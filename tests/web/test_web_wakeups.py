@@ -179,13 +179,13 @@ def test_service_owns_timer_loop_and_bounds_activity(monkeypatch: pytest.MonkeyP
         assert not scheduler.pending
         monkeypatch.setattr(wakeups, "MAX_EVENTS", 2)
         for index in range(4):
-            scheduler.publish({"event": "notice", "session_id": "ngn-first", "text": str(index)})
+            scheduler.publish({"event": "notice", "root_session_id": "ngn-first", "text": str(index)})
         result = scheduler.activity("ngn-first", 0, "")
         assert result["truncated"] is True
         assert isinstance(result["events"], list) and len(result["events"]) == 2
         assert scheduler.activity("ngn-other", 0, "")["events"] == []
         assert scheduler.activity("ngn-first", scheduler.cursor, "")["events"] == []
-        scheduler.publish({"session_id": "ngn-first", "text": "x" * (wakeups.MAX_ACTIVITY_BYTES + 1)})
+        scheduler.publish({"root_session_id": "ngn-first", "text": "x" * (wakeups.MAX_ACTIVITY_BYTES + 1)})
         assert not scheduler._events and scheduler._bytes == 0
 
     asyncio.run(check())
@@ -212,7 +212,7 @@ def test_root_ack_finishes_stream_then_wakes_once_without_subscriber(
             result = next(event["result"] for event in events if event["event"] == "tool_result")
             assert isinstance(result, dict)
             ack = cast("dict[str, object]", result)
-            assert ack["status"] == "scheduled" and ack["task_id"] == ""
+            assert ack["status"] == "scheduled" and ack["session_id"] == ""
             assert all(isinstance(value, str) for value in ack.values())
             assert events[-1]["status"] == "completed" and state.active is None
             assert len(providers[0].requests) == 2 and not state.harness.tasks.list()
@@ -242,7 +242,7 @@ def test_root_ack_finishes_stream_then_wakes_once_without_subscriber(
             assert len({event["run_id"] for event in background}) == 1
             foreground = next(event for event in events if event["event"] == "run_started")
             assert background[0]["run_id"] != foreground["run_id"]
-            assert all(event["session_id"] == session_id and event["schema_version"] == 1 for event in background)
+            assert all(event["root_session_id"] == session_id and event["schema_version"] == 1 for event in background)
             assert not activity["pending_wakeups"] and not activity["active_run_id"]
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
             assert snapshot["activity_cursor"] == activity["cursor"]
@@ -291,7 +291,7 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
     async def check() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate", name="delegate", arguments={"prompt": "retained child"})
+                yield ToolCallEvent(id="to_agent", name="to_agent", arguments={"prompt": "retained child"})
             else:
                 yield TextDoneEvent(text="recorded result")
 
@@ -303,7 +303,7 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             retained = snapshot["retained_tasks"]
             expected = [
                 {
-                    **asdict(info),
+                    **{key: value for key, value in asdict(info).items() if not key.startswith("_")},
                     "can_message": True,
                     "unavailable_reason": "",
                     "can_start_children": False,
@@ -313,12 +313,10 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
                 for info in state.harness.tasks.list()
             ]
             assert retained == expected
-            assert len(retained) == 1 and retained[0]["session_id"] == first
+            assert len(retained) == 1 and retained[0]["session_id"] == state.harness.tasks.list()[0].session_id
             assert retained[0]["status"] == "completed" and retained[0]["result"] == "recorded result"
             assert retained[0]["activation"] == 0 and retained[0]["trigger"] == "delegation"
-            assert any(
-                message["content"].startswith("BACKGROUND TASK NOTIFICATION:") for message in snapshot["history"]
-            )
+            assert any(message["content"].startswith("BACKGROUND AGENT UPDATES:") for message in snapshot["history"])
             requests = [len(provider.requests) for provider in providers]
             new = (await client.post("/api/sessions/new", json={}, headers=headers)).json()
             assert new["session_id"] != first and new["retained_tasks"] == [] and new["history"] == []
@@ -347,7 +345,9 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             assert restored[0]["can_start_children"] is False
             assert restored[0]["child_agents"] == []
             assert "history is read-only" in restored[0]["child_start_unavailable_reason"]
-            task_detail = (await client.get(f"/api/sessions/{first}/tasks/{restored[0]['id']}", headers=headers)).json()
+            task_detail = (
+                await client.get(f"/api/sessions/{first}/tasks/{restored[0]['session_id']}", headers=headers)
+            ).json()
             assert task_detail["history"]
             assert task_detail["history"][-1]["content"] == "recorded result"
             assert resumed["history"] == snapshot["history"]
@@ -363,7 +363,7 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
     async def check() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index < 2 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate", name="delegate", arguments={"prompt": "child"})
+                yield ToolCallEvent(id="to_agent", name="to_agent", arguments={"prompt": "child"})
             elif provider.index == 2 and len(provider.requests) == 1:
                 yield ToolCallEvent(
                     id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "nested wake"}
@@ -378,7 +378,7 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             infos = sorted(state.harness.tasks.list(), key=lambda item: item.depth)
             assert len(infos) == 2
             parent, child = infos
-            assert next(iter(state.wakeups.pending.values())).task_id == child.id
+            assert next(iter(state.wakeups.pending.values())).session_id == child.session_id
             cursor = state.wakeups.cursor
             used = state.harness.tasks._used
             second = (await client.post("/api/sessions/new", json={}, headers=headers)).json()["session_id"]
@@ -393,7 +393,7 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             retained = resumed["retained_tasks"]
             expected = [
                 {
-                    **asdict(info),
+                    **{key: value for key, value in asdict(info).items() if not key.startswith("_")},
                     "can_message": True,
                     "unavailable_reason": "",
                     "can_start_children": False,
@@ -403,21 +403,25 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
                 for info in state.harness.tasks.list()
             ]
             assert len(retained) == len(expected) == 2
-            assert sorted(retained, key=lambda task: task["id"]) == sorted(expected, key=lambda task: task["id"])
+            assert sorted(retained, key=lambda task: task["session_id"]) == sorted(
+                expected, key=lambda task: task["session_id"]
+            )
             assert all(info["activation"] == 1 for info in resumed["retained_tasks"])
             events = (await client.get(f"/api/activity/{session_id}/{cursor}", headers=headers)).json()["events"]
             assert events[-1]["status"] == "completed"
             starts = [event for event in events if event["event"] == "task_started"]
-            assert [(event["task_id"], event["trigger"]) for event in starts] == [
-                (child.id, "wakeup"),
-                (parent.id, "notification"),
+            assert [(event["session_id"], event["trigger"]) for event in starts] == [
+                (child.session_id, "wakeup"),
+                (parent.session_id, "notification"),
             ]
             assert all(event["activation"] == 1 and event["followup"] == 0 for event in starts)
             notices = [event for event in events if event["event"] == "task_notification"]
-            assert [(event["source_task_id"], event["recipient_task_id"], event["cause"]) for event in notices] == [
-                (child.id, child.id, "wakeup"),
-                (child.id, parent.id, "completion"),
-                (parent.id, "", "completion"),
+            assert [
+                (event["source_session_id"], event["recipient_session_id"], event["cause"]) for event in notices
+            ] == [
+                (child.session_id, child.session_id, "wakeup"),
+                (child.session_id, parent.session_id, "completion"),
+                (parent.session_id, "", "completion"),
             ]
             assert len({event["notification_id"] for event in notices}) == 3
             assert state.harness.tasks._used == used + 2
@@ -440,9 +444,9 @@ def test_reused_call_ids_keep_grandchild_approval_and_wakeup_activation_scope(
             first = len(provider.requests) == 1
             if provider.index == 0 and first:
                 yield ToolCallEvent(id="shared-call", name="read_file", arguments={"path": "readable.txt"})
-                yield ToolCallEvent(id="delegate-parent", name="delegate", arguments={"prompt": "parent"})
+                yield ToolCallEvent(id="delegate-parent", name="to_agent", arguments={"prompt": "parent"})
             elif provider.index == 1 and first:
-                yield ToolCallEvent(id="delegate-child", name="delegate", arguments={"prompt": "grandchild"})
+                yield ToolCallEvent(id="delegate-child", name="to_agent", arguments={"prompt": "grandchild"})
             elif provider.index in {2, 3} and first:
                 yield ToolCallEvent(
                     id="shared-call", name="write", arguments={"path": "denied.txt", "content": "Must not be written"}
@@ -465,7 +469,7 @@ def test_reused_call_ids_keep_grandchild_approval_and_wakeup_activation_scope(
                     if approval["event"] == "approval":
                         break
             child = next(info for info in state.harness.tasks.list() if info.depth == 2)
-            assert approval["task_id"] == child.id and approval["activation"] == 0
+            assert approval["session_id"] == child.session_id and approval["activation"] == 0
             assert approval["id"] == "shared-call" and approval["tool"] == "write"
             decision = {
                 "run_id": approval["run_id"],
@@ -481,12 +485,16 @@ def test_reused_call_ids_keep_grandchild_approval_and_wakeup_activation_scope(
             reads = [event for event in foreground if event["event"] == "tool_result" and event["id"] == "shared-call"]
             assert len(reads) == 1 and reads[0]["name"] == "read_file" and not reads[0]["error"]
             assert "Root-only read result" in str(reads[0]["result"])
-            assert reads[0].get("task_id", "") == ""
+            assert reads[0].get("session_id", "") == ""
             closed = next(event for event in foreground if event["event"] == "approval_closed")
-            assert (closed["task_id"], closed["activation"], closed["call_id"]) == (child.id, 0, "shared-call")
+            assert (closed["session_id"], closed["activation"], closed["call_id"]) == (
+                child.session_id,
+                0,
+                "shared-call",
+            )
             assert next(event["status"] for event in foreground if event["event"] == "run_finished") == "completed"
             await stream.disconnect()
-            assert next(iter(state.wakeups.pending.values())).task_id == child.id
+            assert next(iter(state.wakeups.pending.values())).session_id == child.session_id
             cursor = state.wakeups.cursor
             clock.now += 10
             await state.wakeups.tick()
@@ -495,15 +503,15 @@ def test_reused_call_ids_keep_grandchild_approval_and_wakeup_activation_scope(
                 event for event in activity["events"] if event["event"] == "notice" and "Unattended" in event["text"]
             ]
             assert len(notices) == 1
-            assert (notices[0]["task_id"], notices[0]["activation"], notices[0]["call_id"]) == (
-                child.id,
+            assert (notices[0]["session_id"], notices[0]["activation"], notices[0]["call_id"]) == (
+                child.session_id,
                 1,
                 "shared-call",
             )
             assert notices[0]["run_id"] != approval["run_id"] and notices[0]["tool"] == "write"
             completions = [event for event in activity["events"] if event["event"] == "task_completed"]
             assert any(
-                event["task_id"] == child.id and event["activation"] == 1 and event["trigger"] == "wakeup"
+                event["session_id"] == child.session_id and event["activation"] == 1 and event["trigger"] == "wakeup"
                 for event in completions
             )
             assert not any(event["event"] == "approval" for event in activity["events"])
@@ -893,7 +901,7 @@ def test_child_wakeup_obeys_current_root_permission_settings(
     async def check() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate", name="delegate", arguments={"prompt": "child"})
+                yield ToolCallEvent(id="to_agent", name="to_agent", arguments={"prompt": "child"})
             elif provider.index == 1 and len(provider.requests) == 1:
                 yield ToolCallEvent(id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "later"})
             else:
@@ -931,7 +939,7 @@ def test_child_wakeup_obeys_current_root_permission_settings(
                 assert resumed[0].requests and resumed[0].schemas
                 assert not {"write", "edit", "shell"}.intersection(resumed[0].schemas[0])
                 continued = retained.tasks.list()[0]
-                assert continued.id == task.id and continued.child_session_id == task.child_session_id
+                assert continued.session_id == task.session_id and continued._storage_id == task._storage_id
                 assert continued.mode == "reviewer" and continued.status == "completed"
             else:
                 assert events[-1]["status"] == "failed" and not resumed

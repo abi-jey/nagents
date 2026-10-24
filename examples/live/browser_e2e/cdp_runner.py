@@ -323,9 +323,9 @@ def scenario_capture(
                     identifier = (
                         str(event.get("delegationId", ""))
                         if event.get("eventType") == "delegation"
-                        else f"{event.get('runId', '')}:{event.get('taskId', '')}"
+                        else f"{event.get('runId', '')}:{event.get('sessionId', '')}"
                     )
-                    if event.get("taskId") or event.get("delegationId"):
+                    if event.get("sessionId") or event.get("delegationId"):
                         status = str(event.get("status", ""))
                         event_type = str(event.get("eventType", ""))
                         lifecycle = status if event_type == "delegation" else event_type

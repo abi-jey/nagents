@@ -1,8 +1,12 @@
 # Agent definitions
 
-ngn can discover named agents from Markdown and Codex TOML files. They run through
-the same `delegate(prompt, agent="name")` lifecycle as JSON profiles: shared task
-limits, approval handling, child history, follow-ups, and result delivery.
+ngn can discover named agents from Markdown and Codex TOML files. Start a named
+agent with the canonical `to_agent(prompt=..., agent="name")` tool, which shares
+execution limits, guarded approvals, child history, and result delivery with the
+built-in assistant profile. The acknowledgment returns the child's short
+`session_id` and status; completion arrives later as untrusted data. A caller may
+supply a separate display `title`. Use read-only `agent_status()` to list
+accessible child sessions or `agent_status(session_id="s1")` to inspect one.
 
 Create `.ngn/agents/research.md`:
 
@@ -20,9 +24,9 @@ prompt: |
 ```
 
 Start ngn with `--trust-project` to discover workspace definitions. Select the
-agent through `/agent research` or the web settings, or delegate to it from
-another agent. Descriptions appear in the picker and the model's delegation tool
-schema. Web settings show the selected source file and expandable loading
+agent through `/agent research` or the web settings, or target it with
+`to_agent(prompt="...", agent="research")`. Descriptions appear in the picker
+and in the model-facing `to_agent` schema. Web settings show the selected source file and expandable loading
 diagnostics. Terminal diagnostics also include parsing failures and collisions.
 Trusted definitions refresh before every model request, including requests after
 tool calls and requests in children. Creating or renaming a definition updates
@@ -256,9 +260,9 @@ deciding how their intended behavior should be expressed in ngn.
 | Antigravity | Required name/description, tools, `mainAgent`, `subagent`, mapped model. Omitted tools mean no tools, matching its documented default. Command policies, plugins, skills and MCP settings are unsupported. |
 
 Common mappings include Claude `Read/Glob/Grep/Bash/Task` to
-`read_file/find/search/shell/delegate`; Copilot `read`, `search`, and `edit` map to
+`read_file/find/search/shell/to_agent`; Copilot `read`, `search`, and `edit` map to
 the corresponding ngn file-tool groups; OpenCode `bash/task` map to
-`shell/delegate`; Gemini `run_shell_command/replace` map to `shell/edit`;
+`shell/to_agent`; Gemini `run_shell_command/replace` map to `shell/edit`;
 Antigravity `view_file/run_command` map to `read_file/shell`. The parser reports
 unmapped names rather than treating them as installed tools.
 

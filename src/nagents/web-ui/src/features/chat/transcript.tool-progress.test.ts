@@ -25,10 +25,10 @@ const snapshot = (events?: WireEvent[], records?: WireEvent[]): Snapshot => ({
 test("a recoverable child delivery warning preserves the root's Preparing tool preview", () => {
   let entries = appendEvent([], progress({ arguments_text: '{"command":"root' }));
   const root = entries[0];
-  entries = appendEvent(entries, progress({ task_id: "child", activation: 1, followup: 2, arguments_text: "child draft" }));
+  entries = appendEvent(entries, progress({ session_id: "child", activation: 1, followup: 2, arguments_text: "child draft" }));
   entries = appendEvent(entries, {
     event: "error", run_id: "run", code: "TASK_DELIVERY_SKIPPED", recoverable: true,
-    task_id: "child", activation: 1, followup: 2,
+    session_id: "child", activation: 1, followup: 2,
     message: "The immediate parent stopped; its descendant result was not forwarded to Main.",
   });
   const remaining = entries.find(entry => entry.id === root.id);
@@ -123,13 +123,13 @@ test("direct approval before queued previews or calls keeps one exact card and n
 test("early approval binds only its generation, task, activation and followup when IDs are reused", () => {
   let entries = appendEvent([], progress({ id: "call" }));
   entries = appendEvent(entries, progress({ id: "call", status: "abandoned" }));
-  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { task_id: "child", activation: 2, followup: 1 } }));
-  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { task_id: "child", activation: 2, followup: 2 } }));
-  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { task_id: "other", activation: 2, followup: 1 } }));
+  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { session_id: "child", activation: 2, followup: 1 } }));
+  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { session_id: "child", activation: 2, followup: 2 } }));
+  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { session_id: "other", activation: 2, followup: 1 } }));
   const target = entries[2].id;
-  entries = appendEvent(entries, { event: "approval", run_id: "run", task_id: "child", activation: 2, followup: 2,
+  entries = appendEvent(entries, { event: "approval", run_id: "run", session_id: "child", activation: 2, followup: 2,
     generation_id: "retry", index: 0, id: "call", tool: "shell", approval_id: "current" });
-  entries = appendEvent(entries, canonical({ extra: { generation_id: "retry", index: 0, task_id: "child", activation: 2, followup: 2 } }));
+  entries = appendEvent(entries, canonical({ extra: { generation_id: "retry", index: 0, session_id: "child", activation: 2, followup: 2 } }));
   assert.equal(entries.length, 4);
   assert.deepEqual(entries.map(entry => entry.state), ["Not run", "Preparing", "Waiting for approval", "Preparing"]);
   assert.equal(entries[2].id, target);
@@ -235,9 +235,9 @@ test("abandoned attempts and task scopes cannot absorb a later call reusing the 
   assert.equal(appendEvent(entries, canonical()), entries, "A late canonical event cannot revive an abandoned attempt");
   entries = appendEvent(entries, progress({ id: "call", generation_id: "retry" }));
   entries = appendEvent(entries, canonical({ extra: { generation_id: "retry", index: 0 } }));
-  entries = appendEvent(entries, progress({ id: "call", extra: { task_id: "child", activation: 2, followup: 1 } }));
-  entries = appendEvent(entries, canonical({ extra: { task_id: "child", activation: 2, followup: 1, generation_id: "generation", index: 0 } }));
-  entries = appendEvent(entries, progress({ id: "call", extra: { task_id: "child", activation: 2, followup: 2 } }));
+  entries = appendEvent(entries, progress({ id: "call", extra: { session_id: "child", activation: 2, followup: 1 } }));
+  entries = appendEvent(entries, canonical({ extra: { session_id: "child", activation: 2, followup: 1, generation_id: "generation", index: 0 } }));
+  entries = appendEvent(entries, progress({ id: "call", extra: { session_id: "child", activation: 2, followup: 2 } }));
   assert.equal(entries.length, 4);
   assert.deepEqual(entries.map(entry => entry.state), ["Not run", "Requested", "Requested", "Preparing"]);
   assert.equal(entries[2].followup, 1);
@@ -249,12 +249,13 @@ test("terminal events stop progress and invocation animations, including late ou
     { event: "run_finished", status: "completed" }, { event: "client_disconnected" },
     { event: "error", message: "bad stream" }, { event: "done" }, { event: "task_completed", status: "cancelled" },
   ]) {
-    let entries = appendEvent([], progress({ arguments_text: "partial" }));
-    entries = appendEvent(entries, { run_id: "run", ...terminal });
+    const scope = terminal.event === "task_completed" ? { session_id: "s1" } : {};
+    let entries = appendEvent([], progress({ ...scope, arguments_text: "partial" }));
+    entries = appendEvent(entries, { run_id: "run", ...scope, ...terminal });
     assert.notEqual(executionStatus(entries[0]).tone, "active", terminal.event);
     assert.equal(entries[0].streaming, false);
     assert.equal(entries[0].toolProgress, "abandoned");
-    assert.equal(appendEvent(entries, progress()), entries);
+    assert.equal(appendEvent(entries, progress(scope)), entries);
   }
   let entries = appendEvent(appendEvent([], progress()), canonical());
   entries = appendEvent(entries, { event: "run_finished", run_id: "run", status: "cancelled" });

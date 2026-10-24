@@ -22,7 +22,7 @@ function presentation(overrides: Partial<DelegationPresentation> = {}): Delegati
 }
 
 function source(id: string, values: Partial<Entry> = {}): Entry {
-  return { id, kind: "tool", text: "", title: "delegate", state: "Starting", ...values };
+  return { id, kind: "tool", text: "", title: "to_agent", state: "Starting", ...values };
 }
 
 test("a fresh pending delegation starts explicitly and only fresh start evidence appears", () => {

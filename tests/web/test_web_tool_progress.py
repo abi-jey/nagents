@@ -51,7 +51,7 @@ def test_cumulative_progress_replaces_adjacent_preview_even_when_provider_identi
     assert len(replay.records) == 3
     assert replay.records[1]["index"] == 1
     replay.append(progress(id="call", generation_id="retry"))
-    replay.append(progress(id="call", generation_id="retry", extra={"task_id": "child", "activation": 1}))
+    replay.append(progress(id="call", generation_id="retry", extra={"session_id": "s1", "activation": 1}))
     assert len(replay.records) == 5
 
 
@@ -73,11 +73,11 @@ def test_drafts_promote_to_canonical_call_and_clear_invocation_on_result() -> No
 def test_abandoned_and_terminal_progress_is_removed_from_active_drafts_in_its_exact_scope() -> None:
     run = Run("root")
     run.remember(progress())
-    run.remember(progress(extra={"task_id": "child", "activation": 1, "followup": 1}))
-    run.remember(progress(extra={"task_id": "child", "activation": 1, "followup": 2}))
+    run.remember(progress(extra={"session_id": "s1", "activation": 1, "followup": 1}))
+    run.remember(progress(extra={"session_id": "s1", "activation": 1, "followup": 2}))
     run.remember(progress(status="abandoned"))
     assert len(run.drafts) == 2
-    run.remember({"event": "task_completed", "task_id": "child", "activation": 1, "followup": 1})
+    run.remember({"event": "task_completed", "session_id": "s1", "activation": 1, "followup": 1})
     assert len(run.drafts) == 1
     run.remember({"event": "run_finished", "status": "cancelled"})
     assert not run.drafts

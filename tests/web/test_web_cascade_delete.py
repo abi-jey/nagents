@@ -38,7 +38,7 @@ def test_delete_cancels_nested_tasks_and_quarantines_queued_receipts(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 1 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate", name="delegate", arguments={"prompt": "nested worker"})
+                yield ToolCallEvent(id="to_agent", name="to_agent", arguments={"prompt": "nested worker"})
                 yield TextDoneEvent(text="parent finished")
             elif provider.index == 2 and len(provider.requests) == 1:
                 child_started.set()
@@ -60,15 +60,15 @@ def test_delete_cancels_nested_tasks_and_quarantines_queued_receipts(
                 json={"message_id": str(uuid4()), "agent": "reviewer", "text": "start nested work"},
             )
             assert started.status_code == 200, started.text
-            task_id = started.json()["task"]["id"]
+            task_id = started.json()["task"]["session_id"]
             async with asyncio.timeout(HANG_GUARD):
                 await child_started.wait()
             nested = next(info for info in state.harness.tasks.list() if info.depth == 2)
-            nested_child = nested.child_session_id
+            nested_child = nested._storage_id
             state.wakeups.schedule(root, "active-run", Chain(), task_id, 3600, "pending test timer")
             queued_id = str(uuid4())
             queued = await client.post(
-                f"/api/sessions/{root}/tasks/{nested.id}/messages",
+                f"/api/sessions/{root}/tasks/{nested.session_id}/messages",
                 headers=headers,
                 json={"message_id": queued_id, "text": "must not replay"},
             )
@@ -83,7 +83,7 @@ def test_delete_cancels_nested_tasks_and_quarantines_queued_receipts(
                 await until(lambda: state.run_for(root) is None)
             assert not state.wakeups.pending
             assert all(provider.closed for provider in providers[1:])
-            assert await rows(state, "SELECT status FROM ngn_web_task_inputs WHERE message_id = ?", queued_id) == [
+            assert await rows(state, "SELECT status FROM ngn_web_agent_inputs WHERE message_id = ?", queued_id) == [
                 ("error",)
             ]
             if permanent:

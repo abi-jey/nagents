@@ -81,7 +81,7 @@ class Trace:
         self.sequence = 0
         self.requests: list[dict[str, object]] = []
         self.tools: list[dict[str, object]] = []
-        self.session_actors: dict[str, tuple[str, str]] = {}
+        self.session_actors: dict[str, tuple[str, str, str]] = {}
 
     def tick(self) -> int:
         self.sequence += 1
@@ -95,7 +95,7 @@ class Trace:
             {
                 "sequence": self.tick(),
                 "generation_id": data.get("model_call_id", ""),
-                "session_id": data.get("session_id", ""),
+                "_storage_id": data.get("session_id", ""),
                 "input_sha256": sha256(json.dumps(payload, sort_keys=True)),
                 **(payload if isinstance(payload, dict) else {}),
             }
@@ -103,8 +103,9 @@ class Trace:
 
     def annotate(self) -> None:
         for request in self.requests:
-            actor, task = self.session_actors.get(str(request["session_id"]), ("unknown", ""))
-            request.update(actor=actor, task_id=task)
+            storage_id = str(request.pop("_storage_id", ""))
+            actor, session_id, root = self.session_actors.get(storage_id, ("unknown", "", ""))
+            request.update(actor=actor, session_id=session_id, root_session_id=root)
 
 
 async def trial(case: NaturalCase, model: str, timeout: float) -> dict[str, object]:
@@ -144,14 +145,15 @@ async def trial(case: NaturalCase, model: str, timeout: float) -> dict[str, obje
             nonlocal mutation_done
             harness = executor.harness
             actor = "child" if harness._is_subagent else "root"
-            task_id = harness._task_id
-            trace.session_actors[harness.session_id] = (actor, task_id)
+            session_id = harness._agent_session_id
+            root = harness.tasks.root.harness.session_id
+            trace.session_actors[harness.session_id] = (actor, session_id, root)
             context = scope.get()
             entry: dict[str, object] = {
                 "sequence": trace.tick(),
                 "actor": actor,
-                "task_id": task_id,
-                "session_id": harness.session_id,
+                "session_id": session_id,
+                "root_session_id": root,
                 "generation_id": context.get("model_call_id", ""),
                 "native_generation_id": context.get("tool_generation_id", ""),
                 "tool": call.name,
@@ -199,7 +201,7 @@ async def trial(case: NaturalCase, model: str, timeout: float) -> dict[str, obje
             ):
                 harness = Harness(config, allow_subagents=False)
                 harness.approval_handler = approve
-                trace.session_actors[harness.session_id] = ("root", "")
+                trace.session_actors[harness.session_id] = ("root", "", harness.session_id)
                 try:
                     async with asyncio.timeout(timeout):
                         await harness.initialize()
@@ -217,6 +219,8 @@ async def trial(case: NaturalCase, model: str, timeout: float) -> dict[str, obje
                     errors.append(type(error).__name__)
                 finally:
                     await harness.close()
+                    for child in harness.tasks.list():
+                        trace.session_actors[child._storage_id] = ("child", child.session_id, child.root_session_id)
         finally:
             observer.reset(token)
         trace.annotate()

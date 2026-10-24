@@ -158,12 +158,12 @@ test("streamed and stored assistant text renders the same Markdown through Conve
 test("focused child conversation renders the same Markdown before and after history refresh", () => {
   const text = "### Child findings\n\n- **Keep** images visible\n  - Support mobile\n\n| Check | Result |\n| --- | --- |\n| Layout | Done |";
   const detail: TaskDetail = {
-    task: { id: "worker", name: "Explorer", status: "running", result: "", error: "", session_id: "root",
-      prompt: "Inspect the layout", child_session_id: "child", parent_task_id: "", parent_session_id: "root",
+    task: { session_id: "worker", title: "Explorer", status: "running", result: "", error: "", root_session_id: "root",
+      prompt: "Inspect the layout",  parent_session_id: "",
       depth: 1, profile: "assistant", mode: "build", followups: 0, activation: 0, trigger: "delegation" },
     history: [], activity_cursor: 0,
   };
-  const streamed = taskEntries(detail, [{ event: "task_activity", task_id: "worker", sequence: 1,
+  const streamed = taskEntries(detail, [{ event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "worker", sequence: 1,
     timestamp: 1, activation: 0, payload: { type: "text_done", text } }]);
   const stored = taskEntries({ ...detail, activity_cursor: 1, history: [
     { role: "assistant", content: text, name: "", tool_calls: [], tool_call_id: "" },

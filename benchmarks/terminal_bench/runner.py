@@ -33,6 +33,8 @@ from nagents.harness.auth import OpenAIAuth
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.types import TranscriptAbandoned
+from nagents.harness.types import TranscriptAnchor
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import _load_config
 
@@ -216,7 +218,7 @@ async def run(args: argparse.Namespace) -> int:
                 "event": "benchmark_start",
                 "model": args.model,
                 "workspace": str(config.workspace),
-                "session_id": harness.session_id,
+                "root_session_id": harness.session_id,
                 "request_timeout": request_timeout if request_timeout is not None else 120.0,
                 "authentication_fixture": "private_named_codex"
                 if request_timeout is not None
@@ -235,6 +237,8 @@ async def run(args: argparse.Namespace) -> int:
             await harness.initialize()
             async with aclosing(harness.run(Path(args.instruction).read_text())) as events:
                 async for event in events:
+                    if isinstance(event, TranscriptAnchor | TranscriptAbandoned):
+                        continue  # Host-local references are not benchmark wire records.
                     log.write({**_event_record(event), "event_scope": "root_harness_stream"})
                     if isinstance(event, CompactionStartedEvent):
                         compacting = True
@@ -262,11 +266,14 @@ async def run(args: argparse.Namespace) -> int:
             for task in harness.tasks.list() if harness is not None else ():
                 assert harness is not None
                 try:
-                    history = await harness.tasks.history(task.id, limit=200)
+                    history = await harness.tasks.history(task.session_id, limit=200)
                     log.write(
                         {
                             "event": "benchmark_task_history",
-                            "task": asdict(task),
+                            "task": {
+                                **(await harness.agent_status(task.session_id, history_limit=0)),
+                                "depth": task.depth,
+                            },
                             "messages": [asdict(message) for message in history],
                             "limit": 200,
                             "scope": "Current stored child history, possibly compacted; not a complete event stream",
@@ -274,7 +281,11 @@ async def run(args: argparse.Namespace) -> int:
                     )
                 except Exception as exc:
                     log.write(
-                        {"event": "benchmark_task_history_error", "task_id": task.id, "class": type(exc).__name__}
+                        {
+                            "event": "benchmark_task_history_error",
+                            "session_id": task.session_id,
+                            "class": type(exc).__name__,
+                        }
                     )
         finally:
 

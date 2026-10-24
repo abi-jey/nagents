@@ -186,7 +186,7 @@ def test_discovery_order_and_collision_winner_are_deterministic(tmp_path: Path) 
         (
             ".github/agents/reader.agent.md",
             "description: Read\ntools: [read, search, agent]\nagents: [reviewer]\nuser-invocable: false",
-            ("read_file", "list_files", "search", "find", "delegate"),
+            ("read_file", "list_files", "search", "find", "to_agent"),
             (),
             "build",
         ),

@@ -34,7 +34,7 @@ async def automatic_reply(state: WebState, run: Run, request: ApprovalRequest) -
     producer = run.task
     ingress = state.history.ingress.get()
     original_work = ingress.work if ingress is not None else None
-    if request.tool not in _ORIGINAL or request.task_id or request.depth or not request.id:
+    if request.tool not in _ORIGINAL or request.session_id or request.depth or not request.id:
         return False
 
     def executing() -> bool:

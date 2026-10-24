@@ -25,7 +25,7 @@ const terminal = (state: RelayState): boolean => ["done","failed","cancelled","r
 export function delegationRelayState(item: DelegationPresentation): RelayState {
   if (["done","failed","cancelled","ready"].includes(item.phase)) return item.phase;
   if (item.phase === "waiting" || item.latest?.kind === "tool" && ["Waiting for approval","Approval required"].includes(item.latest.state || "")) return "waiting";
-  if (!item.taskId) {
+  if (!item.taskId || item.accepted === false) {
     // A saved/returned acknowledgement without a host task cannot establish an
     // active spawn. Keep its marker settled until runtime identity arrives.
     const call=item.sources.find(source=>source.kind==="tool");

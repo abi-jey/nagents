@@ -56,15 +56,15 @@ def quiescent(state: WebState, root: str) -> None:
         raise HTTPException(409, "Finish or cancel this chat's active run before forking it.")
     harness = state.harness_for(root)
     if any(
-        info.session_id == root
+        info.root_session_id == root
         and (
             info.status not in {"completed", "failed", "cancelled"}
-            or (info.id in harness.tasks._workers and not harness.tasks._workers[info.id].done())
+            or (info.session_id in harness.tasks._workers and not harness.tasks._workers[info.session_id].done())
         )
         for info in harness.tasks._infos.values()
     ):
         raise HTTPException(409, "Finish descendant work in this chat before forking it.")
-    if any(item.session_id == root for item in state.wakeups.pending.values()):
+    if any(item.root_session_id == root for item in state.wakeups.pending.values()):
         raise HTTPException(409, "Finish or cancel this chat's scheduled work before forking it.")
 
 

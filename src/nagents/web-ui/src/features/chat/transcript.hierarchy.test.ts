@@ -22,9 +22,9 @@ const started = (
 ): WireEvent => ({
   event: "task_started",
   run_id: run,
-  task_id: task,
-  parent_task_id: parent,
-  name: `Agent ${task}`,
+  session_id: task,
+  parent_session_id: parent,
+  title: `Agent ${task}`,
   activation,
   followup: 0,
   trigger: activation ? "notification" : "delegation",
@@ -33,8 +33,8 @@ const started = (
 const completed = (task: string, run = "run-1", activation = 0): WireEvent => ({
   event: "task_completed",
   run_id: run,
-  task_id: task,
-  name: `Agent ${task}`,
+  session_id: task,
+  title: `Agent ${task}`,
   activation,
   result: `${task} finished`,
 });
@@ -46,10 +46,10 @@ const notification = (
   event: "task_notification",
   run_id: "run-2",
   notification_id: id,
-  source_task_id: source,
-  recipient_task_id: recipient,
-  source_name: source ? `Agent ${source}` : "Main",
-  recipient_name: recipient ? `Agent ${recipient}` : "Main",
+  source_session_id: source,
+  recipient_session_id: recipient,
+  source_title: source ? `Agent ${source}` : "Main",
+  recipient_title: recipient ? `Agent ${recipient}` : "Main",
   cause: "completion",
   text: `Delivery ${id}`,
 });
@@ -151,7 +151,7 @@ test("rendered task identities nest Main > A > B with independent siblings and r
     html.indexOf("Main response") < html.indexOf("Second main request"),
   );
   assert.match(html, /Parent: Agent A/);
-  assert.match(html, /Task B/);
+  assert.match(html, /Session B/);
 });
 
 test("closed A, B wake-up, A delivery, actual activation and Main delivery remain distinct evidence", () => {
@@ -164,7 +164,7 @@ test("closed A, B wake-up, A delivery, actual activation and Main delivery remai
   entries = appendEvent(entries, {
     event: "wakeup",
     run_id: "run-2",
-    task_id: "B",
+    session_id: "B",
     wakeup_id: "alarm",
     status: "fired",
     reason: "Check again",
@@ -225,8 +225,8 @@ test("child approval creates evidence without stealing a same-ID root call; late
       event: "approval",
       run_id: "run",
       id: "same",
-      task_id: "child",
-      task_name: "Child",
+      session_id: "child",
+      title: "Child",
       tool: "shell",
       arguments: { command: "child" },
       approval_id: "nonce",
@@ -254,7 +254,7 @@ test("child approval creates evidence without stealing a same-ID root call; late
   entries = appendEvent(entries, {
     event: "tool_call",
     run_id: "run",
-    task_id: "child",
+    session_id: "child",
     id: "same",
     name: "shell",
     arguments: { command: "child" },
@@ -267,7 +267,7 @@ test("child approval creates evidence without stealing a same-ID root call; late
   entries = appendEvent(entries, {
     event: "tool_result",
     run_id: "run",
-    task_id: "child",
+    session_id: "child",
     id: "same",
     result: "child result",
   });
@@ -282,7 +282,7 @@ test("denied and expired provisional approvals keep their exact decision without
         event: "approval",
         run_id: "run",
         id: "call",
-        task_id: "child",
+        session_id: "child",
         tool: "shell",
         approval_id: "nonce",
       },
@@ -348,8 +348,8 @@ test("human follow-ups and automatic activations do not overwrite previous execu
     {
       event: "task_message",
       run_id: "run-2",
-      task_id: "A",
-      name: "Agent A",
+      session_id: "A",
+      title: "Agent A",
       followup: 1,
       prompt: "Human request",
     },
@@ -370,36 +370,36 @@ test("human follow-ups and automatic activations do not overwrite previous execu
 test("text, tools, compaction and run termination are actor/activation scoped", () => {
   let entries = reduce(
     { event: "text_chunk", run_id: "r1", chunk: "Main" },
-    { event: "text_chunk", run_id: "r1", task_id: "A", chunk: "A" },
-    { event: "text_chunk", run_id: "r2", task_id: "B", chunk: "B" },
-    { event: "compaction_started", run_id: "r1", task_id: "A" },
-    { event: "text_chunk", run_id: "r1", task_id: "A", chunk: "hidden" },
+    { event: "text_chunk", run_id: "r1", session_id: "A", chunk: "A" },
+    { event: "text_chunk", run_id: "r2", session_id: "B", chunk: "B" },
+    { event: "compaction_started", run_id: "r1", session_id: "A" },
+    { event: "text_chunk", run_id: "r1", session_id: "A", chunk: "hidden" },
     { event: "text_chunk", run_id: "r1", chunk: " continued" },
     {
       event: "text_chunk",
       run_id: "r1",
-      task_id: "A",
+      session_id: "A",
       activation: 1,
       chunk: "A resumed",
     },
     {
       event: "tool_call",
       run_id: "r1",
-      task_id: "A",
+      session_id: "A",
       id: "same",
       name: "read_file",
     },
     {
       event: "tool_call",
       run_id: "r1",
-      task_id: "B",
+      session_id: "B",
       id: "same",
       name: "read_file",
     },
     {
       event: "tool_output",
       run_id: "r1",
-      task_id: "A",
+      session_id: "A",
       call_id: "same",
       text: "A output",
     },
@@ -421,7 +421,7 @@ test("text, tools, compaction and run termination are actor/activation scoped", 
   entries = appendEvent(entries, {
     event: "text_done",
     run_id: "r2",
-    task_id: "B",
+    session_id: "B",
     text: "B final",
   });
   assert.equal(entries.filter((entry) => entry.kind === "assistant").length, 4);
@@ -446,17 +446,17 @@ test("schedule acknowledgments, firing and delegation completion have separate v
       event: "wakeup",
       run_id: "r",
       wakeup_id: "w",
-      task_id: "B",
+      session_id: "B",
       status: "scheduled",
       due_at: "2030-01-01T00:00:00Z",
       reason: "Review",
     },
-    { event: "tool_call", run_id: "r", id: "delegate", name: "delegate" },
+    { event: "tool_call", run_id: "r", id: "to_agent", name: "to_agent" },
     {
       event: "tool_result",
       run_id: "r",
-      id: "delegate",
-      result: { task_id: "B", status: "running" },
+      id: "to_agent",
+      result: { session_id: "B", status: "running" },
     },
   );
   const html = markup(entries);
@@ -468,13 +468,13 @@ test("schedule acknowledgments, firing and delegation completion have separate v
     event: "wakeup",
     run_id: "later",
     wakeup_id: "w",
-    task_id: "B",
+    session_id: "B",
     status: "fired",
   });
   entries = appendEvent(entries, {
     event: "wakeup",
     wakeup_id: "w",
-    task_id: "B",
+    session_id: "B",
     status: "scheduled",
   });
   assert.equal(entries.filter((entry) => entry.kind === "wakeup").length, 1);
@@ -491,13 +491,13 @@ test("streamed token changes do not create per-token activity announcements", ()
   entries = appendEvent(entries, {
     event: "text_chunk",
     run_id: "run-1",
-    task_id: "A",
+    session_id: "A",
     chunk: "one",
   });
   entries = appendEvent(entries, {
     event: "text_chunk",
     run_id: "run-1",
-    task_id: "A",
+    session_id: "A",
     chunk: "two",
   });
   assert.equal(entries[0].activity, revision);
@@ -521,7 +521,7 @@ test("background batches preserve foreground output, show explicit gaps and reta
     pending_wakeups: [
       {
         wakeup_id: "w",
-        task_id: "A",
+        session_id: "A",
         due_at: "2030-01-01T00:00:00Z",
         reason: "Review",
       },
@@ -614,8 +614,8 @@ test("completed root read survives a denied grandchild write with the same call 
     run_id: "run-1",
     id: "shared-call",
     tool: "write_file",
-    task_id: "B",
-    task_name: "Agent B",
+    session_id: "B",
+    title: "Agent B",
     depth: 2,
     activation: 0,
     approval_id: "grandchild-denial",
@@ -662,7 +662,7 @@ test("same run, task and call ID remain isolated by activation, including late c
     {
       event: "approval",
       run_id: "run",
-      task_id: "A",
+      session_id: "A",
       id: "shared",
       activation: 0,
       approval_id: "old-nonce",
@@ -672,7 +672,7 @@ test("same run, task and call ID remain isolated by activation, including late c
     {
       event: "approval",
       run_id: "run",
-      task_id: "A",
+      session_id: "A",
       id: "shared",
       activation: 1,
       approval_id: "new-nonce",
@@ -696,7 +696,7 @@ test("same run, task and call ID remain isolated by activation, including late c
   entries = appendEvent(entries, {
     event: "tool_call",
     run_id: "run",
-    task_id: "A",
+    session_id: "A",
     id: "shared",
     name: "write_file",
     arguments: { path: "old.txt" },
@@ -704,7 +704,7 @@ test("same run, task and call ID remain isolated by activation, including late c
   entries = appendEvent(entries, {
     event: "tool_call",
     run_id: "run",
-    task_id: "A",
+    session_id: "A",
     id: "shared",
     activation: 1,
     name: "write_file",
@@ -713,7 +713,7 @@ test("same run, task and call ID remain isolated by activation, including late c
   entries = appendEvent(entries, {
     event: "tool_result",
     run_id: "run",
-    task_id: "A",
+    session_id: "A",
     id: "shared",
     activation: 1,
     result: "New result",
@@ -721,7 +721,7 @@ test("same run, task and call ID remain isolated by activation, including late c
   entries = appendEvent(entries, {
     event: "tool_output",
     run_id: "run",
-    task_id: "A",
+    session_id: "A",
     call_id: "shared",
     text: "Old output",
   });
@@ -753,8 +753,8 @@ test("approval dialog includes the requested child activation", () => {
         description: "Review child write",
         arguments: {},
         preview: "",
-        task_id: "B",
-        task_name: "Agent B",
+        session_id: "B",
+        title: "Agent B",
         depth: 2,
         activation: 3,
       },

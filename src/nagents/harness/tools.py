@@ -62,6 +62,7 @@ READ_ONLY_TOOLS = frozenset(
         "schedule_wakeup",
         "compact_history",
         "subagent_configuration",
+        "agent_status",
     }
 )
 MODIFYING_TOOLS = frozenset({"edit", "write", "shell", "remote_agent_configure"})
@@ -211,12 +212,12 @@ class HarnessExecutor(ToolExecutor):
                 )
             tool = self.harness.resources.definition(call.name)
             builtin = tool is not None and tool.func == self.tools.builtins.get(call.name)
-            if call.name == "delegate" and not self.harness.can_delegate:
+            if call.name == "to_agent" and not self.harness.can_delegate:
                 raise PermissionError("Delegation is disabled at the configured subagent depth limit")
             if call.name == "subagent_configure" and (self.harness._is_subagent or self.harness.mode != "build"):
                 raise PermissionError("Only the root build agent can propose shared subagent settings")
             if self.harness.config.demo and (
-                not builtin or call.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}
+                not builtin or call.name not in READ_ONLY_TOOLS | {"demo_preview", "to_agent"}
             ):
                 raise PermissionError("OFFLINE DEMO: writes, shell, and custom tools are disabled")
             if self.harness.mode == "reviewer" and (not builtin or call.name in MODIFYING_TOOLS):
@@ -448,7 +449,7 @@ class CodingTools:
             raise RuntimeError("Wake-up scheduler is unavailable in this client; no wake-up was scheduled")
         self.harness.tasks._check_active()
         try:
-            result = await handler(self.harness._task_id, delay, reason.strip())
+            result = await handler(self.harness._agent_session_id, delay, reason.strip())
         except Exception:
             raise RuntimeError("Wake-up could not be scheduled; no successful acknowledgement is available") from None
         # A callback swallowing cancellation must not restart the model loop.

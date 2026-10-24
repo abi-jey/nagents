@@ -205,7 +205,7 @@ class ExecutionBridge:
                 self.session_id,
                 self.run_id,
                 self.turn_id,
-                self.harness._task_id,
+                self.harness._agent_session_id,
                 self.harness._activation,
                 uuid.uuid4().hex,
                 block.row_id,
@@ -305,7 +305,7 @@ def delivery_origin(harness: "Harness", channel: str, destination: str) -> Deliv
         or bridge.block.row_id != bridge.invocation.anchor_message_id
         or bridge.turn_id != bridge.invocation.turn_id
         or bridge.run_id != bridge.invocation.host_run_id
-        or harness._task_id != bridge.invocation.task_id
+        or harness._agent_session_id != bridge.invocation.task_id
         or harness._activation != bridge.invocation.activation
         or bridge.call != bridge.block.calls[bridge.position]
         or bridge.approved_call != bridge.block.calls[bridge.position]

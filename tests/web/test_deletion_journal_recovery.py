@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from nagents.harness.session_identity import SessionIdentityStore
 from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web.deletion import delete_session
@@ -31,22 +32,23 @@ def test_retry_keeps_child_ownership_when_journal_write_fails(
             state = cast("WebState", app.state.web)
             await quiet(state)
             root = state.selected_session_id
-            child = "ngn-unconsumed-child"
+            identity = await SessionIdentityStore(state.history.db_path).reserve(root, "", "Hidden child")
+            child = identity.storage_id
             await state.history.get_or_create_session(child, "harness")
             await state.history.add_message(child, Message(role="user", content="Keep ownership through retry"))
             # Cancellation won before the startup event reached the web journal.
-            state.harness.tasks._infos["hidden"] = TaskInfo(
-                "hidden", "Hidden child", session_id=root, child_session_id=child
+            state.harness.tasks._infos[identity.session_id] = TaskInfo(
+                identity.session_id, "Hidden child", root_session_id=root, _storage_id=child
             )
             save = state.tasks.store.save
             writes = 0
 
-            async def failing_save(session_id: str, data: dict[str, object]) -> None:
+            async def failing_save(session_id: str, data: dict[str, object], storage_id: str) -> None:
                 nonlocal writes
                 writes += 1
                 if writes == failed_write:
                     raise OSError("Injected journal storage failure")
-                await save(session_id, data)
+                await save(session_id, data, storage_id)
 
             monkeypatch.setattr(state.tasks.store, "save", failing_save)
             with pytest.raises(OSError, match="Injected journal"):
@@ -54,9 +56,11 @@ def test_retry_keeps_child_ownership_when_journal_write_fails(
             assert not state.mutating
             assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
             assert await state.history.get_history(child)
-            assert ("hidden" in state.harness.tasks._infos) == (failed_write == 1)
+            assert (identity.session_id in state.harness.tasks._infos) == (failed_write == 1)
             if failed_write == 2:
-                assert await rows(state, "SELECT child FROM ngn_web_tasks WHERE root = ?", root) == [(child,)]
+                assert await rows(state, "SELECT storage_id FROM ngn_web_agent_sessions WHERE root = ?", root) == [
+                    (child,)
+                ]
 
             result = await delete_session(state, root, permanent=permanent)
             assert not state.harness.tasks._infos
@@ -74,7 +78,7 @@ def test_retry_keeps_child_ownership_when_journal_write_fails(
                 assert saved[0]["status"] == "cancelled" and not saved[0]["can_message"]
                 await delete_session(state, root, permanent=True)
             assert not await rows(state, "SELECT id FROM v2_sessions WHERE id = ?", child)
-            assert not await rows(state, "SELECT child FROM ngn_web_tasks WHERE root = ?", root)
+            assert not await rows(state, "SELECT storage_id FROM ngn_web_agent_sessions WHERE root = ?", root)
             assert await state.history.get_history(child) == []
 
     asyncio.run(scenario())

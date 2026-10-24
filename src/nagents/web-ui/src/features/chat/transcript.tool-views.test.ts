@@ -17,8 +17,8 @@ const readResult = {
   newline_counts: { LF: 2, CRLF: 0, CR: 0 },
 };
 const scheduleResult = {
-  wakeup_id: "wake-1", task_id: "task-1", due_at: "2026-10-15T12:00:00Z", reason: "Review the draft",
-  status: "scheduled", session_id: "session-1", run_id: "run-1",
+  wakeup_id: "wake-1", session_id: "task-1", due_at: "2026-10-15T12:00:00Z", reason: "Review the draft",
+  status: "scheduled", root_session_id: "session-1", run_id: "run-1",
 };
 
 test("native tools and MCP methods have distinct labels, icons, and origin metadata", () => {
@@ -26,7 +26,7 @@ test("native tools and MCP methods have distinct labels, icons, and origin metad
     ["shell", "Run command", "terminal", "command"], ["read_file", "Read file", "file-read", "read"],
     ["edit_file", "Edit file", "edit", "edit"], ["write_file", "Write file", "file-write", "write"],
     ["list_directory", "List directory", "folder", "list"], ["search_files", "Search files", "search", "search"],
-    ["skill", "Load skill", "book", "skill"], ["delegate", "Delegate task", "team", "team"],
+    ["skill", "Load skill", "book", "skill"], ["to_agent", "Send to agent", "team", "team"],
     ["compact_history", "Compact history", "compact", "compact"], ["channel_send", "Send to channel", "channels", "channel"],
     ["schedule_wakeup", "Schedule wake-up", "clock", "schedule"],
     ["channel_configure", "Queue channel configuration", "channels", "channel"],

@@ -218,7 +218,7 @@ class ChildActivity(AgentPlugin):
                 aiosqlite.connect(self.child.agent.session.db_path) as db,
                 db.execute(
                     "SELECT COALESCE(MAX(id), 0) FROM v2_messages WHERE session_id = ?",
-                    (self.info.child_session_id,),
+                    (self.info._storage_id,),
                 ) as cursor,
             ):
                 row = await cursor.fetchone()
@@ -235,7 +235,10 @@ class ChildActivity(AgentPlugin):
         if turn.id not in self.seen_turns:
             self.seen_turns.add(turn.id)
             await self.manager._input_started(self.info, self.child, turn)
-        self.info.context = (await self.child.agent.context_stats(self.info.child_session_id)).as_dict()
+        self.info.context = (await self.child.agent.context_stats(self.info._storage_id)).as_dict()
+        self.info.context["session_id"] = self.info.session_id
+        if "response_session_id" in self.info.context:
+            self.info.context["response_session_id"] = self.info.session_id
         self.info.compaction = compaction_snapshot(self.child)
         await self.manager._emit_activity(
             self.info,
@@ -260,7 +263,10 @@ class ChildActivity(AgentPlugin):
         current = asyncio.current_task()
         if current is not None and not current.cancelling():
             await self._history_committed()
-            self.info.context = (await self.child.agent.context_stats(self.info.child_session_id)).as_dict()
+            self.info.context = (await self.child.agent.context_stats(self.info._storage_id)).as_dict()
+            self.info.context["session_id"] = self.info.session_id
+            if "response_session_id" in self.info.context:
+                self.info.context["response_session_id"] = self.info.session_id
             self.info.compaction = compaction_snapshot(self.child)
             await self.manager._emit_activity(
                 self.info,

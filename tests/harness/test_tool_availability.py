@@ -62,7 +62,7 @@ def test_inherited_mode_depth_and_root_scheduler_are_resolved_for_each_request(t
         child.agent.register_tool(custom)
         child.agent.register_tool(custom, name="read_file")
         try:
-            assert "delegate" in names(child)
+            assert "to_agent" in names(child)
             assert not {"schedule_wakeup", "wake_up_in", "custom", "read_file"} & names(child)
             assert ("shell" in names(child)) is not read_only
             root.wakeup_handler = scheduler
@@ -73,14 +73,14 @@ def test_inherited_mode_depth_and_root_scheduler_are_resolved_for_each_request(t
             assert "schedule_wakeup" in names(child)
             await set_depth(root, child, depth=1)
             child.refresh_instructions()
-            assert "delegate" not in names(child)
-            denied = await child.agent.tool_executor.execute(ToolCall("depth", "delegate", {"prompt": "no child"}))
+            assert "to_agent" not in names(child)
+            denied = await child.agent.tool_executor.execute(ToolCall("depth", "to_agent", {"prompt": "no child"}))
             assert denied.error and "depth limit" in denied.error
             await set_depth(root, child, depth=2)
             child.refresh_instructions()
-            assert "delegate" in names(child)
+            assert "to_agent" in names(child)
             root.allow_subagents = False
-            assert "delegate" not in names(child)
+            assert "to_agent" not in names(child)
             root.allow_subagents = True
             await root.set_agent("reviewer")
             assert not {"edit", "write", "shell", "custom", "read_file"} & names(child)
@@ -150,13 +150,13 @@ def test_demo_catalog_keeps_unavailable_definitions(tmp_path: Path) -> None:
         harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True, max_subagent_depth=0))
         try:
             raw = {tool.name for tool in ToolRegistry.get_all(harness.agent.tool_registry)}
-            assert {"edit", "write", "shell", "delegate", "schedule_wakeup"} <= raw
+            assert {"edit", "write", "shell", "to_agent", "schedule_wakeup"} <= raw
             assert "wake_up_in" not in raw
-            assert not {"edit", "write", "shell", "delegate", "schedule_wakeup"} & names(harness)
+            assert not {"edit", "write", "shell", "to_agent", "schedule_wakeup"} & names(harness)
             assert {"read_file", "list_files", "demo_preview"} <= names(harness)
             await set_depth(harness, depth=2)
             harness.refresh_instructions()
-            assert "delegate" in names(harness)
+            assert "to_agent" in names(harness)
             assert "end this model turn" in str(harness.agent.system_prompt)
         finally:
             await harness.close()

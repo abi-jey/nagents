@@ -20,7 +20,7 @@ export function ExecutionRecord({
     ? entry.trigger || (entry.recorded ? "Recorded trigger unavailable" : entry.followup ? "human" : "delegation")
     : entry.title || "Tool call";
   const target = executionTarget(entry);
-  const state = commandOutcomeDescription(entry) || (entry.state === "Completed" && entry.title === "delegate" ? "Delegation request completed"
+  const state = commandOutcomeDescription(entry) || (entry.state === "Completed" && entry.title === "to_agent" ? "Delegation request completed"
     : entry.state === "Completed" && ["schedule_wakeup", "wake_up_in"].includes(entry.title || "") ? "Scheduling request completed"
     : entry.state || "Recorded activity");
   const evidence = (slot: string, label: string, text: string) => (
@@ -73,13 +73,13 @@ export function ExecutionRecord({
             )}
             {entry.taskId && (
               <>
-                <dt>Task</dt>
+                <dt>Session</dt>
                 <dd>{entry.taskId}</dd>
               </>
             )}
             {entry.parentTaskId && (
               <>
-                <dt>Parent task</dt>
+                <dt>Parent session</dt>
                 <dd>{entry.parentTaskId}</dd>
               </>
             )}
@@ -152,7 +152,7 @@ export function ExecutionRecord({
             <a href={`#${encodeURIComponent(`task-${entry.delegatedTaskId}`)}`}>
               {entry.delegatedTaskId}
             </a>
-            . The task has its own execution state.
+            . The session has its own execution state.
           </p>
         )}
         {["schedule_wakeup", "wake_up_in"].includes(entry.title || "") && (

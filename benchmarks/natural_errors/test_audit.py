@@ -7,7 +7,7 @@ from benchmarks.natural_errors.audit import audit_calls
 
 
 def call(identifier: str, **kwargs: object) -> CallRecord:
-    base = CallRecord("root", "task", identifier, "read_file", target="/a")
+    base = CallRecord("root", "", identifier, "read_file", target="/a")
     return replace(base, **kwargs)  # type: ignore[arg-type]
 
 
@@ -112,7 +112,7 @@ def test_native_contract_adapter_and_feedback_visibility() -> None:
         {
             "generation_id": "one",
             "actor": "root",
-            "task_id": "task",
+            "session_id": "",
             "tool": "read_file",
             "call_id": "first",
             "arguments": {"path": "/a", "limit": 2000},
@@ -121,7 +121,7 @@ def test_native_contract_adapter_and_feedback_visibility() -> None:
         {
             "generation_id": "two",
             "actor": "root",
-            "task_id": "task",
+            "session_id": "",
             "tool": "read_file",
             "call_id": "second",
             "arguments": {"path": "/a", "limit": 1500},
@@ -165,7 +165,7 @@ def native_audit(
     requests: list[dict[str, object]] = []
     previous_messages: list[dict[str, object]] = []
     for index, event in enumerate(events):
-        event.update(generation_id=str(index), actor="root", task_id="task", call_id=str(index))
+        event.update(generation_id=str(index), actor="root", session_id="", call_id=str(index))
         messages = list(previous_messages)
         if user_intervention and index:
             messages.append({"role": "user", "content": "I fixed the permissions, try again"})

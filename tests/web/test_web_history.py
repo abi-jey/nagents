@@ -192,7 +192,7 @@ def test_unmatched_initial_input_does_not_lend_origin_to_background_notification
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "child work"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "child work"})
             else:
                 yield TextDoneEvent(text="finished")
 
@@ -202,7 +202,7 @@ def test_unmatched_initial_input_does_not_lend_origin_to_background_notification
         app.idle()
         rows = users(app, app.bindings()["chat-a"])
         assert len(rows) > 1 and rows[0]["content"] == "processed initial input"
-        assert any(str(row["content"]).startswith("BACKGROUND TASK NOTIFICATION:") for row in rows[1:])
+        assert any(str(row["content"]).startswith("BACKGROUND AGENT UPDATES:") for row in rows[1:])
         assert all(row["source_verified"] is False and row["message_id"] == "" for row in rows)
         assert received(app) == []
 

@@ -48,7 +48,7 @@ test("WS authenticates with subprotocols, never a query, and subscribes with cur
 });
 test("subscription drops duplicate and wrong-root records; reconnect resumes the last received position", () => {
   const f = fixture(); f.opened(); f.emit(snapshot());
-  const event = { type: "event", session_id: "root", cursor: 4, epoch: "epoch-a", record: { event: "text_chunk", chunk: "once", run_id: "run", task_id: "child", activation: 3 } };
+  const event = { type: "event", session_id: "root", cursor: 4, epoch: "epoch-a", record: { event: "text_chunk", chunk: "once", run_id: "run", session_id: "child", activation: 3 } };
   f.emit(event); f.emit(event); f.emit({ ...event, cursor: 8, session_id: "other" });
   assert.equal(f.frames.length, 2);
   f.disconnected(); assert.equal(f.sockets[0].closed, true); f.tick(); f.opened();
@@ -77,16 +77,16 @@ test("snapshot validation checks histories, scoped replay and pending child appr
   const frame = snapshot();
   assert.equal(parseFrame(JSON.stringify(frame)).type, "snapshot");
   for (const broken of [null, { ...frame, cursor: -1 }, { ...frame, snapshot: { ...frame.snapshot, history: [{}] } },
-    { ...frame, snapshot: { ...frame.snapshot, active_run: { id: "run", status: "running", pending_approvals: [{ event: "approval", task_id: 7 }] } } }])
+    { ...frame, snapshot: { ...frame.snapshot, active_run: { id: "run", status: "running", pending_approvals: [{ event: "approval", session_id: 7 }] } } }])
     assert.throws(() => parseFrame(JSON.stringify(broken)));
 });
 test("backend status and normalized active records accept empty approvals without discarding scoped history", () => {
   assert.equal(parseFrame(JSON.stringify({ type: "status", epoch: "one", cursor: 3, active_run_id: "run", active_session_id: "other" })).type, "status");
   const frame = snapshot();
   assert.equal(parseFrame(JSON.stringify({ ...frame, snapshot: { ...frame.snapshot, active_run: {
-    id: "run", status: "running", approval: {}, records: [{ event: "text_chunk", chunk: "partial", run_id: "run", task_id: "child", activation: 4 }],
+    id: "run", status: "running", approval: {}, records: [{ event: "text_chunk", chunk: "partial", run_id: "run", session_id: "child", activation: 4 }],
   } } })).type, "snapshot");
-  assert.throws(() => parseFrame(JSON.stringify({ type: "event", cursor: 3, epoch: "one", session_id: "root", record: { event: "approval", session_id: "other" } })));
+  assert.throws(() => parseFrame(JSON.stringify({ type: "event", cursor: 3, epoch: "one", session_id: "root", record: { event: "approval", root_session_id: "other" } })));
 });
 test("empty reconnect replay requests one WS snapshot without starting an HTTP poll", () => {
   const f = fixture({ cursor: 9, epoch: "one" }); f.opened();

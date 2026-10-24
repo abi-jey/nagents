@@ -233,19 +233,19 @@ test("main event socket captures only owned tool/task lifecycle metadata", () =>
   }));
   socket.emit("message", JSON.stringify({
     type: "event", session_id: "owned-session", cursor: 2,
-    record: { event: "tool_call", run_id: "run-owned", call_id: "call-owned", name: "delegate", arguments: { prompt: "private prompt" } },
+    record: { event: "tool_call", run_id: "run-owned", call_id: "call-owned", name: "to_agent", arguments: { prompt: "private prompt" } },
   }));
   socket.emit("message", JSON.stringify({
     type: "event", session_id: "owned-session", cursor: 3,
-    record: { event: "task_started", run_id: "run-owned", task_id: "task-owned", name: "Helper" },
+    record: { event: "task_started", run_id: "run-owned", session_id: "s1", title: "Helper", root_session_id: "owned-session" },
   }));
   socket.emit("message", JSON.stringify({
     type: "event", session_id: "owned-session", cursor: 4,
-    record: { event: "task_completed", run_id: "run-owned", task_id: "task-owned", status: "completed", result: "private result" },
+    record: { event: "task_completed", run_id: "run-owned", session_id: "s1", title: "Helper", root_session_id: "owned-session", status: "completed", result: "private result" },
   }));
   socket.emit("message", JSON.stringify({
     type: "event", session_id: "owned-session", cursor: 5,
-    record: { event: "task_activity", run_id: "run-owned", task_id: "task-owned", activation: 1,
+    record: { event: "task_activity", run_id: "run-owned", session_id: "s1", root_session_id: "owned-session", activation: 1,
       payload: { type: "tool_result", id: "read-owned", name: "read_file", result: { content: "private file" } } },
   }));
 
@@ -254,8 +254,8 @@ test("main event socket captures only owned tool/task lifecycle metadata", () =>
   assert.deepEqual(Array.from(state.toolCalls, event => [event.eventType, event.callId, event.runId]), [
     ["tool_call", "call-owned", "run-owned"], ["tool_result", "read-owned", "run-owned"],
   ]);
-  assert.deepEqual(Array.from(state.delegations, event => [event.eventType, event.taskId, event.runId]), [
-    ["task_started", "task-owned", "run-owned"], ["task_completed", "task-owned", "run-owned"],
+  assert.deepEqual(Array.from(state.delegations, event => [event.eventType, event.sessionId, event.runId]), [
+    ["task_started", "s1", "run-owned"], ["task_completed", "s1", "run-owned"],
   ]);
   const exportText = JSON.stringify(globals.__voiceE2E.export());
   for (const secret of ["ngn.token.never-capture", "private", "wrong-run", "other-session"]) {

@@ -59,7 +59,7 @@ class TaskHistory(_HarnessSession):
             def insert(db: sqlite3.Connection) -> tuple[int, dict[str, object]]:
                 row = self.store.row(db, self.identifier)
                 self.store.root(db, str(row["root"]))
-                if row["status"] != "queued" or row["epoch"] != self.store.epoch or row["child"] != session_id:
+                if row["status"] != "queued" or row["epoch"] != self.store.epoch or row["storage_id"] != session_id:
                     raise RuntimeError("Child input is no longer owned by this runtime")
                 cursor = db.execute(
                     "INSERT INTO v2_messages(session_id, role, content, tool_calls, tool_call_id, name) "
@@ -70,7 +70,7 @@ class TaskHistory(_HarnessSession):
                 assert identifier is not None
                 db.execute("UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
                 db.execute(
-                    "UPDATE ngn_web_task_inputs SET status = 'picked_up', revision = revision + 1, "
+                    "UPDATE ngn_web_agent_inputs SET status = 'picked_up', revision = revision + 1, "
                     "history_id = ?, picked_up_at = ? WHERE message_id = ?",
                     (identifier, now(), self.identifier),
                 )

@@ -36,15 +36,13 @@ export type ActiveRun = {
   approval?: WireEvent | Record<string, never>;
 };
 export type RetainedTask = {
-  id: string;
-  name: string;
+  session_id: string;
+  title: string;
   status: "running" | "completed" | "failed" | "cancelled";
   result: string;
   error: string;
-  session_id: string;
+  root_session_id: string;
   prompt: string;
-  child_session_id: string;
-  parent_task_id: string;
   parent_session_id: string;
   depth: number;
   profile: string;
@@ -60,6 +58,7 @@ export type RetainedTask = {
   updated_at?: number;
   completed_at?: number;
   activity_sequence?: number;
+  details_truncated?: boolean;
   can_message?: boolean;
   can_start_children?: boolean;
   child_agents?: string[];
@@ -72,6 +71,10 @@ export type RetainedTask = {
   next_settings?: { provider?: string; model?: string; reasoning_effort?: string; compact_trigger?: string; compact_tokens?: number; compact_messages?: number };
   origin_history_id?: string;
   origin_run_id?: string;
+  activation_history_id?: string;
+  activation_run_id?: string;
+  activation_call_id?: string;
+  activation_call_position?: number;
   compact_trigger?: string;
   compact_tokens?: number;
   compact_messages?: number;
@@ -89,6 +92,8 @@ export type Snapshot = {
   agent_selection?: SessionAgentSelection;
   activity_cursor?: number;
   retained_tasks: RetainedTask[];
+  retained_activations?: RetainedTask[];
+  retained_activations_omitted?: number;
   sessions: Session[];
   active_run?: ActiveRun | null;
   active_run_id?: string;
@@ -163,8 +168,8 @@ export type Approval = {
   description: string;
   preview: string;
   arguments: unknown;
-  task_id: string;
-  task_name: string;
+  session_id: string;
+  title: string;
   depth: number;
   activation: number;
   allow_tool?: boolean;
@@ -176,7 +181,7 @@ export type WireEvent = { event: string; [key: string]: unknown };
 
 export type PendingWakeup = {
   wakeup_id: string;
-  task_id: string;
+  session_id: string;
   due_at: string;
   reason: string;
 };

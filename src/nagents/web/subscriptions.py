@@ -170,7 +170,7 @@ class EventBus:
                 subscriber.offer(record, size)
 
     def event(self, record: dict[str, object]) -> None:
-        self.publish({"type": "event", "session_id": record["session_id"], "record": record})
+        self.publish({"type": "event", "session_id": record["root_session_id"], "record": record})
 
     async def serve(
         self,

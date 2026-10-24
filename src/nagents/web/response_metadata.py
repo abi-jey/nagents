@@ -55,13 +55,12 @@ class Responses:
         if event.response_session_id == run.session_id:
             payload["turn_id"] = owner.followups.current.id
         else:
-            info = next(
-                (task for task in owner.tasks.list() if task.child_session_id == event.response_session_id), None
-            )
+            info = next((task for task in owner.tasks.list() if task._storage_id == event.response_session_id), None)
             if info is not None:
-                child_owner = owner.tasks._children.get(info.id)
+                child_owner = owner.tasks._children.get(info.session_id)
                 payload.update(
-                    task_id=info.id,
+                    session_id=info.session_id,
+                    response_session_id=info.session_id,
                     activation=info.activation,
                     followup=info.followups,
                     turn_id=child_owner.followups.current.id if child_owner is not None else "",
@@ -69,10 +68,22 @@ class Responses:
         responses = self.captured.setdefault(run.id, {})
         responses[event.response_id] = payload
         same_session = [
-            key for key, value in responses.items() if value.get("response_session_id") == event.response_session_id
+            key
+            for key, value in responses.items()
+            if value.get("response_session_id") == payload["response_session_id"]
         ]
         for key in same_session[: -storage.SUMMARY_RETENTION]:
             responses[key].update(summary="", summary_expired=True)
+
+    def storage_record(self, run: Run, record: dict[str, object]) -> dict[str, object]:
+        session_id = str(record["response_session_id"])
+        if session_id == run.session_id:
+            return record
+        owner = run.harness or self.state.running_harness
+        info = owner.tasks._lookup(session_id)
+        if info.root_session_id != run.session_id:
+            raise ValueError("Response metadata belongs to another root")
+        return {**record, "response_session_id": info._storage_id}
 
     async def initialize(self) -> None:
         # Only startup invokes this. A previous server's partial responses have
@@ -96,16 +107,16 @@ class Responses:
             return
         if child is None and session != run.session_id:
             return
-        if child is not None and session != record.get("child_session_id"):
+        if child is not None and session != record.get("session_id"):
             return
         canonical = {key: payload[key] for key in _FIELDS if key in payload}
         canonical.update(event="response_metadata", run_id=run.id)
         captured = self.captured.get(run.id, {}).get(response, {})
         canonical.update(
-            {key: captured[key] for key in ("task_id", "activation", "followup", "turn_id") if key in captured}
+            {key: captured[key] for key in ("session_id", "activation", "followup", "turn_id") if key in captured}
         )
         canonical.update(
-            {key: record[key] for key in ("task_id", "activation", "followup", "turn_id") if key in record}
+            {key: record[key] for key in ("session_id", "activation", "followup", "turn_id") if key in record}
         )
         pending = self.pending.setdefault(run.id, {})
         previous = pending.get(response, {})
@@ -124,7 +135,9 @@ class Responses:
             or now - self.checkpoints.get(checkpoint_key, 0) >= 0.1
         )
         if checkpoint:
-            saved = await finish_on_cancel(self.state.history.store._transaction(partial(_save, record=canonical)))
+            saved = await finish_on_cancel(
+                self.state.history.store._transaction(partial(_save, record=self.storage_record(run, canonical)))
+            )
             self.checkpoints[checkpoint_key] = now
             aggregate = saved.get("run_usage")
             if isinstance(aggregate, dict):
@@ -151,7 +164,7 @@ class Responses:
         else:
             pending[response] = {**record, "payload": dict(payload)} if child is not None else dict(payload)
 
-    async def finish(self, run: Run, task_id: str = "", status: str = "") -> None:
+    async def finish(self, run: Run, agent_session_id: str = "", status: str = "") -> None:
         pending = self.pending.setdefault(run.id, {})
         for response, payload in list(self.captured.get(run.id, {}).items()):
             previous = pending.get(response, {})
@@ -163,26 +176,25 @@ class Responses:
                 continue
             owner = run.harness or self.state.running_harness
             info = next(
-                (task for task in owner.tasks.list() if task.child_session_id == payload["response_session_id"]), None
+                (task for task in owner.tasks.list() if task.session_id == payload["response_session_id"]), None
             )
-            if info is None or (task_id and info.id != task_id):
+            if info is None or (agent_session_id and info.session_id != agent_session_id):
                 continue
-            child_owner = owner.tasks._children.get(info.id)
+            child_owner = owner.tasks._children.get(info.session_id)
             pending[response] = {
                 "event": "task_activity",
-                "task_id": info.id,
+                "session_id": info.session_id,
                 "root_session_id": run.session_id,
-                "parent_task_id": info.parent_task_id,
-                "child_session_id": info.child_session_id,
+                "parent_session_id": info.parent_session_id,
                 "depth": info.depth,
                 "activation": payload.get("activation", info.activation),
                 "turn_id": payload.get("turn_id", child_owner.followups.current.id if child_owner is not None else ""),
-                "payload": {**payload, "type": "response_metadata", "task_id": info.id},
+                "payload": {**payload, "type": "response_metadata", "session_id": info.session_id},
             }
         for response, record in list(pending.items()):
             child = record.get("payload") if record.get("event") == "task_activity" else None
             payload = dict(child) if isinstance(child, dict) else dict(record)
-            if task_id and record.get("task_id") != task_id:
+            if agent_session_id and record.get("session_id") != agent_session_id:
                 continue
             payload.update(
                 status=payload["status"]
@@ -192,17 +204,19 @@ class Responses:
             )
             canonical = {
                 key: payload[key]
-                for key in (*_FIELDS, "event", "run_id", "task_id", "activation", "followup", "turn_id")
+                for key in (*_FIELDS, "event", "run_id", "session_id", "activation", "followup", "turn_id")
                 if key in payload
             }
-            saved = await self.state.history.store._transaction(partial(_save, record=canonical))
-            payload.update(saved)
+            saved = await self.state.history.store._transaction(
+                partial(_save, record=self.storage_record(run, canonical))
+            )
+            payload.update({**saved, "response_session_id": canonical["response_session_id"]})
             if child is not None:
                 # Both captured-only and already-published thinking snapshots
                 # need a fresh canonical cursor for this synthetic terminal.
                 # Reusing the pending envelope's cursor makes clients drop it.
                 owner = run.harness or self.state.running_harness
-                info = owner.tasks._lookup(str(record["task_id"]))
+                info = owner.tasks._lookup(str(record["session_id"]))
                 info.activity_sequence += 1
                 payload["type"] = "response_metadata"
                 final = {**record, "payload": payload, "sequence": info.activity_sequence, "timestamp": time()}

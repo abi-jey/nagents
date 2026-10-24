@@ -24,6 +24,8 @@ export function pendingApprovals(run?: ActiveRun): WireEvent[] {
   return [...pending.values()];
 }
 function compatible(saved: Entry, previous: Entry): boolean {
+  if (saved.activationOmission || previous.activationOmission) return saved.kind === "status" && previous.kind === "status" &&
+    !!saved.activationOmission && saved.activationOmission.sessionId === previous.activationOmission?.sessionId;
   if (saved.kind === "live_caption" || previous.kind === "live_caption") return sameLiveCaption(saved, previous);
   if (saved.delivery || previous.delivery) return !!saved.delivery && saved.delivery.delivery_id === previous.delivery?.delivery_id;
   if (saved.abandoned || previous.abandoned) return false;
@@ -43,7 +45,7 @@ function conflictingRows(left: Entry, right: Entry): boolean {
 }
 function sameSavedEntry(saved: Entry, previous: Entry): boolean {
   if (!compatible(saved, previous)) return false;
-  if (saved.delivery) return true;
+  if (saved.delivery || saved.activationOmission) return true;
   if (saved.kind === "user" && sameTranscriptUser(saved, previous)) return true;
   if (saved.responseId && saved.responseId === previous.responseId) return true;
   const a = rowIds(saved), b = rowIds(previous);
@@ -82,7 +84,7 @@ function newRow(entry: Entry, history?: Snapshot["history"]): boolean {
 // A live response can join only its own turn, in order. Text/prefix equality is
 // never an identity; complete replay or a history baseline must establish a
 // still-streaming response's place before it can claim a committed row.
-export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announceNewUsers = false,
+export function reconcileHistory(previous: Entry[], snapshot: Snapshot & { root_session_id?: string }, announceNewUsers = false,
   knownHistory?: Snapshot["history"], canonicalRuns: ReadonlySet<string> = new Set(), preserveObserved = false): Entry[] {
   const saved = fromHistory(snapshot);
   const roots = saved.filter((item) => item.kind !== "task" && item.kind !== "retained_tasks");
@@ -136,7 +138,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
     }
     for (let i = after; i < index; i++) keep(previous[i]);
     const old = previous[index];
-    next.push(entry.delivery ? { ...entry, id: old.id } : entry.kind === "live_caption"
+    next.push(entry.delivery || entry.activationOmission ? { ...entry, id: old.id } : entry.kind === "live_caption"
       ? { ...entry, id: old.id, activity: old.activity } : entry.kind === "user"
       ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, admission: undefined, state: undefined, activity: old.activity,
           voice: entry.voice, voiceSessionId: entry.voiceSessionId,
@@ -168,7 +170,8 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
   }
   for (let i = after; i < previous.length; i++) keep(previous[i]);
   for (const entry of saved.filter((item) => item.kind === "task" || item.kind === "retained_tasks")) {
-    const old = previous.find((item) => item.recorded && item.kind === entry.kind && item.taskId === entry.taskId);
+    const old = previous.find((item) => item.recorded && item.kind === entry.kind && item.taskId === entry.taskId &&
+      (item.activation || 0) === (entry.activation || 0));
     next.push({ ...entry, id: old?.id || id() });
   }
   return next;
@@ -185,7 +188,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     // A receipt has no message text: it can admit an existing optimistic row,
     // but cannot recreate that row while replaying an otherwise empty log.
     for (const record of run.events) if (record.event === "input_admitted" &&
-        (!record.run_id || record.run_id === run.id) && (!record.session_id || record.session_id === snapshot.session_id))
+        (!record.run_id || record.run_id === run.id) && (!record.root_session_id || record.root_session_id === snapshot.session_id))
       entries = appendEvent(entries, { ...record, run_id: record.run_id || run.id });
     let replay: Entry[] = [];
     for (const record of run.events) replay = appendEvent(replay, {
@@ -262,7 +265,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     const responseId = typeof record.response_id === "string" ? record.response_id
       : record.extra && typeof record.extra === "object" && "response_id" in record.extra ? record.extra.response_id : undefined;
     const index = entries.findLastIndex((entry) => entry.kind === "assistant" && (!responseId || entry.responseId === responseId) && entry.runId === event.run_id &&
-      (entry.taskId || "") === (record.task_id || "") && (entry.activation || 0) === (record.activation || 0) &&
+      (entry.taskId || "") === (record.session_id || "") && (entry.activation || 0) === (record.activation || 0) &&
       (entry.followup || 0) === (record.followup || 0));
     entries = entries.map((entry, i) => i === index ? { ...entry, streaming: true } : entry);
   }
@@ -302,7 +305,7 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
     if (event.event === "approval" && activeRun) activeRun = { ...activeRun, pending_approvals: [...pendingApprovals(activeRun), event] };
     if (event.event === "approval_closed" && activeRun) activeRun = { ...activeRun, pending_approvals: pendingApprovals(activeRun).filter((item) => item.approval_id !== event.approval_id), events: undefined, approval: undefined };
     const scopedInput = event.event !== "input_admitted" ||
-      ((!event.session_id || event.session_id === frame.session_id) && (!activeRun || event.run_id === activeRun.id));
+      ((!event.root_session_id || event.root_session_id === frame.session_id) && (!activeRun || event.run_id === activeRun.id));
     next = { ...current, activeRun, runHistory, completedRuns, entries: scopedInput ? appendEvent(current.entries, event) : current.entries };
   }
   return { ...next, position: { cursor: frame.cursor, epoch: frame.epoch } };

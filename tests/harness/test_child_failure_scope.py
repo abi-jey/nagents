@@ -48,7 +48,7 @@ async def test_child_budget_failure_cancels_descendant_without_poisoning_recover
         descendant = next(event for event in completions if event.depth == 2)
         assert descendant.result == "" and "cancelled" in descendant.error
         assert all(
-            event.source_task_id != descendant.task_id for event in events if isinstance(event, TaskNotification)
+            event.source_session_id != descendant.session_id for event in events if isinstance(event, TaskNotification)
         )
         errors = [event for event in events if isinstance(event, ErrorEvent)]
         assert len(errors) == 1
@@ -59,15 +59,14 @@ async def test_child_budget_failure_cancels_descendant_without_poisoning_recover
         else:
             assert isinstance(error, TaskDeliveryWarning) and error.recoverable
             assert error.code == "TASK_DELIVERY_SKIPPED"
-            assert error.task_id == descendant.task_id
-            assert error.parent_task_id == descendant.parent_task_id
+            assert error.session_id == descendant.session_id
             assert error.parent_session_id == descendant.parent_session_id
-            assert error.child_session_id == descendant.child_session_id
+            assert error.root_session_id == descendant.root_session_id
             assert error.activation == descendant.activation and error.followup == descendant.followup
             cloned = replace(error)
             assert type(cloned) is TaskDeliveryWarning and cloned.recoverable and cloned.code == error.code
             record = _event_record(cloned)
-            assert record["event"] == "error" and record["task_id"] == descendant.task_id
+            assert record["event"] == "error" and record["session_id"] == descendant.session_id
     finally:
         await harness.close()
     assert all(provider.closed for provider in scenario.providers)

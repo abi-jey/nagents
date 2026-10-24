@@ -1940,14 +1940,14 @@ def test_authenticated_delegation_can_be_proved_by_owned_task_lifecycle() -> Non
                 "type": "live.event",
                 "eventType": "task_started",
                 "run_id": "run-owned",
-                "task_id": "task-owned",
+                "session_id": "s1",
                 "monotonicMs": 5600,
             },
             {
                 "type": "live.event",
                 "eventType": "task_completed",
                 "run_id": "run-owned",
-                "task_id": "task-owned",
+                "session_id": "s1",
                 "status": "completed",
                 "monotonicMs": 6900,
             },
@@ -1959,7 +1959,7 @@ def test_authenticated_delegation_can_be_proved_by_owned_task_lifecycle() -> Non
     round_detail = cast("list[dict[str, object]]", details["scenarioRounds"])[1]
     assert round_detail["delegationCompleted"] is None
     assert round_detail["subagentCompleted"] is True
-    assert round_detail["taskLifecycles"] == {"run-owned:task-owned": ["task_completed", "task_started"]}
+    assert round_detail["taskLifecycles"] == {"run-owned:s1": ["task_completed", "task_started"]}
 
     unfinished = copy.deepcopy(report)
     events = cast("list[dict[str, object]]", unfinished["events"])

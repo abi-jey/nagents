@@ -72,7 +72,7 @@ def test_captions_merge_at_history_anchors_replay_once_and_survive_restart(tmp_p
             assert len({record["history_id"] for record in saved}) == 3
             streamed = caption_events(state)
             assert [record["history_id"] for record in streamed] == [record["history_id"] for record in saved]
-            assert all(record["session_id"] == root and record["text"] == record["content"] for record in streamed)
+            assert all(record["root_session_id"] == root and record["text"] == record["content"] for record in streamed)
             assert [message.content for message in await state.history.get_history(root)] == [
                 "Typed request",
                 "Full answer",
@@ -99,7 +99,7 @@ def test_caption_call_stays_in_original_root_after_selection_changes(tmp_path: P
             assert (await state.snapshot(selected))["history"] == []
             with pytest.raises(ValueError, match="admitted chat"):
                 await state.live_captions(selected, "bound-call")(caption(3, "Wrong chat"))
-            assert all(event["session_id"] == original for event in caption_events(state))
+            assert all(event["root_session_id"] == original for event in caption_events(state))
             assert (await state.snapshot(selected))["history"] == []
 
     asyncio.run(scenario())

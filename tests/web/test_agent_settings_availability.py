@@ -47,7 +47,7 @@ def test_named_reviewer_gates_do_not_leak_into_shared_defaults(tmp_path: Path) -
             for scope in ("global", "workspace"):
                 defaults = await read(client, headers, scope, "mini")
                 rows = {tool["name"]: tool for tool in defaults["tools"]}
-                assert rows["shell"]["available"] and rows["delegate"]["available"]
+                assert rows["shell"]["available"] and rows["to_agent"]["available"]
                 assert "shell" in defaults["effective_tools"]
             assert harness.config.agent == "mini"
 
@@ -64,22 +64,22 @@ def test_scheduler_and_static_delegation_limits_explain_unavailable_tools(tmp_pa
             snapshot = await read(client, headers, "agent")
             rows = {tool["name"]: tool for tool in snapshot["tools"]}
             assert not rows["schedule_wakeup"]["available"] and "scheduler" in rows["schedule_wakeup"]["reason"]
-            assert not rows["delegate"]["available"] and "depth" in rows["delegate"]["reason"]
+            assert not rows["to_agent"]["available"] and "depth" in rows["to_agent"]["reason"]
             assert (
-                "schedule_wakeup" not in snapshot["effective_tools"] and "delegate" not in snapshot["effective_tools"]
+                "schedule_wakeup" not in snapshot["effective_tools"] and "to_agent" not in snapshot["effective_tools"]
             )
             harness.config.max_subagent_depth = 2
             harness.config.profiles["mini"].allowed_agents = ()
             mini = await read(client, headers, "agent", "mini")
             rows = {tool["name"]: tool for tool in mini["tools"]}
-            assert not rows["delegate"]["available"] and "eligible" in rows["delegate"]["reason"]
+            assert not rows["to_agent"]["available"] and "eligible" in rows["to_agent"]["reason"]
             assistant = await read(client, headers, "agent")
             rows = {tool["name"]: tool for tool in assistant["tools"]}
-            assert rows["delegate"]["available"]
+            assert rows["to_agent"]["available"]
             harness.allow_subagents = False
             disabled = await read(client, headers, "agent")
             rows = {tool["name"]: tool for tool in disabled["tools"]}
-            assert not rows["delegate"]["available"] and "disabled" in rows["delegate"]["reason"]
+            assert not rows["to_agent"]["available"] and "disabled" in rows["to_agent"]["reason"]
 
     asyncio.run(scenario())
 

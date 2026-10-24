@@ -101,7 +101,7 @@ def get_cases(case_type: type[Case]) -> tuple[Case, ...]:
             "Please ask a background reviewer to compare src/old_parser.py against src/new_parser.py for changes "
             "in handling blank input and return findings without edits. Those are the two files meant by 'old' and 'new'; "
             "include enough detail that the reviewer can work independently.",
-            "delegate",
+            "to_agent",
         ),
         case_type(
             "challenge_oversized_sample",
@@ -143,7 +143,7 @@ def grade_challenge(case: Case, call: ToolCall) -> list[str]:
         failures = ["delegate_missing_file_context"] if missing else []
         if not any(word in prompt.lower() for word in ("blank", "empty")):
             failures.append("delegate_missing_review_focus")
-        if call.arguments.get("agent", "assistant") != "assistant":
+        if (call.arguments.get("agent") or "assistant") != "assistant":
             failures.append("delegate_unavailable_profile")
         # Whether the prose actually requests review without edits needs human
         # inspection; avoid pretending keyword checks capture its full meaning.

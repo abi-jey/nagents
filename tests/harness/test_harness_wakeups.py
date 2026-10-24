@@ -60,7 +60,7 @@ def test_native_scheduler_callback_acknowledges_without_holding_run(
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
                 if child and not provider.index:
-                    yield ToolCallEvent(id="delegate", name="delegate", arguments={"prompt": "Child"})
+                    yield ToolCallEvent(id="to_agent", name="to_agent", arguments={"prompt": "Child"})
                 else:
                     yield ToolCallEvent(
                         id="schedule",
@@ -80,7 +80,7 @@ def test_native_scheduler_callback_acknowledges_without_holding_run(
         harness.wakeup_handler = schedule
         try:
             events = await asyncio.wait_for(collect(harness), HANG_GUARD)
-            assert calls == [(harness.tasks.list()[0].id if child else "", 90120.5, "Check progress")]
+            assert calls == [(harness.tasks.list()[0].session_id if child else "", 90120.5, "Check progress")]
             assert all(
                 "schedule_wakeup" in schema and "wake_up_in" not in schema for p in providers for schema in p.schemas
             )
@@ -210,9 +210,9 @@ def test_root_wake_without_children_preserves_budget_and_normal_hooks(
             assert harness.tasks.list() == [] and len(providers) == 1
             notes = [event for event in events if isinstance(event, TaskNotification)]
             assert len(notes) == 1
-            assert (notes[0].source_task_id, notes[0].recipient_task_id) == ("", "")
-            assert (notes[0].source_name, notes[0].recipient_name, notes[0].cause) == ("Main", "Main", "wakeup")
-            assert before[-1].startswith("BACKGROUND TASK NOTIFICATION:") and "untrusted" in before[-1]
+            assert (notes[0].source_session_id, notes[0].recipient_session_id) == ("", "")
+            assert (notes[0].source_title, notes[0].recipient_title, notes[0].cause) == ("Main", "Main", "wakeup")
+            assert before[-1].startswith("BACKGROUND AGENT WAKEUP:") and "untrusted" in before[-1]
             assert "Root reminder" in before[-1] and after == [harness.session_id] * 2
             assert isinstance(events[-1], DoneEvent) and events[-1].final_text == "Root resumed"
             assert_balanced(await harness.history())
@@ -226,10 +226,10 @@ async def tree_script(provider: FakeProvider, messages: list[Message]) -> AsyncI
     original = next(str(message.content) for message in messages if message.role == "user")
     note = str(messages[-1].content)
     if original == "ROOT" and len(provider.requests) == 1:
-        yield ToolCallEvent(id="A", name="delegate", arguments={"prompt": "A"})
-        yield ToolCallEvent(id="sibling", name="delegate", arguments={"prompt": "SIBLING"})
+        yield ToolCallEvent(id="A", name="to_agent", arguments={"prompt": "A"})
+        yield ToolCallEvent(id="sibling", name="to_agent", arguments={"prompt": "SIBLING"})
     elif original == "A" and note == "A":
-        yield ToolCallEvent(id="B", name="delegate", arguments={"prompt": "B"})
+        yield ToolCallEvent(id="B", name="to_agent", arguments={"prompt": "B"})
     elif original == "B":
         yield TextDoneEvent(text="B_WAKE_PRIVATE" if '"wakeups"' in note else "B_INITIAL_PRIVATE")
     elif original == "A":
@@ -258,47 +258,56 @@ def test_closed_grandchild_wakes_same_immediate_parent_then_main(
             assert a.status == ("failed" if failed_parent else "completed")
             assert all(child._closed for child in harness.tasks._children.values())
             assert harness.tasks._used == 3
-            sibling_history = await harness.task_history(sibling.id)
-            events = [event async for event in harness.wake("Wake B", task_id=b.id)]
+            sibling_history = await harness.task_history(sibling.session_id)
+            events = [event async for event in harness.wake("Wake B", session_id=b.session_id)]
             updated = {info.prompt: info for info in harness.tasks.list()}
             assert harness.tasks._used == 5 and len(providers) == 6
             for old in (a, b):
                 current = updated[old.prompt]
-                assert (current.id, current.child_session_id, current.parent_task_id, current.parent_session_id) == (
-                    old.id,
-                    old.child_session_id,
-                    old.parent_task_id,
+                assert (
+                    current.session_id,
+                    current._storage_id,
+                    current.parent_session_id,
+                    current._parent_storage_id,
+                ) == (
+                    old.session_id,
+                    old._storage_id,
                     old.parent_session_id,
+                    old._parent_storage_id,
                 )
                 assert current.status == "completed" and current.activation == 1 and current.followups == 0
             assert updated["A"].trigger == "notification" and updated["B"].trigger == "wakeup"
-            assert await harness.task_history(sibling.id) == sibling_history
+            assert await harness.task_history(sibling.session_id) == sibling_history
             assert not any(isinstance(event, TaskMessage) for event in events)
             starts = [event for event in events if isinstance(event, TaskStarted)]
-            assert [(event.task_id, event.activation, event.trigger) for event in starts] == [
-                (b.id, 1, "wakeup"),
-                (a.id, 1, "notification"),
+            assert [(event.session_id, event.activation, event.trigger) for event in starts] == [
+                (b.session_id, 1, "wakeup"),
+                (a.session_id, 1, "notification"),
             ]
             deliveries = [event for event in events if isinstance(event, TaskNotification)]
-            assert [(event.source_task_id, event.recipient_task_id, event.cause) for event in deliveries] == [
-                (b.id, b.id, "wakeup"),
-                (b.id, a.id, "completion"),
-                (a.id, "", "completion"),
+            assert [(event.source_session_id, event.recipient_session_id, event.cause) for event in deliveries] == [
+                (b.session_id, b.session_id, "wakeup"),
+                (b.session_id, a.session_id, "completion"),
+                (a.session_id, "", "completion"),
             ]
             assert len({event.notification_id for event in deliveries}) == 3
             assert any(
-                isinstance(event, TaskCompleted) and event.task_id == b.id and event.result == "B_WAKE_PRIVATE"
+                isinstance(event, TaskCompleted)
+                and event.session_id == b.session_id
+                and event.result == "B_WAKE_PRIVATE"
                 for event in events
             )
             assert any(
-                isinstance(event, TaskNotification) and event.source_task_id == b.id and event.recipient_task_id == a.id
+                isinstance(event, TaskNotification)
+                and event.source_session_id == b.session_id
+                and event.recipient_session_id == a.session_id
                 for event in initial
             )
-            root_history, parent_history = await harness.history(), await harness.task_history(a.id)
+            root_history, parent_history = await harness.history(), await harness.task_history(a.session_id)
             assert "B_WAKE_PRIVATE" in str(notifications(parent_history))
             assert "B_WAKE_PRIVATE" not in str(root_history) and "B_INITIAL_PRIVATE" not in str(root_history)
             assert "A_WAKE_SYNTHESIS" in str(notifications(root_history))
-            for history in (root_history, parent_history, await harness.task_history(b.id)):
+            for history in (root_history, parent_history, await harness.task_history(b.session_id)):
                 assert_balanced(history)
             assert len([event for event in events if isinstance(event, DoneEvent)]) == 1
         finally:
@@ -317,7 +326,7 @@ def test_parent_reactivation_quota_failure_does_not_fall_back_to_root(
             b = next(info for info in harness.tasks.list() if info.prompt == "B")
             requests = len(providers[0].requests)
             await set_limits(harness, SubagentLimits(max_subagent_executions=4))
-            events = [event async for event in harness.wake("Wake B", task_id=b.id)]
+            events = [event async for event in harness.wake("Wake B", session_id=b.session_id)]
             assert harness.tasks._used == 4 and len(providers[0].requests) == requests
             assert any(isinstance(event, ErrorEvent) and "quota exhausted" in event.message for event in events)
             assert not any(isinstance(event, TaskNotification) and event.cause == "completion" for event in events)
@@ -353,20 +362,20 @@ def test_parent_becomes_unavailable_during_wake_never_receives_or_reroutes_resul
             requests = len(providers[0].requests)
 
             async def wake() -> list[HarnessEvent]:
-                return [event async for event in harness.wake("Wake B", task_id=b.id)]
+                return [event async for event in harness.wake("Wake B", session_id=b.session_id)]
 
             task = asyncio.create_task(wake())
             await asyncio.wait_for(waiting.wait(), HANG_GUARD)
             if invalid == "missing":
-                harness.tasks._infos[b.id].parent_task_id = "missing"
+                harness.tasks._infos[b.session_id].parent_session_id = "s999"
             elif invalid == "cancelled":
-                harness.tasks._infos[a.id].status = "cancelled"
+                harness.tasks._infos[a.session_id].status = "cancelled"
             else:
-                harness.tasks._children.pop(a.id)
+                harness.tasks._children.pop(a.session_id)
             release.set()
             events = await asyncio.wait_for(task, HANG_GUARD)
             assert any(isinstance(event, ErrorEvent) and "not forwarded to Main" in event.message for event in events)
-            assert any(isinstance(event, TaskCompleted) and event.task_id == b.id for event in events)
+            assert any(isinstance(event, TaskCompleted) and event.session_id == b.session_id for event in events)
             assert not any(isinstance(event, TaskNotification) and event.cause == "completion" for event in events)
             assert len(providers[0].requests) == requests and "B_WAKE_PRIVATE" not in str(await harness.history())
         finally:
@@ -404,14 +413,14 @@ def test_woken_child_keeps_permissions_and_activation_scoped_approvals(
             await collect(harness, "ROOT")
             b = next(info for info in harness.tasks.list() if info.prompt == "B")
             await harness.set_agent("assistant" if mode == "build" else mode)
-            _ = [event async for event in harness.wake("Try tools", task_id=b.id)]
+            _ = [event async for event in harness.wake("Try tools", session_id=b.session_id)]
             assert len(approvals) == (2 if mode == "build" else 0)
-            assert all(request.task_id == b.id and request.activation == 1 for request in approvals)
+            assert all(request.session_id == b.session_id and request.activation == 1 for request in approvals)
             assert not (tmp_path / "forbidden.txt").exists()
             assert all(
                 ("shell" in schema) == (mode == "build") for provider in providers[4:] for schema in provider.schemas
             )
-            history = await harness.task_history(b.id)
+            history = await harness.task_history(b.session_id)
             denied = [message for message in history if message.role == "tool" and message.name in {"write", "shell"}]
             assert len(denied) == 2 and all(
                 "denied" in str(message.content) or "denies" in str(message.content) for message in denied
@@ -440,7 +449,7 @@ def test_wake_cancellation_joins_children_without_reactivating_parent(
         try:
             await collect(harness, "ROOT")
             b = next(info for info in harness.tasks.list() if info.prompt == "B")
-            async with aclosing(harness.wake("Wait", task_id=b.id)) as stream:
+            async with aclosing(harness.wake("Wait", session_id=b.session_id)) as stream:
                 if stop == "aclose":
                     async for event in stream:
                         if isinstance(event, TaskNotification) and event.cause == "wakeup":
@@ -462,7 +471,7 @@ def test_wake_cancellation_joins_children_without_reactivating_parent(
             assert next(info for info in harness.tasks.list() if info.prompt == "B").status == "cancelled"
             assert not harness.tasks._pending and not harness.tasks._observed
             with pytest.raises(RuntimeError, match="cancellation"):
-                _ = [event async for event in harness.wake("Never replay", task_id=b.id)]
+                _ = [event async for event in harness.wake("Never replay", session_id=b.session_id)]
         finally:
             await harness.close()
 
@@ -497,12 +506,18 @@ def test_completion_observation_precedes_immediate_parent_delivery_boundary(
             await asyncio.wait_for(asyncio.gather(paused.wait(), observed.wait()), 5)
             b = next(info for info in harness.tasks.list() if info.prompt == "B")
             a = next(info for info in harness.tasks.list() if info.prompt == "A")
-            assert not any(isinstance(event, TaskNotification) and event.source_task_id == b.id for event in events)
-            assert not notifications(await harness.task_history(a.id))
+            assert not any(
+                isinstance(event, TaskNotification) and event.source_session_id == b.session_id for event in events
+            )
+            assert not notifications(await harness.task_history(a.session_id))
             release.set()
             await asyncio.wait_for(task, HANG_GUARD)
-            notes = [event for event in events if isinstance(event, TaskNotification) and event.source_task_id == b.id]
-            assert len(notes) == 1 and notes[0].recipient_task_id == a.id
+            notes = [
+                event
+                for event in events
+                if isinstance(event, TaskNotification) and event.source_session_id == b.session_id
+            ]
+            assert len(notes) == 1 and notes[0].recipient_session_id == a.session_id
             assert "B_INITIAL_PRIVATE" not in str(await harness.history())
         finally:
             release.set()
@@ -522,12 +537,12 @@ def test_automatic_activations_do_not_consume_human_followups_or_reset_budget(
             await collect(harness, "ROOT")
             b = next(info for info in harness.tasks.list() if info.prompt == "B")
             monkeypatch.setattr(subagents, "MAX_FOLLOWUPS", 0)
-            _ = [event async for event in harness.wake("Automatic", task_id=b.id)]
+            _ = [event async for event in harness.wake("Automatic", session_id=b.session_id)]
             assert harness.tasks._used == 5
             with pytest.raises(ValueError, match="human follow-ups"):
-                _ = [event async for event in harness.continue_task(b.id, "Human")]
+                _ = [event async for event in harness.continue_task(b.session_id, "Human")]
             monkeypatch.setattr(subagents, "MAX_FOLLOWUPS", 8)
-            events = [event async for event in harness.continue_task(b.id, "Human")]
+            events = [event async for event in harness.continue_task(b.session_id, "Human")]
             starts = [event for event in events if isinstance(event, TaskStarted)]
             assert [(event.activation, event.followup, event.trigger) for event in starts] == [
                 (2, 1, "human"),
@@ -537,7 +552,7 @@ def test_automatic_activations_do_not_consume_human_followups_or_reset_budget(
             await set_limits(harness, SubagentLimits(max_subagent_executions=7))
             count = len(providers)
             with pytest.raises(ValueError, match="budget exhausted"):
-                _ = [event async for event in harness.wake("No eighth execution", task_id=b.id)]
+                _ = [event async for event in harness.wake("No eighth execution", session_id=b.session_id)]
             assert harness.tasks._used == 7 and len(providers) == count
             _ = [event async for event in harness.wake("Main still can synthesize")]
             assert harness.tasks._used == 7
@@ -562,9 +577,9 @@ def test_wake_admission_rejects_invalid_ancestry_without_activation(
             b = next(info for info in harness.tasks.list() if info.prompt == "B")
             owner = harness
             if invalid == "missing-parent":
-                harness.tasks._infos[b.id].parent_task_id = "missing"
+                harness.tasks._infos[b.session_id].parent_session_id = "s999"
             elif invalid == "cancelled-parent":
-                harness.tasks._infos[a.id].status = "cancelled"
+                harness.tasks._infos[a.session_id].status = "cancelled"
             elif invalid == "depth":
                 await set_limits(harness, SubagentLimits(max_subagent_depth=1))
             elif invalid == "other-session":
@@ -575,8 +590,8 @@ def test_wake_admission_rejects_invalid_ancestry_without_activation(
                 owner = restored
             calls = sum(len(provider.requests) for provider in providers)
             with pytest.raises((ValueError, RuntimeError, PermissionError)):
-                _ = [event async for event in owner.wake("Rejected", task_id=b.id)]
-            assert harness.tasks._infos[b.id].activation == 0 and harness.tasks._used == 3
+                _ = [event async for event in owner.wake("Rejected", session_id=b.session_id)]
+            assert harness.tasks._infos[b.session_id].activation == 0 and harness.tasks._used == 3
             assert sum(len(provider.requests) for provider in providers) == calls
         finally:
             if restored is not None:
@@ -638,7 +653,7 @@ def test_closed_deep_tree_reactivates_each_parent_not_all_ancestors_at_once(
             original = next(str(message.content) for message in messages if message.role == "user")
             if messages[-1].content == original and original != "C":
                 yield ToolCallEvent(
-                    id=original, name="delegate", arguments={"prompt": {"ROOT": "A", "A": "B", "B": "C"}[original]}
+                    id=original, name="to_agent", arguments={"prompt": {"ROOT": "A", "A": "B", "B": "C"}[original]}
                 )
             else:
                 yield TextDoneEvent(text=f"{original}_SYNTHESIS")
@@ -648,17 +663,17 @@ def test_closed_deep_tree_reactivates_each_parent_not_all_ancestors_at_once(
             await set_limits(harness, SubagentLimits(max_subagent_depth=3))
             await collect(harness, "ROOT")
             infos = {info.prompt: info for info in harness.tasks.list()}
-            events = [event async for event in harness.wake("Leaf", task_id=infos["C"].id)]
+            events = [event async for event in harness.wake("Leaf", session_id=infos["C"].session_id)]
             assert harness.tasks._used == 6
             assert [
-                (event.source_task_id, event.recipient_task_id)
+                (event.source_session_id, event.recipient_session_id)
                 for event in events
                 if isinstance(event, TaskNotification)
             ] == [
-                (infos["C"].id, infos["C"].id),
-                (infos["C"].id, infos["B"].id),
-                (infos["B"].id, infos["A"].id),
-                (infos["A"].id, ""),
+                (infos["C"].session_id, infos["C"].session_id),
+                (infos["C"].session_id, infos["B"].session_id),
+                (infos["B"].session_id, infos["A"].session_id),
+                (infos["A"].session_id, ""),
             ]
             assert all(info.activation == 1 and info.followups == 0 for info in harness.tasks.list())
             root_history = str(await harness.history())
@@ -689,31 +704,31 @@ def test_followup_rejects_starting_ancestor_without_losing_original_notification
 
             async def pause_initialized_parent(child: Harness, *, create_session: bool = True) -> None:
                 await original_initialize(child, create_session=create_session)
-                if child._task_id == a.id and child._activation == 1 and not child.tasks._active:
+                if child._agent_session_id == a.session_id and child._activation == 1 and not child.tasks._active:
                     initialized.set()
                     await release.wait()
 
             monkeypatch.setattr(Harness, "initialize", pause_initialized_parent)
 
             async def wake() -> None:
-                async for event in harness.wake("Wake B", task_id=b.id):
+                async for event in harness.wake("Wake B", session_id=b.session_id):
                     events.append(event)
-                    if isinstance(event, TaskStarted) and event.task_id == a.id:
+                    if isinstance(event, TaskStarted) and event.session_id == a.session_id:
                         started.set()
 
             task = asyncio.create_task(wake())
             await asyncio.wait_for(asyncio.gather(started.wait(), initialized.wait()), 5)
-            parent = harness.tasks._children[a.id]
+            parent = harness.tasks._children[a.session_id]
             assert parent._initialized and not parent.tasks._active
-            assert harness.tasks._infos[a.id].status == "running"
-            assert not harness.tasks._workers[a.id].done()
-            assert harness.tasks._workers[b.id].done()
+            assert harness.tasks._infos[a.session_id].status == "running"
+            assert not harness.tasks._workers[a.session_id].done()
+            assert harness.tasks._workers[b.session_id].done()
             retained = harness.tasks.list()
             workers = dict(harness.tasks._workers)
             budget = harness.tasks._used
             accepted: list[HarnessEvent] = []
             with pytest.raises(RuntimeError, match="Ancestor is starting or stopping"):
-                async for event in harness.continue_task(b.id, "Second human follow-up"):
+                async for event in harness.continue_task(b.session_id, "Second human follow-up"):
                     accepted.append(event)
             assert not accepted
             assert harness.tasks.list() == retained and harness.tasks._workers == workers
@@ -721,17 +736,17 @@ def test_followup_rejects_starting_ancestor_without_losing_original_notification
             release.set()
             await asyncio.wait_for(task, HANG_GUARD)
             deliveries = [event for event in events if isinstance(event, TaskNotification)]
-            assert [(event.source_task_id, event.recipient_task_id, event.cause) for event in deliveries] == [
-                (b.id, b.id, "wakeup"),
-                (b.id, a.id, "completion"),
-                (a.id, "", "completion"),
+            assert [(event.source_session_id, event.recipient_session_id, event.cause) for event in deliveries] == [
+                (b.session_id, b.session_id, "wakeup"),
+                (b.session_id, a.session_id, "completion"),
+                (a.session_id, "", "completion"),
             ]
             assert deliveries[1].text == "B_WAKE_PRIVATE" and deliveries[2].text == "A_WAKE_SYNTHESIS"
-            parent_history = await harness.task_history(a.id)
+            parent_history = await harness.task_history(a.session_id)
             root_history = await harness.history()
             assert sum("B_WAKE_PRIVATE" in str(note.content) for note in notifications(parent_history)) == 1
             assert "B_WAKE_PRIVATE" not in str(root_history) and "A_WAKE_SYNTHESIS" in str(root_history)
-            assert "Second human follow-up" not in str(await harness.task_history(b.id))
+            assert "Second human follow-up" not in str(await harness.task_history(b.session_id))
             assert not any(isinstance(event, ErrorEvent | TaskMessage) for event in events)
             assert all(info.status == "completed" for info in harness.tasks.list())
             assert isinstance(events[-1], DoneEvent)
@@ -758,7 +773,7 @@ def test_scheduler_suppressing_cancellation_cannot_restart_model_after_single_ca
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if child and not provider.index:
                 if len(provider.requests) == 1:
-                    yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Schedule"})
+                    yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Schedule"})
                 else:
                     parent_waiting.set()
                     yield TextDoneEvent(text="Waiting for child")
@@ -805,7 +820,7 @@ def test_scheduler_suppressing_cancellation_cannot_restart_model_after_single_ca
             if child:
                 info = harness.tasks.list()[0]
                 assert info.status == "cancelled"
-                assert_balanced(await harness.task_history(info.id))
+                assert_balanced(await harness.task_history(info.session_id))
         finally:
             release_unexpected.set()
             if not consumer.done():

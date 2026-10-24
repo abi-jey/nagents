@@ -21,8 +21,8 @@ export function useApproval(token: string) {
       arguments: event.arguments,
       allow_tool: event.allow_tool === true,
       allow_tool_persistent: event.allow_tool_persistent === true,
-      task_id: text(event, "task_id"),
-      task_name: text(event, "task_name"),
+      session_id: text(event, "session_id"),
+      title: text(event, "title"),
       depth: typeof event.depth === "number" ? event.depth : 0,
       activation: typeof event.activation === "number" ? event.activation : 0,
     };

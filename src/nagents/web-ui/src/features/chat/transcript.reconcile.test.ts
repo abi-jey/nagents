@@ -142,7 +142,7 @@ test("an unlinked wakeup prefers saved history only after an observed success an
 
 test("child approvals sharing an old call ID retain their execution scope across cold history reconciliation", () => {
   const snapshot = held();
-  snapshot.active_run!.approval = { event: "approval", run_id: "run-3", task_id: "child", activation: 4, followup: 2, call_id: "call", approval_id: "approval-current", tool: "shell" };
+  snapshot.active_run!.approval = { event: "approval", run_id: "run-3", session_id: "child", activation: 4, followup: 2, call_id: "call", approval_id: "approval-current", tool: "shell" };
   let state = applySnapshot({ entries: [] }, snapshot);
   const child = state.entries.find((entry) => entry.approvalId === "approval-current")!;
   assert.equal(child.taskId, "child"); assert.equal(child.activation, 4); assert.equal(child.followup, 2);
@@ -169,8 +169,8 @@ test("ingress-only active input links to its saved user without guessing from eq
 test("aggregated active records retain exact followup scopes and stable IDs when refreshed out of order", () => {
   const snapshot = held(false);
   snapshot.active_run!.records!.push(
-    { event: "text_chunk", run_id: "run-3", task_id: "child", activation: 4, followup: 1, chunk: "first followup" },
-    { event: "text_chunk", run_id: "run-3", task_id: "child", activation: 4, followup: 2, chunk: "second followup" },
+    { event: "text_chunk", run_id: "run-3", session_id: "child", activation: 4, followup: 1, chunk: "first followup" },
+    { event: "text_chunk", run_id: "run-3", session_id: "child", activation: 4, followup: 2, chunk: "second followup" },
   );
   const first = applySnapshot({ entries: [] }, snapshot);
   snapshot.active_run!.records!.reverse();

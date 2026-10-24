@@ -1,7 +1,7 @@
 # Independent ngn diagnostics
 
 This optional development task exercises the shipping `Harness.run`, native file
-tools, test execution, `delegate(..., agent='assistant')` with inspect-only
+tools, test execution, `to_agent(..., agent='assistant')` with inspect-only
 instructions, and completing actionable review work. It contains no Terminal-Bench
 material or reference solution, and produces no comparable benchmark score.
 

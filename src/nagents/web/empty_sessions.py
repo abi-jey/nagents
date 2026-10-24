@@ -23,8 +23,9 @@ _ROOT = re.compile(r"ngn-[A-Za-z0-9-]{1,76}\Z")
 _REFERENCES = (
     ("v2_messages", "session_id = ?"),
     ("ngn_web_inbox", "session_id = ?"),
-    ("ngn_web_tasks", "root = ?"),
-    ("ngn_web_task_inputs", "root = ? AND text != ''"),
+    ("ngn_web_agent_sessions", "root = ?"),
+    ("nagents_agent_sessions", "root_session_id = ?"),
+    ("ngn_web_agent_inputs", "root = ? AND text != ''"),
     ("nagents_channel_inbox", "session_id = ?"),
     ("ngn_web_uploads", "session_id = ?"),
     ("ngn_web_group_members", "session_id = ?"),
@@ -82,11 +83,11 @@ def _empty_roots(db: sqlite3.Connection, active_voice: str) -> list[str]:
 def _protected(state: WebState) -> set[str]:
     return {
         *(
-            info.session_id
+            info.root_session_id
             for harness in {state.harness, *state.executions.owners.values()}
             for info in harness.tasks._infos.values()
         ),
-        *(item.session_id for item in state.wakeups.pending.values()),
+        *(item.root_session_id for item in state.wakeups.pending.values()),
         *(connection.main_session_id for connection in state.channels.catalog.connections.values()),
         *state.executions.runs,
         *state.channels.work_tasks,
@@ -112,7 +113,7 @@ async def _invalidate(state: WebState, removed: list[str]) -> None:
     for session_id in removed:
         state.session_agents.choices.pop(session_id, None)
         state.bus.delete_session(session_id)
-        state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
+        state.observe_run(None, {"event": "session_deleted", "root_session_id": session_id})
         state.wakeups.forget_session(session_id)
     state.bus.publish({"type": "sessions", "sessions": [asdict(item) for item in await state.list_sessions()]})
 

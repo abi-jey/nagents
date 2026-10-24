@@ -129,11 +129,11 @@ class ToolApprovals:
     def requested_binding(self, harness: Harness, request: ApprovalRequest) -> ToolBinding | None:
         if harness._closed:
             return None
-        if request.task_id:
+        if request.session_id:
             root = harness.tasks.root
-            child = root._children.get(request.task_id)
-            info = root._infos.get(request.task_id)
-            worker = root._workers.get(request.task_id)
+            child = root._children.get(request.session_id)
+            info = root._infos.get(request.session_id)
+            worker = root._workers.get(request.session_id)
             if (
                 child is None
                 or child._activation != request.activation
@@ -142,7 +142,7 @@ class ToolApprovals:
                 or info.status != "running"
                 or info.activation != request.activation
                 or info.depth != request.depth
-                or info.session_id != root.harness.session_id
+                or info.root_session_id != root.harness.session_id
                 or worker is None
                 or worker.done()
                 or worker.cancelling()

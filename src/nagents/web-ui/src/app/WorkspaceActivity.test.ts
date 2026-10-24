@@ -22,10 +22,10 @@ test("workspace polling and recipient switches retain exactly one main conversat
   Object.assign(globalThis, globals);
   const container = dom.window.document.getElementById("root")!;
   const react = createRoot(container);
-  const child: RetainedTask = { id: "child", name: "Explorer", status: "running", result: "", error: "", session_id: "root",
-    prompt: "Inspect repository", child_session_id: "root-child", parent_task_id: "", parent_session_id: "root", depth: 1,
+  const child: RetainedTask = { session_id: "child", title: "Explorer", status: "running", result: "", error: "", root_session_id: "root",
+    prompt: "Inspect repository",  parent_session_id: "",  depth: 1,
     profile: "research", mode: "build", followups: 0, activation: 0, trigger: "delegation", can_message: true };
-  const mainAgent: TeamAgent = { ...taskAgent({ ...child, id: "", name: "Assistant" }), phase: "ready" };
+  const mainAgent: TeamAgent = { ...taskAgent({ ...child, session_id: "", title: "Assistant" }), phase: "ready" };
   const agents = [mainAgent, taskAgent(child)];
   const base: TeamController = { selected: "", select() {}, tasks: [child], profiles: [], subagentUsage: undefined, task: undefined, profile: undefined,
     detail: undefined, loaded: true, activity: [], loading: false, error: "", startNotice: "", startParent: undefined,

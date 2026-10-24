@@ -69,7 +69,7 @@ async def test_child_completion_reflects_recovery_and_routes_result_once(
         elif notifications(messages):
             yield TextDoneEvent(text="Parent considered child outcome")
         elif len(provider.requests) == 1:
-            yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Review this fixture"})
+            yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Review this fixture"})
         else:
             yield TextDoneEvent(text="Parent preliminary response")
 
@@ -103,7 +103,7 @@ async def test_child_completion_reflects_recovery_and_routes_result_once(
         )
         done = [event for event in child_events if isinstance(event, DoneEvent)]
         assert len(done) == 1 and done[0].final_text == expected_result
-        history = await harness.task_history(info.id)
+        history = await harness.task_history(info.session_id)
         assert [message.content for message in history if message.role == "assistant"] == (
             [expected_result] if recovered else []
         )
@@ -111,18 +111,21 @@ async def test_child_completion_reflects_recovery_and_routes_result_once(
         completed = [event for event in events if isinstance(event, TaskCompleted)]
         delivered = [event for event in events if isinstance(event, TaskNotification)]
         assert len(completed) == len(delivered) == 1
-        assert completed[0].task_id == info.id == delivered[0].source_task_id
+        assert completed[0].session_id == info.session_id == delivered[0].source_session_id
         assert completed[0].status == expected_status
         assert completed[0].result == expected_result
         assert completed[0].error == info.error
-        assert completed[0].parent_session_id == harness.session_id
-        assert completed[0].child_session_id == info.child_session_id
-        assert delivered[0].recipient_task_id == ""
+        assert completed[0].parent_session_id == ""
+        assert completed[0].root_session_id == harness.session_id
+        assert delivered[0].recipient_session_id == ""
+        assert delivered[0].root_session_id == harness.session_id
         notes = notifications(await harness.history())
         assert len(notes) == 1
         payload = json.loads(str(notes[0].content).partition("\n")[2])
-        assert payload["tasks"][0]["result"] == expected_result
-        assert payload["tasks"][0]["status"] == expected_status
+        assert payload["sessions"][0]["session_id"] == info.session_id
+        assert payload["sessions"][0].get("result", "") == expected_result
+        assert payload["sessions"][0].get("error", "") == info.error
+        assert payload["sessions"][0]["status"] == expected_status
         assert "private" not in repr(completed) + repr(notes)
         assert len(providers[0].requests) == 3
         assert isinstance(events[-1], DoneEvent)

@@ -232,7 +232,7 @@ class SessionTrash:
             await self.store._transaction(lambda db: self._purge_rows(db, session_id, deletion_id, expired=expired))
         _repoint_mains(self.state, session_id, self.state.selected_session_id)
         self.state.bus.delete_session(session_id)
-        self.state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
+        self.state.observe_run(None, {"event": "session_deleted", "root_session_id": session_id})
         self.state.wakeups.forget_session(session_id)
         await self.state.executions.dispose(session_id)
 

@@ -55,16 +55,16 @@ async def test_live_turn_reload_raises_limits_without_resetting_usage_or_occupie
             yield TextDoneEvent(text="Child completed")
             return
         if len(provider.requests) == 1:
-            yield ToolCallEvent(id="parent-a", name="delegate", arguments={"prompt": "First child"})
+            yield ToolCallEvent(id="parent-a", name="to_agent", arguments={"prompt": "First child"})
             yield ToolCallEvent(id="change-limits", name="raise_limits", arguments={})
         elif len(provider.requests) == 2:
             manager = harness.tasks.root
             assert manager.limits == SubagentLimits(2, 3, 2)
             assert manager._used == 1
             assert manager.usage()["occupied_slots"] == 1
-            assert "delegate" in provider.schemas[-1]
+            assert "to_agent" in provider.schemas[-1]
             raised_turn.set()
-            yield ToolCallEvent(id="parent-b", name="delegate", arguments={"prompt": "Second child"})
+            yield ToolCallEvent(id="parent-b", name="to_agent", arguments={"prompt": "Second child"})
         elif len(provider.requests) == 3:
             manager = harness.tasks.root
             assert manager._used == 2
@@ -135,8 +135,8 @@ async def test_lowering_limits_preserves_running_children_and_blocks_new_admissi
         await save_limits(harness, SubagentLimits(3, 8, 2))
         await harness.tasks.refresh_limits()
         harness.tasks.begin(harness.session_id)
-        first = await harness.tasks.delegate("First running child")
-        second = await harness.tasks.delegate("Second running child")
+        first = await harness.tasks.to_agent("First running child")
+        second = await harness.tasks.to_agent("Second running child")
         await asyncio.wait_for(two_started.wait(), HANG_GUARD)
         assert harness.tasks._used == 2
 
@@ -147,22 +147,24 @@ async def test_lowering_limits_preserves_running_children_and_blocks_new_admissi
         assert lowered["remaining_executions"] == 0
         assert lowered["occupied_slots"] == 2
         assert lowered["available_slots"] == 0
-        assert all(not harness.tasks._workers[task_id].done() for task_id in (first["task_id"], second["task_id"]))
+        assert all(
+            not harness.tasks._workers[session_id].done() for session_id in (first["session_id"], second["session_id"])
+        )
         with pytest.raises(ValueError, match="budget exhausted"):
-            await harness.tasks.delegate("Blocked by lower execution limit")
+            await harness.tasks.to_agent("Blocked by lower execution limit")
         assert harness.tasks._used == 2
 
         await save_limits(harness, SubagentLimits(1, 5, 2))
         await harness.tasks.refresh_limits()
         with pytest.raises(ValueError, match="concurrently"):
-            await harness.tasks.delegate("Still blocked by occupied slots")
+            await harness.tasks.to_agent("Still blocked by occupied slots")
         assert harness.tasks._used == 2
 
         await save_limits(harness, SubagentLimits(3, 5, 2))
         await harness.tasks.refresh_limits()
-        third = await harness.tasks.delegate("Allowed after raising the limits")
+        third = await harness.tasks.to_agent("Allowed after raising the limits")
         await asyncio.wait_for(three_started.wait(), HANG_GUARD)
-        assert third["task_id"] in harness.tasks._workers
+        assert third["session_id"] in harness.tasks._workers
         assert harness.tasks._used == 3
         assert harness.tasks.usage()["occupied_slots"] == 3
     finally:
@@ -216,8 +218,8 @@ async def test_five_by_two_tree_runs_in_waves_with_one_shared_budget(
             elif request_number == 3:
                 assert harness.tasks.limits == proposed_limits
                 assert harness.tasks._used == 0
-                assert "delegate" in provider.schemas[-1]
-                yield ToolCallEvent(id="parent-1", name="delegate", arguments={"prompt": "Parent 1"})
+                assert "to_agent" in provider.schemas[-1]
+                yield ToolCallEvent(id="parent-1", name="to_agent", arguments={"prompt": "Parent 1"})
             else:
                 parents = [info for info in harness.tasks.list() if info.depth == 1]
                 completed = sum(info.status == "completed" for info in parents)
@@ -227,7 +229,9 @@ async def test_five_by_two_tree_runs_in_waves_with_one_shared_budget(
                     yield TextDoneEvent(text="Waiting for this branch to complete.")
                 elif completed < 5:
                     failed_parent = next((info for info in parents if info.status == "failed"), None)
-                    parent_history = await harness.task_history(failed_parent.id) if failed_parent is not None else []
+                    parent_history = (
+                        await harness.task_history(failed_parent.session_id) if failed_parent is not None else []
+                    )
                     assert harness.tasks._used == completed * 3, [
                         (info.depth, info.status, info.error, info.prompt) for info in harness.tasks.list()
                     ] + [
@@ -238,7 +242,7 @@ async def test_five_by_two_tree_runs_in_waves_with_one_shared_budget(
                     ]
                     yield ToolCallEvent(
                         id=f"parent-{completed + 1}",
-                        name="delegate",
+                        name="to_agent",
                         arguments={"prompt": f"Parent {completed + 1}"},
                     )
                 else:
@@ -248,7 +252,7 @@ async def test_five_by_two_tree_runs_in_waves_with_one_shared_budget(
             parent = str((provider.index - 1) // 3 + 1)
             for leaf in range(1, 3):
                 yield ToolCallEvent(
-                    id=f"leaf-{parent}-{leaf}", name="delegate", arguments={"prompt": f"Leaf {parent}-{leaf}"}
+                    id=f"leaf-{parent}-{leaf}", name="to_agent", arguments={"prompt": f"Leaf {parent}-{leaf}"}
                 )
         else:
             yield TextDoneEvent(text="Branch finished.")
@@ -266,8 +270,8 @@ async def test_five_by_two_tree_runs_in_waves_with_one_shared_budget(
         parents = [info for info in all_tasks if info.depth == 1]
         leaves = [info for info in all_tasks if info.depth == 2]
         assert len(parents) == 5 and len(leaves) == 10
-        assert {parent.id for parent in parents} == {leaf.parent_task_id for leaf in leaves}
-        assert all(sum(leaf.parent_task_id == parent.id for leaf in leaves) == 2 for parent in parents)
+        assert {parent.session_id for parent in parents} == {leaf.parent_session_id for leaf in leaves}
+        assert all(sum(leaf.parent_session_id == parent.session_id for leaf in leaves) == 2 for parent in parents)
         assert all(info.status == "completed" and info.activation == 0 and info.followups == 0 for info in all_tasks)
         assert harness.tasks._used == proposed_limits.max_subagent_executions == 15
         assert harness.tasks.usage()["occupied_slots"] == 0
@@ -279,7 +283,7 @@ async def test_five_by_two_tree_runs_in_waves_with_one_shared_budget(
                     event
                     for event in events
                     if isinstance(event, TaskNotification)
-                    and not event.recipient_task_id
+                    and not event.recipient_session_id
                     and event.cause == "completion"
                 ]
             )
@@ -297,18 +301,18 @@ async def test_five_by_two_tree_runs_in_waves_with_one_shared_budget(
         assert not any(isinstance(event, ToolResultEvent) and event.error for event in events)
         assert_balanced(await harness.history())
         for parent in parents:
-            history = await harness.task_history(parent.id)
+            history = await harness.task_history(parent.session_id)
             delivered = [
                 task
                 for notice in notifications(history)
-                for task in json.loads(str(notice.content).partition("\n")[2])["tasks"]
+                for task in json.loads(str(notice.content).partition("\n")[2])["sessions"]
             ]
-            expected = {leaf.id for leaf in leaves if leaf.parent_task_id == parent.id}
+            expected = {leaf.session_id for leaf in leaves if leaf.parent_session_id == parent.session_id}
             assert len(delivered) == 2
-            assert {task["task_id"] for task in delivered} == expected
+            assert {task["session_id"] for task in delivered} == expected
             assert_balanced(history)
         for task in all_tasks:
-            assert_balanced(await harness.task_history(task.id))
+            assert_balanced(await harness.task_history(task.session_id))
         assert all(provider.closed for provider in providers[1:])
     finally:
         await harness.close()

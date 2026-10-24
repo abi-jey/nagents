@@ -161,16 +161,17 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
         assert descendant["result"] == "" and descendant["error"]
         error = next(record for record in records if record["event"] == "error")
         if wrong_parent:
-            assert error["recoverable"] is False and "task_id" not in error and "code" not in error
+            assert error["recoverable"] is False and "task_id" not in error and "session_id" not in error
+            assert "code" not in error
             assert not protected_drafts
         else:
             assert error["recoverable"] is True and error["code"] == "TASK_DELIVERY_SKIPPED"
             assert "parent stopped" in str(error["message"]) and "Provider" not in str(error["message"])
             for key in (
-                "task_id",
-                "parent_task_id",
+                "session_id",
+                "title",
                 "parent_session_id",
-                "child_session_id",
+                "root_session_id",
                 "depth",
                 "activation",
                 "followup",
@@ -178,7 +179,7 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
                 assert error[key] == descendant[key]
             assert "extra" not in error and protected_drafts
         assert not any(
-            record.get("source_task_id") == descendant["task_id"]
+            record.get("source_session_id") == descendant["session_id"]
             for record in records
             if record["event"] == "task_notification"
         )
@@ -202,7 +203,12 @@ async def test_upstream_error_code_cannot_spoof_task_scope_or_hide_a_root_failur
                     ErrorEvent(
                         code=code,
                         message="PRIVATE_UPSTREAM_DETAIL",
-                        extra={"task_id": "forged-child", "activation": 123, "password": "PRIVATE_UPSTREAM_DETAIL"},
+                        extra={
+                            "task_id": "legacy-forged-child",
+                            "session_id": "s999",
+                            "activation": 123,
+                            "password": "PRIVATE_UPSTREAM_DETAIL",
+                        },
                     ),
                 ]
             ]
@@ -212,7 +218,7 @@ async def test_upstream_error_code_cannot_spoof_task_scope_or_hide_a_root_failur
         assert "PRIVATE_UPSTREAM_DETAIL" not in json.dumps(records)
         error = next(record for record in records if record["event"] == "error")
         assert error["recoverable"] is False
-        assert not {"extra", "task_id", "activation", "password", "code"} & error.keys()
+        assert not {"extra", "task_id", "session_id", "activation", "password", "code"} & error.keys()
         assert next(record for record in records if record["event"] == "run_finished")["status"] == "failed"
 
 
@@ -288,17 +294,17 @@ async def test_stop_reaches_providers_before_pending_task_evidence_commit_finish
         save = state.tasks.store.save
         held = False
 
-        async def delayed_save(root: str, data: dict[str, object]) -> None:
+        async def delayed_save(root: str, data: dict[str, object], storage_id: str) -> None:
             nonlocal held
             if held:
-                await save(root, data)
+                await save(root, data, storage_id)
                 return
             held = True
 
             async def committing() -> None:
                 entered.set()
                 await release.wait()
-                await save(root, data)
+                await save(root, data, storage_id)
                 committed.set()
 
             # Like the actual SQLite owner, finish an accepted operation even

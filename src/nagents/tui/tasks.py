@@ -61,9 +61,9 @@ class AgentTree(Tree[str]):
     """
 
     class Opened(UIMessage):
-        def __init__(self, task_id: str) -> None:
+        def __init__(self, session_id: str) -> None:
             super().__init__()
-            self.task_id = task_id
+            self.session_id = session_id
 
     def __init__(self, *, id: str = "agent-tree") -> None:
         super().__init__("Agents / 0", data="", id=id)
@@ -72,7 +72,9 @@ class AgentTree(Tree[str]):
         self.root.expand()
 
     def update_tasks(self, tasks: list[TaskInfo], parents: dict[str, str]) -> None:
-        signature = tuple((task.id, task.name, task.status, parents.get(task.id, "")) for task in tasks)
+        signature = tuple(
+            (task.session_id, task.label, task.profile, task.status, parents.get(task.session_id, "")) for task in tasks
+        )
         if signature == self._signature:
             return
         self._signature = signature
@@ -88,27 +90,29 @@ class AgentTree(Tree[str]):
             self.root.expand()
         else:
             self.root.collapse()
-        known_ids = {task.id for task in tasks}
+        known_ids = {task.session_id for task in tasks}
         pending = list(tasks)
         while pending:
             ready = [
                 task
                 for task in pending
-                if parents.get(task.id, "") not in known_ids or parents.get(task.id, "") in self.task_nodes
+                if parents.get(task.session_id, "") not in known_ids
+                or parents.get(task.session_id, "") in self.task_nodes
             ]
             # Corrupt or incomplete ancestry must not hide otherwise inspectable tasks.
             if not ready:
                 ready = pending[:1]
             for task in ready:
-                parent = self.task_nodes.get(parents.get(task.id, ""), self.root)
+                parent = self.task_nodes.get(parents.get(task.session_id, ""), self.root)
                 state = {"running": "RUN", "completed": "DONE", "failed": "FAIL", "cancelled": "STOP"}[task.status]
                 label = Text(state.ljust(4), style=self.get_component_rich_style(f"agent-tree--{task.status}"))
-                label.append(" " + bounded(task.name))
-                self.task_nodes[task.id] = parent.add(
+                display = f"{task.label} [{task.session_id}]" if task.title else task.session_id
+                label.append(" " + bounded(f"{display} ({task.profile})"))
+                self.task_nodes[task.session_id] = parent.add(
                     label,
-                    data=task.id,
-                    expand=task.id in expanded or task.id not in previous_ids,
-                    allow_expand=task.id in parents.values(),
+                    data=task.session_id,
+                    expand=task.session_id in expanded or task.session_id not in previous_ids,
+                    allow_expand=task.session_id in parents.values(),
                 )
                 pending.remove(task)
         if cursor in self.task_nodes:
@@ -149,7 +153,7 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
         history: Callable[[str], Awaitable[list[Message]]],
         *,
         parents: Callable[[], dict[str, str]],
-        selected_id: str = "",
+        selected_session_id: str = "",
         drafts: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
@@ -157,7 +161,7 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
         self.get_history = history
         self.get_parents = parents
         self.infos: dict[str, TaskInfo] = {}
-        self.selected_id = selected_id
+        self.selected_session_id = selected_session_id
         self._signature: tuple[object, ...] = ()
         self._drafts = drafts if drafts is not None else {}
 
@@ -176,7 +180,7 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
                     with VerticalScroll(id="task-history-scroll"):
                         yield Static("", id="task-history", markup=False)
             yield TextArea(
-                self._drafts.get(self.selected_id, ""),
+                self._drafts.get(self.selected_session_id, ""),
                 id="task-followup",
                 soft_wrap=True,
                 placeholder="Write a follow-up for this agent...",
@@ -201,21 +205,30 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
         infos = self.get_tasks()
         parents = self.get_parents()
         signature = tuple(
-            (info.id, info.name, info.status, info.result, info.error, parents.get(info.id, "")) for info in infos
+            (
+                info.session_id,
+                info.title,
+                info.profile,
+                info.status,
+                info.result,
+                info.error,
+                parents.get(info.session_id, ""),
+            )
+            for info in infos
         )
         if signature == self._signature:
             return
         self._signature = signature
-        self.infos = {info.id: info for info in infos}
+        self.infos = {info.session_id: info for info in infos}
         options = self.query_one("#task-options", AgentTree)
         options.update_tasks(infos, parents)
         ids = list(self.infos)
         if ids:
-            selected = self.selected_id if self.selected_id in self.infos else ids[0]
+            selected = self.selected_session_id if self.selected_session_id in self.infos else ids[0]
             self.show_task(selected)
             options.call_after_refresh(options.move_cursor, options.task_nodes[selected])
         else:
-            self.selected_id = ""
+            self.selected_session_id = ""
             self.query_one("#task-heading", Static).update("No subagents in this session.")
             self.query_one("#task-history", Static).update("")
             self.query_one("#task-followup", TextArea).load_text("")
@@ -230,20 +243,21 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
     @on(AgentTree.Opened)
     def selected(self, event: AgentTree.Opened) -> None:
         event.stop()
-        if event.task_id in self.infos:
-            self.show_task(event.task_id)
+        if event.session_id in self.infos:
+            self.show_task(event.session_id)
             self.query_one("#task-followup", TextArea).focus()
 
-    def show_task(self, task_id: str) -> None:
+    def show_task(self, session_id: str) -> None:
         composer = self.query_one("#task-followup", TextArea)
-        if task_id != self.selected_id:
-            if self.selected_id:
-                self._drafts[self.selected_id] = composer.text
-            self.selected_id = task_id
-            composer.load_text(self._drafts.get(task_id, ""))
+        if session_id != self.selected_session_id:
+            if self.selected_session_id:
+                self._drafts[self.selected_session_id] = composer.text
+            self.selected_session_id = session_id
+            composer.load_text(self._drafts.get(session_id, ""))
             self.query_one("#task-history", Static).update("Loading saved conversation...")
-        info = self.infos[task_id]
-        self.query_one("#task-heading", Static).update(bounded(f"{info.name}  /  {info.status}"))
+        info = self.infos[session_id]
+        label = f"{info.title} [{info.session_id}]" if info.title else info.session_id
+        self.query_one("#task-heading", Static).update(bounded(f"{label}  /  {info.profile}  /  {info.status}"))
         self.query_one("#task-send", Button).disabled = info.status in {"running", "cancelled"}
         self.query_one("#task-hint", Static).update(
             "Cancelled tasks cannot continue. Delegate a new task instead."
@@ -252,14 +266,14 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
             if info.status == "running"
             else "Tab to write. Ctrl+Enter or Continue Agent sends to this agent and notifies the parent."
         )
-        self.load_history(task_id)
+        self.load_history(session_id)
 
     @work(exclusive=True, group="task-history")
-    async def load_history(self, task_id: str) -> None:
-        info = self.infos[task_id]
+    async def load_history(self, session_id: str) -> None:
+        info = self.infos[session_id]
         unavailable = False
         try:
-            messages = await self.get_history(task_id)
+            messages = await self.get_history(session_id)
         except (OSError, ValueError, RuntimeError):
             messages = []
             unavailable = True
@@ -285,7 +299,7 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
                 lines.append(f"ASSISTANT\n{bounded(info.result)}")
         if info.error:
             lines.append(f"STATUS\n{bounded(info.error)}")
-        if self.is_mounted and self.selected_id == task_id:
+        if self.is_mounted and self.selected_session_id == session_id:
             transcript = Text()
             if len(messages) > 40:
                 transcript.append("Showing the latest 40 messages.\n\n")
@@ -299,19 +313,19 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
             self.query_one("#task-history-scroll", VerticalScroll).scroll_end(animate=False)
 
     def action_send(self) -> None:
-        info = self.infos.get(self.selected_id)
+        info = self.infos.get(self.selected_session_id)
         text = self.query_one("#task-followup", TextArea).text.strip()
         if info is None or info.status in {"running", "cancelled"} or not text:
             self.query_one("#task-hint", Static).update("Choose a finished agent and enter a follow-up first.")
         elif len(text) > 16000:
             self.query_one("#task-hint", Static).update("Follow-ups are limited to 16,000 characters.")
         else:
-            self._drafts[info.id] = text
-            self.dismiss((info.id, text))
+            self._drafts[info.session_id] = text
+            self.dismiss((info.session_id, text))
 
     def action_close(self) -> None:
-        if self.selected_id:
-            self._drafts[self.selected_id] = self.query_one("#task-followup", TextArea).text
+        if self.selected_session_id:
+            self._drafts[self.selected_session_id] = self.query_one("#task-followup", TextArea).text
         self.dismiss(None)
 
     @on(Button.Pressed, "#task-send")

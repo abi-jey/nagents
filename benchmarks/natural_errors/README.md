@@ -52,3 +52,5 @@ only public fixture files and the original user utterance to model context;
 expected artifacts, answer terms, and control metadata remain outside it.
 
 See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the retained harness changes and repeated real-model validation.
+
+Current recorders and auditors use short child `session_id` values and separate `root_session_id` routing context. Historical measured outputs in `results/` retain their original schema and evidence; they are not migrated or replayed through the current contract. Create a fresh run for canonical trace auditing.

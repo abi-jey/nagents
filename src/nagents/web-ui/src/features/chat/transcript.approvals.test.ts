@@ -16,7 +16,7 @@ import type { Approval, Decision, Snapshot, WireEvent } from "../../types.js";
 const approval: Approval = {
   run_id: "run", approval_id: "nonce", call_id: "call", tool: "shell",
   description: "Execute this command", preview: "", arguments: { command: "pwd" },
-  task_id: "", task_name: "", activation: 0, depth: 0, allow_tool: true, allow_tool_persistent: true,
+  session_id: "", title: "", activation: 0, depth: 0, allow_tool: true, allow_tool_persistent: true,
 };
 
 test("approval dialog explains durable workspace scope and extension reload boundaries", () => {
@@ -38,7 +38,7 @@ test("approval dialog explains durable workspace scope and extension reload boun
 
 test("remote delegate approval names the remote operation and safely handles malformed nested data", () => {
   const render = (arguments_: unknown) => renderToStaticMarkup(createElement(ApprovalDialog, {
-    approval: { ...approval, tool: "delegate", arguments: arguments_ }, busy: false, error: "", decide() {}, cancel() {},
+    approval: { ...approval, tool: "to_agent", arguments: arguments_ }, busy: false, error: "", decide() {}, cancel() {},
   }));
   const remote = render({ agent: "reviewer", remote_operation: { tool: "shell", arguments: { command: "cat report.txt" } } });
   assert.match(remote, /Review remote <code>shell<\/code>/);
@@ -48,7 +48,7 @@ test("remote delegate approval names the remote operation and safely handles mal
   assert.doesNotMatch(remote, /Always allow this tool/);
   for (const malformed of [null, "nested", [], { remote_operation: [] }, { remote_operation: { tool: { name: "shell" } } }]) {
     assert.doesNotThrow(() => render(malformed));
-    assert.match(render(malformed), /Review (?:remote )?<code>(?:delegate|operation)<\/code>/);
+    assert.match(render(malformed), /Review (?:remote )?<code>(?:to_agent|operation)<\/code>/);
   }
 });
 
@@ -97,11 +97,11 @@ test("permission buttons send distinct decisions and Escape still denies", async
 
 test("saved and one-time approval labels remain bound to the exact task and call", () => {
   let entries: Entry[] = [];
-  for (const task_id of ["one", "two"]) entries = appendEvent(entries, { event: "tool_call", run_id: "run", task_id, activation: 3, id: "same", name: "shell", arguments: {} });
-  entries = appendEvent(entries, { event: "notice", run_id: "run", task_id: "two", activation: 3, call_id: "same", tool: "shell", policy: "workspace_tool_allow", text: "Saved permission" });
+  for (const session_id of ["one", "two"]) entries = appendEvent(entries, { event: "tool_call", run_id: "run", session_id, activation: 3, id: "same", name: "shell", arguments: {} });
+  entries = appendEvent(entries, { event: "notice", run_id: "run", session_id: "two", activation: 3, call_id: "same", tool: "shell", policy: "workspace_tool_allow", text: "Saved permission" });
   assert.equal(entries.find(entry => entry.kind === "tool" && entry.taskId === "one")!.approval, undefined);
   assert.equal(entries.find(entry => entry.kind === "tool" && entry.taskId === "two")!.approval, "Always allowed in workspace");
-  entries = appendEvent(entries, { event: "approval", run_id: "run", task_id: "one", activation: 3, id: "same", tool: "shell", approval_id: "nonce", arguments: {} });
+  entries = appendEvent(entries, { event: "approval", run_id: "run", session_id: "one", activation: 3, id: "same", tool: "shell", approval_id: "nonce", arguments: {} });
   entries = appendEvent(entries, { event: "approval_closed", run_id: "run", approval_id: "nonce", decision: "allow_tool" });
   const first = entries.find(entry => entry.kind === "tool" && entry.taskId === "one")!;
   assert.equal(first.approval, "Always allowed in workspace");
@@ -110,8 +110,8 @@ test("saved and one-time approval labels remain bound to the exact task and call
 
 test("remote approval completion stays a stable tools review record without claiming execution", () => {
   const arguments_ = { agent: "reviewer", remote_operation: { tool: "shell", arguments: { command: "printf A2A_REVIEW_ONLY_OK" } } };
-  const call = { event: "tool_call", run_id: "remote-run", id: "remote-call", name: "delegate", arguments: arguments_ } as const;
-  const request = { event: "approval", run_id: "remote-run", call_id: "remote-call", tool: "delegate",
+  const call = { event: "tool_call", run_id: "remote-run", id: "remote-call", name: "to_agent", arguments: arguments_ } as const;
+  const request = { event: "approval", run_id: "remote-run", call_id: "remote-call", tool: "to_agent",
     approval_id: "remote-nonce", arguments: arguments_ } as const;
   const closed = { event: "approval_closed", run_id: "remote-run", approval_id: "remote-nonce", decision: "allow" } as const;
   let entries = appendEvent([], call);
@@ -149,9 +149,9 @@ test("remote approval completion stays a stable tools review record without clai
 test("remote denial or expiry remains attention, and local delegate approval still awaits its result", () => {
   const arguments_ = { agent: "reviewer", remote_operation: { tool: "shell", arguments: { command: "pwd" } } };
   const start = (approvalId: string) => appendEvent(appendEvent([], {
-    event: "tool_call", run_id: "review-run", id: `call-${approvalId}`, name: "delegate", arguments: arguments_,
+    event: "tool_call", run_id: "review-run", id: `call-${approvalId}`, name: "to_agent", arguments: arguments_,
   }), {
-    event: "approval", run_id: "review-run", call_id: `call-${approvalId}`, tool: "delegate", approval_id: approvalId, arguments: arguments_,
+    event: "approval", run_id: "review-run", call_id: `call-${approvalId}`, tool: "to_agent", approval_id: approvalId, arguments: arguments_,
   });
   for (const [approvalId, expired] of [["denied", false], ["expired", true]] as const) {
     const denied = appendEvent(start(approvalId), { event: "approval_closed", run_id: "review-run", approval_id: approvalId,
@@ -160,8 +160,8 @@ test("remote denial or expiry remains attention, and local delegate approval sti
     assert.equal(importantActivity({ kind: "entry", entry: denied[0] }), true);
   }
 
-  let local = appendEvent([], { event: "tool_call", run_id: "local-run", id: "local-call", name: "delegate", arguments: { task: "research" } });
-  local = appendEvent(local, { event: "approval", run_id: "local-run", call_id: "local-call", tool: "delegate",
+  let local = appendEvent([], { event: "tool_call", run_id: "local-run", id: "local-call", name: "to_agent", arguments: { task: "research" } });
+  local = appendEvent(local, { event: "approval", run_id: "local-run", call_id: "local-call", tool: "to_agent",
     approval_id: "local-nonce", arguments: { task: "research" } });
   local = appendEvent(local, { event: "approval_closed", run_id: "local-run", approval_id: "local-nonce", decision: "allow" });
   assert.equal(local[0].remoteReview, undefined);
@@ -174,7 +174,7 @@ test("remote denial or expiry remains attention, and local delegate approval sti
 test("malformed remote operation metadata remains safe and cannot inject review markup", () => {
   for (const remoteOperation of [null, [], { tool: { name: "shell" } }, { tool: "<img src=x onerror=alert(1)>" }]) {
     const arguments_ = { agent: "<script>alert(1)</script>", remote_operation: remoteOperation };
-    const entries = appendEvent([], { event: "approval", run_id: "run", call_id: "call", tool: "delegate",
+    const entries = appendEvent([], { event: "approval", run_id: "run", call_id: "call", tool: "to_agent",
       approval_id: "nonce", arguments: arguments_ });
     assert.equal(entries.length, 1);
     assert.ok([undefined, "operation"].includes(entries[0].remoteReview?.tool));
@@ -236,10 +236,10 @@ for (const [policy, badge] of [
 
   test(`${policy} stays scoped to the correct child and consumes incomplete policy notices`, () => {
     let entries: Entry[] = [];
-    for (const task_id of ["one", "two"]) entries = appendEvent(entries, {
-      event: "tool_call", run_id: "run", task_id, activation: 2, id: "same", name: "channel_send", arguments: {},
+    for (const session_id of ["one", "two"]) entries = appendEvent(entries, {
+      event: "tool_call", run_id: "run", session_id, activation: 2, id: "same", name: "channel_send", arguments: {},
     });
-    entries = appendEvent(entries, { event: "notice", run_id: "run", task_id: "two", activation: 2,
+    entries = appendEvent(entries, { event: "notice", run_id: "run", session_id: "two", activation: 2,
       call_id: "same", tool: "channel_send", policy, text: "Policy evidence" });
     assert.equal(entries.length, 2);
     assert.equal(entries[0].approval, undefined);

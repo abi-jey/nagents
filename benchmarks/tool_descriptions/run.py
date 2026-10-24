@@ -105,7 +105,7 @@ CASES = (
     Case(
         "delegate",
         "Start a background child using the default assistant profile. Give it exactly this self-contained task: Inspect src/parser.py for incorrect handling of empty strings and report findings; do not modify files.",
-        "delegate",
+        "to_agent",
         {
             "prompt": "Inspect src/parser.py for incorrect handling of empty strings and report findings; do not modify files.",
             "agent": "assistant",
@@ -113,8 +113,9 @@ CASES = (
     ),
     Case(
         "task_status",
-        "A previously delegated child task id is task-123. Which callable tool can poll its status? Call it if available; if none is exposed, explain that limitation without invoking a different tool.",
-        "",
+        "A retained child session_id is s1. Inspect its current status without starting work or waiting for completion. Use the available read-only status tool.",
+        "agent_status",
+        {"session_id": "s1"},
     ),
     Case(
         "search_file",
@@ -131,7 +132,8 @@ CLARIFIED = {
     "edit": "Edit an EXISTING file after reading it in this session. Replace exactly one nonempty literal old string with new. Requires an unchanged read snapshot and approval; never use write to overwrite.",
     "write": "CREATE a nonexistent UTF-8 file in an existing directory after approval. Cannot overwrite existing files; use read_file then edit for those.",
     "shell": "Run a POSIX shell command after approval. timeout is seconds: omit it or use 0 to inherit the configured default (60 seconds here); a positive override must not exceed that default. Not sandboxed.",
-    "delegate": "Start a background child and return task_id immediately. prompt must be self-contained because children do not receive parent history. Omit agent for the assistant profile; never invent profiles or pass an empty name. Results arrive automatically; this tool does not poll status.",
+    "agent_status": "Read current status for a retained short session_id; omit the ID for a bounded descendant list. This inspection never starts, resumes, waits for, or modifies work.",
+    "to_agent": "Send work to a child conversation and return exactly session_id and status immediately. Omit session_id to start; use a retained short ID to continue that idle child. prompt is self-contained. Omit agent or use an empty string to choose assistant for a new child or retain an existing profile. An optional title is a label, never an address. Results arrive automatically; use agent_status only for read-only inspection.",
 }
 NAME_MAP = {
     "read_file": "read_text_lines",
@@ -140,7 +142,8 @@ NAME_MAP = {
     "edit": "replace_exact_text",
     "write": "create_new_text_file",
     "shell": "run_shell_command",
-    "delegate": "start_background_task",
+    "to_agent": "send_to_agent_session",
+    "agent_status": "inspect_agent_status",
 }
 ARG_MAP = {
     "read_file": {"path": "file_path", "start_line": "first_line_number", "limit": "line_count"},
@@ -149,7 +152,13 @@ ARG_MAP = {
     "edit": {"path": "file_path", "old": "exact_old_text", "new": "replacement_text"},
     "write": {"path": "new_file_path", "content": "utf8_content"},
     "shell": {"command": "shell_command", "timeout": "timeout_seconds"},
-    "delegate": {"prompt": "self_contained_task", "agent": "agent_profile"},
+    "to_agent": {
+        "prompt": "self_contained_task",
+        "agent": "agent_profile",
+        "session_id": "existing_agent_session_id",
+        "title": "conversation_title",
+    },
+    "agent_status": {"session_id": "agent_session_id"},
 }
 ARG_CLARIFIED = {
     "read_file": {
@@ -176,9 +185,11 @@ ARG_CLARIFIED = {
         "command": "POSIX shell command.",
         "timeout": "Seconds: omit or 0 for configured default; positive override cannot exceed default.",
     },
-    "delegate": {
+    "to_agent": {
         "prompt": "Self-contained task; no inherited conversation.",
-        "agent": "Omit for assistant; only an exact configured profile is accepted.",
+        "agent": "Omit or use empty for assistant on new work; preserve an existing target profile.",
+        "session_id": "Short retained child ID; omit to start a new child.",
+        "title": "Optional one-line display title; never used for routing.",
     },
 }
 DEFAULTS: dict[str, JsonValue] = {"start_line": 1, "limit": 200, "timeout": 0, "agent": "assistant", "path": "."}
@@ -251,6 +262,8 @@ def grade(case: Case, calls: list[ToolCall], tools: list[ToolDefinition], varian
         return [*failures, "wrong_tool"]
     for key, expected in case.expected.items():
         value = call.arguments.get(key, DEFAULTS.get(key))
+        if call.name == "to_agent" and key == "agent" and value == "":
+            value = "assistant"
         if key == "path" and isinstance(value, str):
             value = value.removeprefix("./").rstrip("/")
         if case.name == "filename_glob" and key == "pattern" and value == "*.py":

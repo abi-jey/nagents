@@ -37,12 +37,12 @@ def proposal_script(
         if provider.index:
             yield TextDoneEvent(text="Child result")
         elif delegate_first and len(provider.requests) == 1:
-            yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Count one execution"})
+            yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Count one execution"})
         elif len(provider.requests) == (2 if delegate_first else 1):
             yield ToolCallEvent(id="read-limits", name="subagent_configuration", arguments={"scope": "workspace"})
         elif len(provider.requests) == (3 if delegate_first else 2):
             if delegate_first:
-                assert any(message.role == "tool" and message.name == "delegate" for message in messages)
+                assert any(message.role == "tool" and message.name == "to_agent" for message in messages)
             yield ToolCallEvent(
                 id="configure-limits",
                 name="subagent_configure",
@@ -281,7 +281,7 @@ def test_approved_limits_are_read_on_next_model_turn_without_resetting_usage(
                 if provider.index:
                     yield TextDoneEvent(text="Completed one charged child")
                 elif len(provider.requests) == 1:
-                    yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Count one execution"})
+                    yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Count one execution"})
                 elif len(provider.requests) == 2:
                     yield ToolCallEvent(
                         id="read-initial", name="subagent_configuration", arguments={"scope": "workspace"}
@@ -322,7 +322,7 @@ def test_approved_limits_are_read_on_next_model_turn_without_resetting_usage(
             await asyncio.wait_for(stream.task, HANG_GUARD)
 
             assert state.harness.tasks._used == 1, "The approved settings reload retains the already-used execution"
-            assert {"delegate", "subagent_configuration", "subagent_configure"} <= set(providers[0].schemas[-1])
+            assert {"to_agent", "subagent_configuration", "subagent_configure"} <= set(providers[0].schemas[-1])
             limits = await state.subagent_settings.read("workspace")
             assert limits.limits == proposed
             values = (await client.get("/api/settings", headers=headers)).json()["values"]

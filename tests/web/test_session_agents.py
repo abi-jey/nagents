@@ -384,7 +384,7 @@ def test_read_only_switch_restricts_pending_child_and_does_not_loosen_it_on_late
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate-child", name="delegate", arguments={"prompt": "Create child output"})
+                yield ToolCallEvent(id="delegate-child", name="to_agent", arguments={"prompt": "Create child output"})
             elif provider.index == 1 and len(provider.requests) == 1:
                 yield ToolCallEvent(id="child-write", name="write", arguments={"path": "child.txt", "content": "no"})
             elif provider.index == 1 and len(provider.requests) == 2:
@@ -401,7 +401,7 @@ def test_read_only_switch_restricts_pending_child_and_does_not_loosen_it_on_late
             stream = LiveStream(app, headers, root, "Delegate this")
             pending = await stream.event("approval")
             original = state.harness_for(root)
-            child = original.tasks._children[str(pending["task_id"])]
+            child = original.tasks._children[str(pending["session_id"])]
             try:
                 await choose(client, headers, root, "reviewer")
                 closed = await stream.event("approval_closed")
@@ -490,7 +490,7 @@ def test_idle_retained_context_uses_current_connection_after_endpoint_change(
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if messages[-1].content == "Keep a completed child for inspection":
-                yield ToolCallEvent(id="retain-child", name="delegate", arguments={"prompt": "Review the fixture"})
+                yield ToolCallEvent(id="retain-child", name="to_agent", arguments={"prompt": "Review the fixture"})
             else:
                 yield TextDoneEvent(text="done")
 

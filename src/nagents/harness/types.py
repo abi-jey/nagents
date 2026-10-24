@@ -38,8 +38,8 @@ class ApprovalRequest:
     description: str
     arguments: ToolArguments
     preview: str = ""
-    task_id: str = ""
-    task_name: str = ""
+    session_id: str = ""
+    title: str = ""
     depth: int = 0
     activation: int = 0
     mandatory: bool = False
@@ -69,12 +69,11 @@ class SessionInfo:
 
 @dataclass
 class TaskStarted:
-    task_id: str
-    name: str
+    session_id: str
+    title: str
     prompt: str
-    parent_task_id: str = ""
     parent_session_id: str = ""
-    child_session_id: str = ""
+    root_session_id: str = ""
     depth: int = 1
     profile: str = "assistant"
     followup: int = 0
@@ -87,23 +86,30 @@ class TaskStarted:
     origin_history_id: str = ""
     origin_run_id: str = ""
     reasoning_effort: str = ""
+    activation_history_id: str = ""
+    activation_run_id: str = ""
+    activation_call_id: str = ""
+    activation_call_position: int = -1
 
 
 @dataclass
 class TaskCompleted:
-    task_id: str
-    name: str
+    session_id: str
+    title: str
     result: str
     error: str = ""
-    parent_task_id: str = ""
     parent_session_id: str = ""
-    child_session_id: str = ""
+    root_session_id: str = ""
     depth: int = 1
     profile: str = "assistant"
     followup: int = 0
     status: Literal["running", "completed", "failed", "cancelled"] = "completed"
     activation: int = 0
     trigger: str = "delegation"
+    provider: str = ""
+    provider_kind: str = ""
+    model: str = ""
+    reasoning_effort: str = ""
 
 
 @dataclass(kw_only=True)
@@ -121,11 +127,10 @@ class TaskDeliveryWarning(ErrorEvent):
     )
     code: str = field(default="TASK_DELIVERY_SKIPPED", init=False)
     recoverable: bool = field(default=True, init=False)
-    task_id: str
-    task_name: str
-    parent_task_id: str
+    session_id: str
+    title: str
     parent_session_id: str
-    child_session_id: str
+    root_session_id: str
     depth: int
     activation: int
     followup: int
@@ -135,12 +140,11 @@ class TaskDeliveryWarning(ErrorEvent):
 class TaskMessage:
     """A human follow-up accepted for a child, not a parent-model instruction."""
 
-    task_id: str
-    name: str
+    session_id: str
+    title: str
     prompt: str
-    parent_task_id: str = ""
     parent_session_id: str = ""
-    child_session_id: str = ""
+    root_session_id: str = ""
     depth: int = 1
     profile: str = "assistant"
     followup: int = 1
@@ -156,10 +160,9 @@ class TaskActivity:
     Provider extras and reasoning events are deliberately not forwarded.
     """
 
-    task_id: str
+    session_id: str
     root_session_id: str
-    parent_task_id: str
-    child_session_id: str
+    parent_session_id: str
     depth: int
     activation: int
     sequence: int
@@ -173,12 +176,14 @@ class TaskNotification:
     """An untrusted notification delivered at the recipient's model-run boundary."""
 
     notification_id: str
-    source_task_id: str
-    recipient_task_id: str
-    source_name: str
-    recipient_name: str
+    source_session_id: str
+    recipient_session_id: str
+    source_title: str
+    recipient_title: str
     cause: Literal["completion", "wakeup"]
     text: str
+    root_session_id: str = ""
+    source_activation: int = 0
 
 
 HarnessEvent = (

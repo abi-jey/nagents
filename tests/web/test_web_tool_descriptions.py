@@ -87,8 +87,8 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
                 assert definition["description"] == ui[name]["description"]
                 assert definition["parameters"] == ui[name]["parameters"]
             assert wire["described"]["description"] == DESCRIPTION
-            assert "host approval policy" in str(wire["delegate"]["description"])
-            assert "human approval" not in str(wire["delegate"]["description"])
+            assert "host approval policy" in str(wire["to_agent"]["description"])
+            assert "human approval" not in str(wire["to_agent"]["description"])
             assert "host approval policy" in str(wire["channel_action"]["description"])
 
             saved = await client.post(

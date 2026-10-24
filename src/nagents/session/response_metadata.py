@@ -105,7 +105,7 @@ def save(db: sqlite3.Connection, record: dict[str, object]) -> dict[str, object]
         previous = lookup(db, session, response)
         scope: dict[str, object] = {
             key: record[key]
-            for key in ("run_id", "task_id", "activation", "followup", "turn_id")
+            for key in ("run_id", "session_id", "activation", "followup", "turn_id")
             if key in record and key not in previous
         }
         if scope:

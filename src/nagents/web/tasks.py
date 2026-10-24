@@ -29,6 +29,7 @@ from nagents.harness.reasoning import ReasoningPreference
 from nagents.harness.reasoning import resolve_effort
 from nagents.harness.remote_credentials import RemoteCredentials
 from nagents.harness.runtime import _HarnessSession
+from nagents.harness.session_identity import validate_title
 from nagents.harness.task_activity import TaskOptions
 from nagents.session import response_metadata
 
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
     from .service import WebState
 
 RootId = Annotated[str, PathParameter(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")]
-TaskId = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
+AgentSessionId = Annotated[str, PathParameter(min_length=2, max_length=14, pattern=r"^s[1-9a-z][0-9a-z]*$")]
 TASK_DRAIN_TIMEOUT = 5.0
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,13 @@ class TaskMessageInput(BaseModel):
 
 class TaskStartInput(TaskMessageInput):
     agent: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
-    parent_task_id: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$")
+    parent_session_id: str = Field(default="", max_length=14, pattern=r"^(|s[1-9a-z][0-9a-z]*)$")
+    title: str = Field(default="", max_length=120)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def display_title(cls, value: str) -> str:
+        return validate_title(value)
 
 
 class TaskSettingsInput(BaseModel):
@@ -113,11 +120,13 @@ class Tasks:
             raise HTTPException(409, "This task runtime is unavailable. Start a new agent.")
         return owner
 
-    async def index(self, root: str) -> dict[str, object]:
+    async def index(
+        self, root: str, *, history_ids: frozenset[str] | None = None, include_activations: bool = True
+    ) -> dict[str, object]:
         await self.store.validate(root)
         refreshed_primary = self.state.harness
         refreshed_primary.refresh_agent_definitions()
-        saved = {str(task["id"]): task for task in await self.store.tasks(root)}
+        saved = {str(task["session_id"]): task for task in await self.store.tasks(root)}
         for task in saved.values():
             task.update(
                 can_message=False,
@@ -134,7 +143,8 @@ class Tasks:
         if owner is not None:
             for info in owner.tasks.list():
                 task = self.task(asdict(info), owner)
-                saved[info.id] = task
+                saved[info.session_id] = task
+                await self.store.save(root, task, info._storage_id)
         usage_owner = owner
         primary = self.state.harness
         if (
@@ -147,13 +157,22 @@ class Tasks:
             # This fallback never grants authority to message/start a task, and
             # must not relabel another root's last-run budget as this session's.
             usage_owner = primary
+        activations, omitted = (
+            await self.store.activation_projection(root, history_ids=history_ids) if include_activations else ([], 0)
+        )
         if (
             self.state.session_agents.unavailable(self.state.session_agents.selected(root))
             and self.state.run_for(root) is None
         ):
             # Keep saved conversations inspectable after an administrator removes
             # a profile; the main picker can select a replacement before work.
-            return {"tasks": list(saved.values()), "profiles": []}
+            return {
+                "tasks": list(saved.values()),
+                "activations": activations,
+                "activations_omitted": omitted,
+                "profiles": [],
+                "profile_revision": primary.profile_revision,
+            }
         # One discovery pass per primary owner in this request. A distinct
         # session runtime still refreshes in view(), and a swapped primary is
         # never mistaken for the owner whose catalog we already refreshed.
@@ -235,6 +254,8 @@ class Tasks:
                 )
             return {
                 "tasks": list(saved.values()),
+                "activations": activations,
+                "activations_omitted": omitted,
                 "profiles": profiles,
                 "profile_revision": profile_owner.profile_revision,
                 **({"subagent_usage": usage_owner.tasks.usage()} if usage_owner is not None else {}),
@@ -242,8 +263,12 @@ class Tasks:
 
     @staticmethod
     def task(data: dict[str, object], owner: Harness) -> dict[str, object]:
-        task_id = str(data["id"])
-        child = owner.tasks._children.get(task_id)
+        agent_session_id = str(data["session_id"])
+        public = {key: value for key, value in data.items() if not key.startswith("_")}
+        context = public.get("context")
+        if isinstance(context, dict) and "session_id" in context:
+            public["context"] = {**context, "session_id": agent_session_id}
+        child = owner.tasks._children.get(agent_session_id)
         can_message = (
             owner.allow_subagents
             and data.get("status") != "cancelled"
@@ -274,7 +299,7 @@ class Tasks:
                 elif child_agents and not usage["remaining_executions"]:
                     child_reason = "The shared subagent execution budget is exhausted."
         return {
-            **data,
+            **public,
             "can_message": can_message,
             "unavailable_reason": "" if can_message else "Task is unavailable.",
             "can_start_children": bool(child_agents) and not child_reason,
@@ -306,18 +331,20 @@ class Tasks:
         kind = record.get("event")
         if kind not in {"task_started", "task_completed", "task_message", "task_activity"}:
             return
-        identifier = str(record.get("task_id", ""))
+        identifier = str(record.get("session_id", ""))
         try:
             owner = self.owner(run.session_id)
             info = owner.tasks._lookup(identifier)
         except (HTTPException, ValueError):
             return
         task = self.task(asdict(info), owner)
+        if kind in {"task_started", "task_completed"}:
+            await self.store.record_activation(run.session_id, {**record, "mode": info.mode})
         if kind != "task_activity":
-            await self.store.save(run.session_id, task)
+            await self.store.save(run.session_id, task, info._storage_id)
         ready = self.created.get(run.task_message_id)
-        if kind == "task_started" and ready is not None and not ready.is_set() and not info.parent_task_id:
-            await self.store.bind(run.task_message_id, {**task, "receipt_run_id": run.id})
+        if kind == "task_started" and ready is not None and not ready.is_set() and not info.parent_session_id:
+            await self.store.bind(run.task_message_id, {**task, "receipt_run_id": run.id}, info._storage_id)
             # The input context can finish binding first and release the HTTP
             # waiter, which then removes this registry entry during our await.
             # We own this exact Event, not a later lookup in that registry.
@@ -397,25 +424,25 @@ class Tasks:
                     self.truncated.add(key)
 
     def publish(self, receipt: dict[str, object]) -> None:
-        record = {"event": "task_message_receipt", "task_id": receipt["task_id"], "receipt": receipt}
-        run = self.state.run_for(str(receipt["session_id"]))
+        record = {"event": "task_message_receipt", "session_id": receipt["session_id"], "receipt": receipt}
+        run = self.state.run_for(str(receipt["root_session_id"]))
         if run is not None:
             self.state.publish(run, record)
         else:
-            self.state.bus.event({**record, "session_id": receipt["session_id"], "schema_version": 1})
+            self.state.bus.event({**record, "root_session_id": receipt["root_session_id"], "schema_version": 1})
 
     @asynccontextmanager
     async def input_context(self, owner: Harness, identifier: str) -> AsyncIterator[None]:
         info, child = owner.tasks.input_child(identifier)
         task = self.task(asdict(info), owner)
-        await self.store.save(info.session_id, task)
-        await self.store.bind(identifier, self.receipt_target(info.session_id, task))
+        await self.store.save(info.root_session_id, task, info._storage_id)
+        await self.store.bind(identifier, self.receipt_target(info.root_session_id, task), info._storage_id)
         if ready := self.created.get(identifier):
             ready.set()
         previous = child.agent.session
         if type(previous) is not _HarnessSession:
             raise RuntimeError("This child persistence adapter does not support verified web inputs")
-        adapter = TaskHistory(self.store, identifier, info.child_session_id, self.publish)
+        adapter = TaskHistory(self.store, identifier, info._storage_id, self.publish)
         child.agent.session = adapter
         child.agent.plugins.append(adapter.identity)
         try:
@@ -478,20 +505,22 @@ class Tasks:
         if not done or task.cancelled():
             raise HTTPException(409, "This chat is still finishing. Retry after it finishes.")
 
-    async def accept(self, root: str, task_id: str, body: TaskMessageInput, owner: Harness) -> dict[str, object]:
+    async def accept(
+        self, root: str, agent_session_id: str, body: TaskMessageInput, owner: Harness
+    ) -> dict[str, object]:
         message = self.message(owner, body)
-        if owner.tasks.submit_message(task_id, message):
-            accepted = asdict(owner.tasks._lookup(task_id))
+        if owner.tasks.submit_message(agent_session_id, message):
+            accepted = asdict(owner.tasks._lookup(agent_session_id))
         elif self.state.run_for(root) is not None:
-            accepted = asdict(owner.tasks.continue_task(task_id, body.text, message=message))
+            accepted = asdict(await owner.tasks.continue_task(agent_session_id, body.text, message=message))
         else:
             # The scheduled worker has not accepted its new activation yet.
-            self.launch(root, body, task_id=task_id)
-            return await self.store.duplicate(root, task_id, body.message_id, body.text)
+            self.launch(root, body, agent_session_id=agent_session_id)
+            return await self.store.duplicate(root, agent_session_id, body.message_id, body.text)
         target = self.receipt_target(root, accepted)
-        receipt = await self.store.bind(body.message_id, target)
+        receipt = await self.store.bind(body.message_id, target, str(accepted["_storage_id"]))
         current = self.state.run_for(root)
-        info = owner.tasks._lookup(task_id)
+        info = owner.tasks._lookup(agent_session_id)
         if receipt["status"] == "queued" and (
             current is None
             or current.id != target["receipt_run_id"]
@@ -501,7 +530,7 @@ class Tasks:
             receipt = await self.store.fail(body.message_id, "The agent ended before reading this message.")
         return receipt
 
-    async def send(self, root: str, task_id: str, body: TaskMessageInput) -> dict[str, object]:
+    async def send(self, root: str, agent_session_id: str, body: TaskMessageInput) -> dict[str, object]:
         journaled = False
         deadline = asyncio.get_running_loop().time() + TASK_DRAIN_TIMEOUT
         try:
@@ -509,15 +538,15 @@ class Tasks:
                 async with self.admission:
                     if self.state.mutating or self.state.executions.closed:
                         raise HTTPException(409, "Server configuration is changing. Retry shortly.")
-                    duplicate = await self.store.duplicate(root, task_id, body.message_id, body.text)
+                    duplicate = await self.store.duplicate(root, agent_session_id, body.message_id, body.text)
                     if duplicate and (not journaled or duplicate["status"] != "queued"):
                         return duplicate
                     known = (await self.index(root))["tasks"]
                     assert isinstance(known, list)
-                    if not any(task["id"] == task_id for task in known):
+                    if not any(task["session_id"] == agent_session_id for task in known):
                         raise HTTPException(404, "Task not found in this session.")
                     owner = self.owner(root)
-                    info = owner.tasks._lookup(task_id)
+                    info = owner.tasks._lookup(agent_session_id)
                     if info.status == "cancelled":
                         raise HTTPException(409, "This agent was cancelled. Start a new agent.")
                     draining = self.draining(root, owner)
@@ -526,7 +555,9 @@ class Tasks:
                         if self.state.run_for(root) is not None and not owner.tasks._active:
                             raise HTTPException(409, "This chat is starting. Retry the message shortly.")
                         if not journaled:
-                            await self.store.insert(root, task_id, body.message_id, body.text, task_id)
+                            await self.store.insert(
+                                root, agent_session_id, body.message_id, body.text, agent_session_id
+                            )
                             journaled = True
                         if self.owner(root) is not owner:
                             raise RuntimeError("Task owner changed")
@@ -536,7 +567,7 @@ class Tasks:
                         draining = self.draining(root, owner)
                         claim = self.finishing_claim(root)
                         if draining is None and claim is None:
-                            receipt = await self.accept(root, task_id, body, owner)
+                            receipt = await self.accept(root, agent_session_id, body, owner)
                             self.publish(receipt)
                             return receipt
                 # Joining a completed producer's web cleanup never holds the
@@ -559,20 +590,22 @@ class Tasks:
 
     async def start(self, root: str, body: TaskStartInput) -> dict[str, object]:
         async with self.admission:
-            target = f"profile:{body.parent_task_id}:{body.agent}" if body.parent_task_id else f"profile:{body.agent}"
+            target = (
+                f"profile:{body.parent_session_id}:{body.agent}" if body.parent_session_id else f"profile:{body.agent}"
+            )
             duplicate = await self.store.duplicate(root, target, body.message_id, body.text)
             if duplicate:
                 tasks = await self.store.tasks(root)
                 return {
                     "receipt": duplicate,
-                    "task": next((task for task in tasks if task["id"] == duplicate["task_id"]), {}),
+                    "task": next((task for task in tasks if task["session_id"] == duplicate["session_id"]), {}),
                 }
             if self.state.mutating or self.state.executions.closed:
                 raise HTTPException(409, "Server configuration is changing. Retry shortly.")
             parent: Harness | None = None
             parent_owner: Harness | None = None
-            if body.parent_task_id:
-                parent_owner, parent = self.start_parent(root, body.parent_task_id)
+            if body.parent_session_id:
+                parent_owner, parent = self.start_parent(root, body.parent_session_id)
                 if (
                     body.agent not in parent.delegatable_profile_names
                     or not parent.delegation_profile(body.agent).user_invocable
@@ -598,18 +631,26 @@ class Tasks:
             try:
                 if parent is not None:
                     assert parent_owner is not None
-                    owner, current_parent = self.start_parent(root, body.parent_task_id)
+                    owner, current_parent = self.start_parent(root, body.parent_session_id)
                     if owner is not parent_owner or current_parent is not parent:
                         raise RuntimeError("Parent runtime changed")
-                    info = await parent.tasks.start_task(body.text, body.agent, message=self.message(owner, body))
-                    await self.store.save(root, self.task(asdict(info), owner))
-                    await self.store.bind(body.message_id, self.receipt_target(root, asdict(info)))
+                    info = await parent.tasks.start_task(
+                        body.text, body.agent, title=body.title, message=self.message(owner, body)
+                    )
+                    await self.store.save(root, self.task(asdict(info), owner), info._storage_id)
+                    await self.store.bind(
+                        body.message_id, self.receipt_target(root, self.task(asdict(info), owner)), info._storage_id
+                    )
                     ready.set()
                 elif self.state.run_for(root) is not None:
                     owner = self.owner(root)
-                    info = await owner.tasks.start_task(body.text, body.agent, message=self.message(owner, body))
-                    await self.store.save(root, self.task(asdict(info), owner))
-                    await self.store.bind(body.message_id, self.receipt_target(root, asdict(info)))
+                    info = await owner.tasks.start_task(
+                        body.text, body.agent, title=body.title, message=self.message(owner, body)
+                    )
+                    await self.store.save(root, self.task(asdict(info), owner), info._storage_id)
+                    await self.store.bind(
+                        body.message_id, self.receipt_target(root, self.task(asdict(info), owner)), info._storage_id
+                    )
                     ready.set()
                 else:
                     self.launch(root, body, agent=body.agent)
@@ -625,7 +666,7 @@ class Tasks:
                     "web.task_start.rejected",
                     extra={
                         "root_session_id": root,
-                        "parent_task_id": body.parent_task_id,
+                        "parent_session_id": body.parent_session_id,
                         "profile": body.agent,
                         "error_type": type(error).__name__,
                     },
@@ -635,23 +676,26 @@ class Tasks:
                 self.created.pop(body.message_id, None)
             receipt = await self.store.duplicate(root, target, body.message_id, body.text)
             tasks = await self.store.tasks(root)
-            return {"receipt": receipt, "task": next((task for task in tasks if task["id"] == receipt["task_id"]), {})}
+            return {
+                "receipt": receipt,
+                "task": next((task for task in tasks if task["session_id"] == receipt["session_id"]), {}),
+            }
 
-    async def configure(self, root: str, task_id: str, body: TaskSettingsInput) -> dict[str, object]:
+    async def configure(self, root: str, agent_session_id: str, body: TaskSettingsInput) -> dict[str, object]:
         async with self.admission:
             if self.state.mutating or self.state.executions.closed:
                 raise HTTPException(409, "Server configuration is changing. Retry shortly.")
-            return await self._configure(root, task_id, body)
+            return await self._configure(root, agent_session_id, body)
 
-    async def _configure(self, root: str, task_id: str, body: TaskSettingsInput) -> dict[str, object]:
+    async def _configure(self, root: str, agent_session_id: str, body: TaskSettingsInput) -> dict[str, object]:
         known = (await self.index(root))["tasks"]
         assert isinstance(known, list)
-        if not any(task["id"] == task_id for task in known):
+        if not any(task["session_id"] == agent_session_id for task in known):
             raise HTTPException(404, "Task not found in this session.")
         owner = self.owner(root)
         try:
             info = owner.tasks.configure_task(
-                task_id,
+                agent_session_id,
                 TaskOptions(
                     body.provider,
                     body.model,
@@ -664,18 +708,18 @@ class Tasks:
         except (ValueError, RuntimeError, PermissionError) as error:
             raise HTTPException(409, str(error)) from None
         task = self.task(asdict(info), owner)
-        await self.store.save(root, task)
+        await self.store.save(root, task, info._storage_id)
         record: dict[str, object] = {
             "event": "task_settings",
-            "task_id": task_id,
+            "session_id": agent_session_id,
             "task": task,
-            "session_id": root,
+            "root_session_id": root,
             "schema_version": 1,
         }
         self.state.bus.event(record)
         return {"task": task}
 
-    def launch(self, root: str, body: TaskMessageInput, *, task_id: str = "", agent: str = "") -> None:
+    def launch(self, root: str, body: TaskMessageInput, *, agent_session_id: str = "", agent: str = "") -> None:
         from .service import Run
 
         if root in self.state.channels.work_tasks or root in self.state.channels.work_cleanup:
@@ -691,7 +735,12 @@ class Tasks:
                         self.state.running_harness = owner
                         await owner.resume(root)
                         await self.state.produce(
-                            run, body.text, task_id=task_id, task_agent=agent, task_input=self.message(owner, body)
+                            run,
+                            body.text,
+                            agent_session_id=agent_session_id,
+                            task_agent=agent,
+                            task_input=self.message(owner, body),
+                            task_title=body.title if isinstance(body, TaskStartInput) else "",
                         )
             except asyncio.CancelledError:
                 run.outcome = "cancelled"
@@ -709,7 +758,7 @@ class Tasks:
                 await self.state.executions.release_idle(root)
 
         run.task = asyncio.create_task(execute(), name=f"ngn-task-input-{body.message_id}")
-        self.state.publish(run, {"event": "run_started", "message_id": body.message_id, "task_id": task_id})
+        self.state.publish(run, {"event": "run_started", "message_id": body.message_id, "session_id": agent_session_id})
         self.state.status()
 
     async def finish(self, run: Run) -> None:
@@ -721,7 +770,7 @@ class Tasks:
             owner = None
         if owner is not None:
             for info in owner.tasks.list():
-                await self.store.save(run.session_id, self.task(asdict(info), owner))
+                await self.store.save(run.session_id, self.task(asdict(info), owner), info._storage_id)
         for key in tuple(self.activity):
             if key[0] == run.session_id:
                 self.activity.pop(key, None)
@@ -730,7 +779,7 @@ class Tasks:
             return [
                 str(row[0])
                 for row in db.execute(
-                    "SELECT message_id FROM ngn_web_task_inputs WHERE root = ? AND epoch = ? AND status = 'queued' "
+                    "SELECT message_id FROM ngn_web_agent_inputs WHERE root = ? AND epoch = ? AND status = 'queued' "
                     "AND (owner_run_id = ? OR message_id = ?)",
                     (run.session_id, self.store.epoch, run.id, run.task_message_id),
                 )
@@ -739,16 +788,16 @@ class Tasks:
         for identifier in await self.store.db._transaction(unread):
             self.publish(await self.store.fail(identifier, "The agent stopped before reading this message."))
 
-    async def detail(self, root: str, task_id: str, *, limit: int = 100, before: int = 0) -> dict[str, object]:
+    async def detail(self, root: str, agent_session_id: str, *, limit: int = 100, before: int = 0) -> dict[str, object]:
         async def snapshot(_: str) -> dict[str, object]:
-            indexed = await self.index(root)
+            indexed = await self.index(root, include_activations=False)
             tasks = indexed["tasks"]
             assert isinstance(tasks, list)
-            task = next((item for item in tasks if item["id"] == task_id), None)
+            task = next((item for item in tasks if item["session_id"] == agent_session_id), None)
             if task is None:
                 raise HTTPException(404, "Task not found in this session.")
-            child = str(task["child_session_id"])
-            key = (root, task_id)
+            child = await self.store.storage_id(root, agent_session_id)
+            key = (root, agent_session_id)
             boundary = (
                 self.boundaries.get(key, 0) if key in self.activity or task.get("status") == "running" else 2**63 - 1
             )
@@ -801,6 +850,10 @@ class Tasks:
                         record["truncated"] = True
                     records.append(record)
                 records = response_metadata.merge(db, child, records, orphans=not before, maximum=boundary)
+                for record in records:
+                    metadata = record.get("response_metadata")
+                    if isinstance(metadata, dict) and metadata.get("response_session_id") == child:
+                        record["response_metadata"] = {**metadata, "response_session_id": agent_session_id}
                 while len(json.dumps(records)) > 262144:
                     records.pop(0)
                     more = True
@@ -812,7 +865,7 @@ class Tasks:
                 # reading. Retry that transition rather than labeling its new
                 # history with the old activation's cursor.
                 try:
-                    current = self.owner(root).tasks._lookup(task_id)
+                    current = self.owner(root).tasks._lookup(agent_session_id)
                 except (HTTPException, ValueError):
                     pass
                 else:
@@ -820,12 +873,21 @@ class Tasks:
                         return await snapshot(root)
             context: dict[str, object] = {}
             with suppress(HTTPException, ValueError, RuntimeError):
-                context = await self.owner(root).tasks.context_stats(task_id)
+                context = await self.owner(root).tasks.context_stats(agent_session_id)
+                if "session_id" in context:
+                    context = {**context, "session_id": agent_session_id}
+            activations, omitted = await self.store.activation_projection(
+                root,
+                history_ids=frozenset(str(row["history_id"]) for row in history if row.get("history_id")),
+                parent_session_id=agent_session_id,
+            )
             return {
                 "task": task,
                 "history": history,
+                "retained_activations": activations,
+                "retained_activations_omitted": omitted,
                 "activity": activity,
-                "receipts": await self.store.receipts(root, task_id),
+                "receipts": await self.store.receipts(root, agent_session_id),
                 "context": context,
                 "activity_cursor": activity_cursor,
                 "activity_truncated": activity_truncated,
@@ -838,27 +900,29 @@ class Tasks:
 
 
 def register(app: FastAPI, state: Callable[[], WebState]) -> None:
-    @app.get("/api/sessions/{session_id}/tasks")
-    async def index(session_id: RootId) -> dict[str, object]:
-        return await state().tasks.index(session_id)
+    @app.get("/api/sessions/{root_session_id}/tasks")
+    async def index(root_session_id: RootId) -> dict[str, object]:
+        return await state().tasks.index(root_session_id)
 
-    @app.get("/api/sessions/{session_id}/tasks/{task_id}")
+    @app.get("/api/sessions/{root_session_id}/tasks/{session_id}")
     async def detail(
-        session_id: RootId,
-        task_id: TaskId,
+        root_session_id: RootId,
+        session_id: AgentSessionId,
         limit: Annotated[int, Query(ge=1, le=200)] = 100,
         before: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0,
     ) -> dict[str, object]:
-        return await state().tasks.detail(session_id, task_id, limit=limit, before=before)
+        return await state().tasks.detail(root_session_id, session_id, limit=limit, before=before)
 
-    @app.post("/api/sessions/{session_id}/tasks/{task_id}/messages")
-    async def message(session_id: RootId, task_id: TaskId, body: TaskMessageInput) -> dict[str, object]:
-        return await finish_on_cancel(state().tasks.send(session_id, task_id, body))
+    @app.post("/api/sessions/{root_session_id}/tasks/{session_id}/messages")
+    async def message(root_session_id: RootId, session_id: AgentSessionId, body: TaskMessageInput) -> dict[str, object]:
+        return await finish_on_cancel(state().tasks.send(root_session_id, session_id, body))
 
-    @app.post("/api/sessions/{session_id}/tasks")
-    async def start(session_id: RootId, body: TaskStartInput) -> dict[str, object]:
-        return await finish_on_cancel(state().tasks.start(session_id, body))
+    @app.post("/api/sessions/{root_session_id}/tasks")
+    async def start(root_session_id: RootId, body: TaskStartInput) -> dict[str, object]:
+        return await finish_on_cancel(state().tasks.start(root_session_id, body))
 
-    @app.put("/api/sessions/{session_id}/tasks/{task_id}/settings")
-    async def settings(session_id: RootId, task_id: TaskId, body: TaskSettingsInput) -> dict[str, object]:
-        return await finish_on_cancel(state().tasks.configure(session_id, task_id, body))
+    @app.put("/api/sessions/{root_session_id}/tasks/{session_id}/settings")
+    async def settings(
+        root_session_id: RootId, session_id: AgentSessionId, body: TaskSettingsInput
+    ) -> dict[str, object]:
+        return await finish_on_cancel(state().tasks.configure(root_session_id, session_id, body))

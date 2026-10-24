@@ -125,24 +125,24 @@ test("call inputs remain unchanged when output, error and duration arrive", () =
 test("parallel task records retain identity and complete independently", () => {
   let entries = appendEvent([], {
     event: "task_started",
-    task_id: "child-a",
-    name: "review",
+    session_id: "child-a",
+    title: "review",
     prompt: "Inspect a",
-    parent_task_id: "parent",
+    parent_session_id: "parent",
     depth: 2,
   });
   entries = appendEvent(entries, {
     event: "task_started",
-    task_id: "child-b",
-    name: "review",
+    session_id: "child-b",
+    title: "review",
     prompt: "Inspect b",
-    parent_task_id: "parent",
+    parent_session_id: "parent",
     depth: 2,
   });
   entries = appendEvent(entries, {
     event: "task_completed",
-    task_id: "child-b",
-    name: "review",
+    session_id: "child-b",
+    title: "review",
     result: "b done",
   });
   assert.equal(entries.length, 2);

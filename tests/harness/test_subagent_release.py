@@ -33,9 +33,9 @@ def test_release_nested_tree_preserves_other_root_and_saved_history(
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and messages[-1].role == "user" and messages[-1].content == "Create tree":
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Review"})
             elif provider.index % 2 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="nested", name="delegate", arguments={"prompt": "Check details"})
+                yield ToolCallEvent(id="nested", name="to_agent", arguments={"prompt": "Check details"})
             else:
                 yield TextDoneEvent(text="Finished")
 
@@ -46,25 +46,24 @@ def test_release_nested_tree_preserves_other_root_and_saved_history(
                 first_root = harness.session_id
                 first = harness.tasks.list()
                 assert len(first) == 2 and {info.depth for info in first} == {1, 2}
-                first_ids = {info.id for info in first}
+                first_ids = {info.session_id for info in first}
                 child_histories = {
-                    info.child_session_id: await harness.agent.session.get_history(info.child_session_id)
-                    for info in first
+                    info._storage_id: await harness.agent.session.get_history(info._storage_id) for info in first
                 }
                 assert all(child_histories.values())
                 second_root = await harness.new_session()
                 await collect(harness, "Create tree")
                 second = harness.tasks.list()
-                assert len(second) == 2 and not first_ids.intersection(info.id for info in second)
+                assert len(second) == 2 and not first_ids.intersection(info.session_id for info in second)
                 managers = harness.tasks
-                survivor = TaskCompleted(second[0].id, second[0].name, "Keep this result")
-                obsolete = TaskCompleted(first[0].id, first[0].name, "Deleted root result")
+                survivor = TaskCompleted(second[0].session_id, second[0].title, "Keep this result")
+                obsolete = TaskCompleted(first[0].session_id, first[0].title, "Deleted root result")
                 managers._ready.extend((obsolete, survivor))
                 managers._observed.extend((obsolete, survivor))
-                managers._pending[second[0].id] = [survivor]
-                managers._pending[first[0].id] = [obsolete]
-                managers._activity_gaps.update((first[0].id, second[0].id))
-                managers.notification_sources = (first[0].id, second[0].id)
+                managers._pending[second[0].session_id] = [survivor]
+                managers._pending[first[0].session_id] = [obsolete]
+                managers._activity_gaps.update((first[0].session_id, second[0].session_id))
+                managers.notification_sources = (first[0].session_id, second[0].session_id)
 
                 await managers.release_session(first_root)
                 await managers.release_session(first_root)  # Repeating host cleanup is harmless.
@@ -72,9 +71,9 @@ def test_release_nested_tree_preserves_other_root_and_saved_history(
                 assert harness.session_id == second_root and not harness._closed
                 assert managers.list() == second
                 assert list(managers._ready) == list(managers._observed) == [survivor]
-                assert managers._pending == {second[0].id: [survivor]}
-                assert managers._activity_gaps == {second[0].id}
-                assert list(managers.notification_sources) == [second[0].id]
+                assert managers._pending == {second[0].session_id: [survivor]}
+                assert managers._activity_gaps == {second[0].session_id}
+                assert list(managers.notification_sources) == [second[0].session_id]
                 for registry in (
                     managers._infos,
                     managers._workers,
@@ -115,7 +114,7 @@ def test_release_requires_root_stop_before_forgetting_active_children(
                 child_started.set()
                 await asyncio.Event().wait()
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Wait"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Wait"})
             else:
                 yield TextDoneEvent(text="Waiting for my child")
 
@@ -128,15 +127,15 @@ def test_release_requires_root_stop_before_forgetting_active_children(
                 with pytest.raises(RuntimeError, match="Stop the root run"):
                     await harness.tasks.release_session(harness.session_id)
                 with pytest.raises(PermissionError, match="Only the root"):
-                    await harness.tasks.child(info.id).tasks.release_session(harness.session_id)
+                    await harness.tasks.child(info.session_id).tasks.release_session(harness.session_id)
                 assert not running.done() and not providers[1].closed
                 running.cancel()
                 await asyncio.gather(running, return_exceptions=True)
                 await harness.tasks.release_session(harness.session_id)
                 assert not harness.tasks.list() and not harness.tasks._children
                 assert providers[1].closed and not providers[0].closed
-                with pytest.raises(ValueError, match="Unknown task"):
-                    harness.tasks.child(info.id)
+                with pytest.raises(ValueError, match="Unknown or unavailable child session"):
+                    harness.tasks.child(info.session_id)
         finally:
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)
@@ -151,7 +150,7 @@ def test_release_joins_surviving_worker_cleanup_despite_repeated_cancellation(
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Review"})
             else:
                 yield TextDoneEvent(text="Finished")
 
@@ -173,7 +172,7 @@ def test_release_joins_surviving_worker_cleanup_despite_repeated_cancellation(
                 await collect(harness)
                 info = harness.tasks.list()[0]
                 worker = asyncio.create_task(surviving_worker())
-                harness.tasks._workers[info.id] = worker
+                harness.tasks._workers[info.session_id] = worker
                 await started.wait()
                 releasing = asyncio.create_task(harness.tasks.release_session(harness.session_id))
                 await closing.wait()
@@ -181,7 +180,7 @@ def test_release_joins_surviving_worker_cleanup_despite_repeated_cancellation(
                 await asyncio.sleep(0)
                 releasing.cancel()
                 await asyncio.sleep(0)
-                assert not releasing.done() and info.id in harness.tasks._infos
+                assert not releasing.done() and info.session_id in harness.tasks._infos
                 finish.set()
                 with pytest.raises(asyncio.CancelledError):
                     await releasing

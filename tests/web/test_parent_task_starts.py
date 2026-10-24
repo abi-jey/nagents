@@ -27,10 +27,10 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_posix
 
 
-def _start_body(agent: str, text: str, *, parent_task_id: str = "", message_id: str = "") -> dict[str, str]:
+def _start_body(agent: str, text: str, *, parent_session_id: str = "", message_id: str = "") -> dict[str, str]:
     body = {"message_id": message_id or str(uuid4()), "agent": agent, "text": text}
-    if parent_task_id:
-        body["parent_task_id"] = parent_task_id
+    if parent_session_id:
+        body["parent_session_id"] = parent_session_id
     return body
 
 
@@ -60,13 +60,13 @@ def test_active_parent_start_creates_real_child_with_inherited_reviewer_ceiling(
             try:
                 response = await client.post(path, headers=headers, json=_start_body("reviewer", "PARENT ASSIGNMENT"))
                 assert response.status_code == 200, response.text
-                parent_id = response.json()["task"]["id"]
+                parent_id = response.json()["task"]["session_id"]
                 async with asyncio.timeout(HANG_GUARD):
                     await parent_started.wait()
 
                 indexed = (await client.get(path, headers=headers)).json()
-                parent_view = next(item for item in indexed["tasks"] if item["id"] == parent_id)
-                assert parent_view["parent_task_id"] == ""
+                parent_view = next(item for item in indexed["tasks"] if item["session_id"] == parent_id)
+                assert parent_view["parent_session_id"] == ""
                 assert parent_view["depth"] == 1
                 assert parent_view["can_start_children"] is True
                 assert "assistant" in parent_view["child_agents"]
@@ -75,12 +75,12 @@ def test_active_parent_start_creates_real_child_with_inherited_reviewer_ceiling(
                 child_response = await client.post(
                     path,
                     headers=headers,
-                    json=_start_body("assistant", "NESTED ASSIGNMENT", parent_task_id=parent_id),
+                    json=_start_body("assistant", "NESTED ASSIGNMENT", parent_session_id=parent_id),
                 )
                 assert child_response.status_code == 200, child_response.text
-                child_id = child_response.json()["task"]["id"]
-                assert child_response.json()["receipt"]["task_id"] == child_id
-                assert child_response.json()["receipt"]["session_id"] == root
+                child_id = child_response.json()["task"]["session_id"]
+                assert child_response.json()["receipt"]["session_id"] == child_id
+                assert child_response.json()["receipt"]["root_session_id"] == root
                 async with asyncio.timeout(HANG_GUARD):
                     await child_started.wait()
 
@@ -88,20 +88,20 @@ def test_active_parent_start_creates_real_child_with_inherited_reviewer_ceiling(
                 parent = owner.tasks.child(parent_id)
                 child_info = owner.tasks._lookup(child_id)
                 child = owner.tasks.child(child_id)
-                assert child_info.parent_task_id == parent_id
-                assert child_info.parent_session_id == parent.session_id
-                assert child_info.session_id == root and child_info.depth == 2
-                assert child_response.json()["receipt"]["child_session_id"] == child_info.child_session_id
+                assert child_info.parent_session_id == parent_id
+                assert child_info._parent_storage_id == parent.session_id
+                assert child_info.root_session_id == root and child_info.depth == 2
+                assert "child_session_id" not in child_response.json()["receipt"]
                 assert child_info.mode == "reviewer"
                 assert child.mode == "reviewer"
                 assert child._permission_ceiling == "reviewer"
                 assert child.mode_for_profile("assistant") == "reviewer"
-                assert [item.id for item in parent.tasks.list()] == [child_id]
+                assert [item.session_id for item in parent.tasks.list()] == [child_id]
 
                 indexed = (await client.get(path, headers=headers)).json()
-                child_view = next(item for item in indexed["tasks"] if item["id"] == child_id)
-                assert child_view["parent_task_id"] == parent_id
-                assert child_view["parent_session_id"] == parent.session_id
+                child_view = next(item for item in indexed["tasks"] if item["session_id"] == child_id)
+                assert child_view["parent_session_id"] == parent_id
+                assert child_view["root_session_id"] == root
                 assert child_view["depth"] == 2
                 assert child_view["mode"] == "reviewer"
                 assert child_view["can_start_children"] is False
@@ -129,37 +129,37 @@ def test_parent_start_rejects_idle_foreign_and_remote_parents(tmp_path: Path, mo
             path = f"/api/sessions/{root}/tasks"
             response = await client.post(path, headers=headers, json=_start_body("reviewer", "COMPLETE PARENT"))
             assert response.status_code == 200, response.text
-            parent_id = response.json()["task"]["id"]
+            parent_id = response.json()["task"]["session_id"]
             await until(lambda: state.run_for(root) is None)
             completed = await client.get(path, headers=headers)
-            parent_view = next(item for item in completed.json()["tasks"] if item["id"] == parent_id)
+            parent_view = next(item for item in completed.json()["tasks"] if item["session_id"] == parent_id)
             assert parent_view["status"] == "completed"
             assert parent_view["can_start_children"] is False
             assert "must be running" in parent_view["child_start_unavailable_reason"]
 
             denied_idle = await client.post(
-                path, headers=headers, json=_start_body("assistant", "NO IDLE CHILD", parent_task_id=parent_id)
+                path, headers=headers, json=_start_body("assistant", "NO IDLE CHILD", parent_session_id=parent_id)
             )
             assert denied_idle.status_code == 409
             assert "must be running" in denied_idle.json()["detail"]
 
             owner = state.executions.owners[root]
-            owner.tasks._infos["foreign-parent"] = TaskInfo(
-                id="foreign-parent", name="Foreign", session_id="ngn-foreign-root", status="running"
+            owner.tasks._infos["s99"] = TaskInfo(
+                session_id="s99", title="Foreign", root_session_id="ngn-foreign-root", status="running"
             )
             denied_foreign = await client.post(
                 path,
                 headers=headers,
-                json=_start_body("assistant", "NO FOREIGN CHILD", parent_task_id="foreign-parent"),
+                json=_start_body("assistant", "NO FOREIGN CHILD", parent_session_id="s99"),
             )
             assert denied_foreign.status_code == 404
 
-            owner.tasks._infos["remote-parent"] = TaskInfo(
-                id="remote-parent",
-                name="Remote",
-                session_id=root,
-                child_session_id="ngn-remote-child",
-                parent_session_id=root,
+            owner.tasks._infos["s98"] = TaskInfo(
+                session_id="s98",
+                title="Remote",
+                root_session_id=root,
+                _storage_id="ngn-remote-child",
+                _parent_storage_id=root,
                 status="running",
                 provider="a2a",
                 provider_kind="a2a",
@@ -167,7 +167,7 @@ def test_parent_start_rejects_idle_foreign_and_remote_parents(tmp_path: Path, mo
             denied_remote = await client.post(
                 path,
                 headers=headers,
-                json=_start_body("assistant", "NO REMOTE CHILD", parent_task_id="remote-parent"),
+                json=_start_body("assistant", "NO REMOTE CHILD", parent_session_id="s98"),
             )
             assert denied_remote.status_code == 409
             assert "Remote agents manage their children" in denied_remote.json()["detail"]
@@ -205,20 +205,20 @@ def test_parent_profile_availability_intersects_allowed_agents_and_user_invocabi
             try:
                 response = await client.post(path, headers=headers, json=_start_body("reviewer", "RESTRICTED PARENT"))
                 assert response.status_code == 200, response.text
-                parent_id = response.json()["task"]["id"]
+                parent_id = response.json()["task"]["session_id"]
                 async with asyncio.timeout(HANG_GUARD):
                     await parent_started.wait()
 
                 owner = state.executions.owners[root]
                 indexed = (await client.get(path, headers=headers)).json()
-                parent_view = next(item for item in indexed["tasks"] if item["id"] == parent_id)
+                parent_view = next(item for item in indexed["tasks"] if item["session_id"] == parent_id)
                 assert parent_view["child_agents"] == ["assistant"]
 
                 for agent in ("reviewer", "internal", "hidden"):
                     denied = await client.post(
                         path,
                         headers=headers,
-                        json=_start_body(agent, f"DENIED {agent}", parent_task_id=parent_id),
+                        json=_start_body(agent, f"DENIED {agent}", parent_session_id=parent_id),
                     )
                     assert denied.status_code == 403, denied.text
                     assert "cannot be started under this parent" in denied.json()["detail"]
@@ -249,7 +249,7 @@ def test_parent_start_respects_root_shared_execution_quota(tmp_path: Path, monke
             try:
                 response = await client.post(path, headers=headers, json=_start_body("reviewer", "QUOTA PARENT"))
                 assert response.status_code == 200, response.text
-                parent_id = response.json()["task"]["id"]
+                parent_id = response.json()["task"]["session_id"]
                 async with asyncio.timeout(HANG_GUARD):
                     await parent_started.wait()
                 owner = state.executions.owners[root]
@@ -258,12 +258,12 @@ def test_parent_start_respects_root_shared_execution_quota(tmp_path: Path, monke
                 )
 
                 indexed = (await client.get(path, headers=headers)).json()
-                parent_view = next(item for item in indexed["tasks"] if item["id"] == parent_id)
+                parent_view = next(item for item in indexed["tasks"] if item["session_id"] == parent_id)
                 assert set(parent_view["child_agents"]) == {"assistant", "reviewer"}
                 assert parent_view["can_start_children"] is False
                 assert "execution budget is exhausted" in parent_view["child_start_unavailable_reason"]
 
-                body = _start_body("assistant", "OVER QUOTA", parent_task_id=parent_id)
+                body = _start_body("assistant", "OVER QUOTA", parent_session_id=parent_id)
                 denied = await client.post(
                     path,
                     headers=headers,
@@ -311,21 +311,23 @@ def test_parent_start_idempotency_is_scoped_to_parent_target(tmp_path: Path, mon
             try:
                 first = await client.post(path, headers=headers, json=_start_body("reviewer", "PARENT ONE"))
                 assert first.status_code == 200, first.text
-                first_parent = first.json()["task"]["id"]
+                first_parent = first.json()["task"]["session_id"]
                 async with asyncio.timeout(HANG_GUARD):
                     await parent_started.wait()
 
                 second = await client.post(path, headers=headers, json=_start_body("reviewer", "PARENT TWO"))
                 assert second.status_code == 200, second.text
-                second_parent = second.json()["task"]["id"]
+                second_parent = second.json()["task"]["session_id"]
                 await until(lambda: len(parent_prompts) == 2)
                 assert first_parent != second_parent
 
                 message_id = str(uuid4())
-                body = _start_body("assistant", "IDEMPOTENT CHILD", parent_task_id=first_parent, message_id=message_id)
+                body = _start_body(
+                    "assistant", "IDEMPOTENT CHILD", parent_session_id=first_parent, message_id=message_id
+                )
                 started = await client.post(path, headers=headers, json=body)
                 assert started.status_code == 200, started.text
-                child_id = started.json()["task"]["id"]
+                child_id = started.json()["task"]["session_id"]
                 async with asyncio.timeout(HANG_GUARD):
                     await child_started.wait()
                 owner = state.executions.owners[root]
@@ -333,15 +335,15 @@ def test_parent_start_idempotency_is_scoped_to_parent_target(tmp_path: Path, mon
 
                 duplicate = await client.post(path, headers=headers, json=body)
                 assert duplicate.status_code == 200, duplicate.text
-                assert duplicate.json()["task"]["id"] == child_id
-                assert duplicate.json()["receipt"]["task_id"] == child_id
+                assert duplicate.json()["task"]["session_id"] == child_id
+                assert duplicate.json()["receipt"]["session_id"] == child_id
                 assert owner.tasks._used == used
 
                 different_parent = await client.post(
                     path,
                     headers=headers,
                     json=_start_body(
-                        "assistant", "IDEMPOTENT CHILD", parent_task_id=second_parent, message_id=message_id
+                        "assistant", "IDEMPOTENT CHILD", parent_session_id=second_parent, message_id=message_id
                     ),
                 )
                 assert different_parent.status_code == 409

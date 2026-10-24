@@ -44,7 +44,7 @@ test("success, framework failures, cancellation, unrelated tools and task status
   assert.equal(failed.error, "Tool transport failed");
   assert.deepEqual(executionStatus(failed), { label: "Error", tone: "error" });
   assert.equal(commandOutcomeDescription(failed), "");
-  for (const name of ["delegate", "read_file", "custom_tool"]) {
+  for (const name of ["to_agent", "read_file", "custom_tool"]) {
     const entry = resultEntry({ exit_code: 7, timed_out: true }, { name });
     assert.equal(executionStatus(entry).tone, "complete");
     assert.equal(commandOutcomeDescription(entry), "");
@@ -113,8 +113,8 @@ test("identical tool IDs across runs and tasks keep independent command outcomes
   send({ event: "run_started", run_id: "run-one" });
   send({ event: "tool_result", run_id: "run-one", call_id: "same", name: "shell", result: { exit_code: 7, timed_out: false } });
   assert.equal(cache.get("root").activeRun?.status, "running");
-  send({ event: "task_started", run_id: "run-one", task_id: "child", name: "Worker", activation: 1 });
-  send({ event: "tool_result", run_id: "run-one", task_id: "child", activation: 1, call_id: "same", name: "shell", result: { exit_code: 0, timed_out: false } });
+  send({ event: "task_started", run_id: "run-one", session_id: "child", title: "Worker", activation: 1 });
+  send({ event: "tool_result", run_id: "run-one", session_id: "child", activation: 1, call_id: "same", name: "shell", result: { exit_code: 0, timed_out: false } });
   send({ event: "tool_result", run_id: "run-two", call_id: "same", name: "shell", result: { exit_code: -15, timed_out: true } });
   const entries = cache.get("root").entries;
   assert.deepEqual(entries.filter(entry => entry.kind === "tool").map(entry => executionStatus(entry).label), ["Exit 7", "Completed", "Timed out"]);

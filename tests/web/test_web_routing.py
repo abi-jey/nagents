@@ -91,7 +91,15 @@ def journal(app: Site) -> dict[str, dict[str, str]]:
             }
 
     assert app.client.portal is not None
-    return app.client.portal.call(read)
+    rows = app.client.portal.call(read)
+    if not isinstance(rows, dict):
+        raise AssertionError("Inbox query returned a non-object result")
+    result: dict[str, dict[str, str]] = {}
+    for message_id, fields in rows.items():
+        if not isinstance(fields, dict):
+            raise AssertionError("Inbox query returned a malformed row")
+        result[str(message_id)] = {str(field): str(value) for field, value in fields.items()}
+    return result
 
 
 def users(app: Site, session_id: str) -> list[dict[str, object]]:

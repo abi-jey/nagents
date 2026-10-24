@@ -47,6 +47,7 @@ from nagents.harness.execution import host_run
 from nagents.harness.followups import RunInput
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
+from nagents.harness.types import TaskDeliveryWarning
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolOutput
@@ -280,7 +281,7 @@ class NagentsApp(App[None]):
             return
         tasks = self.harness.tasks.list()
         self.default_screen.query_one("#agent-tree", AgentTree).update_tasks(
-            tasks, {task.id: task.parent_task_id for task in tasks}
+            tasks, {task.session_id: task.parent_session_id for task in tasks}
         )
 
     @on(TextArea.SelectionChanged, "#composer")
@@ -785,7 +786,7 @@ class NagentsApp(App[None]):
         else:
             self._launch(lambda: self._send(prompt), "Working on queued prompt  /  Esc to stop")
 
-    async def _send(self, text: str, *, display_text: str = "", task_id: str = "") -> None:
+    async def _send(self, text: str, *, display_text: str = "", session_id: str = "") -> None:
         if not self._backend_ready:
             await self._initialize()
         run_id = uuid4().hex
@@ -799,12 +800,12 @@ class NagentsApp(App[None]):
         self._called_tools.clear()
         self._delivery_session = self.harness.session_id
         self._usage = ""
-        if not task_id:
+        if not session_id:
             await self._add(Turn("user", display_text or text))
         # Close the producer even if cancellation happens while rendering an event.
         stream = (
-            self.harness.continue_task(task_id, text, message=self._task_input(task_id, text))
-            if task_id
+            self.harness.continue_task(session_id, text, message=self._task_input(session_id, text))
+            if session_id
             else self.harness.run(text)
         )
         pending_events: deque[HarnessEvent] = deque()
@@ -842,26 +843,26 @@ class NagentsApp(App[None]):
                 if self._task_note_run == run_id:
                     self._task_note_run = ""
 
-    def _task_input(self, task_id: str, prompt: str) -> RunInput:
+    def _task_input(self, session_id: str, prompt: str) -> RunInput:
         identifier = uuid4().hex
-        self._pending_task_notes[task_id, identifier] = (self._task_note_run, prompt)
+        self._pending_task_notes[session_id, identifier] = (self._task_note_run, prompt)
         return RunInput(prompt, identifier=identifier, message_id=identifier)
 
     def _picked_up_task_note(self, event: TaskMessage) -> str:
-        _, prompt = self._pending_task_notes.pop((event.task_id, event.message_id), ("", ""))
+        _, prompt = self._pending_task_notes.pop((event.session_id, event.message_id), ("", ""))
         if not prompt:
             return event.prompt
         # An inspector may have reopened while pickup waited on the parent
         # stream. Its editor is newer than the draft saved on its last close.
-        if isinstance(self.screen, TaskScreen) and self.screen.selected_id == event.task_id:
+        if isinstance(self.screen, TaskScreen) and self.screen.selected_session_id == event.session_id:
             composer = self.screen.query_one("#task-followup", TextArea)
             if composer.text == prompt:
                 composer.clear()
-                self._task_drafts.pop(event.task_id, None)
+                self._task_drafts.pop(event.session_id, None)
             else:
-                self._task_drafts[event.task_id] = composer.text
-        elif self._task_drafts.get(event.task_id) == prompt:
-            self._task_drafts.pop(event.task_id, None)
+                self._task_drafts[event.session_id] = composer.text
+        elif self._task_drafts.get(event.session_id) == prompt:
+            self._task_drafts.pop(event.session_id, None)
         return prompt
 
     async def _text(self, text: str) -> None:
@@ -929,23 +930,28 @@ class NagentsApp(App[None]):
         if isinstance(event, (TextChunkEvent, TextDoneEvent, ToolResultEvent, DoneEvent)):
             await self._reconcile_deliveries(force=not isinstance(event, TextChunkEvent))
         if isinstance(event, TaskStarted):
-            key = f"task:{event.task_id}" + (f":{event.followup}" if event.followup else "")
+            key = f"session:{event.session_id}" + (f":{event.followup}" if event.followup else "")
+            label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
             await self._tool(
-                key, f"subagent / {event.name}", {"task": event.prompt, "profile": event.profile, "depth": event.depth}
+                key,
+                f"agent / {label} ({event.profile})",
+                {"task": event.prompt, "profile": event.profile, "depth": event.depth},
             )
             self._running_tools.add(key)
             self._refresh_tasks()
-            self._status(f"{event.name} started in the background  /  /tasks for details")
+            self._status(f"{label} started in the background  /  /tasks for details")
         elif isinstance(event, TaskMessage):
             prompt = self._picked_up_task_note(event)
             await self._flush_stream()
             self._answer = None
             self._answer_text = ""
-            await self._add(Turn("user", f"Follow-up to {event.name}:\n\n{prompt}"))
+            label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
+            await self._add(Turn("user", f"Follow-up to {label}:\n\n{prompt}"))
             self._refresh_tasks()
         elif isinstance(event, TaskCompleted):
-            key = f"task:{event.task_id}" + (f":{event.followup}" if event.followup else "")
-            card = await self._tool(key, f"subagent / {event.name}")
+            key = f"session:{event.session_id}" + (f":{event.followup}" if event.followup else "")
+            label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
+            card = await self._tool(key, f"agent / {label} ({event.profile})")
             if event.status == "cancelled":
                 card.cancel()
             else:
@@ -958,7 +964,7 @@ class NagentsApp(App[None]):
             self._answer = None
             self._answer_text = ""
             self._run_text = ""
-            self._status(f"{event.name} responded  /  parent continuing")
+            self._status(f"{label} responded  /  parent continuing")
         elif isinstance(event, CompactionStartedEvent):
             self._compacting = True
             self._status("Compacting context...")
@@ -1009,6 +1015,10 @@ class NagentsApp(App[None]):
                 self._status("Tool failed  /  expand its card for details", error=True)
         elif isinstance(event, Notice):
             await self._notice(event.text, error=event.level == "error", warning=event.level == "warning")
+        elif isinstance(event, TaskDeliveryWarning):
+            label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
+            parent = event.parent_session_id or "Main"
+            await self._notice(f"{label} could not deliver its result to parent {parent}.", error=True)
         elif isinstance(event, ErrorEvent):
             await self._notice(transport_error_message(event) or event.message, error=True)
         elif isinstance(event, RateLimitEvent):
@@ -1157,9 +1167,9 @@ class NagentsApp(App[None]):
     @on(AgentTree.Opened)
     def open_task(self, event: AgentTree.Opened) -> None:
         event.stop()
-        self._show_tasks(event.task_id)
+        self._show_tasks(event.session_id)
 
-    def _show_tasks(self, selected_id: str = "") -> None:
+    def _show_tasks(self, selected_session_id: str = "") -> None:
         if isinstance(self.screen, ModalScreen):
             return
         self._hide_completions()
@@ -1167,8 +1177,8 @@ class NagentsApp(App[None]):
             TaskScreen(
                 self.harness.tasks.list,
                 self.harness.task_history,
-                parents=lambda: {task.id: task.parent_task_id for task in self.harness.tasks.list()},
-                selected_id=selected_id,
+                parents=lambda: {task.session_id: task.parent_session_id for task in self.harness.tasks.list()},
+                selected_session_id=selected_session_id,
                 drafts=self._task_drafts,
             ),
             self._chosen_task_followup,
@@ -1178,25 +1188,25 @@ class NagentsApp(App[None]):
         self.query_one(Composer).focus()
         if not result or self._shutting_down:
             return
-        task_id, prompt = result
+        session_id, prompt = result
         if self.busy:
-            self.run_worker(self._busy_task_followup(task_id, prompt), group="task-followups", exit_on_error=False)
+            self.run_worker(self._busy_task_followup(session_id, prompt), group="task-followups", exit_on_error=False)
         else:
-            self._launch(lambda: self._send(prompt, task_id=task_id), "Continuing agent conversation...")
+            self._launch(lambda: self._send(prompt, session_id=session_id), "Continuing agent conversation...")
 
-    async def _busy_task_followup(self, task_id: str, prompt: str) -> None:
+    async def _busy_task_followup(self, session_id: str, prompt: str) -> None:
         # A model run may settle between dismissing the inspector and scheduling
         # this worker. Keep any new idle run owned by the normal cancel/queue path.
         if not self.busy:
-            self._launch(lambda: self._send(prompt, task_id=task_id), "Continuing agent conversation...")
+            self._launch(lambda: self._send(prompt, session_id=session_id), "Continuing agent conversation...")
             return
         if self.harness._busy != "run":
             self._status("Wait for the current operation to finish before continuing an agent. Your draft is kept.")
             return
-        message = self._task_input(task_id, prompt)
+        message = self._task_input(session_id, prompt)
         accepted = False
         try:
-            async with aclosing(self.harness.continue_task(task_id, prompt, message=message)) as events:
+            async with aclosing(self.harness.continue_task(session_id, prompt, message=message)) as events:
                 async for event in events:
                     # The busy continuation yields only its acceptance notice;
                     # its pickup belongs to the already-active root stream.
@@ -1206,7 +1216,7 @@ class NagentsApp(App[None]):
             self._status(f"Follow-up not sent; draft kept. {exc}", error=True)
         finally:
             if not accepted:
-                self._pending_task_notes.pop((task_id, message.message_id), None)
+                self._pending_task_notes.pop((session_id, message.message_id), None)
 
     def command(self, text: str) -> None:
         self._hide_completions()

@@ -31,7 +31,7 @@ class RunInput:
     prompt: str | list[ContentPart]
     identifier: str = ""
     kind: Literal["human", "followup", "notification", "wakeup"] = "human"
-    task_ids: tuple[str, ...] = ()
+    session_ids: tuple[str, ...] = ()
     context: Callable[[], AbstractAsyncContextManager[None]] = field(default=nullcontext, repr=False)
     voice_session_id: str = ""
     message_id: str = ""
@@ -44,7 +44,7 @@ class RunTurn:
     id: str
     identifier: str
     kind: str
-    task_ids: tuple[str, ...]
+    session_ids: tuple[str, ...]
     voice_session_id: str = ""
     message_id: str = ""
 
@@ -99,7 +99,7 @@ class RunInputs(AgentPlugin):
             uuid4().hex,
             message.identifier,
             message.kind,
-            message.task_ids,
+            message.session_ids,
             message.voice_session_id,
             message.message_id,
         )
@@ -156,7 +156,7 @@ class RunInputs(AgentPlugin):
                 return self._pending.popleft()
             notification = await tasks.notification(wait_for_tasks=wait_for_tasks)
             if notification is not None:
-                return RunInput(notification, kind="notification", task_ids=tasks.notification_sources)
+                return RunInput(notification, kind="notification", session_ids=tasks.notification_sources)
             if self.pending or tasks._running():
                 continue
             # No await between the empty decision and rejecting future admissions.

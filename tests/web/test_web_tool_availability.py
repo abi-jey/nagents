@@ -81,8 +81,8 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                 catalog = (await client.get("/api/tools", headers=headers)).json()
                 assert {tool["name"] for tool in catalog["tools"]} == set(definitions)
                 assert all(harness.agent.tool_registry.get(name) is tool for name, tool in definitions.items())
-                assert {"edit", "write", "shell", "delegate", "schedule_wakeup"} <= set(definitions)
-                assert ("delegate" in wire) == (harness.can_delegate and not (shadowed and harness.mode == "reviewer"))
+                assert {"edit", "write", "shell", "to_agent", "schedule_wakeup"} <= set(definitions)
+                assert ("to_agent" in wire) == (harness.can_delegate and not (shadowed and harness.mode == "reviewer"))
                 if harness.mode == "reviewer":
                     assert not {"edit", "write", "shell", "custom_read"} & wire
                     assert not any(name.startswith("channel_") for name in wire)
@@ -102,12 +102,12 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                     assert "do not promise delayed self-follow-up" in instructions
                     assert "Scheduling acknowledges immediately" not in instructions
                     assert "Delayed self-follow-up is available only when" not in instructions
-                if not shadowed and "delegate" in wire:
-                    assert "use delegate(prompt, agent='assistant')" in instructions
+                if not shadowed and "to_agent" in wire:
+                    assert "use to_agent(prompt, agent='assistant')" in instructions
                     assert "Children cannot exceed your permission ceiling" in instructions
                 else:
                     assert "cannot delegate using native tools in this request" in instructions
-                    assert "use delegate(" not in instructions
+                    assert "use to_agent(" not in instructions
                 return wire
 
             async def settings(*, agent: str, depth: int) -> None:
@@ -154,18 +154,18 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
             assert "schedule_wakeup" in await capture()
 
             # Names never confer builtin authority on replacement plugin tools.
-            for name in ("read_file", "schedule_wakeup", "schedule_wakeup", "delegate"):
+            for name in ("read_file", "schedule_wakeup", "schedule_wakeup", "to_agent"):
                 definitions[name] = harness.agent.register_tool(custom_read, name=name)
             shadowed = True
             harness.wakeup_handler = None
             build = await capture()
             assert {"read_file", "schedule_wakeup"} <= build
-            assert "delegate" not in build  # The existing executor reserves this name at the depth limit.
+            assert "to_agent" not in build  # The existing executor reserves this name at the depth limit.
             await settings(agent="assistant", depth=2)
-            assert "delegate" in await capture()  # Its custom contract must not inherit native lifecycle guidance.
+            assert "to_agent" in await capture()  # Its custom contract must not inherit native lifecycle guidance.
             await settings(agent="reviewer", depth=2)
             # This reviewer has no native delegate anymore, so all four shadows must disappear.
-            assert not {"read_file", "schedule_wakeup", "delegate"} & await capture()
+            assert not {"read_file", "schedule_wakeup", "to_agent"} & await capture()
 
     asyncio.run(scenario())
 

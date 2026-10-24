@@ -150,8 +150,8 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
             await state.channels.store._transaction(seed)
             subscriber = Subscriber(session_id=root, ready=True)
             state.bus.subscribers.add(subscriber)
-            state.bus.event({"session_id": root, "event": "text_done", "text": "private old output"})
-            state.wakeups.publish({"session_id": root, "event": "text_done", "text": "private old output"})
+            state.bus.event({"root_session_id": root, "event": "text_done", "text": "private old output"})
+            state.wakeups.publish({"root_session_id": root, "event": "text_done", "text": "private old output"})
             protected = tmp_path / "credentials.json"
             protected.write_text("synthetic private credential")
             before = protected.read_bytes()
@@ -617,9 +617,7 @@ def test_unrelated_pending_work_bindings_and_retained_tasks_are_preserved(tmp_pa
             await quiet(state)
             root = state.selected_session_id
             other = await state.harness.new_session()
-            state.harness.tasks._infos["other-task"] = TaskInfo(
-                "other-task", "other child", session_id=other, status="completed"
-            )
+            state.harness.tasks._infos["s1"] = TaskInfo("s1", "other child", root_session_id=other, status="completed")
             state.wakeups.schedule(other, "other-run", Chain(), "", 86400, "unrelated wakeup")
             await state.channels.store.web(other, "other-message", "do not drop")
 
@@ -637,7 +635,7 @@ def test_unrelated_pending_work_bindings_and_retained_tasks_are_preserved(tmp_pa
                 bindings = await state.channels.store.bindings()
                 assert [entry["conversation_id"] for entry in bindings] == ["other"]
                 assert bindings[0]["session_id"] == other
-                assert "other-task" in state.harness.tasks._infos
+                assert "s1" in state.harness.tasks._infos
                 assert len(state.wakeups.pending) == 1
             finally:
                 state.harness.tasks._infos.clear()

@@ -157,10 +157,10 @@ def test_child_budget_explanation_keeps_failed_lifecycle_and_retained_history(
         await harness.initialize()
         harness.tasks.begin(harness.session_id)
         try:
-            ack = await harness.tasks.delegate("offline child budget probe")
+            ack = await harness.tasks.to_agent("offline child budget probe")
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             info = harness.tasks.list()[0]
-            assert info.id == ack["task_id"] and info.status == "failed" and info.result == ""
+            assert info.session_id == ack["session_id"] and info.status == "failed" and info.result == ""
             assert info.error == (
                 "Subagent reached its tool-round limit; its response is not a successful result."
                 if cause == "budget"
@@ -169,10 +169,10 @@ def test_child_budget_explanation_keeps_failed_lifecycle_and_retained_history(
             assert info.followups == info.activation == 0 and "SECRET" not in info.error
             assert not providers[0].requests
             assert len(providers[1].requests) == (12 if cause == "budget" else 1)
-            child = harness.tasks._children[info.id]
+            child = harness.tasks._children[info.session_id]
             assert harness.config.max_tool_rounds == 30 and child.agent.max_tool_rounds == 12
             assert providers[1].closed and child._closed
-            history = await harness.task_history(info.id)
+            history = await harness.task_history(info.session_id)
             assert history and len([message for message in history if message.role == "tool"]) == (
                 12 if cause == "budget" else 0
             )

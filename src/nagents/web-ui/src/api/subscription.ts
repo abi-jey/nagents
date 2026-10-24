@@ -21,9 +21,9 @@ function integer(value: unknown): value is number {
 export function validRecord(value: unknown): value is WireEvent {
   return object(value) && typeof value.event === "string" &&
     (value.uploads === undefined || uploadedAttachments(value.uploads)) &&
-    ["session_id", "run_id", "task_id", "call_id", "id", "approval_id", "parent_task_id", "message_id"].every(
+    ["session_id", "root_session_id", "run_id", "call_id", "id", "approval_id", "parent_session_id", "message_id"].every(
       (key) => value[key] === undefined || typeof value[key] === "string",
-    ) && ["activation", "followup", "depth"].every((key) => value[key] === undefined || integer(value[key]));
+    ) && ["activation", "source_activation", "followup", "depth"].every((key) => value[key] === undefined || integer(value[key]));
 }
 export function validSessionList(value: unknown): value is Session[] {
   return Array.isArray(value) && value.every((item: unknown) => object(item) &&
@@ -52,6 +52,14 @@ function deliveries(value: unknown): boolean {
       ["asset_id", "filename", "media_type"].every((key) => typeof asset[key] === "string") &&
       integer(asset.position) && integer(asset.byte_length) && asset.byte_length <= 20 * 1024 * 1024)));
 }
+function retainedTasks(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item: unknown) => object(item) &&
+    ["session_id", "title", "status", "root_session_id", "parent_session_id", "prompt", "result", "error"].every(
+      (key) => typeof item[key] === "string") && integer(item.activation) && integer(item.followups) &&
+    ["activation_history_id", "activation_run_id", "activation_call_id"].every(key => item[key] === undefined || typeof item[key] === "string") &&
+    (item.details_truncated === undefined || typeof item.details_truncated === "boolean") &&
+    (item.activation_call_position === undefined || Number.isSafeInteger(item.activation_call_position) && Number(item.activation_call_position) >= -1));
+}
 export function validSnapshot(value: unknown): value is Snapshot {
   return object(value) && typeof value.session_id === "string" && sessions(value.sessions) &&
     (value.agent_selection === undefined || validSessionAgent(value.agent_selection) && value.agent_selection.session_id === value.session_id) &&
@@ -63,9 +71,8 @@ export function validSnapshot(value: unknown): value is Snapshot {
       (item.uploads === undefined || uploadedAttachments(item.uploads)) &&
       Array.isArray(item.tool_calls) && item.tool_calls.every((call: unknown) => object(call) &&
         typeof call.id === "string" && typeof call.name === "string")) &&
-    Array.isArray(value.retained_tasks) && value.retained_tasks.every((item: unknown) => object(item) &&
-      ["id", "name", "status", "session_id", "parent_task_id", "prompt", "result", "error"].every(
-        (key) => typeof item[key] === "string") && integer(item.activation) && integer(item.followups));
+    retainedTasks(value.retained_tasks) && (value.retained_activations === undefined || retainedTasks(value.retained_activations)) &&
+    (value.retained_activations_omitted === undefined || integer(value.retained_activations_omitted));
 }
 export function parseFrame(data: unknown): EventFrame {
   if (typeof data !== "string" || data.length > 8 * 1024 * 1024) throw new Error("Invalid event frame.");
@@ -76,7 +83,7 @@ export function parseFrame(data: unknown): EventFrame {
   if (value.type === "status" && typeof value.active_session_id === "string" && typeof value.active_run_id === "string" && activeRuns(value.active_runs)) return value as EventFrame;
   if (typeof value.session_id !== "string") throw new Error("Invalid event session.");
   if (value.type === "event" && validRecord(value.record) &&
-      (value.record.session_id === undefined || value.record.session_id === value.session_id)) return value as EventFrame;
+      (value.record.root_session_id === undefined || value.record.root_session_id === value.session_id)) return value as EventFrame;
   if (value.type === "snapshot" && validSnapshot(value.snapshot) && value.snapshot.session_id === value.session_id)
     return value as EventFrame;
   throw new Error("Invalid event payload.");

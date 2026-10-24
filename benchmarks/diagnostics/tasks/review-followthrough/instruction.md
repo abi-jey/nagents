@@ -6,7 +6,7 @@ Repair the tiny Python project in `/app` using this staged workflow:
    smallest first-phase correction so the count, total, and mean are correct for
    nonempty lists of nonnegative finite numbers. Run the existing basic tests.
    Keep the public function name and the existing tests.
-2. After that first phase, call your native `delegate` tool with
+2. After that first phase, call your native `to_agent` tool with
    `agent='assistant'`. Ask for an independent, inspect-only review of the current
    `report.py` against `/app/REVIEW.md`. Tell the child to report concrete findings,
    not edit files or run shell commands. The child must use the existing project,

@@ -36,10 +36,10 @@ class NoteHarness(FakeHarness):
         self.inputs: list[tuple[str, RunInput]] = []
         self.admission: Literal["accept", "reject", "cancel"] = "accept"
 
-    async def continue_task(self, task_id: str, prompt: str, *, message: RunInput) -> AsyncIterator[HarnessEvent]:
+    async def continue_task(self, session_id: str, prompt: str, *, message: RunInput) -> AsyncIterator[HarnessEvent]:
         assert message.prompt == prompt
         assert message.identifier and message.identifier == message.message_id
-        self.inputs.append((task_id, message))
+        self.inputs.append((session_id, message))
         if self.admission == "reject":
             raise RuntimeError("The child cannot accept this follow-up")
         if self.admission == "cancel":
@@ -55,9 +55,9 @@ async def start_parent(app: NagentsApp, backend: NoteHarness, pilot: Pilot[None]
             await pilot.pause(0.01)
 
 
-def pickup(task_id: str, message_id: str) -> TaskMessage:
+def pickup(session_id: str, message_id: str) -> TaskMessage:
     return TaskMessage(
-        task_id,
+        session_id,
         "Explorer",
         "A human message was picked up by this agent.",
         message_id=message_id,
@@ -71,31 +71,31 @@ def test_busy_pickup_matches_task_and_message_without_losing_a_newer_draft(tmp_p
         async with app.run_test() as pilot:
             await idle(app, pilot)
             await start_parent(app, backend, pilot)
-            app._task_drafts["child"] = "My private child note"
-            await app._busy_task_followup("child", "My private child note")
+            app._task_drafts["s1"] = "My private child note"
+            await app._busy_task_followup("s1", "My private child note")
             _, message = backend.inputs[-1]
-            key = ("child", message.message_id)
+            key = ("s1", message.message_id)
             assert key in app._pending_task_notes
-            assert app._task_drafts["child"] == "My private child note"
+            assert app._task_drafts["s1"] == "My private child note"
 
-            await app._event(pickup("other-child", message.message_id))
-            await app._event(pickup("child", "other-message"))
+            await app._event(pickup("s2", message.message_id))
+            await app._event(pickup("s1", "other-message"))
             assert key in app._pending_task_notes
-            assert app._task_drafts["child"] == "My private child note"
+            assert app._task_drafts["s1"] == "My private child note"
 
-            app._task_drafts["child"] = "A newer unsent direction"
-            event = pickup("child", message.message_id)
+            app._task_drafts["s1"] = "A newer unsent direction"
+            event = pickup("s1", message.message_id)
             await app._event(event)
             assert key not in app._pending_task_notes
-            assert app._task_drafts["child"] == "A newer unsent direction"
+            assert app._task_drafts["s1"] == "A newer unsent direction"
             assert event.prompt == "A human message was picked up by this agent."
             assert any("My private child note" in str(turn.body.render()) for turn in app.query(Turn))
 
-            await app._busy_task_followup("child", "A newer unsent direction")
+            await app._busy_task_followup("s1", "A newer unsent direction")
             _, second = backend.inputs[-1]
             assert second.message_id != message.message_id
-            await app._event(pickup("child", second.message_id))
-            assert "child" not in app._task_drafts
+            await app._event(pickup("s1", second.message_id))
+            assert "s1" not in app._task_drafts
             assert not app._pending_task_notes
 
     asyncio.run(scenario())
@@ -104,25 +104,25 @@ def test_busy_pickup_matches_task_and_message_without_losing_a_newer_draft(tmp_p
 def test_pickup_preserves_the_open_inspectors_unsaved_editor(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = NoteHarness(tmp_path)
-        info = TaskInfo(id="child", name="Explorer", prompt="Research", session_id=backend.session_id)
+        info = TaskInfo(session_id="s1", title="Explorer", prompt="Research", root_session_id=backend.session_id)
         info.status = "completed"
         backend.tasks.list = lambda: [info]
         app = make_app(backend)
         async with app.run_test() as pilot:
             await idle(app, pilot)
-            app._task_drafts["child"] = "Sent direction"
-            message = app._task_input("child", "Sent direction")
-            app._show_tasks("child")
+            app._task_drafts["s1"] = "Sent direction"
+            message = app._task_input("s1", "Sent direction")
+            app._show_tasks("s1")
             await pilot.pause()
             assert isinstance(app.screen, TaskScreen)
             editor = app.screen.query_one("#task-followup", TextArea)
             editor.load_text("Still editing this follow-up")
-            await app._event(pickup("child", message.message_id))
+            await app._event(pickup("s1", message.message_id))
             assert editor.text == "Still editing this follow-up"
-            assert app._task_drafts["child"] == "Still editing this follow-up"
+            assert app._task_drafts["s1"] == "Still editing this follow-up"
             app.screen.action_close()
             await pilot.pause()
-            assert app._task_drafts["child"] == "Still editing this follow-up"
+            assert app._task_drafts["s1"] == "Still editing this follow-up"
 
     asyncio.run(scenario())
 
@@ -138,13 +138,13 @@ def test_failed_admission_keeps_the_draft_and_removes_pending_correlation(
         async with app.run_test() as pilot:
             await idle(app, pilot)
             await start_parent(app, backend, pilot)
-            app._task_drafts["child"] = "Retry this direction"
+            app._task_drafts["s1"] = "Retry this direction"
             if admission == "cancel":
                 with pytest.raises(asyncio.CancelledError):
-                    await app._busy_task_followup("child", "Retry this direction")
+                    await app._busy_task_followup("s1", "Retry this direction")
             else:
-                await app._busy_task_followup("child", "Retry this direction")
-            assert app._task_drafts["child"] == "Retry this direction"
+                await app._busy_task_followup("s1", "Retry this direction")
+            assert app._task_drafts["s1"] == "Retry this direction"
             assert not app._pending_task_notes
 
     asyncio.run(scenario())

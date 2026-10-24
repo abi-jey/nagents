@@ -87,7 +87,7 @@ class ChildFailureScenario:
             previous = info.parent_session_id
             try:
                 if wrong_parent and info.depth == 2:
-                    info.parent_session_id = "wrong-parent-session"
+                    info.parent_session_id = "s999"
                 publish(manager, info, event)
             finally:
                 info.parent_session_id = previous
@@ -109,7 +109,7 @@ class ChildFailureScenario:
         number = len(provider.requests)
         if provider.index == 0:
             if number == 1:
-                yield ToolCallEvent(id="root-parent", name="delegate", arguments={"prompt": "CHILD"})
+                yield ToolCallEvent(id="root-parent", name="to_agent", arguments={"prompt": "CHILD"})
             elif number == 2:
                 # The real child cancellation diagnostic must not abandon this
                 # root draft. Its own later abandonment is an explicit event.
@@ -124,11 +124,11 @@ class ChildFailureScenario:
                 yield TextDoneEvent(text="Waiting for the native child outcome.")
             elif number == 3:
                 assert any("tool-round limit" in str(message.content) for message in messages)
-                yield ToolCallEvent(id="replacement", name="delegate", arguments={"prompt": "REPLACEMENT"})
+                yield ToolCallEvent(id="replacement", name="to_agent", arguments={"prompt": "REPLACEMENT"})
             else:
                 yield TextDoneEvent(text="ROOT_RECOVERED" if number >= 5 else "Replacement requested.")
         elif provider.index == 1:
-            yield ToolCallEvent(id="descendant", name="delegate", arguments={"prompt": "DESCENDANT_PRIVATE_TASK"})
+            yield ToolCallEvent(id="descendant", name="to_agent", arguments={"prompt": "DESCENDANT_PRIVATE_TASK"})
             yield ToolCallEvent(id="barrier", name="read_file", arguments={"path": "owned-barrier"})
         elif provider.index == 2:
             self.grandchild_started.set()

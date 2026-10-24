@@ -38,7 +38,7 @@ class RemoteAgentTools:
         required. ca_file optionally names a server-side trusted CA bundle.
         With only url (and optional ca_file), discover the host's issuer,
         public client ID and scopes automatically. These are host/provider
-        settings, not local model settings. After saving, use delegate(agent=name).
+        settings, not local model settings. After saving, use to_agent(agent=name).
         No restart is needed. Sign-in happens through the UI; never request tokens.
         """
         if self.harness._is_subagent or self.harness.mode != "build" or self.harness.config.demo:
@@ -93,5 +93,5 @@ class RemoteAgentTools:
             "sign_in_required": bool(profile.issuer),
             "host_setup_required": bool(profile.issuer and not profile.client_id),
             "sign_in_path": f"Settings → workspace → {name} → Remote connection → Sign in",
-            "message": "Agent saved in workspace a2a.json. It is available on the next round without a restart. Do not send a task merely to check discovery; inspect the delegate target schema. If sign-in is required, use the sign_in_path in the UI.",
+            "message": "Agent saved in workspace a2a.json. It is available on the next round without a restart. Do not send a task merely to check discovery; inspect the to_agent target schema. If sign-in is required, use the sign_in_path in the UI.",
         }

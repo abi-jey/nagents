@@ -161,7 +161,7 @@ async def _delegated_failure(
         elif provider.index == 0 and len(provider.requests) == 1:
             yield ToolCallEvent(
                 id="delegate-remote-failure",
-                name="delegate",
+                name="to_agent",
                 arguments={"agent": "peer", "prompt": "Check the configured remote task."},
             )
         else:
@@ -232,7 +232,7 @@ async def _delegated_failure(
         for marker in (secret_token, secret_body, secret_exception, "PRIVATE_EXPIRED_OAUTH_TOKEN"):
             assert marker not in public_records
         assert "PRIVATE" not in notification.text
-        child = harness.tasks._children[completion.task_id]
+        child = harness.tasks._children[completion.session_id]
         async with (
             aiosqlite.connect(child.agent.session.db_path) as db,
             db.execute(

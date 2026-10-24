@@ -1,6 +1,6 @@
 ---
 name: assistant
-tools: [read_file, list_files, delegate]
+tools: [read_file, list_files, to_agent, agent_status]
 allowed_agents: [helper]
 live:
   enabled: true

@@ -93,7 +93,7 @@ class ApprovalHarness:
         self.refreshes += 1
 
     def tool_enabled(self, name: str) -> bool:
-        return name == "delegate" and self.delegate_enabled
+        return name == "to_agent" and self.delegate_enabled
 
     async def emit(self, event: Notice) -> None:
         self.notices.append(event)
@@ -144,7 +144,7 @@ async def test_action_review_is_mandatory_and_nonce_is_only_sent_back_to_remote(
     assert handled
     assert len(harness.requests) == 1
     tool, arguments, description, preview, mandatory = harness.requests[0]
-    assert tool == "delegate"
+    assert tool == "to_agent"
     assert mandatory
     assert arguments == {
         "agent": "peer",

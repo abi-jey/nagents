@@ -1207,17 +1207,15 @@ def test_offline_demo_approval_sessions_and_no_plugins(config: HarnessConfig, tm
 
 
 @pytest.mark.parametrize("accepted", [False, True])
-@pytest.mark.parametrize("legacy", [False, True])
-def test_demo_reads_current_json_and_legacy_tool_history(config: HarnessConfig, accepted: bool, legacy: bool) -> None:
+def test_demo_reads_canonical_json_tool_history(config: HarnessConfig, accepted: bool) -> None:
     async def scenario() -> None:
         provider = HarnessProvider(replace(config, demo=True))
         listing = {"paths": ["sample.txt"], "truncated": False, "cursor": None}
         approval = {"approved": accepted, "preview_only": True, "path": None}
-        encode = str if legacy else json.dumps
         messages = [
             Message("user", "demo approval"),
-            Message("tool", encode(listing), name="list_files", tool_call_id="list"),
-            Message("tool", encode(approval), name="demo_preview", tool_call_id="preview"),
+            Message("tool", json.dumps(listing), name="list_files", tool_call_id="list"),
+            Message("tool", json.dumps(approval), name="demo_preview", tool_call_id="preview"),
             Message("tool", "Error: rejected", name="list_files", tool_call_id="error"),
             Message("tool", "{", name="demo_preview", tool_call_id="invalid"),
         ]
@@ -1227,6 +1225,29 @@ def test_demo_reads_current_json_and_legacy_tool_history(config: HarnessConfig, 
             assert "sample.txt" in final
             assert ("**approved**" if accepted else "**declined**") in final
             assert "Error: rejected" not in final
+        finally:
+            await provider.close()
+
+    asyncio.run(scenario())
+
+
+def test_demo_rejects_python_repr_tool_history(config: HarnessConfig) -> None:
+    async def scenario() -> None:
+        provider = HarnessProvider(replace(config, demo=True))
+        try:
+            messages = [
+                Message("user", "demo approval"),
+                Message("tool", str({"paths": ["sample.txt"], "truncated": False}), name="list_files"),
+                Message(
+                    "tool",
+                    str({"approved": True, "preview_only": True, "path": None}),
+                    name="demo_preview",
+                ),
+            ]
+            events = [event async for event in provider.generate(messages)]
+            final = next(event.text for event in events if isinstance(event, TextDoneEvent))
+            assert "sample.txt" not in final
+            assert "approved" not in final and "declined" not in final
         finally:
             await provider.close()
 

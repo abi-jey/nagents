@@ -79,9 +79,9 @@ test("active snapshot restores scoped child approval, provisional activation and
     { event: "run_started", run_id: "run" },
     { event: "user_message", run_id: "run", text: "question", message_id: "uuid" },
     { event: "text_chunk", run_id: "run", chunk: "partial" },
-    { event: "task_started", run_id: "run", task_id: "parent", activation: 1, name: "Parent", parent_task_id: "" },
-    { event: "approval", run_id: "run", task_id: "child", activation: 3, call_id: "call", approval_id: "approval", tool: "shell" },
-    { event: "tool_output", run_id: "run", task_id: "child", activation: 3, call_id: "call", text: "child partial" },
+    { event: "task_started", run_id: "run", session_id: "parent", activation: 1, title: "Parent", parent_session_id: "" },
+    { event: "approval", run_id: "run", session_id: "child", activation: 3, call_id: "call", approval_id: "approval", tool: "shell" },
+    { event: "tool_output", run_id: "run", session_id: "child", activation: 3, call_id: "call", text: "child partial" },
   ];
   const snapshot = { ...history(["question"], "root", ["uuid"]), active_run: { id: "run", status: "running", events: records } };
   let state = applySnapshot({ entries: [] }, snapshot);
@@ -105,8 +105,8 @@ test("reconnect into active run with already loaded HTTP history does not duplic
 });
 test("out-of-band snapshot keeps finished scoped child evidence and stable open tool IDs", () => {
   const cache = new LiveSessions(); cache.set("root", applySnapshot({ entries: [] }, history(["initial"])));
-  event(cache, 1, { event: "tool_call", run_id: "r", task_id: "child", activation: 2, call_id: "c", name: "shell" });
-  event(cache, 2, { event: "tool_result", run_id: "r", task_id: "child", activation: 2, call_id: "c", result: "done" });
+  event(cache, 1, { event: "tool_call", run_id: "r", session_id: "child", activation: 2, call_id: "c", name: "shell" });
+  event(cache, 2, { event: "tool_result", run_id: "r", session_id: "child", activation: 2, call_id: "c", result: "done" });
   const tool = cache.get("root").entries.find((entry) => entry.callId === "c")!;
   const next = applySnapshot(cache.get("root"), history(["initial", "channel update"]));
   assert.deepEqual(next.entries.find((entry) => entry.callId === "c"), tool);
@@ -114,7 +114,7 @@ test("out-of-band snapshot keeps finished scoped child evidence and stable open 
 });
 test("prefix-only channel context stays user data without claiming verified origin or message identity", () => {
   const provenance = INBOUND_PREFIX + JSON.stringify({ version: 1, channel: "telegram-personal", conversation_id: "chat", message_id: "update-7",
-    sender_id: "sender", text: "Hello from Telegram", thread_id: "thread", reply_to: "message", event_type: "message", attachments: [], metadata: { task_id: "not-authority" } });
+    sender_id: "sender", text: "Hello from Telegram", thread_id: "thread", reply_to: "message", event_type: "message", attachments: [], metadata: { session_id: "not-authority" } });
   const state = applySnapshot({ entries: [] }, history([provenance, INBOUND_PREFIX + "bad"]));
   assert.equal(state.entries[0].kind, "user"); assert.equal(state.entries[0].text, "Hello from Telegram");
   assert.equal(state.entries[0].origin, undefined); assert.equal(state.entries[0].originId, undefined);
@@ -128,11 +128,11 @@ test("prefix-only channel context stays user data without claiming verified orig
 test("compact active records replace aggregated streams without losing provisional tools or other activations", () => {
   const cache = new LiveSessions();
   event(cache, 1, { event: "run_started", run_id: "run" });
-  event(cache, 2, { event: "tool_output", run_id: "run", task_id: "child", activation: 2, call_id: "c", text: "kept output" });
-  event(cache, 3, { event: "text_chunk", run_id: "run", task_id: "child", activation: 3, chunk: "partial" });
+  event(cache, 2, { event: "tool_output", run_id: "run", session_id: "child", activation: 2, call_id: "c", text: "kept output" });
+  event(cache, 3, { event: "text_chunk", run_id: "run", session_id: "child", activation: 3, chunk: "partial" });
   const snapshot = { ...history([]), active_run: { id: "run", status: "approval", records: [
-    { event: "text_chunk", run_id: "run", task_id: "child", activation: 3, chunk: "partial full" },
-  ], approval: { event: "approval", run_id: "run", task_id: "child", activation: 4, call_id: "c", approval_id: "new", tool: "shell" } } };
+    { event: "text_chunk", run_id: "run", session_id: "child", activation: 3, chunk: "partial full" },
+  ], approval: { event: "approval", run_id: "run", session_id: "child", activation: 4, call_id: "c", approval_id: "new", tool: "shell" } } };
   const state = applySnapshot(applySnapshot(cache.get("root"), snapshot), snapshot);
   assert.equal(state.entries.filter((entry) => entry.kind === "assistant").length, 1);
   assert.equal(state.entries.find((entry) => entry.kind === "assistant")?.text, "partial full");
@@ -307,7 +307,7 @@ test("explicit history reload stays quiet but a subsequent live source event sti
 
 test("input admission joins the existing run without resetting child approvals, status or history baseline", () => {
   const cache = new LiveSessions();
-  const approval: WireEvent = { event: "approval", run_id: "existing-run", task_id: "child", activation: 2,
+  const approval: WireEvent = { event: "approval", run_id: "existing-run", session_id: "child", activation: 2,
     call_id: "call", approval_id: "child-approval", tool: "shell" };
   cache.receive({ type: "snapshot", cursor: 0, epoch: "one", session_id: "root", snapshot: {
     ...history(["Original request"]), active_run: { id: "existing-run", status: "approval", pending_approvals: [approval], events: [approval] },
@@ -316,7 +316,7 @@ test("input admission joins the existing run without resetting child approvals, 
   cache.enqueue(followup); cache.admission(followup, "queued");
   cache.enqueue({ ...followup, message_id: "later-input" });
   const before = cache.get("root"), child = before.entries.find(entry => entry.approvalId === "child-approval");
-  const receipt: WireEvent = { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "" };
+  const receipt: WireEvent = { event: "input_admitted", run_id: "existing-run", root_session_id: "root", message_id: "next-input", channel: "" };
   const admitted = event(cache, 1, receipt);
   assert.equal(admitted.activeRun, before.activeRun);
   assert.equal(admitted.activeRun?.status, "approval");
@@ -344,7 +344,7 @@ for (const [outcome, label] of [["cancelled", "Cancelled"], ["failed", "Interrup
     const cache = new LiveSessions();
     event(cache, 1, { event: "run_started", run_id: "existing-run" });
     cache.enqueue({ session_id: "root", message_id: "next-input", prompt: "Queued follow-up" });
-    event(cache, 2, { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "" });
+    event(cache, 2, { event: "input_admitted", run_id: "existing-run", root_session_id: "root", message_id: "next-input", channel: "" });
     const finished = event(cache, 3, { event: "run_finished", run_id: "existing-run", status: outcome });
     const entry = finished.entries.find(entry => entry.messageId === "next-input")!;
     assert.equal(entry.queued, false); assert.equal(entry.state, label);
@@ -360,7 +360,7 @@ test("canonical follow-up input clears preparation and cannot be retroactively c
   const cache = new LiveSessions();
   event(cache, 1, { event: "run_started", run_id: "existing-run" });
   cache.enqueue({ session_id: "root", message_id: "next-input", prompt: "Follow-up" });
-  event(cache, 2, { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "" });
+  event(cache, 2, { event: "input_admitted", run_id: "existing-run", root_session_id: "root", message_id: "next-input", channel: "" });
   const saved = event(cache, 3, { event: "user_message", run_id: "existing-run", message_id: "next-input", history_id: "saved-input", text: "Follow-up" });
   assert.equal(saved.entries[0].state, undefined);
   const finished = event(cache, 4, { event: "run_finished", run_id: "existing-run", status: "cancelled" });
@@ -374,9 +374,9 @@ test("foreign, child, channel and unidentified admission receipts cannot claim q
   cache.enqueue({ session_id: "root", message_id: "next-input", prompt: "Follow-up" });
   const original = cache.get("root");
   let cursor = 1;
-  for (const extra of [{ session_id: "another-root" }, { run_id: "another-run" }, { task_id: "child" },
+  for (const extra of [{ root_session_id: "another-root" }, { run_id: "another-run" }, { session_id: "child" },
     { channel: "telegram" }, { message_id: "" }, { message_id: "unrelated" }, { run_id: "" }]) {
-    const after = event(cache, ++cursor, { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "", ...extra });
+    const after = event(cache, ++cursor, { event: "input_admitted", run_id: "existing-run", root_session_id: "root", message_id: "next-input", channel: "", ...extra });
     assert.equal(after.entries, original.entries); assert.equal(after.activeRun, original.activeRun);
   }
   assert.equal(cache.get("root").entries.length, 1);

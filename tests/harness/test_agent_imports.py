@@ -129,21 +129,21 @@ def test_parent_policy_applies_to_advertising_execution_and_resume(tmp_path: Pat
                 data_dir=tmp_path / "data",
                 agent="lead",
                 profiles={
-                    "lead": AgentProfile(tools=("read_file", "find", "search", "delegate")),
-                    "research": AgentProfile(tools=("read_file", "find", "search", "shell", "delegate")),
+                    "lead": AgentProfile(tools=("read_file", "find", "search", "to_agent")),
+                    "research": AgentProfile(tools=("read_file", "find", "search", "shell", "to_agent")),
                 },
             )
         )
         root.tool_settings.save({"lead": {"find": False}, "research": {"find": True}}, "")
         info = TaskInfo(
-            "child", "research", profile="research", child_session_id="child-session", session_id=root.session_id
+            "s1", "research", profile="research", root_session_id=root.session_id, _storage_id="child-session"
         )
         child = root.tasks._create_child("research", info)
-        root.tasks._infos[info.id] = info
-        root.tasks._children[info.id] = child
+        root.tasks._infos[info.session_id] = info
+        root.tasks._children[info.session_id] = child
         resumed: Harness | None = None
         try:
-            assert {tool.name for tool in child.agent.tool_registry.get_all()} == {"read_file", "search", "delegate"}
+            assert {tool.name for tool in child.agent.tool_registry.get_all()} == {"read_file", "search", "to_agent"}
             denial = await child.agent.tool_executor.execute(
                 ToolCall(id="blocked", name="find", arguments={"pattern": "*"})
             )
@@ -198,7 +198,7 @@ def test_imported_profile_delegates_through_normal_lifecycle(tmp_path: Path, mon
                 yield TextDoneEvent(text="Combined findings")
             elif len(provider.requests) == 1:
                 yield ToolCallEvent(
-                    id="delegate", name="delegate", arguments={"prompt": "Investigate", "agent": "research"}
+                    id="to_agent", name="to_agent", arguments={"prompt": "Investigate", "agent": "research"}
                 )
             else:
                 yield TextDoneEvent(text="Waiting for evidence")
@@ -214,7 +214,7 @@ def test_imported_profile_delegates_through_normal_lifecycle(tmp_path: Path, mon
         harness = Harness(config)
         try:
             harness.refresh_instructions()
-            definition = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "delegate")
+            definition = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "to_agent")
             parameter = definition.parameters["properties"]["agent"]
             assert "Find supporting evidence" in parameter["description"]
             assert "research" in parameter["enum"]
@@ -249,10 +249,10 @@ def test_delegation_eligibility_is_enforced_not_only_hidden(tmp_path: Path) -> N
         try:
             harness.tasks.begin(harness.session_id, reset_budget=True)
             with pytest.raises(PermissionError, match="not available"):
-                await harness.tasks.delegate("Try hidden target", "interactive")
+                await harness.tasks.to_agent("Try hidden target", "interactive")
             await harness.set_agent("limited")
             assert not harness.can_delegate
-            assert "delegate" not in {tool.name for tool in harness.agent.tool_registry.get_all()}
+            assert "to_agent" not in {tool.name for tool in harness.agent.tool_registry.get_all()}
         finally:
             await harness.close()
 
@@ -272,14 +272,12 @@ def test_leaf_agent_can_resume_repeatedly_without_gaining_tools(tmp_path: Path) 
                 },
             )
         )
-        info = TaskInfo(
-            "leaf-task", "leaf", profile="leaf", child_session_id="leaf-session", session_id=harness.session_id
-        )
-        harness.tasks._infos[info.id] = info
+        info = TaskInfo("s1", "leaf", profile="leaf", root_session_id=harness.session_id, _storage_id="leaf-session")
+        harness.tasks._infos[info.session_id] = info
         try:
             for activation in range(4):
                 child = harness.tasks._create_child("leaf", info, continuing=activation > 0)
-                harness.tasks._children[info.id] = child
+                harness.tasks._children[info.session_id] = child
                 try:
                     assert child._permission_parents == (harness,)
                     assert not child.can_delegate
@@ -309,13 +307,13 @@ def test_restricted_target_schema_requires_an_available_agent(tmp_path: Path) ->
         )
         try:
             harness.refresh_instructions()
-            delegate = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "delegate")
-            assert "agent" in delegate.parameters["required"]
-            assert delegate.parameters["properties"]["agent"]["enum"] == ["research"]
+            delegate = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "to_agent")
+            assert "agent" not in delegate.parameters["required"]
+            assert delegate.parameters["properties"]["agent"]["enum"] == ["", "research"]
             assert "agent='research'" in (harness.agent.system_prompt or "")
             assert "agent='assistant'" not in (harness.agent.system_prompt or "")
             await harness.set_agent("assistant")
-            delegate = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "delegate")
+            delegate = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "to_agent")
             assert "agent" not in delegate.parameters["required"]
         finally:
             await harness.close()

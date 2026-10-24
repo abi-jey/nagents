@@ -135,7 +135,7 @@ async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -
     async def approve(request: ApprovalRequest) -> bool:
         # Only the fixture's allowed correction is approved, and only at root.
         path = request.arguments.get("path")
-        if request.task_id or request.tool != "edit" or not isinstance(path, str):
+        if request.session_id or request.tool != "edit" or not isinstance(path, str):
             return False
         target = Path(path)
         absolute = target if target.is_absolute() else workspace / target
@@ -188,9 +188,9 @@ async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -
                     async for event in harness.run(scenario.goal + "\n\nExecution strategy: " + instruction):
                         now = time.monotonic() - run_start
                         if isinstance(event, TaskStarted):
-                            child_started[event.task_id] = now
+                            child_started[event.session_id] = now
                         elif isinstance(event, TaskCompleted):
-                            child_intervals.append((child_started.pop(event.task_id, now), now))
+                            child_intervals.append((child_started.pop(event.session_id, now), now))
                             child_outcomes.append(
                                 {"status": event.status, "error": event.error, "result": event.result}
                             )

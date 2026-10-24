@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 def complete_trace() -> list[dict[str, object]]:
     return [
-        {"event": "benchmark_start", "session_id": "ngn-fixture"},
+        {"event": "benchmark_start", "root_session_id": "ngn-fixture"},
         {"event": "tool_call", "id": "edit1", "name": "edit", "arguments": {"path": "/app/report.py"}},
         {"event": "tool_result", "id": "edit1", "name": "edit", "result": {"path": "report.py", "changed": True}},
         {
@@ -39,23 +39,32 @@ def complete_trace() -> list[dict[str, object]]:
                 "output": "Ran 2 tests in 0.001s\n\nOK\n",
             },
         },
-        {"event": "tool_call", "id": "delegate", "name": "delegate", "arguments": {"agent": "assistant"}},
-        {"event": "task_started", "task_id": "child", "parent_task_id": "", "depth": 1},
+        {"event": "tool_call", "id": "delegate", "name": "to_agent", "arguments": {"agent": "assistant"}},
+        {
+            "event": "task_started",
+            "session_id": "s1",
+            "title": "Review",
+            "root_session_id": "ngn-fixture",
+            "parent_session_id": "",
+            "depth": 1,
+        },
         {
             "event": "tool_result",
             "id": "delegate",
-            "name": "delegate",
-            "result": {"task_id": "child", "status": "running"},
+            "name": "to_agent",
+            "result": {"session_id": "s1", "status": "running"},
         },
         {
             "event": "task_completed",
-            "task_id": "child",
-            "parent_task_id": "",
+            "session_id": "s1",
+            "title": "Review",
+            "root_session_id": "ngn-fixture",
+            "parent_session_id": "",
             "depth": 1,
             "status": "completed",
             "error": "",
         },
-        {"event": "task_notification", "source_task_id": "child", "recipient_task_id": "", "cause": "completion"},
+        {"event": "task_notification", "source_session_id": "s1", "recipient_session_id": "", "cause": "completion"},
         {"event": "tool_call", "id": "edit2", "name": "edit", "arguments": {"path": "/app/report.py"}},
         {"event": "tool_result", "id": "edit2", "name": "edit", "result": {"path": "report.py", "changed": True}},
         {
@@ -78,7 +87,7 @@ def complete_trace() -> list[dict[str, object]]:
         {"event": "done", "finish_reason": "stop", "session_id": "ngn-fixture"},
         {
             "event": "benchmark_task_history",
-            "task": {"id": "child", "parent_task_id": "", "depth": 1, "status": "completed", "error": ""},
+            "task": {"session_id": "s1", "parent_session_id": "", "depth": 1, "status": "completed", "error": ""},
             "messages": [
                 {
                     "role": "assistant",
@@ -135,13 +144,11 @@ def test_successful_completion_cannot_be_borrowed_from_an_unrelated_or_incomplet
     assert audit_events(rows)["workflow_passed"] is False
 
 
-@pytest.mark.parametrize(
-    ("source", "recipient"), [("grandchild", "child"), ("grandchild", ""), ("child", "other-child")]
-)
+@pytest.mark.parametrize(("source", "recipient"), [("grandchild", "s1"), ("grandchild", ""), ("s1", "other-child")])
 def test_nested_or_wrong_recipient_notification_is_not_a_main_review(source: str, recipient: str) -> None:
     rows = complete_trace()
     index = next(index for index, row in enumerate(rows) if row.get("event") == "task_notification")
-    rows[index] = {**rows[index], "source_task_id": source, "recipient_task_id": recipient}
+    rows[index] = {**rows[index], "source_session_id": source, "recipient_session_id": recipient}
     audited = audit_events(rows)
     assert audited["workflow_passed"] is False
     assert audited["review_notification_lines"] == []
@@ -158,7 +165,7 @@ def test_inspection_requires_native_ack_and_rejects_child_mutation() -> None:
     index = next(index for index, row in enumerate(rows) if row.get("event") == "benchmark_task_history")
     rows[index] = {
         "event": "benchmark_task_history",
-        "task": {"id": "child", "parent_task_id": "", "depth": 1, "status": "completed", "error": ""},
+        "task": {"session_id": "s1", "parent_session_id": "", "depth": 1, "status": "completed", "error": ""},
         "messages": [{"tool_calls": [{"name": "edit"}]}],
     }
     assert audit_events(rows)["workflow_passed"] is False
@@ -260,13 +267,13 @@ def test_failed_review_cannot_borrow_an_unrelated_grandchild_history() -> None:
             row.update(status="failed", error="Subagent provider failed")
         if row.get("event") == "benchmark_task_history":
             row["task"] = {
-                "id": "grandchild",
-                "parent_task_id": "child",
+                "session_id": "grandchild",
+                "parent_session_id": "s1",
                 "depth": 2,
                 "status": "completed",
                 "error": "",
             }
-    rows.insert(-1, {"event": "benchmark_task_history_error", "task_id": "child", "class": "RuntimeError"})
+    rows.insert(-1, {"event": "benchmark_task_history_error", "session_id": "s1", "class": "RuntimeError"})
     report = audit_events(rows)
     assert report["workflow_passed"] is False
     assert report["review_notification_lines"] == []
@@ -282,9 +289,15 @@ def test_required_review_needs_its_own_completed_native_inspection(problem: str)
     elif problem == "missing":
         rows.remove(history)
     elif problem == "wrong_id":
-        history["task"] = {"id": "different", "parent_task_id": "", "depth": 1, "status": "completed", "error": ""}
+        history["task"] = {"session_id": "s9", "parent_session_id": "", "depth": 1, "status": "completed", "error": ""}
     elif problem == "failed":
-        history["task"] = {"id": "child", "parent_task_id": "", "depth": 1, "status": "failed", "error": "failed"}
+        history["task"] = {
+            "session_id": "s1",
+            "parent_session_id": "",
+            "depth": 1,
+            "status": "failed",
+            "error": "failed",
+        }
     elif problem == "read_error":
         messages = history["messages"]
         assert isinstance(messages, list)

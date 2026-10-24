@@ -27,7 +27,7 @@ class DeliveryTranscript:
                 "calls": calls,
             }
         record = _event_record(event)
-        if self.capture and isinstance(event, ToolCallEvent) and not event.extra.get("task_id"):
+        if self.capture and isinstance(event, ToolCallEvent) and not event.extra.get("session_id"):
             self.serial += 1
             identity = str(self.serial)
             self.pending[id(event)] = (event, identity)

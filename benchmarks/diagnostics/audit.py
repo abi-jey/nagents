@@ -57,7 +57,7 @@ class Delegation:
 @dataclass(frozen=True)
 class Child:
     line: int
-    task_id: str
+    session_id: str
     status: str
     error: str
     direct_completed: bool
@@ -152,7 +152,7 @@ def _child_history(index: int, event: dict[str, object]) -> Child:
         ):
             inspected.add(reads[call_id])
     direct_completed = (
-        task.get("parent_task_id") == ""
+        task.get("parent_session_id") == ""
         and type(task.get("depth")) is int
         and task.get("depth") == 1
         and task.get("status") == "completed"
@@ -160,7 +160,7 @@ def _child_history(index: int, event: dict[str, object]) -> Child:
     )
     return Child(
         index,
-        _text(task.get("id")),
+        _text(task.get("session_id")),
         _text(task.get("status")),
         _text(task.get("error")),
         direct_completed,
@@ -186,8 +186,7 @@ def audit_events(rows: list[dict[str, object]]) -> dict[str, object]:
     failures: list[dict[str, object]] = []
     recoverable_errors: list[dict[str, object]] = []
     manual: list[dict[str, object]] = []
-    root = next((_text(row.get("session_id")) for row in rows if row.get("event") == "benchmark_start"), "")
-    declares_root = any(row.get("event") == "benchmark_start" and "session_id" in row for row in rows)
+    root = next((_text(row.get("root_session_id")) for row in rows if row.get("event") == "benchmark_start"), "")
     compacting = normal_completion = False
     for index, event in enumerate(rows, 1):
         kind = event.get("event")
@@ -195,12 +194,12 @@ def audit_events(rows: list[dict[str, object]]) -> dict[str, object]:
             compacting = True
         elif kind == "compaction_done":
             compacting = False
-        elif kind == "done" and not compacting and (not declares_root or (root and event.get("session_id") == root)):
+        elif kind == "done" and not compacting and (root and event.get("session_id") == root):
             normal_completion = event.get("finish_reason") == "stop"
         if kind == "tool_call":
             calls[_text(event.get("id"))] = (index, event)
-            if event.get("name") == "delegate":
-                delegates.append(Delegation(index, _text(_mapping(event.get("arguments")).get("agent", "assistant"))))
+            if event.get("name") == "to_agent":
+                delegates.append(Delegation(index, _text(_mapping(event.get("arguments")).get("agent")) or "assistant"))
         elif kind == "tool_result":
             call_line, call = calls.get(_text(event.get("id")), (0, {}))
             arguments = _mapping(call.get("arguments"))
@@ -209,9 +208,14 @@ def audit_events(rows: list[dict[str, object]]) -> dict[str, object]:
                 failures.append({"line": index, "kind": "tool_error", "message": event["error"]})
             if not result or not call_line or call.get("name") != event.get("name"):
                 continue
-            task_id = result.get("task_id")
-            if event.get("name") == "delegate" and not event.get("error") and isinstance(task_id, str) and task_id:
-                delegated_ids.add(task_id)
+            session_id = result.get("session_id")
+            if (
+                event.get("name") == "to_agent"
+                and not event.get("error")
+                and isinstance(session_id, str)
+                and session_id
+            ):
+                delegated_ids.add(session_id)
             if (
                 event.get("name") == "edit"
                 and not event.get("error")
@@ -238,19 +242,19 @@ def audit_events(rows: list[dict[str, object]]) -> dict[str, object]:
                     tests.append(TestRun(call_line, index, code, supported, count, passed))
                     if not supported or code is None or (code == 0 and count == 0):
                         manual.append({"line": index, "kind": reason or "missing_successful_unittest_evidence"})
-        elif kind == "task_started" and event.get("parent_task_id") == "" and event.get("depth") == 1:
-            direct_started.add(_text(event.get("task_id")))
+        elif kind == "task_started" and event.get("parent_session_id") == "" and event.get("depth") == 1:
+            direct_started.add(_text(event.get("session_id")))
         elif kind == "task_completed":
-            completed[_text(event.get("task_id"))] = event
+            completed[_text(event.get("session_id"))] = event
         elif kind == "task_notification" and event.get("cause") == "completion":
-            source = _text(event.get("source_task_id"))
+            source = _text(event.get("source_session_id"))
             outcome = completed.get(source, {})
             if (
-                event.get("recipient_task_id") == ""
+                event.get("recipient_session_id") == ""
                 and source in delegated_ids & direct_started
                 and outcome.get("status") == "completed"
                 and outcome.get("error") == ""
-                and outcome.get("parent_task_id") == ""
+                and outcome.get("parent_session_id") == ""
                 and outcome.get("depth") == 1
             ):
                 notifications.append((index, source))
@@ -259,24 +263,24 @@ def audit_events(rows: list[dict[str, object]]) -> dict[str, object]:
         elif kind == "benchmark_task_history":
             children.append(_child_history(index, event))
         elif kind == "benchmark_task_history_error":
-            history_errors.append({"line": index, "task_id": event.get("task_id"), "class": event.get("class")})
+            history_errors.append({"line": index, "session_id": event.get("session_id"), "class": event.get("class")})
         elif kind == "error" and event.get("recoverable") is True:
             recoverable_errors.append({"line": index, "kind": "recoverable_error", "event": event})
         elif kind in {"error", "benchmark_exception", "benchmark_timeout", "benchmark_cancelled"}:
             failures.append({"line": index, "kind": kind, "message": event.get("message", "")})
-    notified_ids = {task_id for _, task_id in notifications}
+    notified_ids = {session_id for _, session_id in notifications}
     first_review = notifications[0][0] if notifications else 0
     first_delegate = delegates[0].line if delegates else 0
     initial_tests = [test for test in tests if test.result_line < first_delegate]
     history_ok = bool(delegated_ids)
-    for task_id in sorted(delegated_ids):
-        matched = [child for child in children if child.task_id == task_id]
-        if any(error.get("task_id") == task_id for error in history_errors):
+    for session_id in sorted(delegated_ids):
+        matched = [child for child in children if child.session_id == session_id]
+        if any(error.get("session_id") == session_id for error in history_errors):
             history_ok = False
-            manual.append({"task_id": task_id, "kind": "required_review_history_error"})
+            manual.append({"session_id": session_id, "kind": "required_review_history_error"})
         elif len(matched) != 1 or not matched[0].inspection_evidenced():
             history_ok = False
-            manual.append({"task_id": task_id, "kind": "required_review_inspection_not_evidenced"})
+            manual.append({"session_id": session_id, "kind": "required_review_inspection_not_evidenced"})
     last_review_edit = max((edit.result_line for edit in edits if edit.call_line > first_review > 0), default=0)
     checks = {
         "phase1_native_edit_before_delegation": any(edit.result_line < first_delegate for edit in edits),
@@ -302,7 +306,7 @@ def audit_events(rows: list[dict[str, object]]) -> dict[str, object]:
         "edits": [asdict(edit) for edit in edits],
         "tests": [asdict(test) for test in tests],
         "delegates": [asdict(delegate) for delegate in delegates],
-        "required_review_task_ids": sorted(delegated_ids),
+        "required_review_session_ids": sorted(delegated_ids),
         "review_notification_lines": [line for line, _ in notifications],
         "ignored_non_main_or_unmatched_notification_lines": ignored_notifications,
         "children": [asdict(child) for child in children],
@@ -310,9 +314,7 @@ def audit_events(rows: list[dict[str, object]]) -> dict[str, object]:
         "manual_confirmation_required": manual,
         "failures": failures,
         "recoverable_errors": recoverable_errors,
-        "completion_scope": "session-bound root"
-        if declares_root
-        else "legacy root-stream evidence without session binding",
+        "completion_scope": "session-bound root" if root else "missing canonical root scope",
     }
 
 

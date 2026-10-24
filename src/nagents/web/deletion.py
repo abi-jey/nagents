@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import anyio
 from fastapi import HTTPException
 
+from nagents.harness.session_identity import session_sequence
 from nagents.session.deliveries import cleanup_deliveries
 
 from ._async import finish_on_cancel
@@ -49,6 +50,23 @@ def _guard_rows(db: sqlite3.Connection, session_id: str) -> set[str]:
             raise HTTPException(
                 409, "Session has inconsistent cross-session history metadata. Deletion was not performed."
             )
+    if "ngn_web_agent_sessions" in tables:
+        for alias, storage_id in db.execute(
+            "SELECT session_id, storage_id FROM ngn_web_agent_sessions WHERE root = ?", (session_id,)
+        ).fetchall():
+            try:
+                sequence = session_sequence(str(alias))
+            except ValueError:
+                raise HTTPException(409, "Child identity is inconsistent. Deletion was not performed.") from None
+            if (
+                "nagents_agent_sessions" not in tables
+                or db.execute(
+                    "SELECT 1 FROM nagents_agent_sessions WHERE sequence = ? AND root_session_id = ? AND storage_id = ?",
+                    (sequence, session_id, storage_id),
+                ).fetchone()
+                is None
+            ):
+                raise HTTPException(409, "Child history ownership is inconsistent. Deletion was not performed.")
     return tables
 
 
@@ -92,17 +110,36 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str, tables: set[str
     # A stopped runtime may have failed to journal its last lifecycle event.
     # Restore must never present those saved descendants as still running.
     tasks = (
-        db.execute("SELECT task_id, data FROM ngn_web_tasks WHERE root = ?", (session_id,)).fetchall()
-        if "ngn_web_tasks" in tables
+        db.execute("SELECT session_id, data FROM ngn_web_agent_sessions WHERE root = ?", (session_id,)).fetchall()
+        if "ngn_web_agent_sessions" in tables
         else []
     )
-    for task_id, data in tasks:
+    for agent_session_id, data in tasks:
         task = json.loads(data)
         if task.get("status") == "running":
             task.update(status="cancelled", phase="cancelled", error="Session removed before completion.")
             db.execute(
-                "UPDATE ngn_web_tasks SET data = ? WHERE root = ? AND task_id = ?",
-                (json.dumps(task), session_id, task_id),
+                "UPDATE ngn_web_agent_sessions SET data = ? WHERE root = ? AND session_id = ?",
+                (json.dumps(task), session_id, agent_session_id),
+            )
+    if "ngn_web_agent_activations" in tables:
+        incomplete = db.execute(
+            "SELECT session_id, activation FROM ngn_web_agent_activations WHERE root = ? AND completed = '{}'",
+            (session_id,),
+        ).fetchall()
+        for agent_session_id, activation in incomplete:
+            terminal = {
+                "root_session_id": session_id,
+                "session_id": agent_session_id,
+                "activation": activation,
+                "status": "cancelled",
+                "result": "",
+                "error": "Session removed before completion.",
+            }
+            db.execute(
+                "UPDATE ngn_web_agent_activations SET completed = ? "
+                "WHERE root = ? AND session_id = ? AND activation = ? AND completed = '{}'",
+                (json.dumps(terminal), session_id, agent_session_id, activation),
             )
     with closing(
         db.execute(
@@ -116,9 +153,38 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str, tables: set[str
 
 def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
     cleanup_deliveries(db, session_id)
-    if "ngn_web_tasks" in tables:
-        for (child,) in db.execute("SELECT child FROM ngn_web_tasks WHERE root = ?", (session_id,)).fetchall():
-            cleanup_deliveries(db, str(child))
+    children: set[str] = set()
+    if "ngn_web_agent_sessions" in tables:
+        children.update(
+            str(row[0])
+            for row in db.execute("SELECT storage_id FROM ngn_web_agent_sessions WHERE root = ?", (session_id,))
+        )
+    if "nagents_agent_sessions" in tables:
+        children.update(
+            str(row[0])
+            for row in db.execute(
+                "SELECT storage_id FROM nagents_agent_sessions WHERE root_session_id = ?", (session_id,)
+            )
+        )
+    for child in children:
+        if child == session_id or db.execute("SELECT 1 FROM harness_sessions WHERE id = ?", (child,)).fetchone():
+            raise HTTPException(409, "Child mapping points to a root conversation. Deletion was not performed.")
+        cleanup_deliveries(db, child)
+        db.execute("DELETE FROM v2_messages WHERE session_id = ?", (child,))
+        db.execute("DELETE FROM v2_sessions WHERE id = ?", (child,))
+    if "ngn_web_agent_sessions" in tables:
+        db.execute("DELETE FROM ngn_web_agent_sessions WHERE root = ?", (session_id,))
+    if "ngn_web_agent_activations" in tables:
+        db.execute("DELETE FROM ngn_web_agent_activations WHERE root = ?", (session_id,))
+    if "ngn_web_agent_inputs" in tables:
+        db.execute(
+            "UPDATE ngn_web_agent_inputs SET text = '', status = CASE WHEN status = 'queued' THEN 'error' ELSE status END, "
+            "revision = revision + 1, reason = 'Root session permanently deleted.' WHERE root = ?",
+            (session_id,),
+        )
+    if "nagents_agent_sessions" in tables:
+        # AUTOINCREMENT's sqlite_sequence high-water mark deliberately survives this cleanup.
+        db.execute("DELETE FROM nagents_agent_sessions WHERE root_session_id = ?", (session_id,))
     if "ngn_web_group_members" in tables:
         db.execute("DELETE FROM ngn_web_group_members WHERE session_id = ?", (session_id,))
     db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
@@ -198,13 +264,13 @@ async def _release_process(state: WebState, session_id: str, *, journal: bool = 
         # never a child-session name prefix.
         if journal:
             for info in tuple(owner.tasks._infos.values()):
-                if info.session_id == session_id:
-                    await state.tasks.store.save(session_id, state.tasks.task(asdict(info), owner))
+                if info.root_session_id == session_id:
+                    await state.tasks.store.save(session_id, state.tasks.task(asdict(info), owner), info._storage_id)
         infos = await owner.tasks.release_session(session_id)
         released += len(infos)
         if journal:
             for info in infos:
-                await state.tasks.store.save(session_id, state.tasks.task(asdict(info), owner))
+                await state.tasks.store.save(session_id, state.tasks.task(asdict(info), owner), info._storage_id)
     state.tasks.forget_session(session_id)
     logger.info("Session task tree released: session=%s tasks=%d stopped_run=%s", session_id, released, run is not None)
 
@@ -275,7 +341,7 @@ async def delete_session(state: WebState, session_id: str, *, permanent: bool = 
                 harness.session_id = selected
                 harness.tools.read_hashes.clear()
             state.bus.delete_session(session_id)
-            state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
+            state.observe_run(None, {"event": "session_deleted", "root_session_id": session_id})
             state.wakeups.forget_session(session_id)
             await state.executions.dispose(session_id)
             result = await state.snapshot(selected)

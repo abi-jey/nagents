@@ -194,7 +194,7 @@ class SessionAgents:
             {
                 "event": "agent_selection_changed",
                 "schema_version": 1,
-                "session_id": session_id,
+                "root_session_id": session_id,
                 "agent_selection": result,
             }
         )

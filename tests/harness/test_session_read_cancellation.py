@@ -49,7 +49,12 @@ async def child_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Asy
     try:
         await child.initialize()
         child._queue = asyncio.Queue()
-        info = TaskInfo(id=child._task_id, name="reader", child_session_id=child.session_id)
+        info = TaskInfo(
+            session_id=child._agent_session_id,
+            title="reader",
+            root_session_id=parent.session_id,
+            _storage_id=child.session_id,
+        )
         yield ChildActivity(parent.tasks, info, child)
     finally:
         await child.close()

@@ -157,7 +157,7 @@ class Run:
         extra = record.get("extra", {})
         extra = extra if isinstance(extra, dict) else {}
         scope = (
-            f"{record.get('task_id', extra.get('task_id', ''))}:{record.get('activation', extra.get('activation', 0))}"
+            f"{record.get('session_id', extra.get('session_id', ''))}:{record.get('activation', extra.get('activation', 0))}"
             f":{record.get('followup', extra.get('followup', 0))}"
         )
         generation = record.get("generation_id", extra.get("generation_id", ""))
@@ -166,7 +166,7 @@ class Run:
         correlated = isinstance(generation, str) and bool(generation) and type(index) is int and 0 <= index < 1024
         call_id = record.get("call_id", record.get("id", ""))
         tool_slot = json.dumps([call_id, generation if correlated else "", index if correlated else -1])
-        if not record.get("task_id", extra.get("task_id", "")):
+        if not record.get("session_id", extra.get("session_id", "")):
             if event == "text_chunk" and not any(key.startswith(f"{scope}:call:") for key in self.drafts):
                 self._context_reply_live = True
             elif event in {"text_done", "tool_call_progress", "tool_call", "tool_result", "done", "compaction_started"}:
@@ -363,12 +363,12 @@ class WebState:
         if (
             self.mutating
             or self.executions.closed
-            or wakeup.session_id in self.channels.work_tasks
-            or wakeup.session_id in self.executions.runs
+            or wakeup.root_session_id in self.channels.work_tasks
+            or wakeup.root_session_id in self.executions.runs
             or len(set(self.executions.runs) | set(self.channels.work_tasks)) >= MAX_PARALLEL_RUNS
         ):
             return False
-        run = Run(wakeup.session_id, background=True, chain=wakeup.chain, wakeup_id=wakeup.id)
+        run = Run(wakeup.root_session_id, background=True, chain=wakeup.chain, wakeup_id=wakeup.id)
         run.task = task
         self.executions.reserve(run)
         return True
@@ -450,10 +450,15 @@ class WebState:
             raise HTTPException(404, "Session not found in this workspace.")
         history = await self.history.snapshot(session_id)
         active = self.run_for(session_id)
+        task_index = await self.tasks.index(
+            session_id, history_ids=frozenset(str(row["history_id"]) for row in history if row.get("history_id"))
+        )
         return {
             "session_id": session_id,
             "activity_cursor": self.wakeups.cursor,
-            "retained_tasks": (await self.tasks.index(session_id))["tasks"],
+            "retained_tasks": task_index["tasks"],
+            "retained_activations": task_index["activations"],
+            "retained_activations_omitted": task_index["activations_omitted"],
             "sessions": [asdict(session) for session in sessions],
             "history": history,
             "agent_selection": await self.session_agents.snapshot(session_id),
@@ -497,7 +502,7 @@ class WebState:
                             **record,
                             "event": "live_caption",
                             "text": record["content"],
-                            "session_id": session_id,
+                            "root_session_id": session_id,
                             "schema_version": 1,
                         }
                     )
@@ -521,7 +526,7 @@ class WebState:
     async def send(self, run: Run, record: dict[str, object]) -> None:
         await self.responses.record(run, record)
         if record.get("event") == "task_completed":
-            await self.responses.finish(run, str(record.get("task_id", "")), str(record.get("status", "failed")))
+            await self.responses.finish(run, str(record.get("session_id", "")), str(record.get("status", "failed")))
         await self.tasks.record(run, record)
         self.publish(run, record)
 
@@ -569,7 +574,7 @@ class WebState:
                     "policy": "workspace_tool_allow",
                     **identity,
                     "text": f"{request.tool} is always allowed in this workspace.",
-                    "task_id": request.task_id,
+                    "session_id": request.session_id,
                     "activation": request.activation,
                     "call_id": request.id,
                     "tool": request.tool,
@@ -585,7 +590,7 @@ class WebState:
                     "policy": "channel_auto_reply",
                     **identity,
                     "text": "Automatic approval for this session's permanently owned chat under its connection's automatic-message policy.",
-                    "task_id": request.task_id,
+                    "session_id": request.session_id,
                     "activation": request.activation,
                     "call_id": request.id,
                     "tool": request.tool,
@@ -603,7 +608,7 @@ class WebState:
                     {
                         "event": "notice",
                         "text": "Unattended approval was denied; no action was taken.",
-                        "task_id": request.task_id,
+                        "session_id": request.session_id,
                         "activation": request.activation,
                         "call_id": request.id,
                         "tool": request.tool,
@@ -653,7 +658,7 @@ class WebState:
                         "event": "approval_closed",
                         **identity,
                         "approval_id": pending.id,
-                        "task_id": request.task_id,
+                        "session_id": request.session_id,
                         "activation": request.activation,
                         "call_id": request.id,
                         "decision": (pending.decision or "allow") if approved else "deny",
@@ -661,14 +666,14 @@ class WebState:
                     },
                 )
 
-    async def schedule(self, task_id: str, delay: float, reason: str) -> dict[str, str]:
+    async def schedule(self, agent_session_id: str, delay: float, reason: str) -> dict[str, str]:
         run = self.active
         if run is None or run.task.cancelling() or run.task.done() or run.session_id != self.running_harness.session_id:
             raise RuntimeError("Wakeups require an active run in their originating session")
-        return self.wakeups.schedule(run.session_id, run.id, run.chain, task_id, delay, reason)
+        return self.wakeups.schedule(run.session_id, run.id, run.chain, agent_session_id, delay, reason)
 
     def publish(self, run: Run, record: dict[str, object]) -> None:
-        record = {**record, "schema_version": 1, "run_id": run.id, "session_id": run.session_id}
+        record = {**record, "schema_version": 1, "run_id": run.id, "root_session_id": run.session_id}
         if run.background:
             self.wakeups.publish(record)  # Observer forwards scheduled work to the same WS bus.
         else:
@@ -712,9 +717,10 @@ class WebState:
         run: Run,
         prompt: str | list[ContentPart],
         *,
-        task_id: str = "",
+        agent_session_id: str = "",
         task_agent: str = "",
         task_input: RunInput | None = None,
+        task_title: str = "",
     ) -> None:
         notices = run.notices = ChannelNotices(self, run)
         transcript = DeliveryTranscript(
@@ -726,14 +732,14 @@ class WebState:
             if task_input is not None:
                 assert isinstance(prompt, str)
                 source = (
-                    self.running_harness.start_task(prompt, task_agent, message=task_input)
+                    self.running_harness.start_task(prompt, task_agent, title=task_title, message=task_input)
                     if task_agent
-                    else self.running_harness.continue_task(task_id, prompt, message=task_input)
+                    else self.running_harness.continue_task(agent_session_id, prompt, message=task_input)
                 )
             elif run.background:
                 if not isinstance(prompt, str):
                     raise ValueError("Background wake prompts must be text")
-                source = self.running_harness.wake(prompt, task_id=task_id)
+                source = self.running_harness.wake(prompt, session_id=agent_session_id)
             else:
                 source = self.running_harness.run(prompt)
             definition = self.running_harness.agent.tool_registry.get("channel_send")
@@ -746,7 +752,7 @@ class WebState:
             def turn_started(turn: RunTurn) -> None:
                 notices.turn(turn)
                 self.observe_run(
-                    run, {"event": "root_turn", "session_id": run.session_id, "run_id": run.id, "_turn": turn}
+                    run, {"event": "root_turn", "root_session_id": run.session_id, "run_id": run.id, "_turn": turn}
                 )
 
             with (
@@ -765,7 +771,7 @@ class WebState:
                         run,
                         {
                             "event": "model_request",
-                            "session_id": run.session_id,
+                            "root_session_id": run.session_id,
                             "run_id": run.id,
                             "request": request,
                             "_turn": self.running_harness.followups.current,
@@ -776,7 +782,7 @@ class WebState:
             ):
                 async with aclosing(source) as events:
                     async for event in events:
-                        if isinstance(event, DoneEvent) and not event.extra.get("task_id"):
+                        if isinstance(event, DoneEvent) and not event.extra.get("session_id"):
                             run.final_text = event.final_text
                         if isinstance(event, ErrorEvent):
                             if type(event) is TaskDeliveryWarning:
@@ -789,11 +795,10 @@ class WebState:
                                     "message": message,
                                     "code": "TASK_DELIVERY_SKIPPED",
                                     "recoverable": True,
-                                    "task_id": event.task_id,
-                                    "task_name": event.task_name,
-                                    "parent_task_id": event.parent_task_id,
+                                    "session_id": event.session_id,
+                                    "title": event.title,
                                     "parent_session_id": event.parent_session_id,
-                                    "child_session_id": event.child_session_id,
+                                    "root_session_id": event.root_session_id,
                                     "depth": event.depth,
                                     "activation": event.activation,
                                     "followup": event.followup,
@@ -1022,12 +1027,12 @@ class WebState:
         self.changed()
 
     async def wake(self, wakeup: Wakeup) -> None:
-        run = self.run_for(wakeup.session_id)
+        run = self.run_for(wakeup.root_session_id)
         if run is None or run.wakeup_id != wakeup.id:
             task = asyncio.current_task()
             if task is None or not self.reserve_wakeup(wakeup, task):
                 raise RuntimeError("Wakeup root is already owned")
-            run = self.run_for(wakeup.session_id)
+            run = self.run_for(wakeup.root_session_id)
             assert run is not None
         self.publish(run, {"event": "run_started"})
         self.status()
@@ -1048,9 +1053,9 @@ class WebState:
             with self.executions.scope(run):
                 async with self.executions.harness(run) as harness:
                     self.running_harness = harness
-                    await harness.resume(wakeup.session_id)
+                    await harness.resume(wakeup.root_session_id)
                     self.wakeups.lifecycle(wakeup, "fired", run_id=run.id)
-                    await self.produce(run, wakeup.reason, task_id=wakeup.task_id)
+                    await self.produce(run, wakeup.reason, agent_session_id=wakeup.session_id)
         except Exception:
             run.outcome = "failed"
             self.publish(run, {"event": "error", "message": "Wakeup failed. Completed actions were not rolled back."})

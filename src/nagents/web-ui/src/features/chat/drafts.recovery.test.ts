@@ -68,7 +68,7 @@ test("recovery refuses model history or active/retained work even when New retur
   const used = [
     { ...blank(), history: [{ role: "user", content: "Saved conversation", name: "", tool_call_id: "", tool_calls: [] }] },
     { ...blank(), active_run: { id: "working", status: "running" } },
-    { ...blank(), retained_tasks: [{ id: "retained" }] } as Snapshot,
+    { ...blank(), retained_tasks: [{ session_id: "retained" }] } as Snapshot,
   ];
   for (const snapshot of used) {
     const drafts = new SessionDrafts(); drafts.set("ngn-pruned", "Keep the source");

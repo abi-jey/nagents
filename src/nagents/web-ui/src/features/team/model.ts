@@ -18,16 +18,16 @@ export type TeamAgent = {
   authentication?: RemoteAuthentication; trustRemoteTools?: boolean;
 };
 export type TaskActivity = WireEvent & {
-  event: "task_activity"; task_id: string; activation: number; sequence: number;
+  event: "task_activity"; session_id: string; root_session_id: string; parent_session_id: string; activation: number; sequence: number;
   timestamp: number; payload: { type: string; [key: string]: unknown };
 };
 export type TaskReceipt = {
-  message_id: string; task_id: string; text?: string;
+  message_id: string; session_id: string; text?: string;
   status: "queued" | "picked_up" | "cancelled" | "error";
   revision: number; reason?: string; queued_at?: string; picked_up_at?: string;
 };
 export type TaskDetail = {
-  task: RetainedTask; history: Snapshot["history"]; activity?: TaskActivity[];
+  task: RetainedTask; history: Snapshot["history"]; activity?: TaskActivity[]; retained_activations?: RetainedTask[]; retained_activations_omitted?: number;
   receipts?: TaskReceipt[]; context?: ContextStats; truncated?: boolean;
   activity_cursor?: number;
   activity_truncated?: boolean;
@@ -78,7 +78,7 @@ export function taskAgent(task: RetainedTask): TeamAgent {
     : task.phase === "waiting_children" || task.phase === "waiting_delegation" ? "Waiting for delegated work"
     : task.phase === "waiting_input" ? "Waiting for a message" : task.phase === "stopping" ? "Stopping"
     : phase === "waiting" ? "Waiting for delegated work" : phase === "failed" ? task.error : phase === "done" ? task.result : task.prompt);
-  return { id: task.id, name: task.name, profile: task.profile || "", parentId: task.parent_task_id || MAIN_AGENT, prompt: task.prompt,
+  return { id: task.session_id, name: task.title || task.session_id, profile: task.profile || "", parentId: task.parent_session_id || MAIN_AGENT, prompt: task.prompt,
     phase, reason, provider: task.provider || "", providerKind: task.provider_kind || task.provider || "", model: task.model || "",
     reasoningEffort: task.reasoning_effort,
     startedAt: task.started_at || 0, updatedAt: task.updated_at || task.completed_at || task.started_at || 0,
@@ -121,7 +121,8 @@ export function phaseLabel(agent: Pick<TeamAgent, "phase" | "reason">): string {
 }
 
 export function validTaskActivity(event: WireEvent): event is TaskActivity {
-  return event.event === "task_activity" && typeof event.task_id === "string" && !!event.task_id &&
+  return event.event === "task_activity" && typeof event.session_id === "string" && !!event.session_id &&
+    typeof event.root_session_id === "string" && typeof event.parent_session_id === "string" &&
     typeof event.activation === "number" && Number.isSafeInteger(event.activation) &&
     typeof event.sequence === "number" && Number.isSafeInteger(event.sequence) &&
     !!event.payload && typeof event.payload === "object" && !Array.isArray(event.payload) &&
@@ -130,8 +131,8 @@ export function validTaskActivity(event: WireEvent): event is TaskActivity {
 
 /** Identity is task + activation + host sequence, never a provider tool id. */
 export function mergeTaskActivity(previous: readonly TaskActivity[], incoming: readonly TaskActivity[]): TaskActivity[] {
-  const unique = new Map(previous.map(event => [`${event.task_id}:${event.activation}:${event.sequence}`, event]));
-  for (const event of incoming) if (validTaskActivity(event)) unique.set(`${event.task_id}:${event.activation}:${event.sequence}`, event);
+  const unique = new Map(previous.map(event => [`${event.session_id}:${event.activation}:${event.sequence}`, event]));
+  for (const event of incoming) if (validTaskActivity(event)) unique.set(`${event.session_id}:${event.activation}:${event.sequence}`, event);
   return [...unique.values()].sort((a, b) => a.activation - b.activation || a.sequence - b.sequence).slice(-600);
 }
 

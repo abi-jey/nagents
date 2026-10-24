@@ -53,7 +53,7 @@ def test_run_context_reply_tracks_root_chunks_and_clears_on_boundaries() -> None
     assert run.context_reply == "first second"
 
     # A child-scoped chunk must never leak into the root streaming reply.
-    run.remember({"event": "text_chunk", "task_id": "child", "activation": 1, "chunk": "child draft"})
+    run.remember({"event": "text_chunk", "session_id": "s1", "activation": 1, "chunk": "child draft"})
     assert run.context_reply == "first second"
 
     # Each boundary clears the live flag, so the streaming reply is empty even
@@ -75,7 +75,7 @@ def test_run_context_reply_tracks_root_chunks_and_clears_on_boundaries() -> None
 
 def test_run_context_reply_is_bounded_and_ignores_child_only_streams() -> None:
     run = Run("ngn-root")
-    run.remember({"event": "text_chunk", "task_id": "child", "activation": 1, "chunk": "child only"})
+    run.remember({"event": "text_chunk", "session_id": "s1", "activation": 1, "chunk": "child only"})
     assert run.context_reply == ""
 
     run.remember({"event": "text_chunk", "chunk": "x" * 300000})
@@ -236,7 +236,7 @@ def test_active_run_context_excludes_child_text_and_clears_after_completion(
                 active = state.active
                 assert active is not None
                 # A child-scoped chunk arrives while the root reply is live.
-                active.remember({"event": "text_chunk", "task_id": "child", "activation": 1, "chunk": "child draft"})
+                active.remember({"event": "text_chunk", "session_id": "s1", "activation": 1, "chunk": "child draft"})
                 assert active.context_reply == "partial text"
 
                 live = (await client.get(f"/api/sessions/{session_id}/context", headers=headers)).json()

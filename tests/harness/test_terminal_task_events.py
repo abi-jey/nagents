@@ -57,9 +57,9 @@ def test_terminal_parent_error_flushes_completed_lifecycle_without_waiting_or_re
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0:
                 if len(provider.requests) == 1:
-                    yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "review"})
+                    yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "review"})
                     if not nested:
-                        yield ToolCallEvent(id="running-child", name="delegate", arguments={"prompt": "wait"})
+                        yield ToolCallEvent(id="running-child", name="to_agent", arguments={"prompt": "wait"})
                     yield ToolCallEvent(id="gate", name="publication_gate")
                 elif len(provider.requests) == 2:
                     yield ErrorEvent(message="original terminal provider error", recoverable=False)
@@ -69,7 +69,7 @@ def test_terminal_parent_error_flushes_completed_lifecycle_without_waiting_or_re
                 yield TextDoneEvent(text="retained completed result")
             else:
                 if nested and len(provider.requests) == 1:
-                    yield ToolCallEvent(id="grandchild", name="delegate", arguments={"prompt": "review"})
+                    yield ToolCallEvent(id="grandchild", name="to_agent", arguments={"prompt": "review"})
                 else:
                     running.set()
                     await never.wait()
@@ -102,14 +102,14 @@ def test_terminal_parent_error_flushes_completed_lifecycle_without_waiting_or_re
             finished = next(info for info in tasks if info.status == "completed")
             cancelled = next(info for info in tasks if info.status == "cancelled")
             assert finished.result == "retained completed result"
-            assert finished.parent_task_id == (cancelled.id if nested else "")
+            assert finished.parent_session_id == (cancelled.session_id if nested else "")
             completions = [event for event in events if isinstance(event, TaskCompleted)]
             assert len(completions) == 1
-            assert completions[0].task_id == finished.id
-            assert completions[0].parent_task_id == finished.parent_task_id
+            assert completions[0].session_id == finished.session_id
             assert completions[0].parent_session_id == finished.parent_session_id
+            assert completions[0].root_session_id == harness.session_id
             assert all(provider.closed for provider in providers[1:])
-            assert await harness.task_history(finished.id)
+            assert await harness.task_history(finished.session_id)
 
             # A fresh human turn can inspect retained data, but never replays the
             # failed turn's queued model notification or completed operation.
@@ -138,7 +138,7 @@ def test_child_fatal_error_does_not_consume_root_lifecycle_queue(
             elif notifications(messages):
                 yield TextDoneEvent(text="parent evaluated failed child")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "review"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "review"})
             else:
                 yield TextDoneEvent(text="parent preliminary response")
 
@@ -149,8 +149,8 @@ def test_child_fatal_error_does_not_consume_root_lifecycle_queue(
             delivered = [event for event in events if isinstance(event, TaskNotification)]
             assert len(completions) == len(delivered) == 1
             assert completions[0].status == "failed" and completions[0].error
-            assert delivered[0].source_task_id == completions[0].task_id
-            assert delivered[0].recipient_task_id == ""
+            assert delivered[0].source_session_id == completions[0].session_id
+            assert delivered[0].recipient_session_id == ""
             assert len(providers[0].requests) == 3
         finally:
             await harness.close()

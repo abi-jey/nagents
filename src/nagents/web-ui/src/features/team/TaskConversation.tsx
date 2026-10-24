@@ -13,8 +13,8 @@ import { RemoteStatus } from "./RemoteStatus.js";
 
 function taskRecords(detail: TaskDetail, streamed: TaskActivity[]): TaskActivity[] {
   const later = streamed.filter(event => event.sequence > (detail.activity_cursor ?? Number.MAX_SAFE_INTEGER));
-  if (detail.activity_truncated || later.some(event => event.task_id === detail.task.id && event.payload.type === "resync_required")) return [];
-  return mergeTaskActivity(detail.activity || [], later).filter(event => event.task_id === detail.task.id);
+  if (detail.activity_truncated || later.some(event => event.session_id === detail.task.session_id && event.payload.type === "resync_required")) return [];
+  return mergeTaskActivity(detail.activity || [], later).filter(event => event.session_id === detail.task.session_id);
 }
 
 function appendTaskRecord(entries: Entry[], event: TaskActivity, childSession: string): Entry[] {
@@ -28,13 +28,13 @@ function appendTaskRecord(entries: Entry[], event: TaskActivity, childSession: s
   // metadata can also carry a root followup counter that text chunks omit;
   // mixing those scopes would split one answer into two visible entries.
   // Provider payloads cannot change the selected task or create a root action.
-  return appendEvent(entries, { ...payload, task_id: "", parent_task_id: "", run_id: "", activation: event.activation, followup: 0 });
+  return appendEvent(entries, { ...payload, session_id: "", parent_session_id: "", run_id: "", activation: event.activation, followup: 0 });
 }
 
 export function taskEntries(detail: TaskDetail | undefined, streamed: TaskActivity[]): Entry[] {
   if (!detail) return [];
-  let entries = fromHistory({ session_id: detail.task.child_session_id, history: detail.history, retained_tasks: [] });
-  for (const event of taskRecords(detail, streamed)) entries = appendTaskRecord(entries, event, detail.task.child_session_id);
+  let entries = fromHistory({ session_id: detail.task.session_id, root_session_id: detail.task.root_session_id, history: detail.history, retained_tasks: [], retained_activations: detail.retained_activations, retained_activations_omitted: detail.retained_activations_omitted });
+  for (const event of taskRecords(detail, streamed)) entries = appendTaskRecord(entries, event, detail.task.session_id);
   return entries;
 }
 
@@ -53,9 +53,9 @@ export class TaskTranscript {
       const cleared = this.history.length > 0 && detail.history.length === 0;
       if (cleared) { this.entries = []; this.generation++; }
       for (const event of records) if (!this.applied.has(`${event.activation}:${event.sequence}`))
-        this.entries = appendTaskRecord(this.entries, event, detail.task.child_session_id);
+        this.entries = appendTaskRecord(this.entries, event, detail.task.session_id);
       this.entries = reconcileHistory(this.entries,
-        { session_id: detail.task.child_session_id, history: detail.history, retained_tasks: [], sessions: [] }, false, this.history, new Set(), !detail.activity_truncated);
+        { session_id: detail.task.session_id, root_session_id: detail.task.root_session_id, history: detail.history, retained_tasks: [], retained_activations: detail.retained_activations, retained_activations_omitted: detail.retained_activations_omitted, sessions: [] }, false, this.history, new Set(), !detail.activity_truncated);
     }
     for (const event of records) this.applied.add(`${event.activation}:${event.sequence}`);
     this.history = detail.history;
@@ -84,14 +84,14 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
   const remote = agent?.providerKind === "a2a" || team.profile?.provider === "a2a";
   return <section className="focused-task-conversation" aria-label={`${name} conversation`}>
     <header className="focused-task-header"><button type="button" className="task-back" onClick={back}><Icon name="chevron" size={14} />{rootName}</button>
-      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{definition && <span className="focused-task-definition">Definition <b>{definition}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
+      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{agent?.id && <><code>{agent.id}</code><span aria-hidden="true"> · </span></>}{definition && <span className="focused-task-definition">Definition <b>{definition}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
       {agent && <AgentState agent={agent} />}
     </header>
     {remote && <div className="task-remote-connection"><RemoteStatus authentication={authentication} /><span>{agent?.trustRemoteTools || team.profile?.trust_remote_tools ? "Remote tools trusted" : "Remote tools reviewed"}</span>
       {configureConnection && definition && <button type="button" onClick={() => configureConnection(definition)}>Connection settings</button>}
     </div>}
     {removedProfile ? <p className="task-history-notice" role="status">This agent profile was removed or renamed. Choose an agent in Team or return to {rootName}. Your draft is kept.</p>
-      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || (team.startParentId ? `Send a message below to start this child under ${team.startParent?.name || "the selected parent"}.` : "Send a message below to start a new conversation using this definition.")}</p>
+      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || (team.startParentId ? `Send a message below to start this child under ${(team.startParent?.title || team.startParent?.session_id) || "the selected parent"}.` : "Send a message below to start a new conversation using this definition.")}</p>
         {team.profile.source && <dl className="team-profile-source"><dt>Definition file</dt><dd><code>{team.profile.source}</code></dd></dl>}
       </div> : <>
       {team.loading && !team.detail && <p className="task-loading" role="status">Loading conversation…</p>}

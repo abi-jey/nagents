@@ -42,7 +42,7 @@ class VisibleFact:
 @dataclass(frozen=True)
 class CallRecord:
     actor_id: str
-    task_id: str
+    session_id: str
     call_id: str
     tool_name: str
     arguments: dict[str, object] = field(default_factory=dict)
@@ -64,7 +64,7 @@ class CallRecord:
 class Failure:
     call_id: str
     actor_id: str
-    task_id: str
+    session_id: str
     category: Category
     reason: str
     repeated_after_feedback: bool
@@ -102,7 +102,7 @@ def _facts(call: CallRecord, prior: dict[str, CallRecord]) -> tuple[VisibleFact,
         for fact in call.visible_facts
         if fact.source_call_id in prior
         and prior[fact.source_call_id].actor_id == call.actor_id
-        and prior[fact.source_call_id].task_id == call.task_id
+        and prior[fact.source_call_id].session_id == call.session_id
         and (fact.kind not in {"maximum", "minimum"} or prior[fact.source_call_id].tool_name == call.tool_name)
     )
 
@@ -199,7 +199,7 @@ def audit_calls(calls: tuple[CallRecord, ...]) -> Audit:
     for call in calls:
         if call.call_id in prior:
             raise ValueError(f"Duplicate call id: {call.call_id}")
-        actor = (call.actor_id, call.task_id)
+        actor = (call.actor_id, call.session_id)
         local_counts[actor] = local_counts.get(actor, 0) + 1
         positions[call.call_id] = local_counts[actor]
         facts = _facts(call, prior)
@@ -225,7 +225,7 @@ def audit_calls(calls: tuple[CallRecord, ...]) -> Audit:
         else:
             matching = False
             for index, failure in enumerate(failures):
-                if (failure.actor_id, failure.task_id) != actor or failure.recovered_by:
+                if (failure.actor_id, failure.session_id) != actor or failure.recovered_by:
                     continue
                 first = prior[failure.call_id]
                 if _same_intention(first, call):
@@ -306,7 +306,7 @@ def audit_trace(requests: list[dict[str, object]], tool_events: list[dict[str, o
             kind = "conflict"
         target = str(arguments.get("path", ""))
         actor = str(event.get("actor", "root"))
-        task = str(event.get("task_id", ""))
+        task = str(event.get("session_id", ""))
         facts: list[VisibleFact] = []
         offered_bounds: list[VisibleFact] = []
         if isinstance(parameters, dict):
@@ -346,7 +346,7 @@ def audit_trace(requests: list[dict[str, object]], tool_events: list[dict[str, o
                 elif isinstance(message, dict) and message.get("role") == "tool":
                     visible_ids.add(str(message.get("tool_call_id", "")))
         for previous in records:
-            if previous.actor_id != actor or previous.task_id != task or previous.call_id not in visible_ids:
+            if previous.actor_id != actor or previous.session_id != task or previous.call_id not in visible_ids:
                 continue
             if (
                 kind == "conflict"

@@ -40,10 +40,8 @@ def capture_archive(app: Site) -> dict[str, object]:
         else:
             await app.state.harness.emit(ToolOutput("inspect", "list_files", "first output\n"))
             await app.state.harness.emit(ToolOutput("inspect", "list_files", "second output\n"))
-            await app.state.harness.emit(TaskStarted("helper", "Helper", "inspect", parent_session_id=app.main))
-            await app.state.harness.emit(
-                TaskCompleted("helper", "Helper", "finished child", "", parent_session_id=app.main)
-            )
+            await app.state.harness.emit(TaskStarted("s1", "Helper", "inspect", root_session_id=app.main))
+            await app.state.harness.emit(TaskCompleted("s1", "Helper", "finished child", "", root_session_id=app.main))
             yield TextChunkEvent(chunk="partial ")
             yield TextChunkEvent(chunk="draft")
             await asyncio.Event().wait()
@@ -87,7 +85,7 @@ def test_cold_snapshot_has_complete_ordered_user_tool_task_output_and_partial_te
             "first output\nsecond output\n"
         ]
         assert [record["chunk"] for record in events if record["event"] == "text_chunk"] == ["partial draft"]
-        assert all(record["run_id"] == run["id"] and record["session_id"] == app.main for record in events)
+        assert all(record["run_id"] == run["id"] and record["root_session_id"] == app.main for record in events)
         message = next(record for record in events if record["event"] == "user_message")
         assert message["text"] == "show archive" and "source" not in message
         for row in cast("list[dict[str, object]]", snapshot["history"]):
@@ -220,7 +218,7 @@ def test_ordered_replay_coalesces_only_adjacent_matching_scopes_and_is_detached(
     replay = RunReplay()
     replay.append({"event": "text_chunk", "chunk": "root "})
     replay.append({"event": "text_chunk", "chunk": "one"})
-    replay.append({"event": "text_chunk", "chunk": "child", "task_id": "child", "activation": 1})
+    replay.append({"event": "text_chunk", "chunk": "child", "session_id": "s1", "activation": 1})
     replay.append({"event": "text_chunk", "chunk": " two"})
     events = cast("list[dict[str, object]]", replay.snapshot()["events"])
     assert [record["chunk"] for record in events] == ["root one", "child", " two"]

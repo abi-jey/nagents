@@ -37,7 +37,7 @@ def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, mon
             if provider.index:
                 yield TextDoneEvent(text="Child completed this question.")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate-one", name="delegate", arguments={"prompt": "Independent task"})
+                yield ToolCallEvent(id="delegate-one", name="to_agent", arguments={"prompt": "Independent task"})
             elif len(provider.requests) == 2:
                 blocked.set()
                 await release.wait()
@@ -58,7 +58,7 @@ def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, mon
             await pilot.press("ctrl+t")
             await pilot.pause()
             assert isinstance(app.screen, TaskScreen)
-            task_id = app.screen.selected_id
+            session_id = app.screen.selected_session_id
             app.screen.query_one("#task-followup", TextArea).load_text("Human child follow-up")
             await pilot.click("#task-send")
             async with asyncio.timeout(HANG_GUARD):
@@ -68,23 +68,23 @@ def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, mon
             assert not app._queued_prompts
             release.set()
             await idle(app, pilot)
-            assert any(message.content == "Human child follow-up" for message in await harness.task_history(task_id))
+            assert any(message.content == "Human child follow-up" for message in await harness.task_history(session_id))
             parent_history = await harness.history()
             notifications = [
                 str(message.content).split("\n", 1)[1]
                 for message in parent_history
                 if isinstance(message.content, str)
-                and message.content.startswith("BACKGROUND TASK NOTIFICATION:")
+                and message.content.startswith("BACKGROUND AGENT UPDATES:")
                 and '"human_messages"' in message.content
             ]
             pickup = next(
                 item
                 for notice in notifications
                 for item in json.loads(notice)["human_messages"]
-                if item["task_id"] == task_id
+                if item["session_id"] == session_id
             )
             assert pickup["prompt"] == "A human message was picked up by this agent."
-            assert pickup["message_id"]
+            assert set(pickup) == {"session_id", "prompt"}
             assert all("Human child follow-up" not in str(message.content) for message in parent_history)
 
     asyncio.run(scenario())
