@@ -73,7 +73,14 @@ export class DelegationFlow {
     const calls = entries.filter(entry => entry.kind === "tool" && (entry.title === "delegate" || entry.delegatedTaskId) &&
       !entry.remoteReview && (!(entry.taskId || "") || entry.taskId === parentId) && !("remote_operation" in argumentsOf(entry)));
     for (const call of calls) {
-      const taskId = call.delegatedTaskId || "";
+      let savedId = "";
+      try {
+        const acknowledgement: unknown = JSON.parse(call.result || "{}");
+        if (acknowledgement && typeof acknowledgement === "object" && "task_id" in acknowledgement && typeof acknowledgement.task_id === "string") savedId = acknowledgement.task_id;
+      } catch { /* An incomplete or non-JSON acknowledgement carries no task identity. */ }
+      const candidate = call.delegatedTaskId || savedId;
+      // Saved JSON supplies a correlation hint, never execution authority.
+      const taskId = call.delegatedTaskId || (direct.has(candidate) || entries.some(entry => entry.kind === "task" && entry.taskId === candidate) ? candidate : "");
       const agent = direct.get(taskId);
       // A known grandchild belongs in its own parent's conversation.
       if (taskId && options.agents.some(candidate => candidate.id === taskId) && !agent) continue;

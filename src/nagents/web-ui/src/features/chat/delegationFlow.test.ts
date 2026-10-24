@@ -4,10 +4,11 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { defaultAppearance } from "../settings/appearance.js";
-import type { TaskActivity, TeamAgent } from "../team/model.js";
+import { taskAgent, type TaskActivity, type TeamAgent } from "../team/model.js";
+import type { RetainedTask, Snapshot } from "../../types.js";
 import { Conversation } from "./Conversation.js";
 import { DelegationFlow, delegationPreview } from "./delegationFlow.js";
-import { appendEvent, type Entry } from "./transcript.js";
+import { appendEvent, fromHistory, type Entry } from "./transcript.js";
 
 const runId = "root-run";
 const prompt = "Check the session read and close paths.";
@@ -87,9 +88,9 @@ function browserFixture() {
   });
   const container = dom.window.document.getElementById("root")!;
   const root = createRoot(container);
-  const render = (entries: Entry[]) => act(async () => root.render(createElement(Conversation, {
+  const render = (entries: Entry[], agents: TeamAgent[] = [agent("child")]) => act(async () => root.render(createElement(Conversation, {
     entries, sessionId: "root", demo: false, canSubmit: false, submit() {}, appearance: defaultAppearance,
-    delegation: options([agent("child")]),
+    delegation: options(agents),
   })));
   return {
     container,
@@ -104,6 +105,69 @@ function browserFixture() {
     },
   };
 }
+
+function historyTask(id: string, name: string, profile: string, result: string): RetainedTask {
+  return {
+    id, name, status: "completed", result, error: "", session_id: "root", prompt: `Work for ${name}`,
+    child_session_id: `session-${id}`, parent_task_id: "", parent_session_id: "root", depth: 1,
+    profile, mode: "build", followups: 0, activation: 0, trigger: "delegation",
+  };
+}
+
+function savedDelegationHistory(): Snapshot["history"] {
+  return [
+    { role: "user", content: "Check two things.", name: "", tool_call_id: "", tool_calls: [] },
+    { role: "assistant", content: "I will delegate both checks.", name: "", tool_call_id: "", tool_calls: [
+      { id: "call-willow", name: "delegate", arguments: { agent: "mini", prompt: "Check the session reader." } },
+      { id: "call-reed", name: "delegate", arguments: { agent: "verifier", prompt: "Check the session writer." } },
+    ] },
+    { role: "tool", content: JSON.stringify({ task_id: "task-willow", name: "gentle willow", status: "running" }),
+      name: "delegate", tool_call_id: "call-willow", tool_calls: [] },
+    { role: "tool", content: JSON.stringify({ task_id: "task-reed", name: "bright reed", status: "running" }),
+      name: "delegate", tool_call_id: "call-reed", tool_calls: [] },
+  ];
+}
+
+test("cold history joins string delegate acknowledgements to completed retained tasks without synthetic notices", () => {
+  const tasks = [
+    historyTask("task-willow", "gentle willow", "mini", "The session reader passed."),
+    historyTask("task-reed", "bright reed", "verifier", "The session writer passed."),
+  ];
+  const entries = fromHistory({ session_id: "root", history: savedDelegationHistory(), retained_tasks: tasks });
+  const projected = new DelegationFlow().project(entries, options(tasks.map(taskAgent)));
+  const rows = delegationRows(projected);
+  const starts = rows.filter(entry => entry.delegation?.kind === "start");
+  const results = rows.filter(entry => entry.delegation?.kind === "result");
+  assert.equal(rows.length, 4);
+  assert.equal(starts.length, 2);
+  assert.equal(results.length, 2);
+  assert.deepEqual(results.map(entry => [entry.delegation?.name, entry.delegation?.profile, entry.delegation?.text]), [
+    ["gentle willow", "mini", "The session reader passed."],
+    ["bright reed", "verifier", "The session writer passed."],
+  ]);
+  assert.equal(projected.some(entry => entry.kind === "notification"), false);
+  assert.equal(projected.some(entry => entry.kind === "context"), false);
+});
+
+test("a cold retained-task update enriches the existing delegate-call article", async () => {
+  const ui = browserFixture();
+  const history = savedDelegationHistory().slice(0, 3);
+  const cold = fromHistory({ session_id: "root", history, retained_tasks: [] });
+  const coldCall = cold.find(entry => entry.kind === "tool" && entry.title === "delegate")!;
+  const retained = historyTask("task-willow", "gentle willow", "mini", "The session reader passed.");
+  try {
+    await ui.render(cold, []);
+    const article = ui.container.querySelector<HTMLElement>(`article[data-record-key="${coldCall.id}"]`);
+    assert.ok(article, "the saved delegate call is visible before retained task data is loaded");
+
+    const restored = fromHistory({ session_id: "root", history, retained_tasks: [retained] });
+    await ui.render(restored, [taskAgent(retained)]);
+    assert.equal(ui.container.querySelector(`article[data-record-key="${coldCall.id}"]`), article);
+    assert.equal(article.querySelector(".delegation-activity")?.getAttribute("data-phase"), "done");
+    assert.match(article.textContent || "", /gentle willow/);
+    assert.match(article.closest(".conversation")?.textContent || "", /The session reader passed\./);
+  } finally { await ui.close(); }
+});
 
 test("the known delegate call owns one stable start row before acknowledgement and after lifecycle evidence arrives", () => {
   const flow = new DelegationFlow();
