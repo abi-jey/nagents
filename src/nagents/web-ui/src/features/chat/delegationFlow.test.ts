@@ -278,6 +278,30 @@ test("completion anchor survives an active checkpoint that rebinds the main ackn
   assert.ok(projected.findIndex(entry => entry.id === result.id) < projected.findIndex(entry => entry.id === finalAnswer.id));
 });
 
+test("a cached terminal result follows its canonical anchor after a later checkpoint", () => {
+  const flow = new DelegationFlow();
+  let entries = delegateCall([]);
+  entries = delegateResult(entries);
+  entries = taskStarted(entries);
+  entries = appendEvent(entries, { event: "text_done", run_id: runId, response_id: "main-ack", text: "I am waiting." });
+  const mainAcknowledgement = entries.at(-1)!;
+  entries = taskCompleted(entries);
+  entries = entries.map(entry => entry.kind === "task" ? { ...entry, completionAfterId: "stale-replay-main-ack" } : entry);
+
+  const firstProjection = flow.project(entries, options([agent("child", "", "done")]));
+  assert.equal(delegationRows(firstProjection).find(entry => entry.delegation?.kind === "result")?.id, "delegation-result:child:0");
+
+  entries = entries.map(entry => entry.kind === "task" ? { ...entry, completionAfterId: mainAcknowledgement.id } : entry);
+  entries = appendEvent(entries, {
+    event: "text_done", run_id: runId, response_id: "main-final", text: "The later final response.",
+  });
+  const finalAnswer = entries.find(entry => entry.kind === "assistant" && entry.responseId === "main-final")!;
+  const secondProjection = flow.project(entries, options([agent("child", "", "done")]));
+  const result = delegationRows(secondProjection).find(entry => entry.delegation?.kind === "result")!;
+  assert.ok(secondProjection.findIndex(entry => entry.id === result.id) > secondProjection.findIndex(entry => entry.id === mainAcknowledgement.id));
+  assert.ok(secondProjection.findIndex(entry => entry.id === result.id) < secondProjection.findIndex(entry => entry.id === finalAnswer.id));
+});
+
 test("initial completion context and delivery fold into two stable delegation rows", () => {
   const flow = new DelegationFlow();
   let entries = delegateCall([]);

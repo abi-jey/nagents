@@ -108,6 +108,10 @@ export class DelegationFlow {
         this.finished.set(key, { anchor, phase, text: lifecycle?.error || lifecycle?.result || notice?.text || agent?.task?.error || agent?.task?.result || agent?.reason || "" });
       }
       const finished = this.finished.get(key);
+      // Checkpoints can rebind the anchor's local ID. Follow the canonical
+      // lifecycle reference instead of falling back to the end of the chat.
+      if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId))
+        finished.anchor = lifecycle.completionAfterId;
       const presentation: DelegationPresentation = { kind: "start", taskId, name, profile, phase: finished?.phase || phase,
         prompt, text: call.error || finished?.text || "", latest, lastTool: local.findLast(entry => entry.kind === "tool"), sources };
       rows.push({ entry: { ...call, kind: "status", delegation: presentation, taskId: undefined,
