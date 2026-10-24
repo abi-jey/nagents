@@ -118,6 +118,7 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
   const ui = browserFixture();
   try {
     await ui.render("running", "token-0", "assistant:response-1");
+    assert.equal(ui.animationCalls.length, 0, "mounting the first activity does not animate its text");
     const row = ui.container.firstElementChild;
     const mark = ui.container.querySelector(".relay-activity-mark");
     const svg = mark?.querySelector("svg");
@@ -146,8 +147,7 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
       assert.equal((content?.textContent || "").trim(), `token-${index}`);
       assert.notEqual(content?.getAttribute("style")?.includes("opacity: 0"), true);
     }
-    assert.equal(ui.animationCalls.length, 1, "token changes do not restart the one-time activity entrance");
-    assert.doesNotMatch(JSON.stringify(ui.animationCalls[0]), /opacity/i, "the entrance motion never fades text");
+    assert.equal(ui.animationCalls.length, 0, "token changes do not replay a mount entrance animation");
     assert.ok(ui.frames.size <= 2, "one pending frame per animated mark/text at most");
 
     for (const [text, activity] of [
@@ -160,7 +160,12 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
         "empty, whitespace and semantic activity changes retain the same text node");
       assert.equal((textNode as Text).data, text.replace(/\s+/g, " ").trim());
     }
-    assert.equal(ui.animationCalls.length, 3, "only the two semantic activity changes trigger entrance motion");
+    assert.equal(ui.animationCalls.length, 2, "only semantic activity changes trigger entrance motion");
+    for (const [frames, timing] of ui.animationCalls) {
+      assert.ok(Array.isArray(frames));
+      assert.ok((frames as Array<Record<string, unknown>>).every(frame => Object.keys(frame).every(key => key === "transform")));
+      assert.equal((timing as { duration?: number }).duration, 160);
+    }
     assert.equal((textNode as Text).data, "tool output");
 
     await ui.render("done", "final result", "result");
@@ -170,6 +175,20 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
   } finally {
     await ui.close();
     assert.equal(ui.frames.size, 0, "unmount cancels every scheduled animation frame");
+  }
+});
+
+test("completed history mounts at rest without mark frames or a text entrance", async () => {
+  const ui = browserFixture();
+  try {
+    await ui.render("done", "Archived result", "result");
+    assert.equal(ui.container.querySelector<HTMLElement>(".relay-activity-mark")?.dataset.state, "done");
+    assert.equal(ui.container.querySelector(".delegation-tail-content")?.textContent, "Archived result");
+    assert.equal(ui.animationCalls.length, 0, "cold history does not play a text entrance");
+    assert.equal(ui.frames.size, 0, "a completed mark and zero-overflow text schedule no frames");
+  } finally {
+    await ui.close();
+    assert.equal(ui.frames.size, 0, "completed rows remain idle after unmount");
   }
 });
 

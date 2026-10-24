@@ -12,7 +12,7 @@
 .delegation-tail { display: block; min-width: 0; flex: 1; overflow: hidden; height: 18px; line-height: 18px; opacity:1; }
 .delegation-tail[data-overflow="true"] { mask-image: linear-gradient(to right, transparent, #000 12px); }
 .delegation-tail-entrance { display:block; height:18px; opacity:1; }
-.delegation-tail-content { display:block; width:max-content; min-width:100%; white-space:pre; opacity:1; will-change:transform; }
+.delegation-tail-content { display:block; width:max-content; min-width:100%; white-space:pre; opacity:1; }
 .delegation-preview.is-tool .delegation-tail { mask-image:none; font-family:var(--font-mono,monospace); }
 .delegation-preview.is-tool .delegation-tail-content { width:100%; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .delegation-line > svg { flex: 0 0 11px; }
