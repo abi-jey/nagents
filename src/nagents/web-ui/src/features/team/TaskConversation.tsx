@@ -5,7 +5,6 @@ import { reconcileHistory } from "../chat/liveTranscript.js";
 import { Icon } from "../../components/Icon.js";
 import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { AgentState, type ArrivalTimes } from "./TeamTree.js";
-import { TaskTimeline } from "./TaskTimeline.js";
 import { MAIN_AGENT, mergeTaskActivity, providerLabel, type TaskActivity, type TaskDetail, type TeamAgent } from "./model.js";
 import { isProfileTarget, type TeamController } from "./useTeam.js";
 import type { Snapshot, WireEvent } from "../../types.js";
@@ -64,9 +63,10 @@ export class TaskTranscript {
   }
 }
 
-export function TaskConversation({ team, agents, arrivals, token, sessionId, back, appearance, configureConnection }: {
+export function TaskConversation({ team, agents, token, sessionId, back, appearance, configureConnection, activity = [] }: {
   team: TeamController; agents: TeamAgent[]; arrivals: ArrivalTimes; token: string; sessionId: string; back: () => void;
   appearance?: ChatAppearance;
+  activity?: TaskActivity[];
   configureConnection?: (name: string) => void;
 }) {
   const agent = agents.find(item => item.id === team.selected);
@@ -101,7 +101,7 @@ export function TaskConversation({ team, agents, arrivals, token, sessionId, bac
       {agent?.prompt && <details className="task-assignment"><summary>Assigned task</summary><p>{agent.prompt}</p></details>}
       {failure && !entries.some(entry => entry.kind === "error") && <div className="task-failure" role="alert"><strong>Request failed</strong><p>{failure}</p></div>}
       <Conversation appearance={appearance} agentName={name} parentAgentName={parentName} key={`${team.selected}:${transcript.generation}`} entries={entries} token={token} sessionId={sessionId} demo={false} canSubmit={false} submit={() => {}}
-        renderTask={thread => <TaskTimeline id={thread.id} thread={thread} agents={agents} inspect={team.select} arrivals={arrivals} />} />
+        delegation={{ agents, activity, parentId: team.selected, inspect: team.select }} />
       {!!team.detail?.receipts?.length && <div className="task-message-receipts" aria-label="Message delivery">
         {team.detail.receipts.filter(receipt => receipt.status !== "picked_up").slice(-6).map(receipt => <div key={receipt.message_id} className={`task-message-receipt receipt-${receipt.status}`}>
           <span>{receipt.status === "queued" ? "Queued for the next response" : receipt.status === "error" ? "Not delivered" : "Cancelled"}</span>

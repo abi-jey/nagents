@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ExecutionRecord } from "./ExecutionRecord.js";
+import { DelegationActivity } from "./DelegationActivity.js";
+import { DelegationFlow, type DelegationOptions } from "./delegationFlow.js";
 import { TeamIcon } from "../team/TeamTree.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
@@ -54,6 +56,7 @@ export function TranscriptItems({
   labels,
   agentName = "Assistant",
   renderReasoning,
+  inspectTask,
 }: {
   items: TranscriptItem[];
   appearance?: ChatAppearance;
@@ -65,6 +68,7 @@ export function TranscriptItems({
   labels?: Map<string, string>;
   agentName?: string;
   renderReasoning?: (props: ResponseDetailsProps) => ReactNode;
+  inspectTask?: (id: string) => void;
 }) {
   const layout = useRef(new ActivityLayout());
   const shownResponses = useRef(new Set<string>());
@@ -88,15 +92,16 @@ export function TranscriptItems({
       const { label, icon } = activityLabels[item.category];
       const state = activityState(item.items);
       if (item.items.some(importantActivity)) expandedRecords.current.add(item.id);
-      const groupOpen = disclosures.get(item.id) ?? (expandedRecords.current.has(item.id) || appearance?.activity[item.category].details === "expanded");
+      const delegationOnly = item.items.every(child => child.kind === "entry" && child.entry.delegation);
+      const groupOpen = delegationOnly || (disclosures.get(item.id) ?? (expandedRecords.current.has(item.id) || appearance?.activity[item.category].details === "expanded"));
       const targets = [...new Set(item.items.flatMap(child => child.kind === "entry" ? [executionTarget(child.entry)] : child.kind === "thread" ? [child.thread.name] : []).filter(Boolean))].slice(0, 2).join(" · ");
-      return <details key={item.id} className="chat-activity-group" data-category={item.category}
+      return <details key={item.id} className="chat-activity-group" data-category={item.category} data-delegation-shell={delegationOnly || undefined}
         data-state={state} data-record-key={item.id} data-disclosure-key={item.id}
         open={groupOpen}
         onToggle={event => { if (event.currentTarget.open !== groupOpen) toggle(item.id, event.currentTarget.open); }}>
-        <summary><Icon name={icon} size={14} /><span className="chat-activity-label">{label}<span className="chat-activity-count">{item.items.length}</span></span>
+        <summary hidden={delegationOnly}><Icon name={icon} size={14} /><span className="chat-activity-label">{label}<span className="chat-activity-count">{item.items.length}</span></span>
           {targets && <span className="chat-activity-target">{targets}</span>}{state && <span className="chat-activity-state" role="status">{state}</span>}</summary>
-        <div className="chat-activity-body"><TranscriptItems items={item.items} names={names} disclosures={disclosures} toggle={toggle} renderTask={renderTask} appearance={appearance} labels={bylines} agentName={agentName} renderReasoning={renderReasoning} insideGroup /></div>
+        <div className="chat-activity-body"><TranscriptItems items={item.items} names={names} disclosures={disclosures} toggle={toggle} renderTask={renderTask} appearance={appearance} labels={bylines} agentName={agentName} renderReasoning={renderReasoning} inspectTask={inspectTask} insideGroup /></div>
       </details>;
     }
     // Registry-only tasks have no proven location in this transcript. The team
@@ -202,14 +207,14 @@ export function TranscriptItems({
     return (
       <article
         key={entry.id}
-        className={`entry ${entry.kind}${entry.kind === "assistant" && !entry.text ? " reasoning-only" : ""}${reasoning?.placement === "separate" ? " reasoning-separate" : ""}`}
+        className={`entry ${entry.kind}${entry.delegation ? " delegation-entry" : ""}${entry.kind === "assistant" && !entry.text ? " reasoning-only" : ""}${reasoning?.placement === "separate" ? " reasoning-separate" : ""}`}
         data-record-key={entry.id}
         data-level={entry.level}
         data-speaker={entry.liveCaption?.speaker}
         data-run-id={entry.runId}
         tabIndex={-1}
       >
-        {entry.kind === "agent_change" ? <div className="agent-change-marker" title={entry.title}><TeamIcon size={13} /><span>{entry.text}</span></div> : entry.liveCaption ? <>
+        {entry.delegation ? <DelegationActivity item={entry.delegation} open={disclosures.get(entry.id) ?? expanded} toggle={open => toggle(entry.id, open)} inspect={inspectTask} /> : entry.kind === "agent_change" ? <div className="agent-change-marker" title={entry.title}><TeamIcon size={13} /><span>{entry.text}</span></div> : entry.liveCaption ? <>
           <div className="entry-label chat-live-caption-label">
             <span hidden={entry.liveCaption.speaker === "assistant" && !bylines.has(entry.id)}>{entry.liveCaption.speaker === "user" ? "You" : bylines.get(entry.id)}</span>
             <span className="chat-live-badge"><Icon name="wave" size={12} />Live</span>
@@ -267,7 +272,7 @@ export function TranscriptItems({
 }
 
 export function Conversation({
-  entries,
+  entries: sourceEntries,
   sessionId,
   demo,
   providerSetup,
@@ -280,6 +285,7 @@ export function Conversation({
   agentName = "Assistant",
   parentAgentName = "",
   renderReasoning,
+  delegation,
 }: {
   entries: Entry[];
   sessionId: string;
@@ -294,7 +300,10 @@ export function Conversation({
   agentName?: string;
   parentAgentName?: string;
   renderReasoning?: (props: ResponseDetailsProps) => ReactNode;
+  delegation?: DelegationOptions;
 }) {
+  const flow = useRef(new DelegationFlow());
+  const entries = delegation ? flow.current.project(sourceEntries, delegation) : sourceEntries;
   const feed = useRef<HTMLDivElement>(null);
   const isActive = useRef(active);
   isActive.current = active;
@@ -548,6 +557,7 @@ export function Conversation({
           disclosures={disclosures}
           toggle={toggle}
           renderTask={renderTask}
+          inspectTask={delegation?.inspect}
           appearance={appearance}
           labels={labels}
           agentName={agentName}

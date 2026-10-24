@@ -14,6 +14,7 @@
     "src/features/chat/activityLayout.test.ts",
     "src/features/chat/agentLabels.test.ts",
     "src/features/chat/appearance.rendering.test.ts",
+    "src/features/chat/delegationFlow.test.ts",
     "src/features/chat/deliveries*.ts",
     "src/features/chat/inlineDeliveryImages.test.ts",
     "src/features/chat/uploads*.ts",

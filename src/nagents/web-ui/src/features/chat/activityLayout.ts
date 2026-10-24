@@ -11,6 +11,7 @@ export const activityLabels: Record<Exclude<ActivityCategory, "reasoning">, { la
 export function activityCategory(item: TranscriptItem): Exclude<ActivityCategory, "reasoning"> | undefined {
   if (item.kind !== "entry") return "agents";
   const entry = item.entry;
+  if (entry.delegation) return "agents";
   if (entry.delivery || entry.liveCaption || entry.uploads?.length) return undefined;
   if (entry.kind === "tool") {
     const family = toolPresentation(entry.title || "", entry.remoteReview).family;
@@ -51,7 +52,7 @@ export class ActivityLayout {
       let slot = this.slots.get(key);
       if (!slot) {
         if (rule?.placement === "hidden" && !importantActivity(item)) continue;
-        if (category && rule?.placement === "grouped" && !insideGroup) {
+        if (category && rule?.placement === "grouped" && !insideGroup && !(item.kind === "entry" && item.entry.delegation)) {
           const previous = result.at(-1), itemScope = scope(item);
           // A streamed name can change category. Give that call its own stable
           // group rather than moving it between parents as its name arrives.
@@ -83,7 +84,7 @@ export function activityLayout(items: TranscriptItem[], appearance?: ChatAppeara
     const category = activityCategory(item), rule = category && appearance?.activity[category];
     const hidden = rule?.placement === "hidden" && !importantActivity(item);
     if (!hidden) {
-      if (category && rule?.placement === "grouped" && !insideGroup) {
+      if (category && rule?.placement === "grouped" && !insideGroup && !(item.kind === "entry" && item.entry.delegation)) {
         const previous = result.at(-1), itemScope = scope(item);
         if (previous?.kind === "activity_group" && previous.category === category && previous.scope === itemScope) previous.items.push(item);
         else result.push({ kind: "activity_group", id: `activity:${itemKey(item)}`, category, scope: itemScope, items: [item] });

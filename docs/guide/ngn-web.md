@@ -15,6 +15,18 @@ definition starts a new conversation through the shared composer; selecting a
 named conversation messages that existing agent. See [Inspecting and messaging delegated agents](task-inspection.md)
 for message delivery, settings, and restart behavior.
 
+In the conversation, each delegation has one compact line. The delegate call and
+the child's progress share that line: it shows the child's latest tool and
+arguments, or the trailing text of its reasoning summary or output. Motion and
+colour convey activity without extra state labels. When the child finishes, a
+separate result line appears at the completion's place in the conversation.
+Expand either line to inspect the assignment, output and original records, or
+open the child's conversation. Only direct children appear here; nested agents
+appear in their own parent's conversation. Initial completion delivery and its
+saved context are evidence inside these rows. Later wake-ups and additional
+messages remain separate notices. Appearance visibility controls still apply,
+and failures remain visible even when ordinary activity is hidden.
+
 A2A conversations show a compact **A2A** connection chip. An open lock means
 credentials are ready or no sign-in is required; an amber closed lock needs
 attention. An unknown status uses a question mark. Hover for the exact status,
