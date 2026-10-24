@@ -6,7 +6,7 @@ import { Icon } from "../../components/Icon.js";
 import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { AgentState, type ArrivalTimes } from "./TeamTree.js";
 import { MAIN_AGENT, mergeTaskActivity, providerLabel, type TaskActivity, type TaskDetail, type TeamAgent } from "./model.js";
-import { isProfileTarget, type TeamController } from "./useTeam.js";
+import { isProfileTarget, profileSelection, type TeamController } from "./useTeam.js";
 import type { Snapshot, WireEvent } from "../../types.js";
 import type { ChatAppearance } from "../settings/appearance.js";
 import { RemoteStatus } from "./RemoteStatus.js";
@@ -71,7 +71,7 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
 }) {
   const agent = agents.find(item => item.id === team.selected);
   const removedProfile = team.loaded && isProfileTarget(team.selected) && !team.profile;
-  const name = agent?.name || team.profile?.name || (isProfileTarget(team.selected) ? team.selected.slice("profile:".length) : "Agent");
+  const name = agent?.name || team.profile?.name || (isProfileTarget(team.selected) ? profileSelection(team.selected).profile : "Agent");
   const rootName = agents.find(item => item.id === MAIN_AGENT)?.name || "Assistant";
   const parentName = agents.find(item => item.id === (agent?.parentId ?? MAIN_AGENT))?.name || rootName;
   const definition = agent?.profile || team.profile?.id || "";
@@ -91,7 +91,7 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
       {configureConnection && definition && <button type="button" onClick={() => configureConnection(definition)}>Connection settings</button>}
     </div>}
     {removedProfile ? <p className="task-history-notice" role="status">This agent profile was removed or renamed. Choose an agent in Team or return to {rootName}. Your draft is kept.</p>
-      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || "Send a message below to start a new conversation using this definition."}</p>
+      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || (team.startParentId ? `Send a message below to start this child under ${team.startParent?.name || "the selected parent"}.` : "Send a message below to start a new conversation using this definition.")}</p>
         {team.profile.source && <dl className="team-profile-source"><dt>Definition file</dt><dd><code>{team.profile.source}</code></dd></dl>}
       </div> : <>
       {team.loading && !team.detail && <p className="task-loading" role="status">Loading conversation…</p>}

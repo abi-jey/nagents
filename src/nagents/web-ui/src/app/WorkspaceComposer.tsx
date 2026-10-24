@@ -4,7 +4,7 @@ import { Composer } from "../features/chat/Composer";
 import { UploadPreviews } from "../features/chat/UploadPreviews";
 import { DraftRecoveryNotice } from "../features/chat/DraftRecoveryNotice.js";
 import { LiveDialog } from "../features/live/LiveDialog.js";
-import { isProfileTarget } from "../features/team/useTeam.js";
+import { isProfileTarget, profileSelection } from "../features/team/useTeam.js";
 import type { LiveComposerTargets } from "../features/live/LiveComposer.js";
 import "../features/live/live.css";
 import "../features/live/composer.css";
@@ -33,7 +33,7 @@ export function WorkspaceComposer({ client, composer, submit, select, configureS
     return { presence: bind("presence"), caption: bind("caption"), controls: bind("controls"), details: bind("details") };
   }, []);
   const child = !!team.selected;
-  const recipient = team.task?.name || team.profile?.name || (isProfileTarget(team.selected) ? team.selected.slice("profile:".length) : "agent");
+  const recipient = team.task?.name || team.profile?.name || (isProfileTarget(team.selected) ? profileSelection(team.selected).profile : "agent");
   const activeTitle = sessions.sessions.find((session) => session.id === sessions.activeSessionId)?.title || "another session";
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
@@ -57,9 +57,9 @@ export function WorkspaceComposer({ client, composer, submit, select, configureS
     <DraftRecoveryNotice drafts={client.orphanedDrafts} disabled={!client.available.create} recover={(id) => {
       void client.recoverDraft(id).then((recovered) => { if (recovered) requestAnimationFrame(() => composer.current?.focus()); });
     }} />
-    {child && <div className="composer-recipient"><span>To <strong>{recipient}</strong></span><button type="button" onClick={() => team.select("")}>Back to Assistant</button></div>}
+    {child && <div className="composer-recipient"><span>To <strong>{recipient}</strong>{team.profile && team.startParentId && <> under <strong>{team.startParent?.name || "Unavailable parent"}</strong></>}</span><button type="button" onClick={() => team.select("")}>Back to Assistant</button></div>}
     {child && team.error && <p className="activity-warning" role="alert">{team.error}<button type="button" onClick={team.dismissError}>Dismiss</button></p>}
-    {child && !team.canMessage && <p className="activity-warning">{team.task?.unavailable_reason || team.profile?.unavailable_reason || team.task?.message_unavailable_reason || "This agent is not available for messages."}</p>}
+    {child && !team.canMessage && <p className="activity-warning">{team.startUnavailable || team.task?.unavailable_reason || team.profile?.unavailable_reason || team.task?.message_unavailable_reason || "This agent is not available for messages."}</p>}
     {child && client.liveOpen && <p className="team-voice-notice">Voice remains in the main conversation.</p>}
     <div hidden={child} className="workspace-live-slot">{client.liveOpen && config && <LiveDialog key={`${config.token}:${sessionId}`} token={config.token} sessionId={sessionId}
       targets={voiceTargets}

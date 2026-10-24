@@ -10,6 +10,12 @@ root's delegation policy; a profile that is only available as a main agent is
 not advertised as launchable. Starting an unused profile creates a real child
 through the usual delegation lifecycle, quotas, and inherited permissions.
 
+The Team tree groups each parent's direct children by definition, then Running
+and Past runs. The same definition under two parents remains two separate groups.
+Waiting is active; completed, failed and cancelled runs are past. Empty buckets
+are hidden. Past buckets and all-past definition groups start collapsed. Selecting
+a conversation reveals its ancestor path and keeps its draft with that recipient.
+
 ## HTTP contract
 
 All routes require the same web token and origin checks as ordinary chat.
@@ -20,7 +26,7 @@ access. An absent task or a task belonging to another root returns 404.
 | --- | --- |
 | `GET /api/sessions/{root}/tasks` | `{tasks, profiles, profile_revision}` and `subagent_usage` while its runtime is available |
 | `GET /api/sessions/{root}/tasks/{task}` | Task, bounded history, current activity, receipts, context |
-| `POST /api/sessions/{root}/tasks` | Start `{message_id, agent, text}`; returns `{task, receipt}` |
+| `POST /api/sessions/{root}/tasks` | Start `{message_id, agent, text, parent_task_id?}`; returns `{task, receipt}` |
 | `POST /api/sessions/{root}/tasks/{task}/messages` | Send `{message_id, text}`; returns receipt |
 | `PUT /api/sessions/{root}/tasks/{task}/settings` | Save next-activation choices; returns `{task}` |
 
@@ -32,8 +38,18 @@ retries return the same receipt without another quota debit or execution.
 `remaining_executions`, `occupied_slots`, `available_slots`, `retained_tasks`,
 `max_retained_tasks`, `depth`, and the `reset` explanation. It is omitted for
 unavailable runtimes: persisted history does not reconstruct live budget state.
-Reusing a UUID for another root, task, profile, or text returns 409. Check the
+Reusing a UUID for another root, parent, task, profile, or text returns 409. Check the
 receipt's status; HTTP acceptance does not mean that the model read the message.
+
+Omitting `parent_task_id`, or sending an empty string, starts under Main. A
+nonempty parent is resolved from that root's retained runtime; a parent from
+another root returns 404. Only a running local parent can accept a direct nested
+start. Idle, completed and remote A2A parents return 409; the server does not wake
+them or silently create a root-level replacement. The chosen parent's accepted
+profile catalog, `user_invocable` policy, ancestor permission ceilings and shared
+quotas apply. The task index exposes `can_start_children`, `child_agents` and
+`child_start_unavailable_reason` for the UI; these hints never replace admission
+checks. Persisted history alone grants no ability to start a child.
 
 Receipt statuses are:
 

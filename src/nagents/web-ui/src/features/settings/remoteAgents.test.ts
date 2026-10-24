@@ -83,18 +83,16 @@ test("remote editor exposes discovered metadata read-only without manual OAuth f
   assert.equal((document.querySelector('input[value="Remote review"]') as HTMLInputElement | null)?.value, "Remote review");
 });
 
-test("Team definition row keeps local alias and description beside refreshed remote card labels", () => {
+test("unused remote definitions stay in the start selector without an empty TeamTree group", () => {
   const html = renderToStaticMarkup(createElement(TeamTree, {
     agents: [],
     profiles: [{ id: "peer", name: "peer-alias", description: "Local note", remote_name: "Advertised name",
       remote_description: "Advertised purpose", metadata_status: "refresh_failed", provider: "a2a", model: "", used: false, available: true }],
     selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
   }));
-  assert.match(html, /peer-alias/);
-  assert.match(html, /Local note/);
-  assert.match(html, /Advertised name · Advertised purpose · Refresh failed/);
-  assert.match(html, />Auth status unavailable<\/span>/);
-  assert.equal((html.match(/<small/g) || []).length, 2);
+  assert.match(html, /<option value="peer"(?: [^>]*)?>peer-alias<\/option>/);
+  assert.doesNotMatch(html, /team-definition-group/);
+  assert.doesNotMatch(html, /Local note|Advertised name|Advertised purpose/);
 });
 
 test("remote auth states explain server credential availability without exposing credential values", () => {

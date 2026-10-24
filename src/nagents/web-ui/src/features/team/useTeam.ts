@@ -4,8 +4,12 @@ import type { RetainedTask } from "../../types.js";
 import { TaskDrafts, type TaskActivity, type TaskDetail, type TaskReceipt, type TeamProfile, type TeamSubagentUsage } from "./model.js";
 
 const profilePrefix = "profile:";
-export const profileTarget = (id: string) => `${profilePrefix}${id}`;
+export const profileTarget = (id: string, parentId = "") => `${profilePrefix}${id}${parentId ? `@${parentId}` : ""}`;
 export const isProfileTarget = (id: string) => id.startsWith(profilePrefix);
+export function profileSelection(target: string): { profile: string; parentId: string } {
+  const [profile, parentId = ""] = target.slice(profilePrefix.length).split("@");
+  return { profile, parentId };
+}
 
 export function useTeam(token: string, sessionId: string, revision: number, running: boolean, activity: TaskActivity[]) {
   const [selectedState, setSelected] = useState({ session: sessionId, id: "" });
@@ -76,7 +80,9 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
   const tasks = index.session === sessionId ? index.tasks : [];
   const profiles = index.session === sessionId ? index.profiles : [];
   const task = tasks.find(item => item.id === selected);
-  const profile = isProfileTarget(selected) ? profiles.find(item => profileTarget(item.id) === selected) : undefined;
+  const profileScope = isProfileTarget(selected) ? profileSelection(selected) : { profile: "", parentId: "" };
+  const profile = profiles.find(item => item.id === profileScope.profile);
+  const startParent = tasks.find(item => item.id === profileScope.parentId);
   const savedDetail = details?.session === sessionId && details.task === selected ? details.value : undefined;
   const older = earlier?.session === sessionId && earlier.task === selected ? earlier : undefined;
   const detail = savedDetail && older ? { ...savedDetail, before: older.before,
@@ -84,7 +90,12 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
   const prompt = drafts.current.get(sessionId, selected);
   // Keep React subscribed to edits without moving any draft when the recipient changes.
   void draftVersion;
-  const canMessage = profile ? profile.can_start ?? profile.available : task?.can_message === true;
+  const canMessage = profile ? profileScope.parentId
+    ? startParent?.can_start_children === true && startParent.child_agents?.includes(profile.id) === true
+    : profile.can_start ?? profile.available : task?.can_message === true;
+  const startUnavailable = profileScope.parentId ? startParent?.child_start_unavailable_reason ||
+    (!startParent ? "This parent runtime is unavailable." : !canMessage ? "This definition is unavailable under the parent's policy." : "")
+    : profile?.unavailable_reason || "";
 
   async function submit() {
     const root = sessionId, target = selected, text = drafts.current.get(root, target);
@@ -94,7 +105,7 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
     sending.current.add(key); setSending(key); setFailure({ session: root, text: "" });
     try {
       const result = await (await request(profile ? path : `${path}/${encodeURIComponent(target)}/messages`, token,
-        profile ? { ...message, agent: profile.id } : message)).json() as TaskReceipt | { task: RetainedTask; receipt: TaskReceipt };
+        profile ? { ...message, agent: profile.id, ...(profileScope.parentId ? { parent_task_id: profileScope.parentId } : {}) } : message)).json() as TaskReceipt | { task: RetainedTask; receipt: TaskReceipt };
       const receipt = "receipt" in result ? result.receipt : result;
       if (receipt.status === "error" || receipt.status === "cancelled") {
         drafts.current.rejected(root, target, message.message_id);
@@ -135,6 +146,7 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
     startNotice: startNotice.session === sessionId && startNotice.target === selected ? startNotice.text : "",
     refresh: () => setRefreshVersion(value => value + 1), dismissError: () => setFailure({ session: sessionId, text: "" }),
     prompt, setPrompt: (text: string) => { drafts.current.set(sessionId, selected, text); setDraftVersion(value => value + 1); },
-    canMessage, submitting: sendingState === JSON.stringify([sessionId, selected]), submit, loadEarlier, loadingEarlier };
+    canMessage, startParent, startParentId: profileScope.parentId, startUnavailable,
+    submitting: sendingState === JSON.stringify([sessionId, selected]), submit, loadEarlier, loadingEarlier };
 }
 export type TeamController = ReturnType<typeof useTeam>;

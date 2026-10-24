@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
 RootId = Annotated[str, PathParameter(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")]
 TaskId = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
 TASK_DRAIN_TIMEOUT = 5.0
+logger = logging.getLogger(__name__)
 
 
 class TaskMessageInput(BaseModel):
@@ -69,6 +71,7 @@ class TaskMessageInput(BaseModel):
 
 class TaskStartInput(TaskMessageInput):
     agent: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    parent_task_id: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$")
 
 
 class TaskSettingsInput(BaseModel):
@@ -117,7 +120,11 @@ class Tasks:
         saved = {str(task["id"]): task for task in await self.store.tasks(root)}
         for task in saved.values():
             task.update(
-                can_message=False, unavailable_reason="This task runtime is unavailable; its history is read-only."
+                can_message=False,
+                unavailable_reason="This task runtime is unavailable; its history is read-only.",
+                can_start_children=False,
+                child_agents=[],
+                child_start_unavailable_reason="This parent runtime is unavailable. Its history is read-only.",
             )
         owner: Harness | None
         try:
@@ -242,7 +249,58 @@ class Tasks:
             and data.get("status") != "cancelled"
             and (data.get("status") == "running" or (child is not None and child._initialized))
         )
-        return {**data, "can_message": can_message, "unavailable_reason": "" if can_message else "Task is unavailable."}
+        child_agents: list[str] = []
+        child_reason = "This parent must be running to start a child. Send it a message to resume."
+        if data.get("provider_kind") == "a2a":
+            child_reason = "Remote agents manage their children on the remote server."
+        elif child is not None and data.get("status") == "running" and not child._closed:
+            try:
+                child.tasks._check_active()
+            except RuntimeError:
+                pass
+            else:
+                if child.can_delegate:
+                    child_agents = [
+                        name
+                        for name in child.delegatable_profile_names
+                        if child.delegation_profile(name).user_invocable
+                    ]
+                child_reason = (
+                    "" if child_agents else "Delegation is unavailable under this parent's policy or depth limit."
+                )
+                usage = child.tasks.usage()
+                if child_agents and not usage["available_slots"]:
+                    child_reason = "All subagent slots are occupied. Wait for a free slot."
+                elif child_agents and not usage["remaining_executions"]:
+                    child_reason = "The shared subagent execution budget is exhausted."
+        return {
+            **data,
+            "can_message": can_message,
+            "unavailable_reason": "" if can_message else "Task is unavailable.",
+            "can_start_children": bool(child_agents) and not child_reason,
+            "child_agents": child_agents,
+            "child_start_unavailable_reason": child_reason,
+        }
+
+    def start_parent(self, root: str, parent_id: str) -> tuple[Harness, Harness]:
+        """Resolve a live local parent from this root's authority, never from UI ancestry."""
+        owner = self.owner(root)
+        try:
+            info = owner.tasks._lookup(parent_id)
+        except ValueError:
+            raise HTTPException(404, "Parent agent not found in this conversation.") from None
+        if info.provider_kind == "a2a":
+            raise HTTPException(409, "Remote agents manage their children on the remote server.")
+        try:
+            parent = owner.tasks.child(parent_id)
+            if info.status != "running":
+                raise RuntimeError("Parent is not running")
+            parent.tasks._check_active()
+        except (ValueError, RuntimeError):
+            raise HTTPException(
+                409, "This parent must be running to start a child. Send it a message to resume."
+            ) from None
+        return owner, parent
 
     async def record(self, run: Run, record: dict[str, object]) -> None:
         kind = record.get("event")
@@ -501,7 +559,7 @@ class Tasks:
 
     async def start(self, root: str, body: TaskStartInput) -> dict[str, object]:
         async with self.admission:
-            target = f"profile:{body.agent}"
+            target = f"profile:{body.parent_task_id}:{body.agent}" if body.parent_task_id else f"profile:{body.agent}"
             duplicate = await self.store.duplicate(root, target, body.message_id, body.text)
             if duplicate:
                 tasks = await self.store.tasks(root)
@@ -511,17 +569,43 @@ class Tasks:
                 }
             if self.state.mutating or self.state.executions.closed:
                 raise HTTPException(409, "Server configuration is changing. Retry shortly.")
-            async with self.state.session_agents.view(root) as current:
+            parent: Harness | None = None
+            parent_owner: Harness | None = None
+            if body.parent_task_id:
+                parent_owner, parent = self.start_parent(root, body.parent_task_id)
                 if (
-                    body.agent not in current.delegatable_profile_names
-                    or not current.config.profile(body.agent).user_invocable
-                    or not current.can_delegate
+                    body.agent not in parent.delegatable_profile_names
+                    or not parent.delegation_profile(body.agent).user_invocable
+                    or not parent.can_delegate
                 ):
-                    raise HTTPException(403, "This agent profile cannot be started here.")
+                    raise HTTPException(403, "This agent profile cannot be started under this parent.")
+                try:
+                    parent.tasks._check_budget(body.text)
+                except ValueError:
+                    raise HTTPException(
+                        409, "Subagent limits prevent this start. Wait for capacity or review execution limits."
+                    ) from None
+            else:
+                async with self.state.session_agents.view(root) as current:
+                    if (
+                        body.agent not in current.delegatable_profile_names
+                        or not current.config.profile(body.agent).user_invocable
+                        or not current.can_delegate
+                    ):
+                        raise HTTPException(403, "This agent profile cannot be started here.")
             await self.store.insert(root, target, body.message_id, body.text)
             ready = self.created[body.message_id] = asyncio.Event()
             try:
-                if self.state.run_for(root) is not None:
+                if parent is not None:
+                    assert parent_owner is not None
+                    owner, current_parent = self.start_parent(root, body.parent_task_id)
+                    if owner is not parent_owner or current_parent is not parent:
+                        raise RuntimeError("Parent runtime changed")
+                    info = await parent.tasks.start_task(body.text, body.agent, message=self.message(owner, body))
+                    await self.store.save(root, self.task(asdict(info), owner))
+                    await self.store.bind(body.message_id, self.receipt_target(root, asdict(info)))
+                    ready.set()
+                elif self.state.run_for(root) is not None:
                     owner = self.owner(root)
                     info = await owner.tasks.start_task(body.text, body.agent, message=self.message(owner, body))
                     await self.store.save(root, self.task(asdict(info), owner))
@@ -536,7 +620,16 @@ class Tasks:
                 # settle the receipt. Return its authoritative queued state.
                 if not self.state.run_for(root):
                     self.publish(await self.store.fail(body.message_id, "Agent startup was unavailable."))
-            except (ValueError, RuntimeError, PermissionError, HTTPException):
+            except (ValueError, RuntimeError, PermissionError, HTTPException) as error:
+                logger.warning(
+                    "web.task_start.rejected",
+                    extra={
+                        "root_session_id": root,
+                        "parent_task_id": body.parent_task_id,
+                        "profile": body.agent,
+                        "error_type": type(error).__name__,
+                    },
+                )
                 self.publish(await self.store.fail(body.message_id, "Agent startup was unavailable."))
             finally:
                 self.created.pop(body.message_id, None)

@@ -79,12 +79,16 @@ test("an unrefreshable token changes to sign-in required at expiry without chang
 test("chip activation opens its definition connection; row inspection and conversation settings stay independent", async t => {
   const view = mounted(t);
   const opened: string[] = [], configured: string[] = [];
-  const remote = { ...agent(true), authentication: { state: "sign_in_required" as const, expires_at: 0, error_code: "" } };
+  const remote = { ...agent(true), phase: "running" as const,
+    authentication: { state: "sign_in_required" as const, expires_at: 0, error_code: "" } };
   const root = { ...agent(false), id: "", name: "assistant", profile: "assistant", phase: "ready" as const };
   const profiles = [{ id: remote.profile, name: "Remote desktop", description: "Read-only checks", provider: "a2a", model: "", used: true, available: true }];
   await view.render(createElement(TeamTree, { agents: [root, remote], profiles, selected: "", inspect: id => opened.push(id), configure: id => configured.push(id), arrivals: {}, error: "", refresh() {} }));
   const card = view.container.querySelector('[data-agent-id="child"]')!;
-  await act(async () => card.querySelector<HTMLButtonElement>(".remote-connection-chip")!.click());
+  const group = view.container.querySelector<HTMLElement>('.team-definition-group[data-parent-id=""][data-profile="remote-desktop"]')!;
+  assert.equal(group.querySelectorAll(".remote-connection-chip").length, 1);
+  assert.equal(card.querySelector(".remote-connection-chip"), null, "a grouped remote definition owns the single connection chip");
+  await act(async () => group.querySelector<HTMLButtonElement>(".remote-connection-chip")!.click());
   assert.deepEqual(configured, ["profile:remote-desktop"]);
   assert.equal(opened.length, 0);
   await act(async () => card.querySelector<HTMLButtonElement>(".team-agent-open")!.click());
@@ -92,7 +96,8 @@ test("chip activation opens its definition connection; row inspection and conver
   await act(async () => card.querySelector<HTMLButtonElement>(".team-agent-settings")!.click());
   assert.deepEqual(configured, ["profile:remote-desktop", "child"]);
   await view.render(createElement(TeamTree, { agents: [root, remote], profiles: [], selected: "", inspect: id => opened.push(id), configure: id => configured.push(id), arrivals: {}, error: "", refresh() {} }));
-  await act(async () => card.querySelector<HTMLButtonElement>(".remote-connection-chip")!.click());
+  const retainedGroup = view.container.querySelector<HTMLElement>('.team-definition-group[data-parent-id=""][data-profile="remote-desktop"]')!;
+  await act(async () => retainedGroup.querySelector<HTMLButtonElement>(".remote-connection-chip")!.click());
   assert.equal(configured.at(-1), "child", "A removed definition falls back to this conversation instead of another connection");
 });
 

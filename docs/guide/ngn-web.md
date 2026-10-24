@@ -5,14 +5,23 @@ terminal client's workspace-scoped sessions, tools, provider configuration, and
 per-call approvals.
 
 The Team pane shows the main conversation and delegated agents in an activity
-tree. Select an agent to inspect its conversation and send it a message through
-the shared composer. Siblings use newest-spawn order; status changes and activity
-inside descendants do not reshuffle the list. Live spawn rows keep their position
-in the chat when later saved metadata arrives. **Agent definitions** stays below
-a divider with its own scroll area, including definitions already used by running
-or completed conversations. Unused definitions show **Not started**. Selecting a
-definition starts a new conversation through the shared composer; selecting a
-named conversation messages that existing agent. See [Inspecting and messaging delegated agents](task-inspection.md)
+tree. Each parent's direct children are grouped by agent definition, with
+**Running** and **Past runs** buckets. Waiting remains in Running. Empty groups
+and buckets are omitted; active groups open by default, while Past runs and
+groups containing only past runs start collapsed. Active branches open through
+two levels, and manual choices remain in place as activity changes. Running
+siblings use newest-spawn order; status updates do not reshuffle them. Moving a
+run between buckets preserves its row, child subtree and inspection controls.
+Select a run to inspect it and send messages through the shared composer.
+
+The start selector includes unused definitions without creating empty groups.
+A group's **+** starts that definition under the parent shown in the tree;
+the selector starts under the currently selected agent. The composer identifies
+that parent before submission. Main can start a new child from idle. A nested
+start requires a running local parent and obeys its allowed definitions, inherited
+permissions and shared depth, slot and execution limits. Unavailable starts show
+a reason. Remote agents manage their own children on their remote server.
+See [Inspecting and messaging delegated agents](task-inspection.md)
 for message delivery, settings, and restart behavior.
 
 In the conversation, each delegation has one compact line. The delegate call and
@@ -35,7 +44,7 @@ Streaming text keeps the same element while its trailing content slides into
 view, so incoming chunks do not restart an opacity animation. Reduced-motion
 preferences disable the movement.
 
-A2A conversations show a compact **A2A** connection chip. An open lock means
+A2A definition groups show a compact shared **A2A** connection chip. An open lock means
 credentials are ready or no sign-in is required; an amber closed lock needs
 attention. An unknown status uses a question mark. Hover for the exact status,
 or select the chip to open that agent's connection settings and sign-in controls.
@@ -44,8 +53,8 @@ its connection needs sign-in. Expiry and automatic-refresh details remain in
 connection settings. The lock and activity animations respect reduced motion.
 
 Generated conversation names are separate from their definitions. A named child
-shows its recorded definition (such as `assistant` or `mini`) beside its name and
-in its conversation header and settings. Definition entries expose their current
+shows its recorded definition (such as `assistant` or `mini`) in its group heading,
+conversation header and settings. Selecting a definition exposes its current
 source file; this is not a historical snapshot of the file used by an older run.
 Each conversation's accepted provider and model remain visible independently.
 
@@ -795,6 +804,8 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `POST trash/{session_id}/restore` | `{deletion_id: string}` restores that generation; returns `{restored_session_id: string, sessions: Session[]}` without selecting it |
 | `DELETE trash/{session_id}` | `{deletion_id: string}` permanently purges that generation; returns `{purged_session_id: string}` |
 | `POST messages` | `{session_id, prompt, message_id}` durably queues input; updates arrive through subscriptions |
+| `GET sessions/{session_id}/tasks` | Task tree, available definitions, shared usage and each retained parent's current child-start capabilities |
+| `POST sessions/{session_id}/tasks` | `{message_id, agent, text, parent_task_id?}` starts a real child under Main or a running local parent; returns `{task, receipt}` |
 | `WS events` | Authenticated session subscriptions, snapshots, replay cursors, and live execution records |
 | `GET channels` | Installed plugin descriptors, redacted saved connections, bindings, and configuration revision |
 | `POST channels/refresh` | Refresh installed connector discovery after package installation |
