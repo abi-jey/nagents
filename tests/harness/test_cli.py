@@ -105,6 +105,7 @@ def test_task_activation_and_notification_wire_contract() -> None:
         "cause": "completion",
         "text": "Result",
         "root_session_id": "ngn-root",
+        "source_activation": 0,
     }
     assert TaskStarted("s1", "", "prompt").activation == 0
     assert TaskCompleted("s1", "", "result").trigger == "delegation"
