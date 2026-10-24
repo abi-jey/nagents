@@ -1,6 +1,6 @@
 .team-grouped-children { margin-left: 12px; padding-left: 7px; }
 .team-run-search { display: flex; align-items: center; gap: 7px; margin: 1px 12px 10px; padding: 7px 8px; border: 1px solid var(--border-group); border-radius: 5px; color: var(--text-secondary); }
-.team-run-search > input { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text-reading); font: inherit; font-size: 10px; line-height: 16px; padding: 0; }
+.team-run-search > input { width: 100%; min-width: 0; min-height: 0; border: 0; outline: none; background: transparent; color: var(--text-reading); font: inherit; font-size: 10px; line-height: 16px; padding: 0; }
 .team-run-search:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
 .team-definition-group { list-style: none; margin: 7px 0 1px; padding: 0; min-width: 0; }
 .team-definition-heading { display: flex; align-items: center; gap: 5px; min-height: 29px; min-width: 0; }
@@ -42,9 +42,11 @@
 .team-definition-group.is-arriving > .team-definition-heading { animation: team-group-arrive 650ms ease-out both; }
 @keyframes team-group-arrive { from { background: color-mix(in srgb,var(--accent-blue) 12%,transparent); } to { background: transparent; } }
 @media (pointer: coarse) {
+  .team-run-search { min-height: 44px; padding-block: 0; }
   .team-definition-toggle, .team-run-bucket > button, .team-definition-start { min-height: 36px; }
-  .team-tree-branch[data-bucket="past"] > .team-tree-row > .team-agent-row .team-agent-open { min-height: 44px; }
-  .team-tree-branch[data-bucket="past"] > .team-tree-row > .team-agent-row .team-agent-settings { top: 7px; opacity: 1; }
+  .team-tree-branch[data-bucket="past"] > .team-tree-row > .team-agent-row .team-agent-open { min-height: 44px; justify-content: center; }
+  .team-tree-branch[data-bucket="past"] > .team-tree-row > .team-agent-row .team-agent-heading { padding-right: 38px; }
+  .team-tree-branch[data-bucket="past"] > .team-tree-row > .team-agent-row .team-agent-settings { top: 0; width: 44px; min-height: 44px; opacity: 1; }
   .team-tree-branch[data-bucket="past"] > .team-tree-row > .team-tree-toggle-slot { padding-top: 10px; }
   .team-grouped-children > .team-tree-branch[data-bucket="past"]::before { top: 24px; }
 }
