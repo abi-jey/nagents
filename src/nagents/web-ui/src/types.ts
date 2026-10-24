@@ -91,6 +91,7 @@ export type Snapshot = {
   agent_selection?: SessionAgentSelection;
   activity_cursor?: number;
   retained_tasks: RetainedTask[];
+  retained_activations?: RetainedTask[];
   sessions: Session[];
   active_run?: ActiveRun | null;
   active_run_id?: string;

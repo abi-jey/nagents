@@ -72,6 +72,9 @@ export type Entry = {
   runId?: string;
   taskId?: string;
   taskName?: string;
+  taskProfile?: string;
+  taskProvider?: string;
+  taskModel?: string;
   parentTaskId?: string;
   originHistoryId?: string;
   activationHistoryId?: string;
@@ -988,7 +991,9 @@ export function fromHistory({
   history: messages,
   session_id,
   retained_tasks = [],
-}: Pick<Snapshot, "history" | "session_id" | "retained_tasks">): Entry[] {
+  retained_activations = [],
+  root_session_id = session_id,
+}: Pick<Snapshot, "history" | "session_id" | "retained_tasks" | "retained_activations"> & { root_session_id?: string }): Entry[] {
   let entries: Entry[] = [];
   let historyTurn = -1;
   function deliver(delivery: LocalDelivery) {
@@ -1083,9 +1088,13 @@ export function fromHistory({
       ? { ...entry, state: "No result recorded" }
       : entry,
   );
-  const retained = retained_tasks.filter(
-    (task) => task.root_session_id === session_id && task.session_id,
-  );
+  // Each host activation record owns its original identity and settings. The
+  // current registry only fills activations not present in that manifest.
+  const activations = new Map(retained_activations.filter(task => task.root_session_id === root_session_id && task.session_id)
+    .map(task => [`${task.session_id}:${task.activation}`, task]));
+  for (const task of retained_tasks) if (task.root_session_id === root_session_id && task.session_id &&
+      !activations.has(`${task.session_id}:${task.activation}`)) activations.set(`${task.session_id}:${task.activation}`, task);
+  const retained = [...activations.values()];
   if (retained.length)
     entries.push({
       id: `entry-${entries.length}`,
@@ -1103,6 +1112,9 @@ export function fromHistory({
       title: task.title || task.session_id,
       text: "",
       taskId: task.session_id,
+      taskProfile: task.profile,
+      taskProvider: task.provider,
+      taskModel: task.model,
       parentTaskId: task.parent_session_id,
       originHistoryId: task.origin_history_id,
       activationHistoryId: task.activation_history_id,

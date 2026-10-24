@@ -21,6 +21,9 @@ const snapshot = (retained_tasks: RetainedTask[] = []): Snapshot => ({ session_i
 
 test("canonical child snapshots and frames keep short identity separate from the root route", () => {
   assert.ok(validSnapshot(snapshot([child("s1")])));
+  assert.ok(validSnapshot({ ...snapshot(), retained_activations: [child("s1")] }));
+  assert.equal(validSnapshot({ ...snapshot(), retained_activations: [{}] }), false);
+  assert.equal(validSnapshot({ ...snapshot(), retained_activations: [{ ...child("s1"), activation_call_position: "0" }] }), false);
   assert.equal(validSnapshot({ ...snapshot(), retained_tasks: [{ id: "old", name: "Old", session_id: "ngn-root" }] }), false);
   const frame = { type: "event", session_id: "ngn-root", epoch: "one", cursor: 1,
     record: { event: "task_started", session_id: "s1", root_session_id: "ngn-root", parent_session_id: "", title: "" } };

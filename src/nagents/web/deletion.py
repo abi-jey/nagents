@@ -155,6 +155,8 @@ def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -
         db.execute("DELETE FROM v2_sessions WHERE id = ?", (child,))
     if "ngn_web_agent_sessions" in tables:
         db.execute("DELETE FROM ngn_web_agent_sessions WHERE root = ?", (session_id,))
+    if "ngn_web_agent_activations" in tables:
+        db.execute("DELETE FROM ngn_web_agent_activations WHERE root = ?", (session_id,))
     if "ngn_web_agent_inputs" in tables:
         db.execute(
             "UPDATE ngn_web_agent_inputs SET text = '', status = CASE WHEN status = 'queued' THEN 'error' ELSE status END, "

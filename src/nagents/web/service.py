@@ -450,10 +450,12 @@ class WebState:
             raise HTTPException(404, "Session not found in this workspace.")
         history = await self.history.snapshot(session_id)
         active = self.run_for(session_id)
+        task_index = await self.tasks.index(session_id)
         return {
             "session_id": session_id,
             "activity_cursor": self.wakeups.cursor,
-            "retained_tasks": (await self.tasks.index(session_id))["tasks"],
+            "retained_tasks": task_index["tasks"],
+            "retained_activations": task_index["activations"],
             "sessions": [asdict(session) for session in sessions],
             "history": history,
             "agent_selection": await self.session_agents.snapshot(session_id),

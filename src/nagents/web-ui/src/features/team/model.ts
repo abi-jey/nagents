@@ -27,7 +27,7 @@ export type TaskReceipt = {
   revision: number; reason?: string; queued_at?: string; picked_up_at?: string;
 };
 export type TaskDetail = {
-  task: RetainedTask; history: Snapshot["history"]; activity?: TaskActivity[];
+  task: RetainedTask; history: Snapshot["history"]; activity?: TaskActivity[]; retained_activations?: RetainedTask[];
   receipts?: TaskReceipt[]; context?: ContextStats; truncated?: boolean;
   activity_cursor?: number;
   activity_truncated?: boolean;

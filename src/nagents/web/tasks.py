@@ -243,6 +243,7 @@ class Tasks:
                 )
             return {
                 "tasks": list(saved.values()),
+                "activations": await self.store.activations(root),
                 "profiles": profiles,
                 "profile_revision": profile_owner.profile_revision,
                 **({"subagent_usage": usage_owner.tasks.usage()} if usage_owner is not None else {}),
@@ -325,6 +326,8 @@ class Tasks:
         except (HTTPException, ValueError):
             return
         task = self.task(asdict(info), owner)
+        if kind in {"task_started", "task_completed"}:
+            await self.store.record_activation(run.session_id, {**record, "mode": info.mode})
         if kind != "task_activity":
             await self.store.save(run.session_id, task, info._storage_id)
         ready = self.created.get(run.task_message_id)
@@ -864,6 +867,7 @@ class Tasks:
             return {
                 "task": task,
                 "history": history,
+                "retained_activations": await self.store.activations(root),
                 "activity": activity,
                 "receipts": await self.store.receipts(root, agent_session_id),
                 "context": context,

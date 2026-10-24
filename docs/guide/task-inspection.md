@@ -25,7 +25,7 @@ returns 404.
 
 | Route | Result |
 | --- | --- |
-| `GET /api/sessions/{root_session_id}/tasks` | `{tasks, profiles, profile_revision}` and `subagent_usage` while its runtime is available |
+| `GET /api/sessions/{root_session_id}/tasks` | `{tasks, activations, profiles, profile_revision}` and `subagent_usage` while its runtime is available |
 | `GET /api/sessions/{root_session_id}/tasks/{session_id}` | Task, bounded history, current activity, receipts, context |
 | `POST /api/sessions/{root_session_id}/tasks` | Start `{message_id, agent, text, parent_session_id?, title?}`; returns `{task, receipt}` |
 | `POST /api/sessions/{root_session_id}/tasks/{session_id}/messages` | Send `{message_id, text}`; returns receipt |
@@ -110,6 +110,14 @@ host's exact committed invocation. These correlate a follow-up with its own chat
 line without replacing the original spawn anchor or borrowing an older result.
 Human, scheduled, and host-started activations have no model-call provenance.
 These display fields do not grant execution authority.
+
+The server also retains an immutable start and terminal record for each
+activation. Root snapshots and child details expose these as
+`retained_activations`; the task index exposes `activations`. They preserve the
+title, model, request and result that belonged to each activation, so refreshing
+the page cannot replace earlier results with a later follow-up. Incomplete
+records from a previous server are displayed as interrupted. Historical records
+are read-only and never reconstruct workers or authorize a new request.
 
 Each `history_committed` marker contains a row watermark captured in the child
 producer. A detail response combines history through that watermark with the

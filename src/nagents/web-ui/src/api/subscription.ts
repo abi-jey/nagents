@@ -52,6 +52,13 @@ function deliveries(value: unknown): boolean {
       ["asset_id", "filename", "media_type"].every((key) => typeof asset[key] === "string") &&
       integer(asset.position) && integer(asset.byte_length) && asset.byte_length <= 20 * 1024 * 1024)));
 }
+function retainedTasks(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item: unknown) => object(item) &&
+    ["session_id", "title", "status", "root_session_id", "parent_session_id", "prompt", "result", "error"].every(
+      (key) => typeof item[key] === "string") && integer(item.activation) && integer(item.followups) &&
+    ["activation_history_id", "activation_run_id", "activation_call_id"].every(key => item[key] === undefined || typeof item[key] === "string") &&
+    (item.activation_call_position === undefined || Number.isSafeInteger(item.activation_call_position) && Number(item.activation_call_position) >= -1));
+}
 export function validSnapshot(value: unknown): value is Snapshot {
   return object(value) && typeof value.session_id === "string" && sessions(value.sessions) &&
     (value.agent_selection === undefined || validSessionAgent(value.agent_selection) && value.agent_selection.session_id === value.session_id) &&
@@ -63,9 +70,7 @@ export function validSnapshot(value: unknown): value is Snapshot {
       (item.uploads === undefined || uploadedAttachments(item.uploads)) &&
       Array.isArray(item.tool_calls) && item.tool_calls.every((call: unknown) => object(call) &&
         typeof call.id === "string" && typeof call.name === "string")) &&
-    Array.isArray(value.retained_tasks) && value.retained_tasks.every((item: unknown) => object(item) &&
-      ["session_id", "title", "status", "root_session_id", "parent_session_id", "prompt", "result", "error"].every(
-        (key) => typeof item[key] === "string") && integer(item.activation) && integer(item.followups));
+    retainedTasks(value.retained_tasks) && (value.retained_activations === undefined || retainedTasks(value.retained_activations));
 }
 export function parseFrame(data: unknown): EventFrame {
   if (typeof data !== "string" || data.length > 8 * 1024 * 1024) throw new Error("Invalid event frame.");

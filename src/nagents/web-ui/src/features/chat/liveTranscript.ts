@@ -82,7 +82,7 @@ function newRow(entry: Entry, history?: Snapshot["history"]): boolean {
 // A live response can join only its own turn, in order. Text/prefix equality is
 // never an identity; complete replay or a history baseline must establish a
 // still-streaming response's place before it can claim a committed row.
-export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announceNewUsers = false,
+export function reconcileHistory(previous: Entry[], snapshot: Snapshot & { root_session_id?: string }, announceNewUsers = false,
   knownHistory?: Snapshot["history"], canonicalRuns: ReadonlySet<string> = new Set(), preserveObserved = false): Entry[] {
   const saved = fromHistory(snapshot);
   const roots = saved.filter((item) => item.kind !== "task" && item.kind !== "retained_tasks");
@@ -168,7 +168,8 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
   }
   for (let i = after; i < previous.length; i++) keep(previous[i]);
   for (const entry of saved.filter((item) => item.kind === "task" || item.kind === "retained_tasks")) {
-    const old = previous.find((item) => item.recorded && item.kind === entry.kind && item.taskId === entry.taskId);
+    const old = previous.find((item) => item.recorded && item.kind === entry.kind && item.taskId === entry.taskId &&
+      (item.activation || 0) === (entry.activation || 0));
     next.push({ ...entry, id: old?.id || id() });
   }
   return next;

@@ -33,6 +33,8 @@ from nagents.harness.auth import OpenAIAuth
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.types import TranscriptAbandoned
+from nagents.harness.types import TranscriptAnchor
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import _load_config
 
@@ -235,6 +237,8 @@ async def run(args: argparse.Namespace) -> int:
             await harness.initialize()
             async with aclosing(harness.run(Path(args.instruction).read_text())) as events:
                 async for event in events:
+                    if isinstance(event, TranscriptAnchor | TranscriptAbandoned):
+                        continue  # Host-local references are not benchmark wire records.
                     log.write({**_event_record(event), "event_scope": "root_harness_stream"})
                     if isinstance(event, CompactionStartedEvent):
                         compacting = True

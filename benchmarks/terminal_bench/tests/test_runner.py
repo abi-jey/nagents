@@ -20,6 +20,8 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness import Harness
 from nagents.harness.providers import ProviderRegistryStore
+from nagents.harness.types import TranscriptAbandoned
+from nagents.harness.types import TranscriptAnchor
 from nagents.provider import OpenAIProvider
 from nagents.provider.openai import CodexCredentials
 
@@ -100,13 +102,20 @@ def test_real_harness_loop_records_native_validation_and_shell_failures(
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         log = EventLog(tmp_path / "events.jsonl")
         harness.approval_handler = log.approve
+        host_local_events = 0
         try:
             async for event in harness.run("exercise the native harness"):
+                if isinstance(event, TranscriptAnchor | TranscriptAbandoned):
+                    host_local_events += 1
+                    continue
                 log.write(_event_record(event))
             log.write({"event": "benchmark_end", "status": "completed"})
         finally:
             await harness.close()
         assert len(providers[0].requests) == 2
+        assert host_local_events > 0
+        serialized = (tmp_path / "events.jsonl").read_text()
+        assert "TranscriptAnchor" not in serialized and "TranscriptAbandoned" not in serialized
 
     asyncio.run(scenario())
     summary = summarize_events(tmp_path / "events.jsonl")

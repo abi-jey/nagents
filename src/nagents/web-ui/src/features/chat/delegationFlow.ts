@@ -4,7 +4,7 @@ import type { AgentPhase, TaskActivity, TeamAgent } from "../team/model.js";
 
 export type DelegationPresentation = {
   kind: "start" | "result"; taskId: string; name: string; profile: string;
-  phase: AgentPhase; activation?: number; accepted?: boolean; prompt: string; text: string; latest?: Entry; lastTool?: Entry; sources: Entry[];
+  phase: AgentPhase; provider?: string; model?: string; activation?: number; accepted?: boolean; prompt: string; text: string; latest?: Entry; lastTool?: Entry; sources: Entry[];
 };
 export type DelegationOptions = {
   agents: readonly TeamAgent[]; activity: readonly TaskActivity[]; parentId?: string;
@@ -42,7 +42,7 @@ function terminal(entry: Entry | undefined): boolean {
 type Binding = { taskId: string; activation: number };
 type Finished = {
   anchor: string; phase: AgentPhase; text: string; name: string; profile: string; prompt: string;
-  latest?: Entry; lastTool?: Entry;
+  latest?: Entry; lastTool?: Entry; provider?: string; model?: string; observed: boolean;
 };
 
 function matchesActivation(call: Entry, lifecycle: Entry): boolean {
@@ -70,6 +70,11 @@ export class DelegationFlow {
     const known = new Map(options.agents.filter(agent => agent.id).map(agent => [agent.id, agent]));
     const positions = new Map(entries.map((entry, index) => [entry.id, index]));
     const lifecycleEntries = entries.filter(entry => entry.kind === "task");
+    // These saved messages locate an already verified host completion; they
+    // never establish its status, result, identity or activation.
+    const contextSlots = entries.flatMap(entry => (agentUpdates(entry.text)?.sessions || [])
+      .map((update, index) => ({ entry, update, key: `${entry.id}:${index}` })));
+    const anchoredContexts = new Set<string>();
     // Partial JSON must not change a canonical request's presentation branch.
     const calls = entries.filter(entry => entry.kind === "tool" && entry.title === "to_agent" &&
       !entry.remoteReview && (!(entry.taskId || "") || entry.taskId === parentId) &&
@@ -119,16 +124,25 @@ export class DelegationFlow {
         : ["Waiting for approval", "Approval required"].includes(call.state || "") ? "waiting"
           : binding && (!agent?.task || agent.task.activation === binding.activation) ? agent?.phase || "running" : "running";
       const name = lifecycle?.title || agent?.name || target;
-      const profile = typeof args.agent === "string" && args.agent ? args.agent : agent?.profile || "Agent";
+      const profile = lifecycle?.taskProfile !== undefined ? lifecycle.taskProfile || "Agent"
+        : typeof args.agent === "string" && args.agent ? args.agent : agent?.profile || "Agent";
+      const provider = lifecycle?.recorded ? lifecycle.taskProvider || "" : lifecycle?.taskProvider ?? agent?.provider;
+      const model = lifecycle?.recorded ? lifecycle.taskModel || "" : lifecycle?.taskModel ?? agent?.model;
       const prompt = typeof args.prompt === "string" ? args.prompt : lifecycle?.inputs || agent?.prompt || "";
+      const result = lifecycle ? lifecycle.error || lifecycle.result || "" : agent?.task?.error || agent?.task?.result || agent?.reason || "";
+      const context = binding && terminal(lifecycle) ? contextSlots.find(slot => !anchoredContexts.has(slot.key) &&
+        slot.update.session_id === binding.taskId && slot.update.status === (phase === "done" ? "completed" : phase) &&
+        positions.get(slot.entry.id)! > positions.get(call.id)! && ((slot.update.error ?? slot.update.result) === result ||
+          !!slot.update.truncated && result.startsWith(slot.update.error ?? slot.update.result ?? ""))) : undefined;
+      if (context) anchoredContexts.add(context.key);
       if (binding && direct && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
-        this.finished.set(key, { anchor: lifecycle?.completionAfterId || entries.at(-1)?.id || call.id,
-          phase, text: lifecycle?.error || lifecycle?.result || agent?.task?.error || agent?.task?.result || agent?.reason || "",
-          name, profile, prompt, latest, lastTool });
+        this.finished.set(key, { anchor: lifecycle?.completionAfterId || context?.entry.id || entries.at(-1)?.id || call.id,
+          phase, text: result, name, profile, prompt, latest, lastTool, provider, model, observed: !!lifecycle && !lifecycle.recorded });
       }
       const finished = this.finished.get(key);
       if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId)) finished.anchor = lifecycle.completionAfterId;
-      return { call, binding, target, evidence, lifecycle, key, finished, name, profile, prompt, phase, latest, lastTool, sources: [call, ...evidence] };
+      else if (finished && !finished.observed && context) finished.anchor = context.entry.id;
+      return { call, binding, target, evidence, lifecycle, key, finished, name, profile, prompt, phase, latest, lastTool, provider, model, sources: [call, ...evidence] };
     });
     // Delivery/context records have no activation. Match them in completion
     // order, independently for each evidence channel.
@@ -143,12 +157,15 @@ export class DelegationFlow {
       if (!ids.length) continue;
       const used = notice ? noticesUsed : contextsUsed;
       const updates = notice ? undefined : agentUpdates(entry.text);
-      const matches = ids.map(id => {
-        const candidates = completed.filter(item => item.target === id && !used.has(item.key) &&
+      const chosen = new Set(used);
+      const matches = ids.map((id, index) => {
+        const candidates = completed.filter(item => item.target === id && !chosen.has(item.key) &&
           (positions.get(item.finished!.anchor) ?? 0) <= positions.get(entry.id)!);
-        const update = updates?.sessions.find(session => session.session_id === id);
+        const update = updates?.sessions[index];
         const text = notice ? entry.text : update?.result ?? update?.error;
-        return candidates.find(item => item.finished!.text === text || !!update?.truncated && !!text && item.finished!.text.startsWith(text)) || candidates.at(-1);
+        const match = candidates.find(item => item.finished!.text === text || !!update?.truncated && !!text && item.finished!.text.startsWith(text)) || candidates.at(-1);
+        if (match) chosen.add(match.key);
+        return match;
       });
       if (matches.some(item => !item)) continue;
       for (const item of matches) { item!.sources.push(entry); used.add(item!.key); }
@@ -159,7 +176,7 @@ export class DelegationFlow {
       const { call, binding, target, lifecycle, key, finished, sources } = item;
       const presentation: DelegationPresentation = { kind: "start", taskId: target, activation: binding?.activation,
         accepted: !!binding, name: finished?.name || item.name, profile: finished?.profile || item.profile,
-        phase: finished?.phase || item.phase, prompt: finished?.prompt || item.prompt,
+        phase: finished?.phase || item.phase, provider: finished?.provider ?? item.provider, model: finished?.model ?? item.model, prompt: finished?.prompt || item.prompt,
         text: call.error || finished?.text || "", latest: finished?.latest || item.latest, lastTool: finished?.lastTool || item.lastTool, sources };
       rows.push({ entry: { ...call, kind: "status", delegation: presentation, taskId: undefined,
         activity: Math.max(call.activity || 0, lifecycle?.activity || 0), title: presentation.name || presentation.profile }, position: positions.get(call.id)! });

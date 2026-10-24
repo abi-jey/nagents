@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import sqlite3
+from dataclasses import asdict
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -22,6 +23,7 @@ from fastapi import HTTPException
 
 from nagents.channels.store import InboxStore
 from nagents.harness.session_identity import session_sequence
+from nagents.harness.subagents import TaskInfo
 
 from .routing import RoutingStore
 
@@ -66,6 +68,12 @@ class TaskStore:
                     "ON ngn_web_agent_inputs(root, session_id, queued_at)"
                 )
                 db.execute(
+                    "CREATE TABLE IF NOT EXISTS ngn_web_agent_activations ("
+                    "sequence INTEGER PRIMARY KEY AUTOINCREMENT, root TEXT NOT NULL, session_id TEXT NOT NULL, "
+                    "activation INTEGER NOT NULL, epoch TEXT NOT NULL, started TEXT NOT NULL DEFAULT '{}', "
+                    "completed TEXT NOT NULL DEFAULT '{}', UNIQUE(root, session_id, activation))"
+                )
+                db.execute(
                     "UPDATE ngn_web_agent_inputs SET status = 'error', revision = revision + 1, "
                     "reason = 'Target unavailable after server restart; this message was not replayed.' "
                     "WHERE status = 'queued' AND epoch != ?",
@@ -77,11 +85,13 @@ class TaskStore:
                     "UPDATE ngn_web_agent_inputs SET status = 'error', revision = revision + 1, "
                     "reason = 'Root session removed.' WHERE root = OLD.id AND status = 'queued'; END"
                 )
+                db.execute("DROP TRIGGER IF EXISTS ngn_web_agent_sessions_root_purged")
                 db.execute(
-                    "CREATE TRIGGER IF NOT EXISTS ngn_web_agent_sessions_root_purged BEFORE DELETE ON v2_sessions BEGIN "
+                    "CREATE TRIGGER ngn_web_agent_sessions_root_purged BEFORE DELETE ON v2_sessions BEGIN "
                     "DELETE FROM v2_messages WHERE session_id IN (SELECT storage_id FROM ngn_web_agent_sessions WHERE root = OLD.id); "
                     "DELETE FROM v2_sessions WHERE id IN (SELECT storage_id FROM ngn_web_agent_sessions WHERE root = OLD.id AND storage_id != OLD.id); "
                     "DELETE FROM ngn_web_agent_sessions WHERE root = OLD.id; "
+                    "DELETE FROM ngn_web_agent_activations WHERE root = OLD.id; "
                     "UPDATE ngn_web_agent_inputs SET text = '', status = CASE WHEN status = 'queued' THEN 'error' ELSE status END, "
                     "revision = revision + 1, reason = 'Root session permanently deleted.' WHERE root = OLD.id; END"
                 )
@@ -287,6 +297,78 @@ class TaskStore:
                     if task.get("status") == "running":
                         task.update(status="cancelled", phase="cancelled", error="Interrupted by server restart.")
                 result.append(task)
+            return result
+
+        return await self.db._transaction(read)
+
+    async def record_activation(self, root: str, record: dict[str, object]) -> None:
+        """Freeze host lifecycle evidence independently for every accepted activation."""
+        kind = record.get("event")
+        if kind not in {"task_started", "task_completed"}:
+            return
+        if record.get("root_session_id") != root:
+            raise ValueError("Activation evidence belongs to another root")
+        session_id, activation = record.get("session_id"), record.get("activation")
+        if not isinstance(session_id, str) or type(activation) is not int or activation < 0:
+            raise ValueError("Activation evidence needs its short session ID and activation")
+        session_sequence(session_id)
+        await self.initialize()
+        fields = set(TaskInfo.__dataclass_fields__) - {
+            name for name in TaskInfo.__dataclass_fields__ if name.startswith("_")
+        }
+        fields.update({"followup", "timestamp"})
+        public = {key: value for key, value in record.items() if key in fields}
+        column = "started" if kind == "task_started" else "completed"
+
+        def save(db: sqlite3.Connection) -> None:
+            self.root(db, root)
+            db.execute(
+                "INSERT INTO ngn_web_agent_activations(root, session_id, activation, epoch, " + column + ") "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(root, session_id, activation) DO UPDATE SET "
+                + column
+                + " = CASE WHEN "
+                + column
+                + " = '{}' THEN excluded."
+                + column
+                + " ELSE "
+                + column
+                + " END",
+                (root, session_id, activation, self.epoch, json.dumps(public)),
+            )
+
+        await self.db._transaction(save)
+
+    async def activations(self, root: str) -> list[dict[str, object]]:
+        """Read historical activation records; they never authorize a new execution."""
+        await self.initialize()
+
+        def read(db: sqlite3.Connection) -> list[dict[str, object]]:
+            self.root(db, root)
+            result: list[dict[str, object]] = []
+            for session_id, activation, epoch, started, completed in db.execute(
+                "SELECT session_id, activation, epoch, started, completed FROM ngn_web_agent_activations "
+                "WHERE root = ? ORDER BY sequence",
+                (root,),
+            ):
+                initial: dict[str, object] = json.loads(started)
+                terminal: dict[str, object] = json.loads(completed)
+                values = {**initial, **terminal}
+                info = TaskInfo(session_id, str(values.get("title", "")), root_session_id=root, activation=activation)
+                public = {key: value for key, value in asdict(info).items() if not key.startswith("_")}
+                public.update({key: value for key, value in values.items() if key in public})
+                public.update(
+                    followups=values.get("followup", 0),
+                    started_at=initial.get("timestamp", 0),
+                    phase=values.get("status", "running"),
+                    can_message=False,
+                    can_start_children=False,
+                    unavailable_reason="Historical activation; open its conversation to send a new message.",
+                    child_agents=[],
+                    child_start_unavailable_reason="Historical activation.",
+                )
+                if epoch != self.epoch and public["status"] == "running":
+                    public.update(status="cancelled", phase="cancelled", error="Interrupted by server restart.")
+                result.append(public)
             return result
 
         return await self.db._transaction(read)
