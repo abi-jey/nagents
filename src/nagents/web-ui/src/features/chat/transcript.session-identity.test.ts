@@ -30,6 +30,8 @@ test("canonical child snapshots and frames keep short identity separate from the
   const frame = { type: "event", session_id: "ngn-root", epoch: "one", cursor: 1,
     record: { event: "task_started", session_id: "s1", root_session_id: "ngn-root", parent_session_id: "", title: "" } };
   assert.deepEqual(parseFrame(JSON.stringify(frame)), frame);
+  assert.throws(() => parseFrame(JSON.stringify({ ...frame, record: { event: "task_notification", source_activation: -1 } })));
+  assert.throws(() => parseFrame(JSON.stringify({ ...frame, record: { event: "task_notification", source_activation: "1" } })));
   assert.throws(() => parseFrame(JSON.stringify({ ...frame, record: { ...frame.record, root_session_id: "ngn-other" } })));
 });
 
@@ -52,8 +54,9 @@ test("canonical lifecycle and notifications read titles and never generated-name
   let entries = appendEvent([], { event: "task_started", session_id: "s1", title: "", name: "Old generated name", parent_session_id: "" });
   assert.equal(entries[0]?.title, "s1");
   entries = appendEvent(entries, { event: "task_notification", notification_id: "n1", source_session_id: "s1",
-    recipient_session_id: "s2", source_title: "", recipient_title: "Review", text: "Ready", cause: "completion" });
+    recipient_session_id: "s2", source_activation: 3, source_title: "", recipient_title: "Review", text: "Ready", cause: "completion" });
   assert.equal(entries[1]?.sourceName, "s1");
+  assert.equal(entries[1]?.sourceActivation, 3);
   assert.equal(entries[1]?.taskName, "Review");
   assert.equal(entries[1]?.taskId, "s2");
   assert.deepEqual(appendEvent([], { event: "task_started", task_id: "legacy", name: "Old" }), []);

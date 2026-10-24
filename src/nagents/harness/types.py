@@ -183,6 +183,7 @@ class TaskNotification:
     cause: Literal["completion", "wakeup"]
     text: str
     root_session_id: str = ""
+    source_activation: int = 0
 
 
 HarnessEvent = (

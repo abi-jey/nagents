@@ -23,7 +23,7 @@ export function validRecord(value: unknown): value is WireEvent {
     (value.uploads === undefined || uploadedAttachments(value.uploads)) &&
     ["session_id", "root_session_id", "run_id", "call_id", "id", "approval_id", "parent_session_id", "message_id"].every(
       (key) => value[key] === undefined || typeof value[key] === "string",
-    ) && ["activation", "followup", "depth"].every((key) => value[key] === undefined || integer(value[key]));
+    ) && ["activation", "source_activation", "followup", "depth"].every((key) => value[key] === undefined || integer(value[key]));
 }
 export function validSessionList(value: unknown): value is Session[] {
   return Array.isArray(value) && value.every((item: unknown) => object(item) &&

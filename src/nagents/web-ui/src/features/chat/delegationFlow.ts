@@ -35,8 +35,9 @@ function ownActivity(events: readonly TaskActivity[], taskId: string, activation
 }
 
 function terminal(entry: Entry | undefined): boolean {
-  return !!entry && (entry.result !== undefined || ["Completed", "Error", "Cancelled"].includes(entry.state || "") ||
-    !!entry.recorded && ["completed", "failed", "cancelled"].includes(entry.recordedStatus || ""));
+  if (!entry) return false;
+  if (entry.recorded) return ["completed", "failed", "cancelled"].includes(entry.recordedStatus || "");
+  return entry.result !== undefined || ["Completed", "Error", "Cancelled"].includes(entry.state || "");
 }
 
 type Binding = { taskId: string; activation: number };
@@ -119,24 +120,28 @@ export class DelegationFlow {
       }
       const latest = local.findLast(entry => entry.kind === "tool" || entry.kind === "assistant" && !!(entry.text || entry.responseMetadata?.summary));
       const lastTool = local.findLast(entry => entry.kind === "tool");
+      const polledPhase = binding && (!agent?.task || agent.task.activation === binding.activation) ? agent?.phase || "running" : "running";
+      // Registry polling can overtake this activation's completion event. Only
+      // its own terminal lifecycle may create/freeze a result row.
+      const activePhase = ["done", "failed", "cancelled"].includes(polledPhase) ? "running" : polledPhase;
       const phase: AgentPhase = call.error ? "failed" : terminal(lifecycle)
         ? lifecycle?.error || lifecycle?.state === "Error" || lifecycle?.recordedStatus === "failed" ? "failed" : lifecycle?.state === "Cancelled" || lifecycle?.recordedStatus === "cancelled" ? "cancelled" : "done"
         : ["Waiting for approval", "Approval required"].includes(call.state || "") ? "waiting"
-          : binding && (!agent?.task || agent.task.activation === binding.activation) ? agent?.phase || "running" : "running";
+          : activePhase;
       const name = lifecycle?.title || agent?.name || target;
       const profile = lifecycle?.taskProfile !== undefined ? lifecycle.taskProfile || "Agent"
         : typeof args.agent === "string" && args.agent ? args.agent : agent?.profile || "Agent";
       const provider = lifecycle?.recorded ? lifecycle.taskProvider || "" : lifecycle?.taskProvider ?? agent?.provider;
       const model = lifecycle?.recorded ? lifecycle.taskModel || "" : lifecycle?.taskModel ?? agent?.model;
       const prompt = typeof args.prompt === "string" ? args.prompt : lifecycle?.inputs || agent?.prompt || "";
-      const result = lifecycle ? lifecycle.error || lifecycle.result || "" : agent?.task?.error || agent?.task?.result || agent?.reason || "";
+      const result = lifecycle?.error || lifecycle?.result || "";
       const context = binding && terminal(lifecycle) ? contextSlots.find(slot => !anchoredContexts.has(slot.key) &&
         slot.update.session_id === binding.taskId && slot.update.status === (phase === "done" ? "completed" : phase) &&
         positions.get(slot.entry.id)! > positions.get(call.id)! && ((slot.update.error ?? slot.update.result) === result ||
           !!slot.update.truncated && result.startsWith(slot.update.error ?? slot.update.result ?? "") ||
           !!lifecycle?.detailsTruncated && (slot.update.error ?? slot.update.result ?? "").startsWith(result))) : undefined;
       if (context) anchoredContexts.add(context.key);
-      if (binding && direct && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
+      if (binding && direct && terminal(lifecycle) && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
         this.finished.set(key, { anchor: lifecycle?.completionAfterId || context?.entry.id || entries.at(-1)?.id || call.id,
           offset: .25, phase, text: result, name, profile, prompt, latest, lastTool, provider, model, detailsTruncated: lifecycle?.detailsTruncated, observed: !!lifecycle && !lifecycle.recorded });
       }
@@ -165,15 +170,19 @@ export class DelegationFlow {
       const updates = notice ? undefined : agentUpdates(entry.text);
       const chosen = new Set(used);
       const matches = ids.map((id, index) => {
-        const candidates = completed.filter(item => item.target === id && !chosen.has(item.key) &&
+        const activationMatches = (item: typeof items[number]) => !notice || entry.sourceActivation === undefined ||
+          item.binding?.activation === entry.sourceActivation;
+        const candidates = completed.filter(item => item.target === id && activationMatches(item) && !chosen.has(item.key) &&
           (positions.get(item.finished!.anchor) ?? 0) <= positions.get(entry.id)!);
         const update = updates?.sessions[index];
         const text = notice ? entry.text : update?.result ?? update?.error;
-        // A saved checkpoint can precede the live terminal lifecycle event.
-        // Keep known accepted requests' compact context in their inspector
-        // from the first render, without treating that data as a completion.
-        const accepted = !notice && update && ["completed", "failed", "cancelled"].includes(update.status)
-          ? items.findLast(item => item.binding && item.direct && item.target === id &&
+        // A checkpoint or notification can precede the terminal lifecycle.
+        // The host notification's exact activation prevents a human/host resume
+        // from borrowing an earlier native request. Neither source grants state.
+        const canFoldEarly = notice ? entry.sourceActivation !== undefined
+          : update && ["completed", "failed", "cancelled"].includes(update.status);
+        const accepted = canFoldEarly
+          ? items.findLast(item => item.binding && item.direct && item.target === id && activationMatches(item) &&
             !chosen.has(item.key) && positions.get(item.call.id)! < positions.get(entry.id)!) : undefined;
         const match = candidates.find(item => item.finished!.text === text || !!update?.truncated && !!text && item.finished!.text.startsWith(text)) || accepted || candidates.at(-1);
         if (match) chosen.add(match.key);
@@ -197,7 +206,7 @@ export class DelegationFlow {
         error: finished.phase === "failed" ? finished.text || "The subagent failed." : undefined,
         runId: call.runId, activity: lifecycle?.activity,
         delegation: { ...presentation, kind: "result", text: finished.text } },
-        position: (positions.get(finished.anchor) ?? entries.length - 1) + finished.offset });
+        position: Math.max((positions.get(finished.anchor) ?? entries.length - 1) + finished.offset, positions.get(call.id)! + .25) });
     }
     const originals = entries.flatMap((entry, index) => {
       if (calls.includes(entry) || entry.kind === "retained_tasks" || entry.taskId || folded.has(entry.id)) return [];

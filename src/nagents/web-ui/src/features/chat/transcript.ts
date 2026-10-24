@@ -95,6 +95,7 @@ export type Entry = {
   delegatedTaskId?: string;
   notificationId?: string;
   sourceTaskId?: string;
+  sourceActivation?: number;
   sourceName?: string;
   cause?: string;
   wakeupId?: string;
@@ -676,6 +677,9 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       ...previous,
     };
     entry.title = text(event, "title") || taskId;
+    if (typeof event.profile === "string") entry.taskProfile = event.profile;
+    if (typeof event.provider === "string") entry.taskProvider = event.provider;
+    if (typeof event.model === "string") entry.taskModel = event.model;
     if (typeof event.parent_session_id === "string")
       entry.parentTaskId = event.parent_session_id;
     if (typeof event.origin_history_id === "string" && event.origin_history_id)
@@ -735,6 +739,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         taskId: recipient,
         notificationId,
         sourceTaskId: source,
+        sourceActivation: typeof event.source_activation === "number" && Number.isSafeInteger(event.source_activation) && event.source_activation >= 0 ? event.source_activation : undefined,
         sourceName: text(event, "source_title") || (source ? source : "Main"),
         taskName:
           text(event, "recipient_title") || (recipient ? recipient : "Main"),

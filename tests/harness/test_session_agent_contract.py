@@ -17,6 +17,7 @@ from nagents.events import ToolResultEvent
 from nagents.harness import runtime
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.subagents import TaskInfo
+from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
@@ -445,6 +446,15 @@ def test_task_started_tracks_each_native_activation_and_keeps_origin_identity(
             assert initial.origin_history_id == initial.activation_history_id
             assert initial.origin_run_id == initial.activation_run_id
 
+            completion_notices = [
+                event
+                for event in events
+                if isinstance(event, TaskNotification)
+                and event.cause == "completion"
+                and event.source_session_id == "s1"
+            ]
+            assert [event.source_activation for event in completion_notices] == [0, 1]
+
             assert continuation.session_id == initial.session_id == "s1"
             assert continuation.activation == initial.activation + 1
             assert continuation.activation_call_id == "child-agent-followup"
@@ -473,6 +483,14 @@ def test_task_started_tracks_each_native_activation_and_keeps_origin_identity(
                 initial.origin_history_id,
                 initial.origin_run_id,
             )
+            host_completion = [
+                event
+                for event in host_events
+                if isinstance(event, TaskNotification)
+                and event.cause == "completion"
+                and event.source_session_id == "s1"
+            ]
+            assert [event.source_activation for event in host_completion] == [2]
             assert private_storage_id not in str(asdict(host_started))
         finally:
             await harness.close()

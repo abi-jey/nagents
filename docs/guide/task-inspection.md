@@ -110,6 +110,9 @@ host's exact committed invocation. These correlate a follow-up with its own chat
 line without replacing the original spawn anchor or borrowing an older result.
 Human, scheduled, and host-started activations have no model-call provenance.
 These display fields do not grant execution authority.
+Completion notifications also carry the host-owned `source_activation`, so a
+delayed delivery stays attached to the correct request in the same child session.
+It is lifecycle metadata and is not added to the compact model-facing envelope.
 
 The server also retains an immutable start and terminal record for each
 activation. Root snapshots and child details expose these as

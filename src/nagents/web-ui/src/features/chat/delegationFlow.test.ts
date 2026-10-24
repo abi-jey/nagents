@@ -311,7 +311,7 @@ test("initial completion context and delivery fold into two stable delegation ro
   entries = taskCompleted(entries);
   entries.push(savedContext("child"));
   entries = appendEvent(entries, {
-    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_session_id: "child",
+    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_session_id: "child", source_activation: 0,
     recipient_session_id: "", cause: "completion", text: "The focused checks passed.",
   });
   assert.equal(entries.length, 4);
@@ -324,7 +324,7 @@ test("initial completion context and delivery fold into two stable delegation ro
 
   entries = taskCompleted(entries);
   entries = appendEvent(entries, {
-    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_session_id: "child",
+    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_session_id: "child", source_activation: 0,
     recipient_session_id: "", cause: "completion", text: "The focused checks passed.",
   });
   const replayed = flow.project(entries, options([agent("child", "", "done")]));
@@ -453,7 +453,7 @@ test("a streaming resume retains every Relay article and owns only its exact act
     assert.match(resumeArticle.textContent || "", /Second activity/);
     assert.doesNotMatch(original[0].textContent || "", /Updated title|Second activity/);
     entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 1, title: "Updated title", result: "Second result" });
-    entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "resume-complete", source_session_id: "child",
+    entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "resume-complete", source_session_id: "child", source_activation: 1,
       recipient_session_id: "", cause: "completion", text: "Second result" });
     entries.push({ ...savedContext("child"), id: "resume-context" });
     await ui.render(entries, [{ ...renamed, phase: "done" }]);
@@ -549,4 +549,228 @@ test("early compact context remains visible for unknown or unaccepted targets, h
   for (const variant of variants) assert.ok(new DelegationFlow().project([...accepted, variant], options([agent("child")])).some(entry => entry.id === context.id));
   const unaccepted = appendEvent([], { event: "tool_call", run_id: runId, id: "resume", name: "to_agent", arguments: { session_id: "child", prompt: "Continue" } });
   assert.ok(new DelegationFlow().project([...unaccepted, context], options([agent("child")])).some(entry => entry.id === context.id));
+});
+
+
+test("same-run native resumes fold their exact early completion notifications without inserting Notices", async () => {
+  const ui = browserFixture();
+  let entries = taskCompleted(taskStarted(delegateResult(delegateCall([]))));
+  entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "first-notice", source_session_id: "child",
+    source_activation: 0, recipient_session_id: "", cause: "completion", text: "The focused checks passed." });
+  const addedNotices: Node[] = [], removedArticles: Node[] = [];
+  const observer = new window.MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node instanceof window.HTMLElement &&
+        (node.matches('[data-category="notices"]') || node.querySelector('[data-category="notices"]'))) addedNotices.push(node);
+      for (const node of record.removedNodes) if (node instanceof window.HTMLElement &&
+        (node.matches("article[data-record-key]") || node.querySelector("article[data-record-key]"))) removedArticles.push(node);
+    }
+  });
+  try {
+    await ui.render(entries, [agent("child")]);
+    const original = [...ui.container.querySelectorAll("article[data-record-key]")];
+    assert.equal(original.length, 2);
+    observer.observe(ui.container, { childList: true, subtree: true });
+    entries = appendEvent(entries, { event: "tool_call", run_id: runId, history_id: "same-run-resume", call_position: 0,
+      id: "resume", name: "to_agent", arguments: { session_id: "child", prompt: "Next check" } });
+    entries = delegateResult(entries, "child", "resume");
+    entries = appendEvent(entries, { event: "task_started", run_id: runId, session_id: "child", activation: 1, title: "Next check",
+      parent_session_id: "", activation_history_id: "same-run-resume", activation_run_id: runId, activation_call_id: "resume", activation_call_position: 0 });
+    const resumeId = entries.find(entry => entry.callId === "resume")!.id;
+    await ui.render(entries, [agent("child")]);
+    const resumed = ui.container.querySelector(`article[data-record-key="${resumeId}"]`);
+    assert.ok(resumed);
+    entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "early-resume-notice", source_session_id: "child",
+      source_activation: 1, recipient_session_id: "", cause: "completion", text: "LATEST_REUSE_OK" });
+    const pending = new DelegationFlow().project(entries, options([agent("child")]));
+    assert.equal(pending.some(entry => entry.kind === "notification"), false);
+    assert.equal(pending.filter(entry => entry.delegation?.kind === "result").length, 1, "notice does not grant terminal state");
+    assert.equal(pending.find(entry => entry.callId === "resume")?.delegation?.phase, "running");
+    assert.ok(pending.find(entry => entry.callId === "resume")?.delegation?.sources.some(source => source.notificationId === "early-resume-notice"));
+    await ui.render(entries, [agent("child")]);
+    assert.equal(ui.container.querySelector('[data-category="notices"]'), null);
+    entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 1, title: "Next check", result: "LATEST_REUSE_OK" });
+    await ui.render(entries, [agent("child", "", "done")]);
+    await Promise.resolve();
+    assert.equal(ui.container.querySelector(`article[data-record-key="${original[0]!.getAttribute("data-record-key")}"]`), original[0]);
+    assert.equal(ui.container.querySelector('article[data-record-key="delegation-result:child:0"]'), original[1]);
+    assert.equal(ui.container.querySelector(`article[data-record-key="${resumeId}"]`), resumed);
+    assert.equal(ui.container.querySelectorAll('[data-event="result"]').length, 2);
+    assert.equal(addedNotices.length, 0);
+    assert.equal(removedArticles.length, 0);
+  } finally { observer.disconnect(); await ui.close(); }
+});
+
+test("host continuations without a matching native activation keep their own completion notification", () => {
+  const flow = new DelegationFlow();
+  let entries = taskCompleted(taskStarted(delegateResult(delegateCall([]))));
+  // Identical text cannot let activation one's host notification claim the
+  // original native activation zero, even when its earlier notice is absent.
+  entries = appendEvent(entries, { event: "task_started", run_id: runId, session_id: "child", activation: 1, title: "Human continuation",
+    parent_session_id: "", trigger: "human" });
+  entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "host-notice", source_session_id: "child",
+    source_activation: 1, recipient_session_id: "", cause: "completion", text: "The focused checks passed." });
+  const pending = flow.project(entries, options([agent("child")]));
+  assert.deepEqual(pending.filter(entry => entry.kind === "notification").map(entry => entry.notificationId), ["host-notice"]);
+  entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 1, title: "Human continuation", result: "The focused checks passed." });
+  const complete = flow.project(entries, options([agent("child", "", "done")]));
+  assert.deepEqual(complete.filter(entry => entry.kind === "notification").map(entry => entry.notificationId), ["host-notice"]);
+  assert.equal(complete.filter(entry => entry.delegation?.kind === "result").length, 1);
+});
+
+
+test("polled completion ahead of lifecycle cannot freeze empty results across native same-run activations", async () => {
+  const ui = browserFixture();
+  let entries = taskStarted(delegateResult(delegateCall([])));
+  entries = appendEvent(entries, { event: "task_started", run_id: runId, session_id: "child", activation: 0, title: "gentle willow",
+    profile: "mini", provider: "provider-0", model: "model-0" });
+  const firstCallId = entries[0]!.id;
+  const poll = (activation: number, title: string, result: string) => taskAgent({
+    ...historyTask("child", title, "mini", result), activation, model: `model-${activation}`,
+  });
+  const removed: Node[] = [], notices: Node[] = [];
+  const observer = new window.MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.removedNodes) if (node instanceof window.HTMLElement &&
+        (node.matches("article[data-record-key]") || node.querySelector("article[data-record-key]"))) removed.push(node);
+      for (const node of record.addedNodes) if (node instanceof window.HTMLElement &&
+        (node.matches('[data-category="notices"]') || node.querySelector('[data-category="notices"]'))) notices.push(node);
+    }
+  });
+  const article = (key: string) => ui.container.querySelector(`article[data-record-key="${key}"]`);
+  try {
+    await ui.render(entries, [poll(0, "gentle willow", "SOURCE_ZERO_OK")], [activity("child", 1, { type: "text_done", text: "SOURCE_ZERO_OK" })]);
+    const firstStart = article(firstCallId);
+    assert.ok(firstStart);
+    assert.equal(ui.container.querySelectorAll('[data-event="result"]').length, 0);
+    assert.equal(firstStart.querySelector(".delegation-activity")?.getAttribute("data-phase"), "running");
+    observer.observe(ui.container, { childList: true, subtree: true });
+    entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "poll-zero-notice", source_session_id: "child",
+      source_activation: 0, recipient_session_id: "", cause: "completion", text: "SOURCE_ZERO_OK" });
+    await ui.render(entries, [poll(0, "gentle willow", "SOURCE_ZERO_OK")]);
+    assert.equal(article("delegation-result:child:0"), null);
+    // The next registry activation can even overtake the old terminal event.
+    await ui.render(entries, [poll(1, "Delivery check", "SOURCE_ONE_OK")]);
+    assert.equal(article("delegation-result:child:0"), null);
+    entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 0, title: "gentle willow",
+      profile: "mini", provider: "provider-0", model: "model-0", result: "SOURCE_ZERO_OK" });
+    await ui.render(entries, [poll(1, "Delivery check", "SOURCE_ONE_OK")]);
+    const firstResult = article("delegation-result:child:0");
+    assert.ok(firstResult);
+    assert.match(firstResult.textContent || "", /SOURCE_ZERO_OK/);
+    assert.match(firstResult.textContent || "", /model-0/);
+    assert.doesNotMatch(firstResult.textContent || "", /model-1|Delivery check/);
+    entries = appendEvent(entries, { event: "tool_call", run_id: runId, history_id: "polled-resume", call_position: 1, id: "poll-resume", name: "to_agent",
+      arguments: { session_id: "child", title: "Delivery check", prompt: "Continue without replacing the original result" } });
+    entries = delegateResult(entries, "child", "poll-resume");
+    entries = appendEvent(entries, { event: "task_started", run_id: runId, session_id: "child", activation: 1, title: "Delivery check", parent_session_id: "",
+      activation_history_id: "polled-resume", activation_run_id: runId, activation_call_id: "poll-resume", activation_call_position: 1,
+      profile: "mini", provider: "provider-1", model: "model-1" });
+    const secondCallId = entries.find(entry => entry.callId === "poll-resume")!.id;
+    await ui.render(entries, [poll(1, "Delivery check", "SOURCE_ONE_OK")], [activity("child", 2, { type: "text_done", text: "SOURCE_ONE_OK" }, 1)]);
+    const secondStart = article(secondCallId);
+    assert.ok(secondStart);
+    assert.equal(secondStart.querySelector(".delegation-activity")?.getAttribute("data-phase"), "running");
+    assert.equal(article("delegation-result:child:1"), null);
+    entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "poll-one-notice", source_session_id: "child",
+      source_activation: 1, recipient_session_id: "", cause: "completion", text: "SOURCE_ONE_OK" });
+    await ui.render(entries, [poll(1, "Delivery check", "SOURCE_ONE_OK")]);
+    assert.equal(article("delegation-result:child:1"), null);
+    entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 1, title: "Delivery check", profile: "mini", provider: "provider-1", model: "model-1", result: "SOURCE_ONE_OK" });
+    await ui.render(entries, [poll(1, "Delivery check", "SOURCE_ONE_OK")]);
+    const secondResult = article("delegation-result:child:1");
+    assert.ok(secondResult);
+    assert.match(secondResult.textContent || "", /SOURCE_ONE_OK/);
+    await ui.render(entries, [poll(2, "Unrelated later title", "UNRELATED_LATER_RESULT")]);
+    await Promise.resolve();
+    assert.equal(article(firstCallId), firstStart);
+    assert.equal(article("delegation-result:child:0"), firstResult);
+    assert.equal(article(secondCallId), secondStart);
+    assert.equal(article("delegation-result:child:1"), secondResult);
+    assert.match(firstResult.textContent || "", /SOURCE_ZERO_OK/);
+    assert.match(secondResult.textContent || "", /SOURCE_ONE_OK/);
+    assert.match(firstResult.textContent || "", /model-0/);
+    assert.match(secondResult.textContent || "", /model-1/);
+    assert.doesNotMatch(firstResult.textContent || "", /model-1|model-2/);
+    assert.doesNotMatch(secondResult.textContent || "", /model-2/);
+    assert.doesNotMatch(firstStart.textContent || "", /Delivery check|Unrelated later/);
+    assert.equal(removed.length, 0);
+    assert.equal(notices.length, 0);
+  } finally { observer.disconnect(); await ui.close(); }
+});
+
+test("terminal team phases wait for own lifecycle while a verified empty completion remains empty", () => {
+  for (const phase of ["done", "failed", "cancelled"] as const) {
+    const flow = new DelegationFlow();
+    let entries = taskStarted(delegateResult(delegateCall([])));
+    const optionsWithTerminalPoll = options([{ ...agent("child", "", phase), reason: "UNRELATED_POLLED_RESULT" }]);
+    const pending = flow.project(entries, optionsWithTerminalPoll);
+    assert.equal(pending.find(entry => entry.delegation?.kind === "start")?.delegation?.phase, "running");
+    assert.equal(pending.some(entry => entry.delegation?.kind === "result"), false);
+    entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 0, result: "" });
+    const completed = flow.project(entries, optionsWithTerminalPoll);
+    const result = completed.find(entry => entry.delegation?.kind === "result")!.delegation!;
+    assert.equal(result.phase, "done");
+    assert.equal(result.text, "");
+    assert.doesNotMatch(JSON.stringify(result), /UNRELATED_POLLED_RESULT/);
+  }
+});
+
+
+test("a running retained record with preliminary text is not a terminal activation", () => {
+  const flow = new DelegationFlow();
+  let entries = taskStarted(delegateResult(delegateCall([]))).map(entry => entry.kind === "task" ? {
+    ...entry, recorded: true, recordedStatus: "running", state: "Recorded result", result: "PRELIMINARY_RESULT",
+  } : entry);
+  const pending = flow.project(entries, options([agent("child", "", "done")]));
+  assert.equal(pending.find(entry => entry.delegation?.kind === "start")?.delegation?.phase, "running");
+  assert.equal(pending.some(entry => entry.delegation?.kind === "result"), false);
+  entries = entries.map(entry => entry.kind === "task" ? { ...entry, recordedStatus: "completed", result: "SOURCE_FINAL_OK" } : entry);
+  const completed = flow.project(entries, options([agent("child", "", "done")]));
+  assert.equal(completed.find(entry => entry.delegation?.kind === "result")?.delegation?.text, "SOURCE_FINAL_OK");
+});
+
+test("early completion anchors cannot place a result before its later-bound request", async () => {
+  const ui = browserFixture();
+  let entries = appendEvent([], { event: "text_done", run_id: runId, response_id: "before-call", text: "Earlier saved parent response" });
+  const earlierId = entries[0]!.id;
+  entries = appendEvent(entries, { event: "task_started", run_id: runId, session_id: "child", activation: 2, title: "Late-bound request", parent_session_id: "",
+    activation_history_id: "late-call-history", activation_run_id: runId, activation_call_id: "late-call", activation_call_position: 0 });
+  entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 2, title: "Late-bound request", result: "EARLY_TERMINAL_OK" });
+  entries = entries.map(entry => entry.kind === "task" ? { ...entry, completionAfterId: earlierId } : entry);
+  entries = appendEvent(entries, { event: "tool_call_progress", run_id: runId, generation_id: "late-generation", index: 0,
+    id: "late-call", name: "to_agent", status: "streaming", arguments_text: '{"session_id":' });
+  const callId = entries.at(-1)!.id;
+  const removed: Node[] = [];
+  const observer = new window.MutationObserver(records => {
+    for (const record of records) for (const node of record.removedNodes)
+      if (node instanceof window.HTMLElement && (node.matches("article[data-record-key]") || node.querySelector("article[data-record-key]"))) removed.push(node);
+  });
+  const row = (id: string) => ui.container.querySelector(`article[data-record-key="${id}"]`);
+  const order = () => [...ui.container.querySelectorAll("article[data-record-key]")].map(element => element.getAttribute("data-record-key"));
+  try {
+    await ui.render(entries, [agent("child", "", "done")]);
+    const request = row(callId);
+    assert.ok(request);
+    assert.equal(row("delegation-result:child:2"), null, "partial caller identity cannot claim an activation");
+    observer.observe(ui.container, { childList: true, subtree: true });
+    entries = appendEvent(entries, { event: "tool_call", run_id: runId, generation_id: "late-generation", index: 0, id: "late-call",
+      name: "to_agent", history_id: "late-call-history", call_position: 0, arguments: { session_id: "child", prompt: "Use the verified completion" } });
+    entries = delegateResult(entries, "child", "late-call");
+    const projected = new DelegationFlow().project(entries, options([agent("child", "", "done")]));
+    assert.ok(projected.findIndex(entry => entry.id === callId) < projected.findIndex(entry => entry.id === "delegation-result:child:2"));
+    await ui.render(entries, [agent("child", "", "done")]);
+    const result = row("delegation-result:child:2");
+    assert.ok(result);
+    assert.match(result.textContent || "", /EARLY_TERMINAL_OK/);
+    assert.equal(row(callId), request);
+    assert.ok(order().indexOf(callId) < order().indexOf("delegation-result:child:2"));
+    entries = appendEvent(entries, { event: "text_done", run_id: runId, response_id: "after-call", text: "The later parent answer" });
+    await ui.render(entries, [agent("child", "", "done")]);
+    await Promise.resolve();
+    assert.equal(row(callId), request);
+    assert.equal(row("delegation-result:child:2"), result);
+    assert.ok(order().indexOf(callId) < order().indexOf("delegation-result:child:2"));
+    assert.equal(removed.length, 0);
+  } finally { observer.disconnect(); await ui.close(); }
 });

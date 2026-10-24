@@ -1625,7 +1625,17 @@ class SubagentManager:
         """Deliver a self-wake at the recipient's next complete run boundary."""
         task_id, name = self.harness._agent_session_id, self.harness._agent_title or "Main"
         await self.root.harness.emit(
-            TaskNotification(uuid.uuid4().hex, task_id, task_id, name, name, "wakeup", prompt, self.root._session_id)
+            TaskNotification(
+                uuid.uuid4().hex,
+                task_id,
+                task_id,
+                name,
+                name,
+                "wakeup",
+                prompt,
+                self.root._session_id,
+                source_activation=self.harness._activation,
+            )
         )
         return format_wakeup(prompt)
 
@@ -1696,6 +1706,7 @@ class SubagentManager:
                         "completion",
                         event.error or event.result,
                         self.root._session_id,
+                        source_activation=event.activation,
                     )
                 )
         return batch.text
