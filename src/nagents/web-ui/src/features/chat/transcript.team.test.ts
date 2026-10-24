@@ -65,6 +65,10 @@ test("child drafts remain separate by root and recipient with stable unconfirmed
   assert.equal(drafts.prepare("root", "a", "First", () => "new-id").message_id, "id-one");
   drafts.confirmed("root", "a", first);
   assert.equal(drafts.get("root", "a"), ""); assert.equal(drafts.get("root", "b"), "Second"); assert.equal(drafts.get("other", "a"), "Other root");
+  const firstParent = profileTarget("research", "parent-one"), secondParent = profileTarget("research", "parent-two");
+  drafts.set("root", firstParent, "First parent draft"); drafts.set("root", secondParent, "Second parent draft");
+  assert.equal(drafts.get("root", firstParent), "First parent draft");
+  assert.equal(drafts.get("root", secondParent), "Second parent draft", "the same profile keeps a separate draft for each parent target");
 });
 
 test("late task acknowledgement cannot erase a draft edited back to the same text", () => {
@@ -118,11 +122,17 @@ test("child shared composer has one input and no root slash commands or attachme
   assert.doesNotMatch(markup, /role="listbox"|type="file"|Voice|Stop run/);
 });
 
-test("tree shows root and two delegation levels, retains deeper branches behind expansion", () => {
+test("tree defaults to two visible levels and defers deeper rows until expansion", () => {
   const agents = [root, taskAgent(task("a")), taskAgent(task("b", "a")), taskAgent(task("c", "b"))];
   const markup = renderToStaticMarkup(createElement(TeamTree, { agents, profiles: [], selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} }));
-  assert.match(markup, /data-agent-id="main"/); assert.match(markup, /data-agent-id="b"/);
-  assert.doesNotMatch(markup, /data-agent-id="c"/); assert.match(markup, /1 nested agent/);
+  const document = new JSDOM(markup).window.document;
+  assert.ok(document.querySelector('li.team-tree-branch[data-run-id="main"]'));
+  assert.ok(document.querySelector('li.team-tree-branch[data-run-id="a"]'));
+  assert.ok(document.querySelector('li.team-tree-branch[data-run-id="b"]'));
+  const deeper = document.querySelector<HTMLElement>('li.team-tree-branch[data-run-id="b"] > ol.team-tree-children');
+  assert.ok(deeper?.hidden, "the default two visible levels keep deeper child groups behind expansion");
+  assert.equal(deeper?.querySelector('[data-run-id="c"]'), null, "collapsed deeper branches are not materialized prematurely");
+  assert.equal(document.querySelectorAll(".team-definition-group[data-parent-id=\"a\"][data-profile=\"assistant\"]").length, 1);
   assert.doesNotMatch(markup, /Earlier work|row-live-detail|New<\/|origin-link/);
 });
 
@@ -152,9 +162,8 @@ test("timeline renders nested task branches with compact terminal rows and reada
   assert.match(markup, /Spawned by a/); assert.doesNotMatch(markup, /started 2 agents|View agents/);
 });
 
-test("used definitions remain in their own list and task names stay distinct from their definition", () => {
+test("used children group by their definition and unused definitions remain only in the start selector", () => {
   const research = taskAgent({ ...task("market-survey"), name: "Market survey", profile: "research" });
-  const unnamedDefinition = taskAgent({ ...task("legacy-child"), name: "Legacy conversation", profile: "" });
   const profiles: TeamProfile[] = [
     { id: "research", name: "Researcher", description: "Survey", provider: "openai", model: "model",
       source: "definitions/researcher.yaml", used: true, available: true },
@@ -162,42 +171,31 @@ test("used definitions remain in their own list and task names stay distinct fro
       used: false, available: true },
     { id: "assistant", name: "Assistant", description: "Main", provider: "openai", model: "model", used: true, available: true },
   ];
-  const markup = renderToStaticMarkup(createElement(TeamTree, { agents: [root, research, unnamedDefinition], profiles,
+  const markup = renderToStaticMarkup(createElement(TeamTree, { agents: [root, research], profiles,
     selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} }));
   const document = new JSDOM(markup).window.document;
-  const definitions = document.querySelector<HTMLElement>('[aria-label="Agent definitions"]');
-  assert.ok(definitions);
   assert.ok(document.querySelector(".team-tree-scroll"));
-  assert.ok(definitions.querySelector(".team-profile-list"), "definitions have their own scroll region");
-  assert.equal(definitions.querySelectorAll(".team-profile-row").length, 3,
-    "used definitions remain listed alongside unused definitions");
-  const usedDefinition = [...definitions.querySelectorAll<HTMLButtonElement>(".team-profile")]
-    .find(button => button.querySelector("strong")?.textContent === "Researcher");
-  assert.ok(usedDefinition);
-  assert.match(usedDefinition.textContent || "", /1 active/);
-  assert.doesNotMatch(usedDefinition.textContent || "", /Not started/);
-  assert.equal(usedDefinition.title, "Definition file: definitions/researcher.yaml");
-  const unusedDefinition = [...definitions.querySelectorAll<HTMLButtonElement>(".team-profile")]
-    .find(button => button.querySelector("strong")?.textContent === "Summarizer");
-  assert.match(unusedDefinition?.textContent || "", /Not started/);
+  const usedDefinition = document.querySelector<HTMLElement>('.team-definition-group[data-parent-id=""][data-profile="research"]');
+  assert.ok(usedDefinition, "the used definition groups its direct children under Main");
+  assert.equal(usedDefinition.querySelector(".team-definition-toggle strong")?.textContent, "Researcher");
+  assert.equal(document.querySelector('.team-definition-group[data-profile="summary"]'), null,
+    "unused definitions do not create empty groups");
+  const startSelector = document.querySelector<HTMLSelectElement>(".team-start-agent select");
+  assert.deepEqual([...startSelector!.options].map(option => option.value), ["research", "summary", "assistant"],
+    "unused definitions remain selectable from the start control");
 
   const taskRow = document.querySelector<HTMLElement>('[data-agent-id="market-survey"]');
   const taskIdentity = taskRow?.querySelector(".team-agent-identity");
-  assert.equal(taskIdentity?.querySelector("strong")?.textContent, "research", "the definition name is the primary identity");
-  assert.equal(taskIdentity?.firstElementChild?.classList.contains("team-agent-definition"), true);
-  assert.equal(taskIdentity?.lastElementChild?.className, "team-agent-instance");
-  assert.equal(taskIdentity?.lastElementChild?.textContent, "Market survey", "the generated conversation name remains visible secondarily");
+  assert.equal(taskIdentity?.querySelector("strong")?.textContent, "Market survey", "the run name is primary inside its definition group");
+  assert.equal(taskIdentity?.querySelector("strong")?.classList.contains("team-agent-run-name"), true);
+  assert.equal(taskIdentity?.querySelector("strong")?.getAttribute("title"), "Agent definition: research");
+  assert.equal(taskIdentity?.querySelector(".team-agent-instance"), null, "group rows avoid repeating the definition as an identity line");
   assert.match(taskRow?.querySelector(".team-agent-open")?.getAttribute("aria-label") || "", /Open Market survey conversation.*Definition research/);
   assert.match(taskRow?.querySelector(".team-agent-model")?.textContent || "", /my-openai · test-model/);
 
   const mainRow = document.querySelector<HTMLElement>('[data-agent-id="main"]');
   assert.equal(mainRow?.querySelector(".team-agent-heading strong")?.textContent, "Assistant");
   assert.equal(mainRow?.querySelector(".team-agent-instance"), null, "the main assistant keeps its existing identity layout");
-  const legacyRow = document.querySelector<HTMLElement>('[data-agent-id="legacy-child"]');
-  assert.equal(legacyRow?.querySelector(".team-agent-heading strong")?.textContent, "Legacy conversation",
-    "without a profile, the generated conversation name remains the primary fallback");
-  assert.equal(legacyRow?.querySelector(".team-agent-instance"), null);
-  assert.equal(legacyRow?.querySelector(".team-agent-definition"), null);
 
   const configuration = renderToStaticMarkup(createElement(AgentConfiguration, {
     agent: research, token: "", sessionId: "root", changed() {}, close() {}, configureDefinition() {},
@@ -229,7 +227,8 @@ test("starting a definition creates a separate child while preserving running ro
   const react = createRoot(dom.window.document.getElementById("root")!);
   let mounted = true;
   let team!: TeamController;
-  const existing = { ...task("active-research"), name: "Current research run", profile: "research" };
+  const existing = { ...task("active-research"), name: "Current research run", profile: "research",
+    can_start_children: true, child_agents: ["research"] };
   const definition: TeamProfile = { id: "research", name: "Researcher", description: "Survey", provider: "openai",
     model: "model", used: true, available: true, can_start: true };
   function View() {
@@ -257,11 +256,13 @@ test("starting a definition creates a separate child while preserving running ro
     await respondIndexes(tasks);
   };
   try {
+    const bucketCount = (parentId: string, bucket: "running" | "past") => document.querySelector(
+      `.team-run-bucket[data-parent-id="${parentId}"][data-profile="research"][data-bucket-heading="${bucket}"] span:last-child`)?.textContent;
     await act(async () => react.render(createElement(View)));
     await respondIndexes([existing]);
     const existingRow = document.querySelector<HTMLElement>('[data-agent-id="active-research"]');
     assert.ok(existingRow);
-    assert.match(document.querySelector(".team-profile")?.textContent || "", /1 active/);
+    assert.equal(bucketCount("", "running"), "1");
     const usageLine = document.querySelector<HTMLElement>('[aria-label="Subagent limits and usage"]');
     assert.equal(usageLine?.textContent?.trim(), "1/3 slots · 1/8 executions");
     assert.match(usageLine?.title || "", /Depth 0\/2\. 7 executions remain/);
@@ -270,11 +271,10 @@ test("starting a definition creates a separate child while preserving running ro
     await act(async () => team.select("active-research"));
     await act(async () => team.setPrompt("Keep this draft on the active run"));
 
-    const definitionButton = [...document.querySelectorAll<HTMLButtonElement>(".team-profile")]
-      .find(button => button.querySelector("strong")?.textContent === "Researcher");
-    assert.ok(definitionButton);
-    await act(async () => definitionButton.click());
-    assert.equal(team.selected, profileTarget("research"));
+    const startButton = document.querySelector<HTMLButtonElement>(".team-start-agent button");
+    assert.ok(startButton, "the selector starts a new child under the selected parent");
+    await act(async () => startButton.click());
+    assert.equal(team.selected, profileTarget("research", "active-research"));
     assert.equal(team.profile?.id, "research");
     await act(async () => team.setPrompt("Start another research conversation"));
     let submission!: Promise<void>;
@@ -282,11 +282,12 @@ test("starting a definition creates a separate child while preserving running ro
     const startIndex = requests.length - 1;
     assert.equal(requests[startIndex].path, "/api/sessions/root/tasks");
     assert.equal(requests[startIndex].init.method, "POST");
-    const submittedBody = JSON.parse(String(requests[startIndex].init.body)) as { message_id: string; text: string; agent: string };
+    const submittedBody = JSON.parse(String(requests[startIndex].init.body)) as { message_id: string; text: string; agent: string; parent_task_id?: string };
     assert.equal(submittedBody.text, "Start another research conversation");
     assert.equal(submittedBody.agent, "research", "the selected definition is sent as the new child recipient");
+    assert.equal(submittedBody.parent_task_id, "active-research", "the selected profile stays scoped to its chosen parent");
     assert.ok(submittedBody.message_id);
-    const newChild = { ...task("new-research"), name: "Follow-up study", profile: "research" };
+    const newChild = { ...task("new-research", "active-research"), name: "Follow-up study", profile: "research" };
     await act(async () => {
       requests[startIndex].respond(Response.json({ task: newChild,
         receipt: { message_id: "new-message", task_id: "new-research", status: "picked_up", revision: 1 } }));
@@ -297,9 +298,7 @@ test("starting a definition creates a separate child while preserving running ro
     assert.equal(document.querySelector('[data-agent-id="active-research"]'), existingRow,
       "starting another child preserves the existing run's DOM row");
     const newIdentity = document.querySelector('[data-agent-id="new-research"] .team-agent-identity');
-    assert.equal(newIdentity?.querySelector("strong")?.textContent, "research");
-    assert.equal(newIdentity?.lastElementChild?.className, "team-agent-instance");
-    assert.equal(newIdentity?.lastElementChild?.textContent, "Follow-up study");
+    assert.equal(newIdentity?.querySelector("strong")?.textContent, "Follow-up study");
     assert.equal(team.selected, "new-research");
     assert.equal(team.prompt, "", "the new child consumes only its own draft");
 
@@ -307,14 +306,14 @@ test("starting a definition creates a separate child while preserving running ro
     assert.equal(document.querySelector('[data-agent-id="new-research"]'), newChildRow,
       "the new child's row survives its completion update");
     assert.equal(document.querySelector('[data-agent-id="active-research"]'), existingRow);
-    assert.match(document.querySelector(".team-profile")?.textContent || "", /1 active/);
+    assert.equal(bucketCount("", "running"), "1");
+    assert.equal(bucketCount("active-research", "past"), "1");
 
     await refreshWith([existing]);
     assert.equal(document.querySelector('[data-agent-id="new-research"]'), null,
       "removing a conversation removes only its row");
     assert.equal(document.querySelector('[data-agent-id="active-research"]'), existingRow);
-    assert.match(document.querySelector(".team-profile")?.textContent || "", /1 active/,
-      "the definition remains in the persistent list after one conversation is removed");
+    assert.equal(bucketCount("", "running"), "1", "the remaining child stays under its parent-scoped definition group");
     await act(async () => team.select("active-research"));
     assert.equal(team.prompt, "Keep this draft on the active run");
   } finally {
@@ -354,7 +353,7 @@ test("team refreshes added and renamed definitions during a run without retarget
   const respond = async (index: number, profiles: TeamProfile[], tasks: RetainedTask[] = []) => act(async () => {
     requests[index].respond(Response.json({ tasks, profiles }));
   });
-  const shownProfiles = () => [...document.querySelectorAll(".team-profile strong")].map(row => row.textContent);
+  const shownProfiles = () => [...document.querySelectorAll<HTMLSelectElement>(".team-start-agent select option")].map(option => option.value);
   try {
     await act(async () => react.render(createElement(View, { revision: 0 })));
     await respond(0, []);
@@ -362,7 +361,8 @@ test("team refreshes added and renamed definitions during a run without retarget
     await act(async () => { t.mock.timers.tick(300); });
     await respond(1, [profile("mint")]);
     assert.deepEqual(shownProfiles(), ["mint"]);
-    assert.match(document.querySelector(".team-profile")?.textContent || "", /Not started/);
+    assert.equal(document.querySelector('.team-definition-group[data-profile="mint"]'), null,
+      "an unused profile is available to start but has no empty conversation group");
     await act(async () => team.select(profileTarget("mint")));
     await act(async () => team.setPrompt("Please inspect the workspace"));
 

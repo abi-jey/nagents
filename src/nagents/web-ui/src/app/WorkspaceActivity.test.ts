@@ -28,7 +28,8 @@ test("workspace polling and recipient switches retain exactly one main conversat
   const mainAgent: TeamAgent = { ...taskAgent({ ...child, id: "", name: "Assistant" }), phase: "ready" };
   const agents = [mainAgent, taskAgent(child)];
   const base: TeamController = { selected: "", select() {}, tasks: [child], profiles: [], subagentUsage: undefined, task: undefined, profile: undefined,
-    detail: undefined, loaded: true, activity: [], loading: false, error: "", startNotice: "", refresh() {}, dismissError() {},
+    detail: undefined, loaded: true, activity: [], loading: false, error: "", startNotice: "", startParent: undefined,
+    startParentId: "", startUnavailable: "", refresh() {}, dismissError() {},
     prompt: "", setPrompt() {}, canMessage: true, submitting: false, async submit() {}, async loadEarlier() {}, loadingEarlier: false };
   const detail = { task: child, history: [{ role: "assistant", content: "Child evidence", name: "", tool_call_id: "", tool_calls: [] }], activity_cursor: 0 };
   const composer = createElement("footer", { className: "composer-area" }, createElement(Composer, { inputRef: null,

@@ -61,6 +61,9 @@ export type RetainedTask = {
   completed_at?: number;
   activity_sequence?: number;
   can_message?: boolean;
+  can_start_children?: boolean;
+  child_agents?: string[];
+  child_start_unavailable_reason?: string;
   message_unavailable_reason?: string;
   unavailable_reason?: string;
   phase_detail?: string;

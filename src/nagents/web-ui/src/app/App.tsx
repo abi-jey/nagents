@@ -11,12 +11,13 @@ import { AgentNavigator } from "../features/settings/navigator/AgentNavigator.js
 import type { NavigatorAudio } from "../features/settings/navigator/AgentNavigator.js";
 import type { SettingsReply } from "../features/settings/types.js";
 import type { NavigatorRequest, NavigatorSection } from "../features/settings/navigator/state.js";
-import { isProfileTarget, profileTarget } from "../features/team/useTeam.js";
+import { isProfileTarget, profileSelection, profileTarget } from "../features/team/useTeam.js";
 import { TaskConversation } from "../features/team/TaskConversation.js";
 import { WorkspaceActivity } from "./WorkspaceActivity.js";
 import { useAppearance } from "../features/settings/appearance.js";
 import { useAppViewport } from "./useAppViewport.js";
 import "../features/team/team.css";
+import "../features/team/teamGroups.css";
 import "../features/chat/delegationActivity.css";
 import "../features/settings/navigator/agentNavigator.css";
 
@@ -62,7 +63,7 @@ export function App() {
   const configured = agents.find(agent => agent.id === configuredAgent);
   function configure(id: string) {
     const target = id || profileTarget(root.profile || client.sessionAgent.selection?.agent || "assistant");
-    if (isProfileTarget(target)) { setConfiguredAgent(""); openAgentSettings(target.slice("profile:".length)); }
+    if (isProfileTarget(target)) { setConfiguredAgent(""); openAgentSettings(profileSelection(target).profile); }
     else setConfiguredAgent(target);
   }
   useEffect(() => {

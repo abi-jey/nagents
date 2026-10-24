@@ -152,7 +152,7 @@ test("new TeamTree siblings do not evict previously revealed rows or nested chil
   const ui = fixture();
   const rootAgent = { ...agent("", "", "running"), name: "Assistant", startedAt: 0 };
   const oldParents = Array.from({ length: 8 }, (_, index) => ({
-    ...agent(`old-${index + 1}`, "", "running"), name: `Old ${index + 1}`, startedAt: 8 - index,
+    ...agent("old-" + (index + 1), "", "running"), name: "Old " + (index + 1), startedAt: 8 - index,
   }));
   const nested = { ...agent("nested-old-1", "old-1", "running"), name: "Nested old child", startedAt: 9 };
   let agents: TeamAgent[] = [rootAgent, ...oldParents, nested];
@@ -161,17 +161,20 @@ test("new TeamTree siblings do not evict previously revealed rows or nested chil
   }));
   try {
     await render();
-    const tree = ui.container.querySelector<HTMLOListElement>("ol.team-tree")!;
+    const tree = ui.container.querySelector<HTMLOListElement>("ol.team-grouped-tree")!;
+    const main = tree.querySelector<HTMLElement>(':scope > li.team-tree-branch[data-run-id="main"]')!;
+    const children = main.querySelector<HTMLOListElement>(":scope > ol.team-tree-children")!;
+    assert.equal(children.querySelectorAll(':scope > li.team-definition-group[data-profile="assistant"]').length, 1,
+      "direct children share one parent-scoped definition group");
     const oldNodes = oldParents.slice(0, 6).map(item => {
-      const node = tree.querySelector<HTMLElement>(`[data-agent-id="${item.id}"]`);
-      assert.ok(node, `${item.id} should be in the initial visible sibling window`);
+      const node = children.querySelector<HTMLElement>(':scope > li.team-tree-branch[data-run-id="' + item.id + '"]');
+      assert.ok(node, item.id + " should be in the initial visible sibling window");
       return [item.id, node] as const;
     });
     const nestedNode = tree.querySelector<HTMLElement>('[data-agent-id="nested-old-1"]');
     assert.ok(nestedNode, "a nested child of a revealed parent should be rendered");
-    assert.deepEqual([...tree.querySelectorAll(":scope > li.team-tree-branch")].length, 1);
-    assert.equal(tree.querySelectorAll(":scope > li.team-tree-branch > .team-tree-children > li.team-tree-branch").length, 6);
-    assert.match(tree.querySelector(":scope > li.team-tree-branch > .team-tree-children > .team-more button")?.textContent || "", /2/);
+    assert.equal(children.querySelectorAll(':scope > li.team-tree-branch[data-bucket="running"]').length, 6);
+    assert.match(children.querySelector(":scope > li.team-group-more button")?.textContent || "", /2/);
 
     const newParents = [
       { ...agent("new-1", "", "running"), name: "New 1", startedAt: 10 },
@@ -180,15 +183,71 @@ test("new TeamTree siblings do not evict previously revealed rows or nested chil
     agents = [rootAgent, ...newParents, ...oldParents, nested];
     await render();
 
-    for (const [id, node] of oldNodes) assert.equal(tree.querySelector(`[data-agent-id="${id}"]`), node,
-      `${id} should remain mounted when new siblings arrive ahead of it`);
+    for (const [id, node] of oldNodes) assert.equal(
+      children.querySelector(':scope > li.team-tree-branch[data-run-id="' + id + '"]'), node,
+      id + " should remain mounted when new siblings arrive ahead of it",
+    );
     assert.equal(tree.querySelector('[data-agent-id="nested-old-1"]'), nestedNode,
       "a previously shown nested child should not disappear when its parent branch shifts");
     assert.ok(tree.querySelector('[data-agent-id="new-1"]'));
     assert.ok(tree.querySelector('[data-agent-id="new-2"]'));
-    assert.equal(tree.querySelectorAll(":scope > li.team-tree-branch > .team-tree-children > li.team-tree-branch").length, 8);
-    assert.match(tree.querySelector(":scope > li.team-tree-branch > .team-tree-children > .team-more button")?.textContent || "", /2/,
+    assert.equal(children.querySelectorAll(':scope > li.team-tree-branch[data-bucket="running"]').length, 8);
+    assert.match(children.querySelector(":scope > li.team-group-more button")?.textContent || "", /2/,
       "the two older siblings that were never shown remain behind the lazy More button");
+  } finally { await ui.close(); }
+});
+
+test("TeamTree keeps run and nested subtree DOM stable as a child moves running → past → resumed", async () => {
+  const ui = fixture();
+  const rootAgent = { ...agent("", "", "running"), name: "Assistant", startedAt: 0 };
+  const worker = { ...agent("worker", "", "running"), name: "Worker", startedAt: 10 };
+  const nested = { ...agent("nested", "worker", "running"), name: "Nested child", startedAt: 11 };
+  let agents = [rootAgent, worker, nested];
+  const render = () => ui.renderElement(createElement(TeamTree, {
+    agents, profiles: [], selected: "nested", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
+  }));
+  try {
+    await render();
+    const tree = ui.container.querySelector<HTMLOListElement>("ol.team-grouped-tree")!;
+    const branch = () => tree.querySelector<HTMLElement>('li.team-tree-branch[data-run-id="worker"]');
+    const workerNode = branch()!;
+    const childList = workerNode.querySelector<HTMLOListElement>(":scope > ol.team-tree-children")!;
+    const nestedNode = childList.querySelector<HTMLElement>(':scope > li.team-tree-branch[data-run-id="nested"]')!;
+    assert.ok(nestedNode, "explicitly selected nested recipient materializes the revealed path");
+
+    const toggle = workerNode.querySelector<HTMLButtonElement>(".team-tree-toggle")!;
+    await act(async () => toggle.click());
+    assert.equal(childList.hidden, true, "manual collapse hides the subtree");
+    agents = [rootAgent, { ...worker, phase: "done" }, nested];
+    await render();
+    assert.equal(branch(), workerNode, "the direct child's keyed row survives the running-to-past bucket move");
+    assert.equal(workerNode.querySelector(":scope > ol.team-tree-children"), childList);
+    assert.equal(childList.hidden, true, "the manual collapse remains in force after completion");
+    assert.equal(childList.querySelector(':scope > li.team-tree-branch[data-run-id="nested"]'), nestedNode);
+    assert.equal(workerNode.dataset.bucket, "past");
+    assert.equal(workerNode.hasAttribute("hidden"), false, "the selected child's completed row stays visible in the Past bucket");
+    const pastToggle = tree.querySelector<HTMLButtonElement>('.team-run-bucket[data-parent-id=""][data-profile="assistant"][data-bucket-heading="past"] button')!;
+    assert.equal(pastToggle.getAttribute("aria-expanded"), "true", "focused child path opens its Past bucket");
+    await act(async () => pastToggle.click());
+    assert.equal(workerNode.hasAttribute("hidden"), true, "manual Past collapse hides the row despite selected focus");
+
+    const earlierPast = { ...agent("earlier-past", "", "done"), name: "Earlier past run", startedAt: 20 };
+    agents = [rootAgent, earlierPast, { ...worker, phase: "done" }, nested];
+    await render();
+    assert.equal(branch(), workerNode, "a new earlier past run does not evict the revealed row");
+    assert.equal(workerNode.hasAttribute("hidden"), true, "a stream update preserves the manual Past collapse");
+    assert.equal(tree.querySelector('[data-agent-id="nested"]'), nestedNode.querySelector(".team-agent-row"),
+      "the previously revealed nested conversation stays mounted");
+
+    agents = [rootAgent, earlierPast, worker, nested];
+    await render();
+    assert.equal(branch(), workerNode, "resuming moves the same keyed row back to Running");
+    assert.equal(workerNode.dataset.bucket, "running");
+    assert.equal(workerNode.querySelector(":scope > ol.team-tree-children"), childList);
+    assert.equal(childList.hidden, true, "resume does not overwrite the manual collapse choice");
+    await act(async () => toggle.click());
+    assert.equal(childList.hidden, false);
+    assert.equal(childList.querySelector(':scope > li.team-tree-branch[data-run-id="nested"]'), nestedNode);
   } finally { await ui.close(); }
 });
 
