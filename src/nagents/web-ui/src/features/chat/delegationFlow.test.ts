@@ -165,6 +165,7 @@ test("a cold retained-task update enriches the existing delegate-call article", 
     await ui.render(restored, [taskAgent(retained)]);
     assert.equal(ui.container.querySelector(`article[data-record-key="${coldCall.id}"]`), article);
     assert.equal(article.querySelector(".delegation-activity")?.getAttribute("data-phase"), "done");
+    assert.equal(article.querySelector(".delegation-tail")?.textContent, "The session reader passed.");
     assert.match(article.textContent || "", /gentle willow/);
     assert.match(article.closest(".conversation")?.textContent || "", /The session reader passed\./);
   } finally { await ui.close(); }

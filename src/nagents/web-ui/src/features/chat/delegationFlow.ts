@@ -105,11 +105,11 @@ export class DelegationFlow {
       if (taskId && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
         const source = notice || relatedContexts[0];
         const anchor = lifecycle?.completionAfterId || (source ? entries[Math.max(0, positions.get(source.id)! - 1)]?.id : entries.at(-1)?.id) || call.id;
-        this.finished.set(key, { anchor, phase, text: lifecycle?.error || lifecycle?.result || notice?.text || agent?.reason || "" });
+        this.finished.set(key, { anchor, phase, text: lifecycle?.error || lifecycle?.result || notice?.text || agent?.task?.error || agent?.task?.result || agent?.reason || "" });
       }
       const finished = this.finished.get(key);
       const presentation: DelegationPresentation = { kind: "start", taskId, name, profile, phase: finished?.phase || phase,
-        prompt, text: call.error || "", latest, lastTool: local.findLast(entry => entry.kind === "tool"), sources };
+        prompt, text: call.error || finished?.text || "", latest, lastTool: local.findLast(entry => entry.kind === "tool"), sources };
       rows.push({ entry: { ...call, kind: "status", delegation: presentation, taskId: undefined,
         activity: Math.max(call.activity || 0, lifecycle?.activity || 0), title: name || profile }, position: positions.get(call.id)! });
       if (taskId) covered.add(taskId);
