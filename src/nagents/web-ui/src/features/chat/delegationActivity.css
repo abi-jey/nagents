@@ -1,3 +1,4 @@
+@import "./relayActivityMark.css";
 .entry.delegation-entry { margin-block: 4px 7px; padding-block: 0; }
 .chat-activity-group[data-delegation-shell="true"] > summary { display: none; }
 .chat-activity-group[data-delegation-shell="true"] > .chat-activity-body { padding: 0; margin: 0; border: 0; }
@@ -6,19 +7,14 @@
 .delegation-line:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .delegation-line > strong { font-size: 11px; font-weight: 550; color: var(--text-reading); flex-shrink: 0; }
 .delegation-instance { max-width: 110px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
-.delegation-mark { display: grid; place-items: center; position: relative; width: 15px; height: 15px; flex: 0 0 15px; color: var(--accent-blue); }
-.delegation-activity[data-event="start"][data-phase="running"] .delegation-mark::after { content: ""; position: absolute; inset: -3px; border: 1px solid transparent; border-top-color: var(--accent-blue); border-radius: 50%; animation: delegation-spin 1.6s linear infinite; }
-.delegation-activity[data-phase="waiting"] .delegation-mark { color: var(--accent-amber); animation: delegation-wait 1.7s ease-in-out infinite; }
-.delegation-activity[data-event="result"] .delegation-mark { color: var(--accent-teal); }
-.delegation-activity[data-phase="failed"] .delegation-mark, .delegation-activity[data-phase="cancelled"] .delegation-mark { color: var(--accent-rose); }
 .delegation-preview { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; overflow: hidden; font-size: 10px; }
 .delegation-preview > code { flex-shrink: 0; font-size: 10px; }
-.delegation-tail { display: flex; justify-content: flex-end; min-width: 0; flex: 1; overflow: hidden; height: 18px; line-height: 18px; }
+.delegation-tail { display: block; min-width: 0; flex: 1; overflow: hidden; height: 18px; line-height: 18px; opacity:1; }
 .delegation-tail[data-overflow="true"] { mask-image: linear-gradient(to right, transparent, #000 12px); }
-.delegation-tail > span { display: block; white-space: pre; min-width: 100%; flex: 0 0 auto; }
-.delegation-preview[aria-busy="true"] .delegation-tail > span { animation: delegation-text 220ms ease-out; }
-.delegation-preview.is-tool .delegation-tail { justify-content: flex-start; mask-image: none; font-family: var(--font-mono, monospace); }
-.delegation-preview.is-tool .delegation-tail > span { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.delegation-tail-entrance { display:block; height:18px; opacity:1; }
+.delegation-tail-content { display:block; width:max-content; min-width:100%; white-space:pre; opacity:1; }
+.delegation-preview.is-tool .delegation-tail { mask-image:none; font-family:var(--font-mono,monospace); }
+.delegation-preview.is-tool .delegation-tail-content { width:100%; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .delegation-line > svg { flex: 0 0 11px; }
 .delegation-line[aria-expanded="true"] > svg { transform: rotate(90deg); }
 .delegation-details { margin: 3px 0 12px 22px; border: 1px solid var(--border-group); border-radius: 6px; padding: 12px 14px; }
@@ -33,8 +29,5 @@
 .delegation-evidence > summary > span { margin-left: 5px; }
 .delegation-evidence section { margin-top: 12px; }
 .delegation-evidence pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: 10px; }
-@keyframes delegation-spin { to { transform: rotate(360deg); } }
-@keyframes delegation-wait { 50% { opacity: .35; } }
-@keyframes delegation-text { from { opacity: .3; } to { opacity: 1; } }
 @media (max-width: 700px) { .delegation-line { gap: 6px; } .delegation-instance { display: none; } .delegation-details { margin-left: 0; padding-inline: 10px; } .delegation-details > header { flex-wrap: wrap; } }
-@media (prefers-reduced-motion: reduce) { .delegation-mark, .delegation-mark::after, .delegation-tail > span { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .delegation-tail-content { will-change:auto; } }

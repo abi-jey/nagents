@@ -1,0 +1,56 @@
+import { useLayoutEffect, useRef, useState } from "react";
+
+export function SlidingActivityText({ text, activity, tool = false }: { text: string; activity: string; tool?: boolean }) {
+  const viewport=useRef<HTMLSpanElement>(null),content=useRef<HTMLSpanElement>(null),entrance=useRef<HTMLSpanElement>(null);
+  const textNode=useRef<Text|undefined>(undefined);
+  const runtime=useRef({current:0,target:0,frame:0,previous:0,measured:false});
+  const previousActivity=useRef<string|undefined>(undefined);
+  const measure=useRef<()=>void>(()=>{});
+  const [overflow,setOverflow]=useState(false);
+  useLayoutEffect(()=>{
+    const element=content.current;if(!element)return;
+    if(!textNode.current){textNode.current=element.ownerDocument.createTextNode("");element.append(textNode.current);}
+    const value=text.replace(/\s+/g," ").trim();if(textNode.current.data!==value)textNode.current.data=value;measure.current();
+  },[text]);
+  useLayoutEffect(()=>{
+    const box=viewport.current,line=content.current,view=box?.ownerDocument.defaultView;
+    if(!box||!line||!view)return;
+    const state=runtime.current;state.measured=false;
+    const reduced=typeof view.matchMedia==="function"?view.matchMedia("(prefers-reduced-motion: reduce)"):undefined;
+    const request=(callback:FrameRequestCallback)=>typeof view.requestAnimationFrame==="function"?view.requestAnimationFrame(callback):requestAnimationFrame(callback);
+    const cancel=(handle:number)=>typeof view.cancelAnimationFrame==="function"?view.cancelAnimationFrame(handle):cancelAnimationFrame(handle);
+    const tick=()=>{
+      const now=view.performance.now(),delta=state.previous?Math.min(64,now-state.previous):16;state.previous=now;
+      state.current+=(state.target-state.current)*(1-Math.exp(-delta/55));
+      if(Math.abs(state.target-state.current)<.1)state.current=state.target;
+      line.style.transform=state.current===state.target?`translateX(${state.current}px)`:`translate3d(${state.current}px,0,0)`;
+      state.frame=state.current===state.target?0:request(tick);if(!state.frame)state.previous=0;
+      if(!state.frame)line.style.removeProperty("will-change");
+    };
+    const update=()=>{
+      const extra=Math.max(0,line.scrollWidth-box.clientWidth);setOverflow(extra>1);
+      state.target=tool?0:-extra;
+      if(reduced?.matches||!state.measured){if(state.frame)cancel(state.frame);state.frame=0;state.previous=0;state.current=state.target;line.style.transform=`translateX(${state.current}px)`;line.style.removeProperty("will-change");state.measured=true;}
+      else if(!state.frame&&state.current!==state.target){line.style.willChange="transform";state.frame=request(tick);}
+    };
+    const Observer=view.ResizeObserver;
+    const observer=typeof Observer==="function"?new Observer(update):undefined;
+    observer?.observe(box);observer?.observe(line);measure.current=update;reduced?.addEventListener("change",update);update();
+    return()=>{observer?.disconnect();reduced?.removeEventListener("change",update);if(state.frame)cancel(state.frame);state.frame=0;state.previous=0;line.style.removeProperty("will-change");measure.current=()=>{};};
+  },[tool]);
+  useLayoutEffect(()=>{
+    const changed=previousActivity.current!==undefined&&previousActivity.current!==activity;previousActivity.current=activity;
+    if(!changed){measure.current();return;}
+    const state=runtime.current;state.current=0;state.target=0;
+    if(content.current)content.current.style.transform="translateX(0px)";
+    const element=entrance.current,view=element?.ownerDocument.defaultView;
+    let animation:Animation|undefined;
+    const preference=view?.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if(element&&typeof element.animate==="function"&&!preference?.matches)
+      animation=element.animate([{transform:"translateY(6px)"},{transform:"translateY(0)"}],{duration:160,easing:"cubic-bezier(.2,.8,.2,1)"});
+    const reduce=()=>{if(preference?.matches)animation?.cancel();};
+    preference?.addEventListener("change",reduce);measure.current();
+    return()=>{animation?.cancel();preference?.removeEventListener("change",reduce);};
+  },[activity]);
+  return <span ref={viewport} className="delegation-tail" data-overflow={overflow} data-tool={tool} title={text}><span ref={entrance} className="delegation-tail-entrance"><span ref={content} className="delegation-tail-content" /></span></span>;
+}
