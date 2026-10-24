@@ -166,7 +166,7 @@ def test_task_inspection_cannot_emit_channel_tool_events(tmp_path: Path, kind: s
                 {
                     **call("child-call"),
                     "event": kind,
-                    "task_id": "child-a",
+                    "session_id": "s1",
                     "payload": {**call("nested-call"), "type": "tool_call"},
                     "text": "Directed child note",
                 },
@@ -189,8 +189,8 @@ def test_unattributed_background_turn_does_not_reuse_previous_message_receipt(tm
             await observer.observe(call("first"), live=True)
             observer.turn(RunTurn("second", "", "followup", (), message_id="queued-receipt"))
             await observer.observe(call("second"), live=True)
-            await observer.observe(call("child", task_id="child-a"), live=True)
-            observer.turn(RunTurn("background", "", "notification", ("child",)))
+            await observer.observe(call("child", session_id="s1"), live=True)
+            observer.turn(RunTurn("background", "", "notification", ("s1",)))
             await observer.observe(call("background"), live=True)
             assert {
                 event.call_id: event.message_id for event in f.channel.events if event.phase == "tool_requested"
@@ -388,9 +388,9 @@ def test_scoped_dedup_budgets_and_terminal_without_time_throttling(tmp_path: Pat
             await notices.start(live=True)
             records = [
                 call(),
-                call(extra={"task_id": "child-a", "activation": 0}),
-                call(task_id="child-b", activation=0),
-                call(task_id="child-a", activation=1),
+                call(extra={"session_id": "s1", "activation": 0}),
+                call(session_id="s2", activation=0),
+                call(session_id="s1", activation=1),
             ]
             for record in records:
                 await notices.observe(record, live=True)
@@ -410,11 +410,12 @@ def test_scoped_dedup_budgets_and_terminal_without_time_throttling(tmp_path: Pat
     "invalid",
     [
         {"id": ""},
-        {"task_id": []},
+        {"session_id": []},
+        {"session_id": []},
         {"activation": True},
         {"activation": -1},
         {"extra": None},
-        {"task_id": "a", "extra": {"task_id": "b"}},
+        {"session_id": "a", "extra": {"session_id": "b"}},
         {"name": "unsafe\nname"},
     ],
 )
@@ -540,7 +541,7 @@ def test_production_hooks_preserve_root_typing_and_do_not_broadcast_final(
         async with fixture(tmp_path) as f:
             f.run.background = background
 
-            async def events(prompt: str, *, task_id: str = "") -> AsyncIterator[HarnessEvent]:
+            async def events(prompt: str, *, session_id: str = "") -> AsyncIterator[HarnessEvent]:
                 yield ToolCallEvent(id="live", name="inspect", arguments={"limit": 2})
                 yield ToolResultEvent(id="live", name="inspect", result="private-result")
                 yield DoneEvent(final_text="private-final")

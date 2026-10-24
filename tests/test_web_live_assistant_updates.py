@@ -74,10 +74,10 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                 child_started.set()
                 await release_child.wait()
                 yield TextDoneEvent(text="PRIVATE CHILD DETAILS")
-            elif text.startswith("BACKGROUND TASK NOTIFICATION: scheduled self-wake"):
+            elif text.startswith("BACKGROUND AGENT WAKEUP:"):
                 yield TextDoneEvent(text="Second scheduled answer.")
                 wake_model.set()
-            elif text.startswith("BACKGROUND TASK NOTIFICATION:"):
+            elif text.startswith("BACKGROUND AGENT UPDATES:"):
                 yield TextDoneEvent(text="First work complete.")
             elif messages[-1].role == "tool":
                 yield TextDoneEvent(
@@ -97,7 +97,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                     yield TextDoneEvent(text="Second answer.")
             else:
                 assert text == "first request"
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "hold child"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "hold child"})
 
         async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
             sent.append((kind, content, identifier))
@@ -178,7 +178,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                         )
                     assert all("PRIVATE CHILD DETAILS" not in text for _, text, _ in sent)
                     assert any("PRIVATE CHILD DETAILS" in json.dumps(record) for record in child_activity)
-                    assert all(record.get("task_id") for record in child_activity)
+                    assert all(record.get("session_id") for record in child_activity)
                 finally:
                     release_child.set()
                     await bridge.close()
@@ -202,7 +202,7 @@ def test_real_scheduled_wakeup_uses_attached_voice_path(
             stream: bool = True,
             verify_model: bool = False,
         ) -> AsyncIterator[Event]:
-            if str(messages[-1].content).startswith("BACKGROUND TASK NOTIFICATION:"):
+            if str(messages[-1].content).startswith("BACKGROUND AGENT WAKEUP:"):
                 yield TextDoneEvent(text="The scheduled result arrived.")
             elif messages[-1].role == "tool":
                 yield TextDoneEvent(text="Scheduled the follow-up.")

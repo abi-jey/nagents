@@ -551,10 +551,10 @@ async def test_nested_harness_approval_stays_on_root_task_and_private_to_owner(
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         if provider.index == 0 and len(provider.requests) == 1:
             yield ReasoningChunkEvent(chunk="PRIVATE_ROOT_REASONING_MARKER")
-            yield ToolCallEvent(id="root-delegate", name="delegate", arguments={"prompt": "Create child"})
+            yield ToolCallEvent(id="root-delegate", name="to_agent", arguments={"prompt": "Create child"})
         elif provider.index == 1 and len(provider.requests) == 1:
             yield ReasoningChunkEvent(chunk="PRIVATE_CHILD_REASONING_MARKER")
-            yield ToolCallEvent(id="child-delegate", name="delegate", arguments={"prompt": "Create grandchild"})
+            yield ToolCallEvent(id="child-delegate", name="to_agent", arguments={"prompt": "Create grandchild"})
         elif provider.index == 2 and len(provider.requests) == 1:
             yield ReasoningChunkEvent(chunk=private_reasoning)
             yield ToolCallEvent(

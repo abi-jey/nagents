@@ -804,8 +804,11 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `POST trash/{session_id}/restore` | `{deletion_id: string}` restores that generation; returns `{restored_session_id: string, sessions: Session[]}` without selecting it |
 | `DELETE trash/{session_id}` | `{deletion_id: string}` permanently purges that generation; returns `{purged_session_id: string}` |
 | `POST messages` | `{session_id, prompt, message_id}` durably queues input; updates arrive through subscriptions |
-| `GET sessions/{session_id}/tasks` | Task tree, available definitions, shared usage and each retained parent's current child-start capabilities |
-| `POST sessions/{session_id}/tasks` | `{message_id, agent, text, parent_task_id?}` starts a real child under Main or a running local parent; returns `{task, receipt}` |
+| `GET sessions/{root_session_id}/tasks` | Task tree, available definitions, shared usage and each retained parent's current child-start capabilities |
+| `GET sessions/{root_session_id}/tasks/{session_id}` | Child metadata, bounded history, current activity, receipts and context |
+| `POST sessions/{root_session_id}/tasks` | `{message_id, agent, text, parent_session_id?, title?}` starts a child under Main or a running local parent; returns `{task, receipt}` |
+| `POST sessions/{root_session_id}/tasks/{session_id}/messages` | `{message_id, text}` queues a message for that child; returns its receipt |
+| `PUT sessions/{root_session_id}/tasks/{session_id}/settings` | Saves provider/model/compaction choices for the next activation |
 | `WS events` | Authenticated session subscriptions, snapshots, replay cursors, and live execution records |
 | `GET channels` | Installed plugin descriptors, redacted saved connections, bindings, and configuration revision |
 | `POST channels/refresh` | Refresh installed connector discovery after package installation |

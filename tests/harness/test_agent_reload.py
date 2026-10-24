@@ -60,7 +60,7 @@ def definition(name: str, *, native: bool = True, instructions: str = "Follow th
 
 
 def catalog(harness: Harness) -> list[str]:
-    tool = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "delegate")
+    tool = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "to_agent")
     result = tool.parameters["properties"]["agent"]["enum"]
     assert isinstance(result, list)
     return result
@@ -113,7 +113,7 @@ async def test_create_rename_and_delegate_without_restart_with_trusted_directory
         if notifications(messages):
             yield TextDoneEvent(text="Mini completed the task.")
             return
-        seen.append(list(harness.resources.pinned["delegate"].parameters["properties"]["agent"]["enum"]))
+        seen.append(list(harness.resources.pinned["to_agent"].parameters["properties"]["agent"]["enum"]))
         turn = len(provider.requests)
         if turn == 1:
             yield ToolCallEvent(
@@ -134,7 +134,7 @@ async def test_create_rename_and_delegate_without_restart_with_trusted_directory
             )
         elif turn == 4:
             yield ToolCallEvent(
-                id="start-mini", name="delegate", arguments={"agent": "mini", "prompt": "Read evidence.txt and report."}
+                id="start-mini", name="to_agent", arguments={"agent": "mini", "prompt": "Read evidence.txt and report."}
             )
         else:
             yield TextDoneEvent(text="Waiting for Mini.")
@@ -155,7 +155,12 @@ async def test_create_rename_and_delegate_without_restart_with_trusted_directory
     harness.approval_handler = approve
     try:
         events = await collect(harness, "Create mint, rename it min then mini, and ask mini to verify evidence.")
-        assert seen[:4] == [["assistant"], ["assistant", "mint"], ["assistant", "min"], ["assistant", "mini"]]
+        assert seen[:4] == [
+            ["", "assistant"],
+            ["", "assistant", "mint"],
+            ["", "assistant", "min"],
+            ["", "assistant", "mini"],
+        ]
         assert any(isinstance(event, TaskCompleted) and "Mini verified" in event.result for event in events)
         assert not [event.error for event in events if isinstance(event, ToolResultEvent) and event.error]
         assert not config.trust_project
@@ -180,19 +185,19 @@ async def test_catalog_refresh_does_not_mutate_advertised_schema_or_selected_pro
         await harness.initialize()
         context = RunContext(harness.agent, harness.session_id, "harness")
         await harness.resources.before_generation(context)
-        advertised = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "delegate")
+        advertised = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "to_agent")
         previous_revision = harness.profile_revision
         path.unlink()
         (root / "mini.md").write_text(definition("mini"))
         assert harness.refresh_agent_definitions()
         assert harness.profile_revision != previous_revision
         assert config.profile_names == ("assistant", "mini")
-        assert advertised.parameters["properties"]["agent"]["enum"] == ["assistant", "mint"]
-        assert catalog(harness) == ["assistant", "mint"]
+        assert advertised.parameters["properties"]["agent"]["enum"] == ["", "assistant", "mint"]
+        assert catalog(harness) == ["", "assistant", "mint"]
         assert harness.current_profile().prompt == "Original accepted instructions."
         assert harness.mode == "build"
         await harness.resources.before_generation(context)
-        assert catalog(harness) == ["assistant", "mini"]
+        assert catalog(harness) == ["", "assistant", "mini"]
         assert harness.current_profile().prompt == "Original accepted instructions."
     finally:
         await harness.close()
@@ -396,7 +401,7 @@ async def test_issued_delegation_retains_profile_then_child_adopts_next_generati
             )
             yield ToolCallEvent(
                 id="accepted-delegate",
-                name="delegate",
+                name="to_agent",
                 arguments={"agent": "mini", "model": "selected-child-model", "prompt": "Read evidence and report."},
             )
         else:
@@ -460,8 +465,10 @@ async def test_clones_and_explicit_children_preserve_unavailable_default_identit
     config.data_dir = tmp_path / "state"
     parent = Harness(config)
     clone = Harness(parent.clone_configuration())
-    info = TaskInfo("explicit-child", "Explicit child", profile="assistant", child_session_id="child-session")
-    parent.tasks._options[info.id] = TaskOptions(provider="home", model="child-model")
+    info = TaskInfo(
+        "s1", "Explicit child", profile="assistant", root_session_id=parent.session_id, _storage_id="child-session"
+    )
+    parent.tasks._options[info.session_id] = TaskOptions(provider="home", model="child-model")
     child = parent.tasks._create_child("assistant", info)
     try:
         for runtime_owner in (parent, clone, child):
@@ -485,11 +492,11 @@ async def test_child_refreshes_definitions_and_inherits_permission_ceiling(tmp_p
     config = load_config(tmp_path, trust_project=True)
     config.demo = True
     config.data_dir = tmp_path / "state"
-    config.profiles["lead"] = AgentProfile(tools=("read_file", "delegate"))
+    config.profiles["lead"] = AgentProfile(tools=("read_file", "to_agent"))
     config.agent = "lead"
     harness = Harness(config)
     info = TaskInfo(
-        "child", "assistant", profile="assistant", child_session_id="child-session", session_id=harness.session_id
+        "s1", "assistant", profile="assistant", root_session_id=harness.session_id, _storage_id="child-session"
     )
     child = harness.tasks._create_child("assistant", info)
     try:
@@ -497,7 +504,7 @@ async def test_child_refreshes_definitions_and_inherits_permission_ceiling(tmp_p
         (root / "mini.md").write_text(definition("mini"))
         await child.resources.before_generation(RunContext(child.agent, child.session_id, "harness"))
         assert "mini" in catalog(child)
-        assert {tool.name for tool in child.agent.tool_registry.get_all()} == {"read_file", "delegate"}
+        assert {tool.name for tool in child.agent.tool_registry.get_all()} == {"read_file", "to_agent"}
         assert not child.tool_enabled("shell")
         harness.config.profiles["lead"] = replace(config.profile("lead"), allowed_agents=())
         assert not child.can_delegate
@@ -532,7 +539,7 @@ async def test_named_model_pairs_use_agent_workspace_global_order_not_parent_ove
         profiles={"lead": AgentProfile(model="parent-special", provider="agents"), "mini": AgentProfile()},
     )
     harness = Harness(config)
-    info = TaskInfo("child", "mini", profile="mini", child_session_id="child-session", session_id=harness.session_id)
+    info = TaskInfo("s1", "mini", profile="mini", root_session_id=harness.session_id, _storage_id="child-session")
     child = harness.tasks._create_child("mini", info)
     try:
         assert (harness.config.provider, harness.agent.provider.model) == ("agents", "parent-special")

@@ -31,9 +31,9 @@ class InspectorApp(App[None]):
         self.result: tuple[str, str] | None = None
 
     def on_mount(self) -> None:
-        async def history(task_id: str) -> list[Message]:
+        async def history(session_id: str) -> list[Message]:
             return [
-                Message(role="user", content=f"Question for {task_id}"),
+                Message(role="user", content=f"Question for {session_id}"),
                 Message(role="assistant", content="Saved child response"),
             ]
 
@@ -45,7 +45,7 @@ class InspectorApp(App[None]):
 
 def test_inspector_arrows_show_history_and_send_explicit_followup() -> None:
     async def scenario() -> None:
-        tasks = [TaskInfo("one", "calm finch", status="completed"), TaskInfo("two", "bright maple", status="completed")]
+        tasks = [TaskInfo("s1", "", status="completed"), TaskInfo("s2", "", status="completed")]
         app = InspectorApp(lambda: tasks)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
@@ -53,21 +53,21 @@ def test_inspector_arrows_show_history_and_send_explicit_followup() -> None:
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, TaskScreen)
-            assert screen.selected_id == "two"
-            assert "Question for two" in str(screen.query_one("#task-history", Static).render())
+            assert screen.selected_session_id == "s2"
+            assert "Question for s2" in str(screen.query_one("#task-history", Static).render())
             await pilot.press("enter")
             assert screen.query_one("#task-followup", TextArea).has_focus
             await pilot.press("m", "o", "r", "e")
             assert app.result is None
             await pilot.click("#task-send")
-            assert app.result == ("two", "more")
+            assert app.result == ("s2", "more")
 
     asyncio.run(scenario())
 
 
 def test_inspector_running_task_preserves_draft_until_completed() -> None:
     async def scenario() -> None:
-        tasks = [TaskInfo("one", "calm finch")]
+        tasks = [TaskInfo("s1", "")]
         app = InspectorApp(lambda: tasks)
         async with app.run_test(size=(60, 20)) as pilot:
             await pilot.pause()
@@ -90,7 +90,7 @@ def test_inspector_running_task_preserves_draft_until_completed() -> None:
 
 def test_inspector_drafts_are_per_agent() -> None:
     async def scenario() -> None:
-        tasks = [TaskInfo("one", "calm finch", status="completed"), TaskInfo("two", "bright maple", status="completed")]
+        tasks = [TaskInfo("s1", "", status="completed"), TaskInfo("s2", "", status="completed")]
         app = InspectorApp(lambda: tasks)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
@@ -121,7 +121,7 @@ class TreeApp(App[None]):
 
     @on(AgentTree.Opened)
     def open_agent(self, event: AgentTree.Opened) -> None:
-        self.opened = event.task_id
+        self.opened = event.session_id
 
 
 def test_tree_has_ancestry_keyboard_open_and_preserves_collapse_and_selection() -> None:
@@ -129,25 +129,25 @@ def test_tree_has_ancestry_keyboard_open_and_preserves_collapse_and_selection() 
         app = TreeApp()
         async with app.run_test(size=(40, 12)) as pilot:
             tree = app.query_one(AgentTree)
-            tasks = [TaskInfo("one", "calm finch"), TaskInfo("two", "bright maple"), TaskInfo("three", "clear otter")]
-            parents = {"two": "one"}
+            tasks = [TaskInfo("s1", ""), TaskInfo("s2", ""), TaskInfo("s3", "")]
+            parents = {"s2": "s1"}
             tree.update_tasks(tasks, parents)
             await pilot.pause()
-            assert tree.task_nodes["two"].parent is tree.task_nodes["one"]
-            tree.move_cursor(tree.task_nodes["two"])
+            assert tree.task_nodes["s2"].parent is tree.task_nodes["s1"]
+            tree.move_cursor(tree.task_nodes["s2"])
             tree.focus()
             await pilot.press("enter")
-            assert app.opened == "two"
-            await pilot.click(AgentTree, offset=(8, tree.task_nodes["three"].line))
-            assert app.opened == "three"
-            tree.task_nodes["one"].collapse()
+            assert app.opened == "s2"
+            await pilot.click(AgentTree, offset=(8, tree.task_nodes["s3"].line))
+            assert app.opened == "s3"
+            tree.task_nodes["s1"].collapse()
             await pilot.pause()
-            tree.move_cursor(tree.task_nodes["three"])
+            tree.move_cursor(tree.task_nodes["s3"])
             tasks[0].status = "completed"
             tree.update_tasks(tasks, parents)
             await pilot.pause()
-            assert not tree.task_nodes["one"].is_expanded
-            assert tree.cursor_node is not None and tree.cursor_node.data == "three"
+            assert not tree.task_nodes["s1"].is_expanded
+            assert tree.cursor_node is not None and tree.cursor_node.data == "s3"
 
     asyncio.run(scenario())
 
@@ -157,7 +157,7 @@ def test_large_tree_scrolls_without_losing_completed_agents() -> None:
         app = TreeApp()
         async with app.run_test(size=(40, 10)) as pilot:
             tree = app.query_one(AgentTree)
-            tasks = [TaskInfo(str(index), f"agent {index}", status="completed") for index in range(30)]
+            tasks = [TaskInfo(f"s{index + 1:x}", "", status="completed") for index in range(30)]
             tree.update_tasks(tasks, {})
             await pilot.pause()
             assert len(tree.task_nodes) == 30
@@ -165,9 +165,9 @@ def test_large_tree_scrolls_without_losing_completed_agents() -> None:
             await pilot.press("end")
             # End animates scrolling; CPU idle does not guarantee completion.
             await pilot.wait_for_scheduled_animations()
-            assert tree.cursor_node is not None and tree.cursor_node.data == "29"
+            assert tree.cursor_node is not None and tree.cursor_node.data == "s1e"
             assert tree.scroll_y > 0
             await pilot.press("enter")
-            assert app.opened == "29"
+            assert app.opened == "s1e"
 
     asyncio.run(scenario())

@@ -17,7 +17,7 @@ export function executionTarget(entry: Entry): string {
   const family = toolPresentation(entry.title || "").family;
   const keys = family === "schedule" ? ["reason"] : family === "skill" ? ["name"]
     : family === "search" || entry.title === "find" ? ["query", "pattern", "path"]
-    : ["command", "cmd", "file_path", "path", "url", "pattern", "query", "task_id"];
+    : ["command", "cmd", "file_path", "path", "url", "pattern", "query", "session_id"];
   for (const key of keys) {
     if (typeof inputs[key] !== "string") continue;
     // Summaries are plain, single-line text; preserve the original in Inputs.
@@ -45,7 +45,7 @@ export function executionStatus(entry: Entry): { label: string; tone: string } {
   if (["Preparing", "Starting", "Requested", "Running", "Receiving output", "Awaiting execution result"].includes(state))
     return { label: state === "Receiving output" ? "Running" : state === "Awaiting execution result" ? "Awaiting result" : state, tone: "active" };
   if (state === "Completed") return {
-    label: ["delegate", "schedule_wakeup", "wake_up_in"].includes(entry.title || "") ? "Request completed" : "Completed",
+    label: ["to_agent", "schedule_wakeup", "wake_up_in"].includes(entry.title || "") ? "Request completed" : "Completed",
     tone: "complete",
   };
   const pending = ["Waiting for approval", "Approval denied", "Awaiting execution result", "No result recorded", "Disconnected", "Cancelled"].includes(state);

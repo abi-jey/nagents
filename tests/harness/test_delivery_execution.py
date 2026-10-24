@@ -250,7 +250,7 @@ def test_host_run_survives_parent_synthesis_turn(tmp_path: Path, monkeypatch: py
             if provider.index:
                 yield TextDoneEvent(text="child complete")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate", name="delegate", arguments={"prompt": "inspect"})
+                yield ToolCallEvent(id="to_agent", name="to_agent", arguments={"prompt": "inspect"})
                 yield ToolCallEvent(
                     id="same", name="channel_send", arguments={"channel": "web", "destination": harness.session_id}
                 )

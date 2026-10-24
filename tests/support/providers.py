@@ -107,5 +107,5 @@ def notifications(messages: list[Message]) -> list[Message]:
     return [
         message
         for message in messages
-        if message.role == "user" and str(message.content).startswith("BACKGROUND TASK NOTIFICATION:")
+        if message.role == "user" and str(message.content).startswith("BACKGROUND AGENT UPDATES:")
     ]

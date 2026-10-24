@@ -257,9 +257,7 @@ def test_referenced_empty_roots_are_preserved(tmp_path: Path, reference: str) ->
             protected = await draft(state)
             unused = await draft(state)
             if reference == "task":
-                state.harness.tasks._infos["retained"] = TaskInfo(
-                    "retained", "child", session_id=protected, status="completed"
-                )
+                state.harness.tasks._infos["s1"] = TaskInfo("s1", "", root_session_id=protected, status="completed")
             elif reference == "wakeup":
                 state.wakeups.schedule(protected, "run", Chain(), "", 86400, "later")
             elif reference == "subscriber":
@@ -320,7 +318,7 @@ def test_task_receipt_body_preserves_empty_root_until_pruned(
                 text = "" if receipt_state == "pruned" else "retained receipt text"
                 await store.db._transaction(
                     lambda db: db.execute(
-                        "UPDATE ngn_web_task_inputs SET status = 'error', text = ? WHERE message_id = ?",
+                        "UPDATE ngn_web_agent_inputs SET status = 'error', text = ? WHERE message_id = ?",
                         (text, message_id),
                     )
                 )
@@ -332,7 +330,7 @@ def test_task_receipt_body_preserves_empty_root_until_pruned(
             assert unused not in current
             receipt = await store.db._transaction(
                 lambda db: db.execute(
-                    "SELECT status, text FROM ngn_web_task_inputs WHERE message_id = ?", (message_id,)
+                    "SELECT status, text FROM ngn_web_agent_inputs WHERE message_id = ?", (message_id,)
                 ).fetchone()
             )
             expected_status = "queued" if receipt_state == "queued" else "error"
@@ -403,8 +401,10 @@ def test_background_child_protects_its_root_but_does_not_prevent_other_draft_reu
                 await asyncio.Event().wait()
 
             worker = asyncio.create_task(pending_child())
-            state.harness.tasks._infos["child"] = TaskInfo("child", "child", session_id=parent, status="running")
-            state.harness.tasks._workers["child"] = worker
+            state.harness.tasks._infos["s1"] = TaskInfo(
+                "s1", "", root_session_id=parent, status="running", _storage_id="ngn-child"
+            )
+            state.harness.tasks._workers["s1"] = worker
             try:
                 first = await client.post("/api/sessions/new", headers=headers, json={})
                 assert first.status_code == 200

@@ -208,7 +208,7 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
         if harness._is_subagent:
             phase = "approval"
             await harness.approve(
-                "delegate",
+                "to_agent",
                 {"agent": harness.config.agent, "url": profile.url, "prompt": prompt},
                 f"Send this task to remote agent {harness.config.agent} at {profile.url}",
             )

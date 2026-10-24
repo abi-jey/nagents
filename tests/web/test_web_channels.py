@@ -257,7 +257,7 @@ def test_bus_is_bounded_and_slow_consumer_does_not_block() -> None:
     slow = Subscriber(session_id="ngn-root", ready=True)
     bus.subscribers.add(slow)
     for index in range(2000):
-        bus.event({"session_id": "ngn-root", "event": "text_chunk", "chunk": "x" * 4096, "n": index})
+        bus.event({"root_session_id": "ngn-root", "event": "text_chunk", "chunk": "x" * 4096, "n": index})
     assert slow.lagged and not bus.listening("ngn-root")
     assert slow.queue.qsize() == 1 and bus.bytes <= 2 * 1024 * 1024 and len(bus.ring) <= 1024
     assert bus.discarded > 0 and bus.cursor == 2000
@@ -266,7 +266,7 @@ def test_bus_is_bounded_and_slow_consumer_does_not_block() -> None:
 def test_reconnect_checkpoint_keeps_task_activation_and_call_scopes_distinct() -> None:
     run = Run("ngn-root")
     run.remember({"event": "text_chunk", "chunk": "root"})
-    child = {"task_id": "child", "activation": 2}
+    child = {"session_id": "s2", "activation": 2}
     run.remember({"event": "text_chunk", "extra": child, "chunk": "child draft"})
     run.remember({"event": "tool_call", "id": "same-call", "name": "shell"})
     run.remember({"event": "tool_output", "call_id": "same-call", "text": "root output"})
@@ -545,12 +545,12 @@ def test_real_ws_slow_subscriber_closes_without_blocking_publisher(
         async def burst() -> None:
             subscriber = next(item for item in app.state.bus.subscribers if item.session_id == app.main and item.ready)
             if buffered:
-                app.state.bus.event({"session_id": app.main, "event": "notice", "text": "already buffered"})
+                app.state.bus.event({"root_session_id": app.main, "event": "notice", "text": "already buffered"})
                 await asyncio.wait_for(sent.wait(), HANG_GUARD)
             # No yield in this burst: publishing must finish and revoke the slow
             # subscriber even while the socket client is not consuming frames.
             for _ in range(100):
-                app.state.bus.event({"session_id": app.main, "event": "notice", "text": "burst"})
+                app.state.bus.event({"root_session_id": app.main, "event": "notice", "text": "burst"})
             assert subscriber.lagged and subscriber.close_code == 1013
             assert not app.state.bus.listening(app.main)
 

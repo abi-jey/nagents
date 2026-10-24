@@ -30,7 +30,7 @@ test("main and child rows keep one context line and place the compaction tick ag
   assert.equal(root.querySelector(".team-agent-threshold")?.getAttribute("style"), "left:42%");
   assert.equal(root.querySelector(".team-agent-open")?.getAttribute("aria-description"), "Compaction at 420,000 tokens (42% of context window)");
   assert.doesNotMatch(root.body.textContent || "", /Compact at|Compaction at|~249k|100k|exceeds/);
-  const child = taskAgent({ id: "child", name: "Research", status: "running", context: { ...context, context_window: 200000,
+  const child = taskAgent({ session_id: "child", title: "Research", status: "running", context: { ...context, context_window: 200000,
     observed_prompt_tokens: 110000, observed_context_tokens: 111200, context_tokens: 111200, remaining_tokens: 88800,
     compaction: { trigger: "tokens", token_threshold: 105000, token_budget: 150000 } },
     compact_tokens: 900000, compaction: { trigger: "tokens", token_threshold: 630000, token_budget: 900000 },

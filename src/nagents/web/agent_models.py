@@ -181,7 +181,7 @@ def register(app: FastAPI, state: Callable[[], WebState]) -> None:
                     {
                         "event": "agent_profiles_changed",
                         "schema_version": 1,
-                        "session_id": session_id,
+                        "root_session_id": session_id,
                         "profile_revision": harness.profile_revision,
                         "agent": name,
                         "model_revision": saved.revision,

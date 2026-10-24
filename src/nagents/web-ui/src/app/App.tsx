@@ -54,7 +54,7 @@ export function App() {
   const root = conversationAgent(client.sessionAgent.selection, client.context.stats, !!client.chat.runId, !!client.chat.approval.pending);
   const agents = [root, ...client.team.tasks.map(task => {
     const agent = taskAgent(task);
-    return client.chat.approval.pending?.task_id === task.id ? { ...agent, phase: "waiting" as const, reason: "Waiting for approval" } : agent;
+    return client.chat.approval.pending?.session_id === task.session_id ? { ...agent, phase: "waiting" as const, reason: "Waiting for approval" } : agent;
   })].map(agent => {
     const profile = client.team.profiles.find(profile => profile.id === agent.profile);
     return { ...agent, authentication: profile?.authentication, trustRemoteTools: profile?.trust_remote_tools };

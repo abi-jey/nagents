@@ -14,14 +14,14 @@ import { profileTarget, useTeam, type TeamController } from "../team/useTeam.js"
 import { TaskDrafts, agentAncestors, mergeTaskActivity, orderedTeam, providerLabel, taskAgent, type TaskActivity, type TeamAgent, type TaskDetail, type TeamProfile } from "../team/model.js";
 import type { ContextStats, RetainedTask } from "../../types.js";
 
-const task = (id: string, parent = "", updated = 1): RetainedTask => ({ id, name: id, parent_task_id: parent,
-  status: "running", result: "", error: "", prompt: `${id} task`, session_id: "root", child_session_id: `child-${id}`,
-  parent_session_id: "root", depth: parent ? 2 : 1, profile: "assistant", mode: "build", followups: 0, activation: 0,
+const task = (id: string, parent = "", updated = 1): RetainedTask => ({ session_id: id, title: id, parent_session_id: parent,
+  status: "running", result: "", error: "", prompt: `${id} task`, root_session_id: "root",
+   depth: parent ? 2 : 1, profile: "assistant", mode: "build", followups: 0, activation: 0,
   trigger: "delegation", provider: "my-openai", provider_kind: "openai", model: "test-model", updated_at: updated,
   started_at: 1, phase: "running", can_message: true });
 const root: TeamAgent = { ...taskAgent(task("")), name: "Assistant", phase: "ready" };
 const event = (id: string, sequence: number, payload: TaskActivity["payload"], activation = 0): TaskActivity => ({
-  event: "task_activity", task_id: id, activation, sequence, timestamp: sequence, payload,
+  event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: id, activation, sequence, timestamp: sequence, payload,
 });
 
 test("team keeps newest spawn first despite later updates, child activity, and phase changes", () => {
@@ -89,7 +89,7 @@ test("task transcript pairs committed history with later activity, drops sibling
   const detail: TaskDetail = { task: task("one"), history: [{ role: "user", content: "Original", name: "", tool_call_id: "", tool_calls: [] }], activity_cursor: 3,
     activity: [event("one", 3, { type: "text_chunk", chunk: "Part" })] };
   const entries = taskEntries(detail, [event("one", 2, { type: "text_chunk", chunk: "Stale" }), event("two", 4, { type: "text_chunk", chunk: "Sibling" }),
-    event("one", 4, { type: "text_chunk", chunk: " two", task_id: "forged" }), event("one", 5, { type: "reasoning", text: "Private" })]);
+    event("one", 4, { type: "text_chunk", chunk: " two", session_id: "forged" }), event("one", 5, { type: "reasoning", text: "Private" })]);
   assert.deepEqual(entries.map(item => item.text), ["Original", "Part two"]);
   assert.ok(entries.every(item => !item.taskId));
 });
@@ -163,7 +163,7 @@ test("timeline renders nested task branches with compact terminal rows and reada
 });
 
 test("used children group by their definition and unused definitions remain only in the start selector", () => {
-  const research = taskAgent({ ...task("market-survey"), name: "Market survey", profile: "research" });
+  const research = taskAgent({ ...task("market-survey"), title: "Market survey", profile: "research" });
   const profiles: TeamProfile[] = [
     { id: "research", name: "Researcher", description: "Survey", provider: "openai", model: "model",
       source: "definitions/researcher.yaml", used: true, available: true },
@@ -227,7 +227,7 @@ test("starting a definition creates a separate child while preserving running ro
   const react = createRoot(dom.window.document.getElementById("root")!);
   let mounted = true;
   let team!: TeamController;
-  const existing = { ...task("active-research"), name: "Current research run", profile: "research",
+  const existing = { ...task("active-research"), title: "Current research run", profile: "research",
     can_start_children: true, child_agents: ["research"] };
   const definition: TeamProfile = { id: "research", name: "Researcher", description: "Survey", provider: "openai",
     model: "model", used: true, available: true, can_start: true };
@@ -282,15 +282,15 @@ test("starting a definition creates a separate child while preserving running ro
     const startIndex = requests.length - 1;
     assert.equal(requests[startIndex].path, "/api/sessions/root/tasks");
     assert.equal(requests[startIndex].init.method, "POST");
-    const submittedBody = JSON.parse(String(requests[startIndex].init.body)) as { message_id: string; text: string; agent: string; parent_task_id?: string };
+    const submittedBody = JSON.parse(String(requests[startIndex].init.body)) as { message_id: string; text: string; agent: string; parent_session_id?: string };
     assert.equal(submittedBody.text, "Start another research conversation");
     assert.equal(submittedBody.agent, "research", "the selected definition is sent as the new child recipient");
-    assert.equal(submittedBody.parent_task_id, "active-research", "the selected profile stays scoped to its chosen parent");
+    assert.equal(submittedBody.parent_session_id, "active-research", "the selected profile stays scoped to its chosen parent");
     assert.ok(submittedBody.message_id);
-    const newChild = { ...task("new-research", "active-research"), name: "Follow-up study", profile: "research" };
+    const newChild = { ...task("new-research", "active-research"), title: "Follow-up study", profile: "research" };
     await act(async () => {
       requests[startIndex].respond(Response.json({ task: newChild,
-        receipt: { message_id: "new-message", task_id: "new-research", status: "picked_up", revision: 1 } }));
+        receipt: { message_id: "new-message", session_id: "new-research", status: "picked_up", revision: 1 } }));
       await submission;
     });
     const newChildRow = document.querySelector<HTMLElement>('[data-agent-id="new-research"]');
@@ -378,7 +378,7 @@ test("team refreshes added and renamed definitions during a run without retarget
     assert.match(missing, /Your draft is kept/);
     assert.doesNotMatch(missing, /Loading conversation/);
 
-    const accepted = { ...task("accepted-child"), name: "mint", profile: "mint", model: "accepted-model" };
+    const accepted = { ...task("accepted-child"), title: "mint", profile: "mint", model: "accepted-model" };
     await act(async () => react.render(createElement(View, { revision: 2 })));
     await act(async () => { t.mock.timers.tick(300); });
     await respond(3, [profile("mini")], [accepted]);

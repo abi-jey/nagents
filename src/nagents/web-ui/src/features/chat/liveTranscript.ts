@@ -185,7 +185,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     // A receipt has no message text: it can admit an existing optimistic row,
     // but cannot recreate that row while replaying an otherwise empty log.
     for (const record of run.events) if (record.event === "input_admitted" &&
-        (!record.run_id || record.run_id === run.id) && (!record.session_id || record.session_id === snapshot.session_id))
+        (!record.run_id || record.run_id === run.id) && (!record.root_session_id || record.root_session_id === snapshot.session_id))
       entries = appendEvent(entries, { ...record, run_id: record.run_id || run.id });
     let replay: Entry[] = [];
     for (const record of run.events) replay = appendEvent(replay, {
@@ -262,7 +262,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     const responseId = typeof record.response_id === "string" ? record.response_id
       : record.extra && typeof record.extra === "object" && "response_id" in record.extra ? record.extra.response_id : undefined;
     const index = entries.findLastIndex((entry) => entry.kind === "assistant" && (!responseId || entry.responseId === responseId) && entry.runId === event.run_id &&
-      (entry.taskId || "") === (record.task_id || "") && (entry.activation || 0) === (record.activation || 0) &&
+      (entry.taskId || "") === (record.session_id || "") && (entry.activation || 0) === (record.activation || 0) &&
       (entry.followup || 0) === (record.followup || 0));
     entries = entries.map((entry, i) => i === index ? { ...entry, streaming: true } : entry);
   }
@@ -302,7 +302,7 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
     if (event.event === "approval" && activeRun) activeRun = { ...activeRun, pending_approvals: [...pendingApprovals(activeRun), event] };
     if (event.event === "approval_closed" && activeRun) activeRun = { ...activeRun, pending_approvals: pendingApprovals(activeRun).filter((item) => item.approval_id !== event.approval_id), events: undefined, approval: undefined };
     const scopedInput = event.event !== "input_admitted" ||
-      ((!event.session_id || event.session_id === frame.session_id) && (!activeRun || event.run_id === activeRun.id));
+      ((!event.root_session_id || event.root_session_id === frame.session_id) && (!activeRun || event.run_id === activeRun.id));
     next = { ...current, activeRun, runHistory, completedRuns, entries: scopedInput ? appendEvent(current.entries, event) : current.entries };
   }
   return { ...next, position: { cursor: frame.cursor, epoch: frame.epoch } };

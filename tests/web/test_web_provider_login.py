@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from time import monotonic
 from typing import TYPE_CHECKING
+from typing import TypeGuard
 from typing import cast
 
 import pytest
@@ -32,6 +33,20 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_posix
 
 
+def is_login_snapshot(value: object) -> TypeGuard[LoginSnapshot]:
+    if not isinstance(value, dict):
+        return False
+    return (
+        isinstance(value.get("id"), str)
+        and value.get("status") in {"idle", "starting", "pending", "completed", "failed", "cancelled"}
+        and isinstance(value.get("provider"), str)
+        and isinstance(value.get("verification_url"), str)
+        and isinstance(value.get("user_code"), str)
+        and type(value.get("expires_in")) is int
+        and isinstance(value.get("message"), str)
+    )
+
+
 def login_service(app: Site) -> ProviderLogin:
     return cast("ProviderLogin", cast("FastAPI", app.client.app).state.provider_login)
 
@@ -46,7 +61,10 @@ def wait_status(app: Site, status: str) -> LoginSnapshot:
         return service.snapshot()
 
     assert app.client.portal is not None
-    return app.client.portal.call(wait)
+    snapshot = app.client.portal.call(wait)
+    if not is_login_snapshot(snapshot):
+        raise AssertionError("Provider login query returned a malformed snapshot")
+    return snapshot
 
 
 def pending_login(app: Site, monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:

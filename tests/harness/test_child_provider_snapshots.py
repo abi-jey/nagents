@@ -79,10 +79,16 @@ def test_children_and_retained_followups_use_accepted_provider_snapshot(
         children: list[Harness] = []
         fresh: list[Harness] = []
         try:
-            info = TaskInfo("retained", "Original child", profile=agent, child_session_id="retained-session")
+            info = TaskInfo(
+                "s1",
+                "Original child",
+                profile=agent,
+                root_session_id=parent.session_id,
+                _storage_id="retained-session",
+            )
             retained = parent.tasks._create_child(agent, info)
             children.append(retained)
-            parent.tasks._children[info.id] = retained
+            parent.tasks._children[info.session_id] = retained
             await retained.close()
             # Simulate another configuration owner editing or deleting routes.
             changed = {

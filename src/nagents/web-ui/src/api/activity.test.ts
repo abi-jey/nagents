@@ -152,7 +152,7 @@ test("invalid session, event session or regressing cursor is rejected without ap
   for (const data of [
     reply(10, { session_id: "other" }),
     reply(8),
-    reply(10, { events: [{ event: "notice", session_id: "other" }] }),
+    reply(10, { events: [{ event: "notice", root_session_id: "other" }] }),
   ]) {
     const controller = new AbortController();
     const mock = t.mock.method(
@@ -191,7 +191,7 @@ test("read failures retry the same cursor without manufacturing run completion",
           pending_wakeups: [
             {
               wakeup_id: "w",
-              task_id: "A",
+              session_id: "A",
               due_at: "2030-01-01T00:00:00Z",
               reason: "Review",
             },

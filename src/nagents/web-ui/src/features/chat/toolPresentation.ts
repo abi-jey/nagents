@@ -17,7 +17,8 @@ const tools: Record<string, ToolPresentation> = {
   search: { label: "Search files", icon: "search", family: "search" },
   search_files: { label: "Search files", icon: "search", family: "search" },
   skill: { label: "Load skill", icon: "book", family: "skill" },
-  delegate: { label: "Delegate task", icon: "team", family: "team" },
+  to_agent: { label: "Send to agent", icon: "team", family: "team" },
+  agent_status: { label: "Inspect agent status", icon: "team", family: "team" },
   team: { label: "Team", icon: "team", family: "team" },
   schedule_wakeup: { label: "Schedule wake-up", icon: "clock", family: "schedule" },
   wake_up_in: { label: "Schedule wake-up", icon: "clock", family: "schedule" },
@@ -100,11 +101,11 @@ function resultView(value: Record<string, unknown>, family: ToolFamily): NativeV
       metadata: [field("Matches returned", found.length), ...(value.skipped_files ? [field("Skipped files", value.skipped_files)] : [])], indicators: truncation(value.truncated) };
   }
   if (family === "schedule" && matches(value, {
-    wakeup_id: string, task_id: string, due_at: string, reason: string, status: (item) => item === "scheduled", session_id: string, run_id: string,
+    wakeup_id: string, session_id: string, due_at: string, reason: string, status: (item) => item === "scheduled", root_session_id: string, run_id: string,
   })) {
     return { format: "Scheduling acknowledgement", sections: [section("Reason", value.reason)],
       metadata: [field("Status", value.status), field("Due at", value.due_at), field("Wake-up ID", value.wakeup_id)],
-      diagnostics: [field("Task", value.task_id), field("Session", value.session_id), field("Run", value.run_id)],
+      diagnostics: [field("Session", value.session_id), field("Root session", value.root_session_id), field("Run", value.run_id)],
       note: "Request acknowledged; firing is reported in wake-up activity." };
   }
   return undefined;

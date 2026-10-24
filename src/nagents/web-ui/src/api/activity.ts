@@ -47,7 +47,7 @@ export async function pollActivity({
             typeof event === "object" &&
             "event" in event &&
             typeof event.event === "string" &&
-            (!("session_id" in event) || event.session_id === sessionId),
+            (!("root_session_id" in event) || event.root_session_id === sessionId),
         ) ||
         !("active_run_id" in data) ||
         typeof data.active_run_id !== "string" ||
@@ -59,7 +59,7 @@ export async function pollActivity({
           (wakeup: unknown) =>
             !!wakeup &&
             typeof wakeup === "object" &&
-            ["wakeup_id", "task_id", "due_at", "reason"].every(
+            ["wakeup_id", "session_id", "due_at", "reason"].every(
               (key) =>
                 key in wakeup &&
                 typeof (wakeup as Record<string, unknown>)[key] === "string",

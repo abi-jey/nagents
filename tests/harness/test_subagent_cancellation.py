@@ -57,7 +57,7 @@ def test_parent_stop_preserves_cancellation_after_owned_initialization(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review"})
             else:
                 await asyncio.Event().wait()
 
@@ -90,7 +90,7 @@ def test_parent_stop_preserves_cancellation_after_owned_initialization(
                     if not isinstance(event, TaskStarted):
                         continue
                     await initialized.wait()
-                    worker = harness.tasks._workers[event.task_id]
+                    worker = harness.tasks._workers[event.session_id]
                     if cancel:
                         closers.append(asyncio.create_task(stream.aclose()))
                         while not worker.cancelling():
@@ -136,7 +136,7 @@ def test_parent_stop_preserves_cancellation_after_owned_initialization(
             assert_balanced(history)
             if cancel:
                 with pytest.raises(RuntimeError, match="cancellation"):
-                    _ = [event async for event in harness.continue_task(info.id, "Do not replay stopped work")]
+                    _ = [event async for event in harness.continue_task(info.session_id, "Do not replay stopped work")]
                 assert await harness.history() == history
                 assert len(providers) == 2 and providers[1].requests == []
         finally:
@@ -162,7 +162,7 @@ def test_parent_stop_preserves_cancellation_when_child_execution_also_raises(
                 started.set()
                 await asyncio.Event().wait()
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review"})
             else:
                 await asyncio.Event().wait()
 
@@ -172,7 +172,7 @@ def test_parent_stop_preserves_cancellation_when_child_execution_also_raises(
             child: Harness,
             message: str,
             *,
-            task_id: str = "",
+            target_session_id: str = "",
             trigger: str = "human",
             notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
             initial_input: RunInput | None = None,
@@ -183,7 +183,7 @@ def test_parent_stop_preserves_cancellation_when_child_execution_also_raises(
                     original_run(
                         child,
                         message,
-                        task_id=task_id,
+                        target_session_id=target_session_id,
                         trigger=trigger,
                         notifications=notifications,
                         initial_input=initial_input,
@@ -207,13 +207,13 @@ def test_parent_stop_preserves_cancellation_when_child_execution_also_raises(
                 with pytest.raises(asyncio.CancelledError):
                     await root
             info = harness.tasks.list()[0]
-            worker = harness.tasks._workers[info.id]
+            worker = harness.tasks._workers[info.session_id]
             assert worker.cancelled() and info.status == "cancelled"
             assert info.error == CANCELLED_FAILURE and PRIVATE_ERROR not in repr(info)
             assert info.result == "" and info.followups == 0
             assert providers[1].closed and len(providers[1].requests) == 1
             assert_balanced(await harness.history())
-            assert_balanced(await harness.task_history(info.id))
+            assert_balanced(await harness.task_history(info.session_id))
         finally:
             root.cancel()
             await asyncio.gather(root, return_exceptions=True)

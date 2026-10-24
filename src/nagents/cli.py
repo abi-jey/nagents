@@ -43,10 +43,13 @@ from .harness.types import HarnessEvent
 from .harness.types import Notice
 from .harness.types import TaskActivity
 from .harness.types import TaskCompleted
+from .harness.types import TaskDeliveryWarning
 from .harness.types import TaskMessage
 from .harness.types import TaskNotification
 from .harness.types import TaskStarted
 from .harness.types import ToolOutput
+from .harness.types import TranscriptAbandoned
+from .harness.types import TranscriptAnchor
 from .tool_outcomes import shell_outcome
 
 if TYPE_CHECKING:
@@ -228,6 +231,9 @@ def _event_record(event: HarnessEvent) -> dict[str, object]:
 
 async def _approve(request: ApprovalRequest, *, interactive: bool) -> bool:
     print(f"\nApproval required: {_plain(request.tool)}", file=sys.stderr)
+    if request.session_id:
+        label = f"{request.title} [{request.session_id}]" if request.title else request.session_id
+        print(_plain(f"Agent: {label}"), file=sys.stderr)
     print(_plain(request.description), file=sys.stderr)
     print(_plain(json.dumps(request.arguments, ensure_ascii=False, indent=2)), file=sys.stderr)
     if request.preview:
@@ -435,6 +441,9 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
         compacting = False
         async with aclosing(harness.run(prompt)) as events:
             async for event in events:
+                if isinstance(event, TranscriptAnchor | TranscriptAbandoned):
+                    # These retain host-local event references, never JSON wire data.
+                    continue
                 if isinstance(event, ErrorEvent) and not event.recoverable:
                     failed = True
                 if isinstance(event, CompactionStartedEvent):
@@ -468,15 +477,27 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                 elif isinstance(event, ToolOutput):
                     print(_plain(event.text), end="", file=sys.stderr, flush=True)
                 elif isinstance(event, TaskStarted):
-                    print(_plain(f"[Subagent {event.name} started: {event.task_id}]"), file=sys.stderr)
+                    label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
+                    print(_plain(f"[Agent {label} ({event.profile}) started]"), file=sys.stderr)
                 elif isinstance(event, TaskCompleted):
-                    print(
-                        _plain(f"[Subagent {event.name}: {'failed' if event.error else 'completed'}]"), file=sys.stderr
-                    )
+                    label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
+                    outcome = f": {event.error}" if event.error else ""
+                    print(_plain(f"[Agent {label} ({event.profile}): {event.status}{outcome}]"), file=sys.stderr)
                 elif isinstance(event, TaskMessage):
-                    print(_plain(f"[Human follow-up to {event.name}]\n{event.prompt}"), file=sys.stderr)
+                    label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
+                    print(_plain(f"[Human follow-up to {label}]\n{event.prompt}"), file=sys.stderr)
                 elif isinstance(event, TaskNotification):
-                    print(_plain(f"[{event.cause}: {event.source_name} -> {event.recipient_name}]"), file=sys.stderr)
+                    source = (
+                        f"{event.source_title} [{event.source_session_id}]"
+                        if event.source_title
+                        else event.source_session_id
+                    )
+                    recipient = (
+                        f"{event.recipient_title} [{event.recipient_session_id}]"
+                        if event.recipient_title
+                        else event.recipient_session_id
+                    )
+                    print(_plain(f"[{event.cause}: {source} -> {recipient}]"), file=sys.stderr)
                 elif isinstance(event, ToolResultEvent):
                     if event.error:
                         print(_plain(f"[{event.name}: {event.error}]"), file=sys.stderr)
@@ -484,6 +505,10 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                         print(_plain(f"[{event.name}: {outcome} in {event.duration_ms:.0f} ms]"), file=sys.stderr)
                     else:
                         print(_plain(f"[{event.name} completed in {event.duration_ms:.0f} ms]"), file=sys.stderr)
+                elif isinstance(event, TaskDeliveryWarning):
+                    label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
+                    parent = event.parent_session_id or "Main"
+                    print(_plain(f"Error: {label} could not deliver its result to parent {parent}."), file=sys.stderr)
                 elif isinstance(event, ErrorEvent):
                     print(_plain(f"Error: {transport_error_message(event) or event.message}"), file=sys.stderr)
                 elif isinstance(event, Notice):

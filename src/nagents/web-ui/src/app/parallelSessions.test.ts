@@ -39,7 +39,7 @@ test("Review later dismisses only presentation and returning to the chat reopens
   let stops = 0;
   const approval: Approval = { run_id: "run-a", approval_id: "nonce-a", call_id: "write-a", tool: "write",
     description: "Create a reviewed file", preview: "proposed change", arguments: { path: "file.txt" },
-    task_id: "", task_name: "", depth: 0, activation: 0 };
+    session_id: "", title: "", depth: 0, activation: 0 };
   async function render(sessionId: string, pending: Approval | undefined) {
     await act(async () => root.render(createElement(ApprovalReview, { sessionId, pending, busy: false, error: "",
       decide: (decision: Decision) => { decisions.push(decision); }, cancel: () => { stops++; } })));

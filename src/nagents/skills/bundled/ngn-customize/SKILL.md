@@ -133,7 +133,7 @@ Use the configuration tool rather than guessing this workspace's hash or editing
 an untrusted project config. It saves resolved discovery fields too. Do not put
 remote definitions in Markdown. The remote host owns its model, prompt, tools,
 reasoning and compaction; they do not inherit the local assistant's model.
-Definitions and delegate target schemas refresh before every model generation.
+Definitions and to_agent target schemas refresh before every model generation.
 New remote agents appear in Team automatically and can be delegated to in this
 same conversation without restarting. Accepted tasks keep their original route.
 
@@ -490,14 +490,18 @@ Skill context grants
 no permissions and executes no scripts. Supporting resources require a separate
 permitted loading mechanism; package locations are not general workspace paths.
 
-`delegate(prompt, agent="assistant")` starts a child and returns its task ID.
-Choose an explicitly configured profile for other behavior; permissions cannot exceed the parent.
-Results notify the immediate parent as user-role data. `Harness.tasks.list()`,
-`task_history(task_id, limit=...)`, and `continue_task(task_id, prompt)` support
-inspection and retained-child follow-ups. Default depth is 2 (root 0), with
-3 concurrent subagents and 8 executions per root run; these are defaults, not
-fixed limits. Trusted configuration accepts depth 0–8, concurrency 1–64, and
-executions 1–4,096.
+`to_agent(prompt="...", agent="assistant")` starts a child and returns its short
+`session_id` with status; it does not wait for the result. Supply `session_id` to
+continue that same idle child conversation. An optional `title` is a display
+label, not an identifier. `agent_status()` lists visible children and
+`agent_status(session_id="s1")` inspects one, without exposing private reasoning.
+Choose an explicitly configured profile for other behavior; permissions cannot
+exceed the parent. Results notify the immediate parent as bounded, untrusted
+data. `Harness.tasks.list()`, `task_history(session_id, limit=...)`, and
+`continue_task(session_id, prompt)` support inspection and retained-child
+follow-ups. Default depth is 2 (root 0), with 3 concurrent subagents and 8
+executions per root run; these are defaults, not fixed limits. Trusted
+configuration accepts depth 0–8, concurrency 1–64, and executions 1–4,096.
 
 Before estimating a delegation plan, call `subagent_configuration(scope="workspace")`
 or `subagent_configuration(scope="global")`. Use its effective limits and usage

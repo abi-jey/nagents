@@ -19,16 +19,31 @@ a conversation reveals its ancestor path and keeps its draft with that recipient
 ## HTTP contract
 
 All routes require the same web token and origin checks as ordinary chat.
-`root` must be an accessible root session. A raw child session ID never grants
-access. An absent task or a task belonging to another root returns 404.
+`root_session_id` must be an accessible root session. A raw child session ID
+never grants access. An absent child or a child belonging to another root
+returns 404.
 
 | Route | Result |
 | --- | --- |
-| `GET /api/sessions/{root}/tasks` | `{tasks, profiles, profile_revision}` and `subagent_usage` while its runtime is available |
-| `GET /api/sessions/{root}/tasks/{task}` | Task, bounded history, current activity, receipts, context |
-| `POST /api/sessions/{root}/tasks` | Start `{message_id, agent, text, parent_task_id?}`; returns `{task, receipt}` |
-| `POST /api/sessions/{root}/tasks/{task}/messages` | Send `{message_id, text}`; returns receipt |
-| `PUT /api/sessions/{root}/tasks/{task}/settings` | Save next-activation choices; returns `{task}` |
+| `GET /api/sessions/{root_session_id}/tasks` | `{tasks, profiles, profile_revision}` and `subagent_usage` while its runtime is available |
+| `GET /api/sessions/{root_session_id}/tasks/{session_id}` | Task, bounded history, current activity, receipts, context |
+| `POST /api/sessions/{root_session_id}/tasks` | Start `{message_id, agent, text, parent_session_id?, title?}`; returns `{task, receipt}` |
+| `POST /api/sessions/{root_session_id}/tasks/{session_id}/messages` | Send `{message_id, text}`; returns receipt |
+| `PUT /api/sessions/{root_session_id}/tasks/{session_id}/settings` | Save next-activation choices; returns `{task}` |
+
+The start body requires a UUID `message_id`, a configured `agent` profile, and
+nonblank `text` of 1–16,000 characters. `parent_session_id` is an optional short
+session ID; omit it or send an empty string to start under Main. `title` is an
+optional one-line display title. The host trims its surrounding whitespace,
+then accepts at most 120 Unicode code points; embedded control, surrogate, line
+separator, and paragraph separator characters are rejected. Emoji joiners are
+allowed. A blank title on a new child falls back to its short session ID; a
+blank title on an existing child preserves its current title. The legacy
+`task_id`, `parent_task_id`, and `name` body fields are rejected. Responses use
+`session_id`, `title`, `root_session_id`, and `parent_session_id`; private child
+storage IDs are not exposed. Short IDs come from one monotonic base-36 workspace
+counter shared across root conversations, so an alias is not reused while that
+workspace database is retained.
 
 Messages require a UUID and 1–16,000 characters of nonblank text. Identical
 retries return the same receipt without another quota debit or execution.
@@ -38,10 +53,10 @@ retries return the same receipt without another quota debit or execution.
 `remaining_executions`, `occupied_slots`, `available_slots`, `retained_tasks`,
 `max_retained_tasks`, `depth`, and the `reset` explanation. It is omitted for
 unavailable runtimes: persisted history does not reconstruct live budget state.
-Reusing a UUID for another root, parent, task, profile, or text returns 409. Check the
+Reusing a UUID for another root, parent session, profile, or text returns 409. Check the
 receipt's status; HTTP acceptance does not mean that the model read the message.
 
-Omitting `parent_task_id`, or sending an empty string, starts under Main. A
+Omitting `parent_session_id`, or sending an empty string, starts under Main. A
 nonempty parent is resolved from that root's retained runtime; a parent from
 another root returns 404. Only a running local parent can accept a direct nested
 start. Idle, completed and remote A2A parents return 409; the server does not wake
@@ -89,6 +104,13 @@ inherit that root anchor. Continuation preserves it, so the same timeline can
 be placed after its originating message following a reload. A direct profile
 start has no fabricated main-history anchor; its origin fields remain empty.
 
+Each model-facing `to_agent` activation also records `activation_history_id`,
+`activation_run_id`, `activation_call_id`, and `activation_call_position` from the
+host's exact committed invocation. These correlate a follow-up with its own chat
+line without replacing the original spawn anchor or borrowing an older result.
+Human, scheduled, and host-started activations have no model-call provenance.
+These display fields do not grant execution authority.
+
 Each `history_committed` marker contains a row watermark captured in the child
 producer. A detail response combines history through that watermark with the
 in-flight activity after it, avoiding duplicate messages while tools run.
@@ -105,9 +127,13 @@ activation. A message queued into an active child keeps that activation's
 accepted settings. Empty provider, model, or compaction trigger retains the
 accepted choice. A provider must name a configured connection.
 
-Task workers are process-local. After restart, recorded task history and
-receipts remain readable, but old workers cannot be resumed through the web
-API. Unread receipts become errors and are never automatically replayed.
+Task workers are process-local. After restart, retained sessions created by the
+current session contract and their receipts remain readable, but old workers
+cannot be resumed through the web API. Unread receipts become errors and are
+never automatically replayed. The new task index initializes automatically;
+legacy task-index rows are not read, copied, or replayed. Recorded root chat
+history remains available. Refresh browser clients to load the current session
+contract; no active worker handles or running state are migrated.
 
 Pending inputs are bounded to 128 messages and 512,000 characters across the
 workspace. Core per-task and root execution quotas also apply. New admission

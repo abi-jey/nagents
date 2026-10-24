@@ -117,7 +117,7 @@ def test_team_tracks_create_rename_and_starts_mini_without_restart(
                 json={"message_id": str(uuid4()), "agent": "mini", "text": "Read evidence.txt and report."},
             )
             assert started.status_code == 200, started.text
-            task_id = started.json()["task"]["id"]
+            task_id = started.json()["task"]["session_id"]
             await until(lambda: state.run_for(root) is None)
             detail = (await client.get(f"{route}/{task_id}", headers=headers)).json()
             assert detail["task"]["profile"] == "mini"
@@ -129,7 +129,7 @@ def test_team_tracks_create_rename_and_starts_mini_without_restart(
             (foreign / "mini.md").unlink()
             removed = (await client.get(route, headers=headers)).json()
             assert {item["id"] for item in removed["profiles"]} == {"assistant"}
-            assert any(item["id"] == task_id for item in removed["tasks"])
+            assert any(item["session_id"] == task_id for item in removed["tasks"])
         assert all(provider.closed for provider in providers)
 
     asyncio.run(scenario())

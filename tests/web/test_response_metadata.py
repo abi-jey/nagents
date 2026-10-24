@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from dataclasses import asdict
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import Usage
 from nagents.harness import Harness
+from nagents.harness.session_identity import SessionIdentityStore
 from nagents.harness.tools import CodingTools
 from nagents.session import response_metadata as storage
 from nagents.session.response_metadata import response_write
@@ -345,10 +347,13 @@ def test_atomic_assistant_anchor_wins_cancel_and_retention_keeps_usage(
     async def scenario() -> None:
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, _, _, state, _, _):
             root = state.selected_session_id
-            await state.history.add_message(root, Message(role="user", content="go"))
+            identity = await SessionIdentityStore(state.history.db_path).reserve(root, "", "Recovery test")
+            child_storage = identity.storage_id
+            await state.history.get_or_create_session(child_storage, "harness")
+            await state.history.add_message(child_storage, Message(role="user", content="go"))
             terminal = ResponseMetadataEvent(
                 response_id="race",
-                response_session_id=root,
+                response_session_id=child_storage,
                 revision=5,
                 summary="savedsummary",
                 status="completed",
@@ -356,13 +361,15 @@ def test_atomic_assistant_anchor_wins_cancel_and_retention_keeps_usage(
                 usage=Usage(prompt_tokens=4, completion_tokens=3, total_tokens=7, reasoning_reported=True),
             )
             with response_write(terminal):
-                row = await state.history.add_message(root, Message(role="assistant", content="committed"))
+                row = await state.history.add_message(child_storage, Message(role="assistant", content="committed"))
 
             def mutate(db: sqlite3.Connection) -> None:
                 record = asdict(terminal)
                 record.pop("type")
                 record.pop("timestamp")
                 record.pop("extra")
+                for key in ("run_id", "session_id", "activation", "followup", "turn_id"):
+                    record.pop(key, None)
                 cancelled = storage.save(
                     db,
                     {
@@ -370,17 +377,32 @@ def test_atomic_assistant_anchor_wins_cancel_and_retention_keeps_usage(
                         "revision": 6,
                         "status": "cancelled",
                         "run_id": "run-race",
+                        "session_id": "s1",
+                        "activation": 2,
+                        "followup": 1,
+                        "turn_id": "turn-race",
+                        "task_id": "untrusted-legacy-task-id",
                         "event": "response_metadata",
                     },
                 )
                 assert cancelled["status"] == "completed" and cancelled["history_id"] == str(row)
-                assert cancelled["summary"] == "savedsummary" and cancelled["run_id"] == "run-race"
+                assert cancelled["summary"] == "savedsummary"
+                assert {
+                    key: cancelled[key] for key in ("run_id", "session_id", "activation", "followup", "turn_id")
+                } == {
+                    "run_id": "run-race",
+                    "session_id": "s1",
+                    "activation": 2,
+                    "followup": 1,
+                    "turn_id": "turn-race",
+                }
+                assert "task_id" not in cancelled
                 for index in range(101):
                     storage.save(
                         db,
                         {**record, "response_id": f"later-{index}", "run_id": "other", "history_id": "", "revision": 1},
                     )
-                old = storage.lookup(db, root, "race")
+                old = storage.lookup(db, child_storage, "race")
                 assert old["summary"] == "" and old["summary_expired"] is True
                 assert object_record(old["usage"])["total_tokens"] == 7
                 assert (
@@ -389,7 +411,7 @@ def test_atomic_assistant_anchor_wins_cancel_and_retention_keeps_usage(
                     ).fetchone()[0]
                     == 100
                 )
-                assert storage.run_totals(db, root, "run-race")["total_tokens"] == 7
+                assert storage.run_totals(db, child_storage, "run-race")["total_tokens"] == 7
 
             await state.history.store._transaction(mutate)
 
@@ -441,7 +463,7 @@ def test_child_metadata_does_not_attach_to_main_and_survives_detail_reload(
                 prefix, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "child task"}
             )
             assert response.status_code == 200, response.text
-            task = response.json()["task"]["id"]
+            task = response.json()["task"]["session_id"]
             await until(lambda: state.run_for(root) is None)
             detail = (await client.get(f"{prefix}/{task}", headers=headers)).json()
             assert outcomes == ["completed"], {"root_outcomes": outcomes}
@@ -451,13 +473,15 @@ def test_child_metadata_does_not_attach_to_main_and_survives_detail_reload(
             metadata = object_record(rows[0]["response_metadata"])
             assert metadata["summary"] == "CHILD SUMMARY" and metadata["status"] == "completed"
             assert metadata["history_id"] == rows[0]["history_id"]
-            assert metadata["response_session_id"] == detail["task"]["child_session_id"]
+            private_storage_id = state.executions.owners[root].tasks._lookup(task)._storage_id
+            assert metadata["response_session_id"] == task
+            assert private_storage_id not in json.dumps(detail)
             assert object_record(metadata["usage"])["reasoning_tokens"] == 4
             root_rows = await state.history.snapshot(root)
             assert "CHILD SUMMARY" not in str(root_rows)
             again = (await client.get(f"{prefix}/{task}", headers=headers)).json()
             assert again["history"] == detail["history"]
-            child_activity = [record for record in activity if record.get("task_id") == task]
+            child_activity = [record for record in activity if record.get("session_id") == task]
             completed = [
                 record
                 for record in child_activity
@@ -549,7 +573,7 @@ def test_child_cancel_keeps_scope_and_monotonic_sequence(
                 prefix, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "child"}
             )
             assert result.status_code == 200, result.text
-            task = result.json()["task"]["id"]
+            task = result.json()["task"]["session_id"]
             async with asyncio.timeout(HANG_GUARD):
                 await ready.wait()
                 if published_before_cancel:
@@ -569,8 +593,10 @@ def test_child_cancel_keeps_scope_and_monotonic_sequence(
             assert len(rows) == 1
             metadata = object_record(rows[0]["response_metadata"])
             assert metadata["summary"] == "Stopped child summary" and metadata["status"] == "cancelled"
-            assert metadata["task_id"] == task and metadata["activation"] == detail["task"]["activation"]
-            assert metadata["turn_id"] and metadata["response_session_id"] == detail["task"]["child_session_id"]
+            assert metadata["session_id"] == task and metadata["activation"] == detail["task"]["activation"]
+            private_storage_id = state.executions.owners[root].tasks._lookup(task)._storage_id
+            assert metadata["turn_id"] and metadata["response_session_id"] == task
+            assert private_storage_id not in json.dumps(detail)
             assert "Stopped child summary" not in str(await state.history.snapshot(root))
             captured = [
                 event
@@ -580,7 +606,7 @@ def test_child_cancel_keeps_scope_and_monotonic_sequence(
             ]
             assert captured and object_record(captured[-1]["payload"])["status"] == "cancelled"
             assert captured[-1]["sequence"] == run.harness.tasks._lookup(task).activity_sequence
-            activity = [record for record in observed if record.get("task_id") == task]
+            activity = [record for record in observed if record.get("session_id") == task]
             sequences = [record["sequence"] for record in activity]
             assert all(type(sequence) is int for sequence in sequences)
             sequence_ids = cast("list[int]", sequences)

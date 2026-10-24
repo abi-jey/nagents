@@ -11,10 +11,9 @@ from nagents.harness.types import TaskActivity
 @pytest.mark.parametrize("kind", ["text_done", "tool_call", "tool_result", "error"])
 def test_task_activity_preserves_host_scope_without_becoming_root_output(kind: str) -> None:
     event = TaskActivity(
-        task_id="child-a",
+        session_id="s2",
         root_session_id="ngn-root",
-        parent_task_id="parent-a",
-        child_session_id="ngn-child",
+        parent_session_id="s1",
         depth=2,
         activation=3,
         sequence=11,
@@ -25,8 +24,8 @@ def test_task_activity_preserves_host_scope_without_becoming_root_output(kind: s
     record = _event_record(event)
     assert record["event"] == "task_activity"
     assert record["schema_version"] == 1
-    assert record["task_id"] == "child-a"
-    assert record["parent_task_id"] == "parent-a"
+    assert record["session_id"] == "s2"
+    assert record["parent_session_id"] == "s1"
     assert record["activation"] == 3
     assert record["sequence"] == 11
     assert "text" not in record

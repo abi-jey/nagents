@@ -46,6 +46,13 @@ class ApprovalModal(ModalScreen[bool]):
             yield Static("PERMISSION REQUIRED", classes="dialog-title", markup=False)
             with VerticalScroll(classes="approval-content"):
                 yield Static(self.request.tool, classes="approval-tool", markup=False)
+                if self.request.session_id:
+                    label = (
+                        f"{self.request.title} [{self.request.session_id}]"
+                        if self.request.title
+                        else self.request.session_id
+                    )
+                    yield Static(f"Agent: {label}", markup=False)
                 yield Static(self.request.description, markup=False)
                 yield Static("EXACT ARGUMENTS", classes="section-label", markup=False)
                 yield Static(highlight(format_value(self.request.arguments), language="json", theme=CodeTheme))

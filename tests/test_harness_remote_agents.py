@@ -398,8 +398,8 @@ async def test_canonical_remote_save_appears_in_delegate_enum_at_next_generation
         await collect(harness, "next generation")
 
         assert len(schemas) == 2
-        first_delegate = schemas[0]["delegate"]
-        next_delegate = schemas[1]["delegate"]
+        first_delegate = schemas[0]["to_agent"]
+        next_delegate = schemas[1]["to_agent"]
         assert isinstance(first_delegate, dict) and isinstance(next_delegate, dict)
         first_properties = first_delegate["properties"]
         next_properties = next_delegate["properties"]

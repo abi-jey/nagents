@@ -65,27 +65,27 @@ test("reasoning heading is extracted once and body is never invented for heading
   assert.equal(frameAt(27).entries.find(entry => entry.responseId === "finish")?.streaming, true);
 });
 
-test("Explorer works under one task identity, returns once, and notifies the continuing parent", () => {
+test("Explorer works under one short session identity, returns once, and notifies the continuing parent", () => {
   const spawned = frameAt(6.7);
-  const explorerRows = (entries: Entry[]) => entries.filter(entry => entry.taskId === "explorer");
-  const taskRows = spawned.entries.filter(entry => entry.kind === "task" && entry.taskId === "explorer");
+  const explorerRows = (entries: Entry[]) => entries.filter(entry => entry.taskId === "s1");
+  const taskRows = spawned.entries.filter(entry => entry.kind === "task" && entry.taskId === "s1");
   assert.equal(taskRows.length, 1);
   assert.equal(taskRows[0].state, "Running");
-  assert.deepEqual([...new Set(explorerRows(spawned.entries).map(entry => entry.taskId))], ["explorer"]);
+  assert.deepEqual([...new Set(explorerRows(spawned.entries).map(entry => entry.taskId))], ["s1"]);
 
   const childWork = frameAt(10.4);
   assert.equal(explorerRows(childWork.entries).filter(entry => entry.kind === "tool" && entry.title === "find").length, 1);
   assert.equal(explorerRows(childWork.entries).filter(entry => entry.responseId === "explore-result").length, 1);
 
   const returned = frameAt(11.6);
-  const completed = returned.entries.filter(entry => entry.kind === "task" && entry.taskId === "explorer");
+  const completed = returned.entries.filter(entry => entry.kind === "task" && entry.taskId === "s1");
   assert.equal(completed.length, 1, "task start and completion update the same transcript task row");
   assert.equal(completed[0].id, taskRows[0].id);
   assert.equal(completed[0].state, "Completed");
   assert.match(completed[0].result || "", /shared attachment styles/);
   assert.equal(explorerRows(returned.entries).filter(entry => entry.responseId === "explore-result").length, 1,
     "the child answer stays in the child transcript once");
-  const delivered = returned.entries.filter(entry => entry.kind === "notification" && entry.sourceTaskId === "explorer");
+  const delivered = returned.entries.filter(entry => entry.kind === "notification" && entry.sourceTaskId === "s1");
   assert.equal(delivered.length, 1);
   assert.match(delivered[0].text, /narrow-screen footer wrapping rule/);
 

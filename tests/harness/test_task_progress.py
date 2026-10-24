@@ -65,7 +65,7 @@ async def test_completed_tasks_are_visible_at_next_core_event_without_early_mode
             await gate_entered.wait()
             if nested and provider.index == 1:
                 if len(provider.requests) == 1:
-                    yield ToolCallEvent(id="grandchild", name="delegate", arguments={"prompt": "Nested review"})
+                    yield ToolCallEvent(id="grandchild", name="to_agent", arguments={"prompt": "Nested review"})
                 elif notifications(messages):
                     yield TextDoneEvent(text="Child evaluated grandchild")
                 else:
@@ -75,7 +75,7 @@ async def test_completed_tasks_are_visible_at_next_core_event_without_early_mode
         elif notifications(messages):
             yield TextDoneEvent(text="Parent synthesized child evidence")
         elif len(provider.requests) == 1:
-            yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Independent review"})
+            yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Independent review"})
             yield ToolCallEvent(id="gate", name="publication_gate")
         elif len(provider.requests) == 2:
             yield TextChunkEvent(chunk="Parent still working")
@@ -120,17 +120,17 @@ async def test_completed_tasks_are_visible_at_next_core_event_without_early_mode
         assert completed == queued
         assert [event.depth for event in completed] == ([2, 1] if nested else [1])
         if nested:
-            assert completed[0].parent_task_id == completed[1].task_id
-            assert completed[0].parent_session_id == completed[1].child_session_id
-        assert completed[-1].parent_task_id == ""
-        assert completed[-1].parent_session_id == harness.session_id
+            assert completed[0].parent_session_id == completed[1].session_id
+            assert completed[0].root_session_id == completed[1].root_session_id
+        assert completed[-1].parent_session_id == ""
+        assert completed[-1].root_session_id == harness.session_id
         gate_result = next(
             index for index, event in enumerate(observed) if isinstance(event, ToolResultEvent) and event.id == "gate"
         )
         assert all(observed.index(event) < gate_result for event in completed)
         assert not task.done()
         assert not harness.tasks._observed
-        assert not any(isinstance(event, TaskNotification) and event.recipient_task_id == "" for event in observed)
+        assert not any(isinstance(event, TaskNotification) and event.recipient_session_id == "" for event in observed)
         assert not notifications(await harness.history())
         assert len(providers[0].requests) == 2
         assert all(not notifications(messages) for messages in providers[0].requests)
@@ -140,8 +140,8 @@ async def test_completed_tasks_are_visible_at_next_core_event_without_early_mode
         assert [event for event in observed if isinstance(event, TaskCompleted)] == completed
         delivered = [event for event in observed if isinstance(event, TaskNotification)]
         assert len(delivered) == len(completed)
-        root_delivery = [event for event in delivered if event.recipient_task_id == ""]
-        assert len(root_delivery) == 1 and root_delivery[0].source_task_id == completed[-1].task_id
+        root_delivery = [event for event in delivered if event.recipient_session_id == ""]
+        assert len(root_delivery) == 1 and root_delivery[0].source_session_id == completed[-1].session_id
         assert len(notifications(await harness.history())) == 1
         assert len(providers[0].requests) == 4
         assert isinstance(observed[-1], DoneEvent)
@@ -181,7 +181,7 @@ async def test_closing_while_progress_flush_waits_on_full_queue_does_not_hang(
             await release_child.wait()
             yield TextDoneEvent(text="Retained completed evidence")
         else:
-            yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Independent review"})
+            yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Independent review"})
             yield ToolCallEvent(id="gate", name="publication_gate")
 
     harness, providers = setup_harness(tmp_path, monkeypatch, script)
@@ -231,7 +231,7 @@ async def test_completed_task_index_retains_last_provider_context_count(
         elif notifications(messages):
             yield TextDoneEvent(text="Parent integrated result")
         elif len(provider.requests) == 1:
-            yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Review this"})
+            yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Review this"})
         else:
             yield TextDoneEvent(text="Waiting for review")
 

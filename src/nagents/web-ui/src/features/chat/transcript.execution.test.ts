@@ -51,7 +51,7 @@ test("saved results and delegated requests never imply an unobserved successful 
   assert.deepEqual(executionStatus(entry), { label: "Saved result", tone: "neutral" });
   assert.deepEqual(executionStatus({ ...entry, error: "Recorded error" }), { label: "Saved error", tone: "error" });
   assert.deepEqual(executionStatus({ ...entry, state: "Completed" }), { label: "Completed", tone: "complete" });
-  for (const title of ["delegate", "schedule_wakeup", "wake_up_in"]) {
+  for (const title of ["to_agent", "schedule_wakeup", "wake_up_in"]) {
     assert.equal(executionStatus({ ...entry, title, state: "Completed" }).label, "Request completed");
   }
   const html = renderToStaticMarkup(createElement(ExecutionRecord, { entry, open: true }));

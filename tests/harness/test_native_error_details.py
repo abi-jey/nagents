@@ -50,7 +50,7 @@ def test_native_provider_error_keeps_actionable_safe_task_and_parent_detail(
             if provider.index == 0:
                 if len(provider.requests) == 1:
                     yield ToolCallEvent(
-                        id="spawn-native-error", name="delegate", arguments={"prompt": "Check model access"}
+                        id="spawn-native-error", name="to_agent", arguments={"prompt": "Check model access"}
                     )
                 else:
                     yield TextDoneEvent(text="I received the child outcome")
@@ -74,7 +74,7 @@ def test_native_provider_error_keeps_actionable_safe_task_and_parent_detail(
             assert len(parent_notes) == 1
             serialized = str(parent_notes[0].content)
             payload = json.loads(serialized.split("\n", 1)[1])
-            task = payload["tasks"][0]
+            task = payload["sessions"][0]
             assert task["status"] == "failed"
             assert code in task["error"] and expected in task["error"]
             assert PRIVATE not in repr(events) + serialized

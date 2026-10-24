@@ -114,8 +114,8 @@ _ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "bash": ("shell",),
         "edit": ("edit",),
         "write": ("write",),
-        "task": ("delegate",),
-        "agent": ("delegate",),
+        "task": ("to_agent",),
+        "agent": ("to_agent",),
         "skill": ("skill",),
     },
     "copilot": {
@@ -131,8 +131,8 @@ _ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "execute/runinterminal": ("shell",),
         "shell": ("shell",),
         "bash": ("shell",),
-        "agent": ("delegate",),
-        "agent/runsubagent": ("delegate",),
+        "agent": ("to_agent",),
+        "agent/runsubagent": ("to_agent",),
     },
     "opencode": {
         "read": ("read_file",),
@@ -142,7 +142,7 @@ _ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "bash": ("shell",),
         "edit": ("edit", "write"),
         "write": ("write",),
-        "task": ("delegate",),
+        "task": ("to_agent",),
         "skill": ("skill",),
     },
     "gemini": {
@@ -450,7 +450,7 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         if "agents" in data:
             targets = _string_names(data["agents"], "agents")
             allowed_agents = None if targets == ("*",) else _names(data["agents"], "agents", _NAME)
-            if allowed_agents != () and allowed is not None and "delegate" not in allowed:
+            if allowed_agents != () and allowed is not None and "to_agent" not in allowed:
                 raise ValueError("agents requires the agent tool in tools")
     elif fmt == "opencode":
         foreign_mode = data.get("mode", "all")

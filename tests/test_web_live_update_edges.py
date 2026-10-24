@@ -149,12 +149,12 @@ def test_attention_cue_rechecks_quiet_state_and_never_speaks_native_instruction_
                 child_started.set()
                 await release_child.wait()
                 yield TextDoneEvent(text="PRIVATE_CHILD_DETAIL")
-            elif last.startswith("BACKGROUND TASK NOTIFICATION:"):
+            elif last.startswith("BACKGROUND AGENT UPDATES:"):
                 yield TextDoneEvent(text="The verified background answer.")
             elif messages[-1].role == "tool":
                 yield TextDoneEvent(text="Background work is running.")
             else:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "edge child"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "edge child"})
 
         async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
             if content == "The verified background answer.":

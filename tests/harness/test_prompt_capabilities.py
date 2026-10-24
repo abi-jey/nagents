@@ -39,7 +39,7 @@ async def test_generated_prompt_refreshes_between_runs_without_overwriting_autho
         initial = str(providers[0].requests[-1][0].content)
         assert "do not promise delayed self-follow-up" in initial
         assert "Scheduling acknowledges immediately" not in initial
-        assert "use delegate(" not in initial
+        assert "use to_agent(" not in initial
         assert "cannot delegate" in initial
         assert "host approval policy" in initial and "Read-only profiles" in initial
         harness.allow_subagents = True
@@ -47,13 +47,13 @@ async def test_generated_prompt_refreshes_between_runs_without_overwriting_autho
         await collect(harness)
         enabled = str(providers[0].requests[-1][0].content)
         assert "Scheduling acknowledges immediately" in enabled
-        assert "use delegate(" in enabled
+        assert "use to_agent(" in enabled
         assert "schedule_wakeup" in providers[0].schemas[-1]
-        harness.tool_settings.save({"assistant": {"delegate": False, "schedule_wakeup": False}}, "")
+        harness.tool_settings.save({"assistant": {"to_agent": False, "schedule_wakeup": False}}, "")
         await collect(harness)
         disabled = str(providers[0].requests[-1][0].content)
         assert "Scheduling acknowledges immediately" not in disabled
-        assert "use delegate(" not in disabled
+        assert "use to_agent(" not in disabled
         harness.agent.system_prompt = "Authored run context"
         await collect(harness)
         assert providers[0].requests[-1][0].content == "Authored run context"
@@ -74,7 +74,7 @@ async def test_children_use_root_scheduler_depth_and_workspace_restrictions(
         root.wakeup_handler = scheduler
         child.refresh_instructions()
         assert "Scheduling acknowledges immediately" in str(child.agent.system_prompt)
-        assert "use delegate(" in str(child.agent.system_prompt)
+        assert "use to_agent(" in str(child.agent.system_prompt)
         current = await root.tasks.settings_host.read("workspace")
         limits = SubagentLimits(
             current.limits.max_concurrent_subagents,
@@ -85,7 +85,7 @@ async def test_children_use_root_scheduler_depth_and_workspace_restrictions(
         await root.tasks.refresh_limits()
         await child.tasks.refresh_limits()
         child.refresh_instructions()
-        assert "use delegate(" not in str(child.agent.system_prompt)
+        assert "use to_agent(" not in str(child.agent.system_prompt)
         root.tool_settings.save({"assistant": {"schedule_wakeup": False}}, "")
         child.refresh_instructions()
         assert "Scheduling acknowledges immediately" not in str(child.agent.system_prompt)
@@ -112,11 +112,11 @@ async def test_custom_overrides_do_not_inherit_native_lifecycle_guidance(
         # A user replacement owns its contract and receives no native lifecycle guidance.
         assert "Scheduling acknowledges immediately" not in str(harness.agent.system_prompt)
         harness.agent.register_tool(custom, name="wake_up_in")
-        harness.agent.register_tool(custom, name="delegate")
+        harness.agent.register_tool(custom, name="to_agent")
         harness.refresh_instructions()
         prompt = str(harness.agent.system_prompt)
         assert "Scheduling acknowledges immediately" not in prompt
-        assert "use delegate(" not in prompt
+        assert "use to_agent(" not in prompt
         assert "Choose only tools advertised" in prompt
     finally:
         await harness.close()
@@ -157,32 +157,22 @@ async def test_invalid_tool_settings_fail_at_initialization_and_remain_visible_b
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("replace_canonical", [False, True])
-async def test_native_delegation_alias_uses_advertised_name_and_respects_depth(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replace_canonical: bool
+async def test_native_agent_tool_uses_canonical_name_and_respects_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         yield TextDoneEvent(text="Done")
 
-    def custom() -> str:
-        return "Custom contract"
-
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
     try:
-        harness.agent.register_tool(harness.tasks.delegate, name="dispatch_child")
-        if replace_canonical:
-            harness.agent.register_tool(custom, name="delegate")
-        else:
-            harness.refresh_instructions()
-            assert "use delegate(" in str(harness.agent.system_prompt)
-            harness.tool_settings.save({"assistant": {"delegate": False}}, "")
         harness.refresh_instructions()
         prompt = str(harness.agent.system_prompt)
-        assert "use dispatch_child(prompt, agent='assistant')" in prompt
-        assert "use delegate(" not in prompt
+        assert "use to_agent(" in prompt
+        assert "dispatch_child" not in prompt
+        assert "dispatch_child" not in harness.agent.tool_registry.names()
         harness.allow_subagents = False
         harness.refresh_instructions()
-        assert "use dispatch_child(" not in str(harness.agent.system_prompt)
+        assert "use to_agent(" not in str(harness.agent.system_prompt)
         assert "cannot delegate" in str(harness.agent.system_prompt)
     finally:
         await harness.close()

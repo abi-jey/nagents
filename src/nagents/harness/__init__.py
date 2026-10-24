@@ -1,5 +1,8 @@
 """Local coding harness with explicit approvals and trusted Python extensions."""
 
+from .agent_status import AgentStatusCollection
+from .agent_status import AgentStatusRecord
+from .agent_status import AgentStatusResult
 from .commands import Command
 from .commands import CommandHandler
 from .commands import CommandRegistry
@@ -25,6 +28,9 @@ from .types import ToolOutput
 from .types import WakeupHandler
 
 __all__ = [
+    "AgentStatusCollection",
+    "AgentStatusRecord",
+    "AgentStatusResult",
     "ApprovalHandler",
     "ApprovalRequest",
     "Command",

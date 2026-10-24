@@ -38,7 +38,7 @@ def test_child_permission_rejects_stale_identity_and_ignores_parent_replacement(
     async def scenario() -> None:
         async def script(provider: FakeProvider, _messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate-one", name="delegate", arguments={"prompt": "Write the fixture"})
+                yield ToolCallEvent(id="delegate-one", name="to_agent", arguments={"prompt": "Write the fixture"})
             elif provider.index == 1 and len(provider.requests) == 1:
                 yield ToolCallEvent(
                     id="child-write", name="write", arguments={"path": "child.txt", "content": "child fixture"}
@@ -49,9 +49,9 @@ def test_child_permission_rejects_stale_identity_and_ignores_parent_replacement(
         async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, _, _):
             stream = LiveStream(app, headers, state.harness.session_id, "Delegate fixture work")
             pending = await stream.event("approval")
-            assert pending["task_id"] and pending["depth"] == 1
+            assert pending["session_id"] and pending["depth"] == 1
             assert pending["allow_tool"] is True and pending["allow_tool_persistent"] is True
-            child = state.harness.tasks.root._children[str(pending["task_id"])]
+            child = state.harness.tasks.root._children[str(pending["session_id"])]
             original_activation, original_depth = child._activation, child.subagent_depth
             if changed == "activation":
                 child._activation += 1
@@ -92,7 +92,7 @@ def test_cancelling_child_cannot_save_permission_before_answer_wait(
     async def scenario() -> None:
         async def script(provider: FakeProvider, _messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="delegate-one", name="delegate", arguments={"prompt": "Write the fixture"})
+                yield ToolCallEvent(id="delegate-one", name="to_agent", arguments={"prompt": "Write the fixture"})
             elif provider.index == 1 and len(provider.requests) == 1:
                 yield ToolCallEvent(
                     id="child-write", name="write", arguments={"path": "cancelled.txt", "content": "must not write"}
@@ -119,9 +119,9 @@ def test_cancelling_child_cannot_save_permission_before_answer_wait(
                 stream = LiveStream(app, headers, state.harness.session_id, "Delegate fixture work")
                 pending = await stream.event("approval")
                 await asyncio.wait_for(sent.wait(), HANG_GUARD)
-                child = state.harness.tasks.root._children[str(pending["task_id"])]
+                child = state.harness.tasks.root._children[str(pending["session_id"])]
                 worker = (
-                    child._worker if owner == "child" else state.harness.tasks.root._workers[str(pending["task_id"])]
+                    child._worker if owner == "child" else state.harness.tasks.root._workers[str(pending["session_id"])]
                 )
                 assert worker is not None
                 worker.cancel()

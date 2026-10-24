@@ -47,53 +47,68 @@ def test_json_event_schema() -> None:
 
 
 def test_human_task_message_json_retains_hierarchy() -> None:
-    record = _event_record(TaskMessage("task", "calm finch", "Follow up", parent_task_id="parent", depth=2))
+    record = _event_record(
+        TaskMessage("s2", "Research", "Follow up", parent_session_id="s1", root_session_id="ngn-root", depth=2)
+    )
     assert record["event"] == "task_message"
     assert record["schema_version"] == 1
-    assert record["parent_task_id"] == "parent" and record["depth"] == 2
+    assert record["session_id"] == "s2" and record["title"] == "Research"
+    assert record["parent_session_id"] == "s1" and record["root_session_id"] == "ngn-root"
+    assert record["depth"] == 2
     assert record["prompt"] == "Follow up"
 
 
 def test_task_activation_and_notification_wire_contract() -> None:
     for event in (
         TaskStarted(
-            "child", "calm finch", "Wake", "parent", "parent-session", "child-session", 2, "agent", 1, 3, "wakeup"
+            "s2",
+            "Research",
+            "Wake",
+            parent_session_id="s1",
+            root_session_id="ngn-root",
+            depth=2,
+            profile="agent",
+            followup=1,
+            activation=3,
+            trigger="wakeup",
         ),
         TaskCompleted(
-            "child",
-            "calm finch",
+            "s2",
+            "Research",
             "Result",
-            "",
-            "parent",
-            "parent-session",
-            "child-session",
-            2,
-            "agent",
-            1,
-            "completed",
-            3,
-            "wakeup",
+            parent_session_id="s1",
+            root_session_id="ngn-root",
+            depth=2,
+            profile="agent",
+            followup=1,
+            status="completed",
+            activation=3,
+            trigger="wakeup",
         ),
     ):
         record = _event_record(event)
         assert record["event"] in {"task_started", "task_completed"}
         assert record["activation"] == 3 and record["trigger"] == "wakeup"
-        assert record["followup"] == 1 and record["parent_task_id"] == "parent"
-    notification = TaskNotification("notice-1", "child", "", "calm finch", "Main", "completion", "Result")
+        assert record["followup"] == 1 and record["parent_session_id"] == "s1"
+        assert record["root_session_id"] == "ngn-root"
+    notification = TaskNotification(
+        "notice-1", "s2", "", "Research", "Main", "completion", "Result", root_session_id="ngn-root"
+    )
     assert _event_record(notification) == {
         "event": "task_notification",
         "schema_version": 1,
         "notification_id": "notice-1",
-        "source_task_id": "child",
-        "recipient_task_id": "",
-        "source_name": "calm finch",
-        "recipient_name": "Main",
+        "source_session_id": "s2",
+        "recipient_session_id": "",
+        "source_title": "Research",
+        "recipient_title": "Main",
         "cause": "completion",
         "text": "Result",
+        "root_session_id": "ngn-root",
     }
-    assert TaskStarted("child", "name", "prompt").activation == 0
-    assert TaskCompleted("child", "name", "result").trigger == "delegation"
-    assert ApprovalRequest("call", "write", "Create", {}, "", "child", "name", 2, 3).activation == 3
+    assert TaskStarted("s1", "", "prompt").activation == 0
+    assert TaskCompleted("s1", "", "result").trigger == "delegation"
+    assert ApprovalRequest("call", "write", "Create", {}, "", "s1", "Research", 2, 3).activation == 3
 
 
 def test_invalid_workspace_is_actionable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

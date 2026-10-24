@@ -57,7 +57,10 @@ def test_trace_freezes_offered_contract_before_execution() -> None:
     trace = Trace()
     tools = [{"name": "read_file", "description": "Native description", "parameters": {"type": "object"}}]
     messages = [{"role": "user", "content": "could you check the notes?"}]
-    trace.observe("model_context", {"messages": messages, "tools": tools, "model_call_id": "g1", "session_id": "s1"})
+    trace.observe(
+        "model_context",
+        {"messages": messages, "tools": tools, "model_call_id": "g1", "session_id": "ngn-private-storage"},
+    )
     tools[0]["description"] = "later change"
     messages[0]["content"] = "later change"
     request = trace.requests[0]
@@ -68,10 +71,13 @@ def test_trace_freezes_offered_contract_before_execution() -> None:
     assert request["sequence"] == 1
     assert trace.tick() == 2
     assert len(str(request["input_sha256"])) == len(sha256(""))
-    trace.session_actors["s1"] = ("child", "task1")
+    trace.session_actors["ngn-private-storage"] = ("child", "s2", "ngn-root")
     trace.annotate()
     assert request["actor"] == "child"
-    assert request["task_id"] == "task1"
+    assert request["session_id"] == "s2"
+    assert request["root_session_id"] == "ngn-root"
+    assert "_storage_id" not in request
+    assert "ngn-private-storage" not in json.dumps(trace.requests)
 
 
 @pytest.mark.parametrize("runtime_error", [False, True])
@@ -105,7 +111,7 @@ def test_native_harness_preserves_prompt_and_stale_failure(
             seen_users.extend(str(message.content) for message in messages if message.role == "user")
             assert tools
             assert "shell" not in {tool.name for tool in tools}
-            assert "delegate" not in {tool.name for tool in tools}
+            assert "to_agent" not in {tool.name for tool in tools}
             usage = example_usage(100, 10)
             if calls in {1, 3}:
                 yield ToolCallEvent(id=f"c{calls}", name="read_file", arguments={"path": "note.txt"}, usage=usage)
@@ -245,7 +251,7 @@ def test_unmapped_generation_does_not_borrow_other_requests_schema() -> None:
         {
             "generation_id": "unknown",
             "actor": "root",
-            "task_id": "",
+            "session_id": "",
             "tool": "read_file",
             "call_id": "call",
             "arguments": {"wrong": True},

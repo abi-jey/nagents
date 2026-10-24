@@ -112,12 +112,12 @@ test("task timeline rows render from observed threads and keep identity as the r
   const ui = fixture();
   let entries: Entry[] = [];
   entries = appendEvent(entries, {
-    event: "task_started", run_id: "run", task_id: "parent", activation: 0,
-    name: "Parent", prompt: "Work for parent", depth: 1,
+    event: "task_started", run_id: "run", session_id: "parent", activation: 0,
+    title: "Parent", prompt: "Work for parent", depth: 1,
   });
   entries = appendEvent(entries, {
-    event: "task_started", run_id: "run", task_id: "child", parent_task_id: "parent", activation: 0,
-    name: "Child", prompt: "Work for child", depth: 2,
+    event: "task_started", run_id: "run", session_id: "child", parent_session_id: "parent", activation: 0,
+    title: "Child", prompt: "Work for child", depth: 2,
   });
   const agents: TeamAgent[] = [];
   const inspect = (_id: string) => {};
@@ -138,8 +138,8 @@ test("task timeline rows render from observed threads and keep identity as the r
       "registry enrichment changes status and metadata without replacing the visible task row");
 
     entries = appendEvent(entries, {
-      event: "task_completed", run_id: "run", task_id: "child", parent_task_id: "parent", activation: 0,
-      name: "Child", status: "completed", result: "Finished",
+      event: "task_completed", run_id: "run", session_id: "child", parent_session_id: "parent", activation: 0,
+      title: "Child", status: "completed", result: "Finished",
     });
     agents[1] = agent("child", "parent", "done");
     await ui.render(entries, { renderTask });
@@ -393,7 +393,7 @@ test("optimistic user row stays mounted through admission, canonical history and
     const key = rowElement.dataset.recordKey;
 
     receive({ event: "run_started", run_id: "run", message_id: message.message_id });
-    receive({ event: "input_admitted", run_id: "run", session_id: "root", message_id: message.message_id, channel: "" });
+    receive({ event: "input_admitted", run_id: "run", root_session_id: "root", message_id: message.message_id, channel: "" });
     await ui.render(cache.get("root").entries);
     assert.equal(ui.container.querySelector(`[data-record-key="${key}"]`), rowElement);
 
@@ -406,7 +406,7 @@ test("optimistic user row stays mounted through admission, canonical history and
       row("saved-followup", "user", prompt, { message_id: message.message_id }),
     ], { id: "run", status: "running", message_id: message.message_id, events: [
       { event: "run_started", run_id: "run", message_id: message.message_id },
-      { event: "input_admitted", run_id: "run", session_id: "root", message_id: message.message_id, channel: "" },
+      { event: "input_admitted", run_id: "run", root_session_id: "root", message_id: message.message_id, channel: "" },
       { event: "user_message", run_id: "run", history_id: "saved-followup", message_id: message.message_id, text: prompt },
     ] });
     cache.receive({ type: "snapshot", session_id: "root", epoch: "one", cursor: ++cursor, snapshot: checkpoint });
@@ -458,18 +458,18 @@ test("checkpointed live answer reconciles to durable history without moving or r
 
 test("task conversation polling reconciles streamed tool and answer rows to canonical history", async () => {
   const ui = fixture();
-  const childSession = "child-session";
+  const childSession = "child";
   const task = {
-    id: "child", name: "Gentle Brook", status: "completed" as const, result: "Found it", error: "",
-    session_id: "root", prompt: "Find one result", child_session_id: childSession, parent_task_id: "",
-    parent_session_id: "root", depth: 1, profile: "assistant", mode: "", followups: 0, activation: 0, trigger: "delegation" as const,
+    session_id: "child", title: "Gentle Brook", status: "completed" as const, result: "Found it", error: "",
+    root_session_id: "root", prompt: "Find one result",  parent_session_id: "",
+     depth: 1, profile: "assistant", mode: "", followups: 0, activation: 0, trigger: "delegation" as const,
   };
   const call = { id: "find-call", name: "find", arguments: { query: "one result" } };
   const activity: TaskActivity[] = [
-    { event: "task_activity", task_id: "child", activation: 0, sequence: 1, timestamp: 1, payload: { type: "tool_call", id: "find-call", name: "find", arguments: { query: "one result" } } },
-    { event: "task_activity", task_id: "child", activation: 0, sequence: 2, timestamp: 2, payload: { type: "tool_result", id: "find-call", name: "find", result: { matches: ["result"] } } },
-    { event: "task_activity", task_id: "child", activation: 0, sequence: 3, timestamp: 3, payload: { type: "response_metadata", response_id: "child-response", response_session_id: childSession, run_id: "child-run", revision: 1, round_number: 0, history_id: "", status: "responding", summary: "", summary_truncated: false, summary_expired: false, usage_reported: false } },
-    { event: "task_activity", task_id: "child", activation: 0, sequence: 4, timestamp: 4, payload: { type: "text_done", response_id: "child-response", response_session_id: childSession, run_id: "child-run", text: "Found one result." } },
+    { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 0, sequence: 1, timestamp: 1, payload: { type: "tool_call", id: "find-call", name: "find", arguments: { query: "one result" } } },
+    { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 0, sequence: 2, timestamp: 2, payload: { type: "tool_result", id: "find-call", name: "find", result: { matches: ["result"] } } },
+    { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 0, sequence: 3, timestamp: 3, payload: { type: "response_metadata", response_id: "child-response", response_session_id: childSession, run_id: "child-run", revision: 1, round_number: 0, history_id: "", status: "responding", summary: "", summary_truncated: false, summary_expired: false, usage_reported: false } },
+    { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 0, sequence: 4, timestamp: 4, payload: { type: "text_done", response_id: "child-response", response_session_id: childSession, run_id: "child-run", text: "Found one result." } },
   ];
   const userRow: TaskDetail["history"][number] = { role: "user", content: "Find one result", name: "", tool_call_id: "", tool_calls: [], history_id: "task-user", message_id: "task-user-message" };
   const responseMetadata = { response_id: "child-response", response_session_id: childSession, run_id: "child-run", revision: 2, round_number: 0, history_id: "assistant-history", status: "completed", summary: "", summary_truncated: false, summary_expired: false, usage_reported: false };
@@ -513,10 +513,10 @@ test("task conversation polling reconciles streamed tool and answer rows to cano
       "polling the same saved history must not append the streamed answer again");
 
     const afterClear: TaskActivity[] = [
-      { event: "task_activity", task_id: "child", activation: 1, sequence: 5, timestamp: 5, payload: { type: "tool_call", id: "find-next", name: "lookup", arguments: { query: "fresh" } } },
-      { event: "task_activity", task_id: "child", activation: 1, sequence: 6, timestamp: 6, payload: { type: "tool_result", id: "find-next", name: "lookup", result: "Fresh result" } },
-      { event: "task_activity", task_id: "child", activation: 1, sequence: 7, timestamp: 7, payload: { type: "response_metadata", response_id: "child-response-next", response_session_id: childSession, run_id: "child-run-next", revision: 1, round_number: 0, history_id: "", status: "responding", summary: "", summary_truncated: false, summary_expired: false, usage_reported: false } },
-      { event: "task_activity", task_id: "child", activation: 1, sequence: 8, timestamp: 8, payload: { type: "text_chunk", response_id: "child-response-next", response_session_id: childSession, run_id: "child-run-next", chunk: "Fresh response." } },
+      { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 1, sequence: 5, timestamp: 5, payload: { type: "tool_call", id: "find-next", name: "lookup", arguments: { query: "fresh" } } },
+      { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 1, sequence: 6, timestamp: 6, payload: { type: "tool_result", id: "find-next", name: "lookup", result: "Fresh result" } },
+      { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 1, sequence: 7, timestamp: 7, payload: { type: "response_metadata", response_id: "child-response-next", response_session_id: childSession, run_id: "child-run-next", revision: 1, round_number: 0, history_id: "", status: "responding", summary: "", summary_truncated: false, summary_expired: false, usage_reported: false } },
+      { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 1, sequence: 8, timestamp: 8, payload: { type: "text_chunk", response_id: "child-response-next", response_session_id: childSession, run_id: "child-run-next", chunk: "Fresh response." } },
     ];
     team.detail = detail([], afterClear, 4);
     await render();
@@ -539,11 +539,11 @@ test("task conversation polling reconciles streamed tool and answer rows to cano
 
 test("child followup metadata and text without a followup counter stay in one activation row", async () => {
   const ui = fixture();
-  const childSession = "child-session";
+  const childSession = "child";
   const task = {
-    id: "child", name: "Calm Otter", status: "completed" as const, result: "Done", error: "",
-    session_id: "root", prompt: "First request", child_session_id: childSession, parent_task_id: "parent",
-    parent_session_id: "root", depth: 2, profile: "assistant", mode: "", followups: 1, activation: 1, trigger: "delegation" as const,
+    session_id: "child", title: "Calm Otter", status: "completed" as const, result: "Done", error: "",
+    root_session_id: "root", prompt: "First request",  parent_session_id: "parent",
+     depth: 2, profile: "assistant", mode: "", followups: 1, activation: 1, trigger: "delegation" as const,
   };
   const priorResponseMetadata = {
     response_id: "first-response", response_session_id: childSession, revision: 2, round_number: 0,
@@ -574,7 +574,7 @@ test("child followup metadata and text without a followup counter stay in one ac
     team, agents: [], arrivals: {}, token: "", sessionId: "root", back() {},
   }));
   const event = (sequence: number, payload: TaskActivity["payload"]): TaskActivity => ({
-    event: "task_activity", task_id: "child", activation: 1, sequence, timestamp: sequence, payload,
+    event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "child", activation: 1, sequence, timestamp: sequence, payload,
   });
   const findAnswer = () => [...ui.container.querySelectorAll<HTMLElement>("article.entry.assistant")]
     .find(item => item.textContent?.includes("A current result is ready.")) || null;
@@ -603,7 +603,7 @@ test("child followup metadata and text without a followup counter stay in one ac
 
     const metadata = event(103, {
       type: "response_metadata", response_id: "followup-response", response_session_id: childSession,
-      run_id: "root-run", task_id: "parent", parent_task_id: "root", followup: 1,
+      run_id: "root-run", session_id: "parent", parent_session_id: "root", followup: 1,
       revision: 1, round_number: 0, history_id: "", status: "responding", summary: "",
       summary_truncated: false, summary_expired: false, usage_reported: false,
     });

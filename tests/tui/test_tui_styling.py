@@ -58,7 +58,7 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
         backend.config.theme_background = background
         backend.config.animations = False
         backend.config.demo = False
-        tasks = [TaskInfo("one", "calm finch", status="completed")]
+        tasks = [TaskInfo("s1", "", status="completed")]
         backend.tasks.list = lambda: tasks
         backend.messages = [
             Message(role="user", content="Inspect this workspace."),
@@ -132,12 +132,12 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
             if size[0] > 110:
                 tree = app.query_one(AgentTree)
                 tree.focus()
-                tree.move_cursor(tree.task_nodes["one"])
+                tree.move_cursor(tree.task_nodes["s1"])
                 await pilot.pause()
                 check_visible("#rail", "#agent-tree")
                 assert tree.styles.background.a == 0
-                row = tree.render_line(tree.task_nodes["one"].line - int(tree.scroll_y))
-                selected = [segment for segment in row if "calm finch" in segment.text]
+                row = tree.render_line(tree.task_nodes["s1"].line - int(tree.scroll_y))
+                selected = [segment for segment in row if "s1" in segment.text]
                 assert selected
                 for segment in selected:
                     assert segment.style is not None

@@ -33,8 +33,8 @@ class Chain:
 @dataclass(frozen=True)
 class Wakeup:
     id: str
+    root_session_id: str
     session_id: str
-    task_id: str
     run_id: str
     chain: Chain
     deadline: float
@@ -42,7 +42,7 @@ class Wakeup:
     reason: str
 
     def summary(self) -> dict[str, str]:
-        return {"wakeup_id": self.id, "task_id": self.task_id, "due_at": self.due_at, "reason": self.reason}
+        return {"wakeup_id": self.id, "session_id": self.session_id, "due_at": self.due_at, "reason": self.reason}
 
 
 class Wakeups:
@@ -53,7 +53,7 @@ class Wakeups:
         *,
         clock: Callable[[], float] = time.monotonic,
         observer: Callable[[dict[str, object]], None] = lambda record: None,
-        available: Callable[[str], bool] = lambda session_id: True,
+        available: Callable[[str], bool] = lambda root_session_id: True,
         parallel: bool = False,
         reserve: Callable[[Wakeup, asyncio.Task[None]], bool] = lambda wakeup, task: True,
     ) -> None:
@@ -89,7 +89,7 @@ class Wakeups:
         record: dict[str, object] = {
             "event": "wakeup",
             "schema_version": 1,
-            "session_id": wakeup.session_id,
+            "root_session_id": wakeup.root_session_id,
             "run_id": run_id or wakeup.run_id,
             **wakeup.summary(),
             "status": status,
@@ -97,7 +97,7 @@ class Wakeups:
         self.publish(record)
 
     def schedule(
-        self, session_id: str, run_id: str, chain: Chain, task_id: str, delay: float, reason: str
+        self, root_session_id: str, run_id: str, chain: Chain, session_id: str, delay: float, reason: str
     ) -> dict[str, str]:
         if self.closed or chain.cancelled:
             raise RuntimeError("Wakeup owner is no longer active")
@@ -111,8 +111,8 @@ class Wakeups:
             raise ValueError("Automatic activation budget exhausted for this human run")
         wakeup = Wakeup(
             secrets.token_urlsafe(24),
+            root_session_id,
             session_id,
-            task_id,
             run_id,
             chain,
             self.clock() + delay,
@@ -125,7 +125,7 @@ class Wakeups:
         return {
             **wakeup.summary(),
             "status": "scheduled",
-            "session_id": session_id,
+            "root_session_id": root_session_id,
             "run_id": run_id,
         }
 
@@ -137,26 +137,30 @@ class Wakeups:
                 self.lifecycle(wakeup, "cancelled")
         self.changed.set()
 
-    def forget_session(self, session_id: str) -> None:
-        self._events = deque(item for item in self._events if item[1].get("session_id") != session_id)
+    def forget_session(self, root_session_id: str) -> None:
+        self._events = deque(item for item in self._events if item[1].get("root_session_id") != root_session_id)
         self._bytes = sum(size for _, _, size in self._events)
         self._discarded = self.cursor
 
-    def cancel_session(self, session_id: str) -> None:
+    def cancel_session(self, root_session_id: str) -> None:
         """Revoke every pending/claimed timer chain owned by this chat."""
         for wakeup in (*self.pending.values(), *self._claimed.values()):
-            if wakeup.session_id == session_id:
+            if wakeup.root_session_id == root_session_id:
                 self.cancel(wakeup.chain)
 
-    def activity(self, session_id: str, after: int, active_run_id: str) -> dict[str, object]:
+    def activity(self, root_session_id: str, after: int, active_run_id: str) -> dict[str, object]:
         return {
-            "session_id": session_id,
+            "session_id": root_session_id,
             "cursor": self.cursor,
             "events": [
-                event for cursor, event, _ in self._events if event["session_id"] == session_id and cursor > after
+                event
+                for cursor, event, _ in self._events
+                if event["root_session_id"] == root_session_id and cursor > after
             ],
             "active_run_id": active_run_id,
-            "pending_wakeups": [item.summary() for item in self.pending.values() if item.session_id == session_id],
+            "pending_wakeups": [
+                item.summary() for item in self.pending.values() if item.root_session_id == root_session_id
+            ],
             "truncated": after < self._discarded or after > self.cursor,
         }
 
@@ -180,13 +184,13 @@ class Wakeups:
             return
         if self.parallel and dispatch:
             started = asyncio.Event()
-            task = asyncio.create_task(self._execute(wakeup, started), name=f"ngn-wakeup-{wakeup.session_id}")
+            task = asyncio.create_task(self._execute(wakeup, started), name=f"ngn-wakeup-{wakeup.root_session_id}")
             if not self.reserve(wakeup, task):
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
                 return
-            self._claimed[wakeup.session_id] = wakeup
+            self._claimed[wakeup.root_session_id] = wakeup
             self._running.add(task)
             task.add_done_callback(lambda completed: self._completed(wakeup, completed, started.is_set()))
         else:
@@ -199,8 +203,8 @@ class Wakeups:
             await self._execute(wakeup)
 
     def _release_claim(self, wakeup: Wakeup) -> None:
-        if self._claimed.get(wakeup.session_id) is wakeup:
-            self._claimed.pop(wakeup.session_id)
+        if self._claimed.get(wakeup.root_session_id) is wakeup:
+            self._claimed.pop(wakeup.root_session_id)
         self.changed.set()
 
     def _completed(self, wakeup: Wakeup, task: asyncio.Task[None], started: bool) -> None:
@@ -213,7 +217,7 @@ class Wakeups:
         return [
             item
             for item in self.pending.values()
-            if item.session_id not in self._claimed and self.available(item.session_id)
+            if item.root_session_id not in self._claimed and self.available(item.root_session_id)
         ]
 
     async def _execute(self, wakeup: Wakeup, started: asyncio.Event | None = None) -> None:

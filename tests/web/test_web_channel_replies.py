@@ -86,7 +86,7 @@ def test_opted_in_original_list_and_send_reply_without_subscribers_only_to_origi
         assert [record["tool"] for record in records] == ["channel_list", "channel_send"]
         root = app.bindings()["chat-a"]
         assert all(
-            record["event"] == "notice" and record["session_id"] == root and record["run_id"] for record in records
+            record["event"] == "notice" and record["root_session_id"] == root and record["run_id"] for record in records
         )
         assert all("approval_id" not in record for record in records)
         history = app.history(root)["history"]
@@ -507,7 +507,7 @@ def test_owned_historical_session_web_followup_can_message_owner_without_subscri
         assert (sent.destination, sent.thread_id, sent.reply_to) == ("chat-a", "chosen-thread", "chosen-reply")
         assert app.bindings()["chat-a"] == attached
         assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
-        assert all(record["session_id"] == root for record in automatic_events(app))
+        assert all(record["root_session_id"] == root for record in automatic_events(app))
 
 
 @pytest.mark.parametrize("voice", [False, True])
@@ -644,7 +644,7 @@ def test_child_approval_keeps_initial_inbox_receipt_after_root_followup(
                 await release_child.wait()
                 yield ToolCallEvent(id="child-write", name="write", arguments={"path": "denied.txt", "content": "no"})
             elif prompt == "initial request":
-                yield ToolCallEvent(id="delegate-child", name="delegate", arguments={"prompt": "held child"})
+                yield ToolCallEvent(id="delegate-child", name="to_agent", arguments={"prompt": "held child"})
             elif prompt == "followup request":
                 yield ToolCallEvent(id="second-read", name="read_file", arguments={"path": "proof.txt"})
             else:
@@ -673,7 +673,7 @@ def test_child_approval_keeps_initial_inbox_receipt_after_root_followup(
             active = app.state.active
             assert active is not None and active.pending is not None
             record = active.pending.record
-            assert record["task_id"] and record["id"] == "child-write"
+            assert record["session_id"] and record["id"] == "child-write"
             event = next(item for item in notices if item.phase == "waiting_for_approval")
             assert event.message_id == first_id
             response = app.client.post(
@@ -810,7 +810,7 @@ def test_actual_scheduled_wakeup_uses_owned_session_without_inventing_ingress(
                 "scheduled-reply",
             )
             assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
-            assert all(record["session_id"] == root for record in automatic_events(app))
+            assert all(record["root_session_id"] == root for record in automatic_events(app))
         else:
             assert len(app.channels[0].deliveries) == before and not automatic_events(app)
         assert not app.channels[1].deliveries

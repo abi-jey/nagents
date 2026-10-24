@@ -145,14 +145,14 @@ def test_retained_clone_adopts_idle_settings_without_freezing_temporary_read_onl
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             prompt = str(messages[-1].content)
             if prompt == "A":
-                yield ToolCallEvent(id="child-a", name="delegate", arguments={"prompt": "child A"})
+                yield ToolCallEvent(id="child-a", name="to_agent", arguments={"prompt": "child A"})
                 yield ToolCallEvent(id="read-a", name="read_file", arguments={"path": "read.txt"})
             elif messages[-1].role == "tool" and messages[-1].name == "read_file":
                 held.set()
                 await release.wait()
                 yield TextDoneEvent(text="A held work complete")
             elif prompt == "B":
-                yield ToolCallEvent(id="child-b", name="delegate", arguments={"prompt": "child B"})
+                yield ToolCallEvent(id="child-b", name="to_agent", arguments={"prompt": "child B"})
             else:
                 if prompt == "B again":
                     observed.append((state.running_harness.mode, provider.model))

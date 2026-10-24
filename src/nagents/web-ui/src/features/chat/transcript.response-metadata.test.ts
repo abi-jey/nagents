@@ -238,11 +238,11 @@ test("cancelled reasoning-only response hydrates as display evidence without cre
 
 test("response identity separates parallel root and child work and later activations", () => {
   let entries: Entry[] = [];
-  for (const [response_id, response_session_id, task_id, activation] of [["root-answer", "root", "", 0], ["child-answer", "child", "worker", 0], ["child-next", "child", "worker", 1]] as const) {
-    entries = appendEvent(entries, update(metadata({ response_id, response_session_id, summary: response_id }), { task_id, activation }));
-    entries = appendEvent(entries, text("text_done", `Answer ${response_id}`, response_id, { task_id, activation }));
+  for (const [response_id, response_session_id, session_id, activation] of [["root-answer", "root", "", 0], ["child-answer", "child", "worker", 0], ["child-next", "child", "worker", 1]] as const) {
+    entries = appendEvent(entries, update(metadata({ response_id, response_session_id, summary: response_id }), { session_id, activation }));
+    entries = appendEvent(entries, text("text_done", `Answer ${response_id}`, response_id, { session_id, activation }));
   }
-  entries = appendEvent(entries, update(metadata({ response_id: "child-answer", response_session_id: "child", revision: 2, status: "completed", summary: "Late child summary" }), { task_id: "worker", activation: 0 }));
+  entries = appendEvent(entries, update(metadata({ response_id: "child-answer", response_session_id: "child", revision: 2, status: "completed", summary: "Late child summary" }), { session_id: "worker", activation: 0 }));
   assert.equal(entries.length, 3);
   assert.deepEqual(entries.map(entry => [entry.text, entry.responseMetadata?.summary]), [
     ["Answer root-answer", "root-answer"], ["Answer child-answer", "Late child summary"], ["Answer child-next", "child-next"],
@@ -258,15 +258,15 @@ test("session subscription caches cannot transfer reasoning metadata to another 
 });
 
 test("focused child conversation displays only its own safe metadata and keeps later activations separate", () => {
-  const task: RetainedTask = { id: "worker", name: "Worker", parent_task_id: "", status: "running", result: "", error: "", prompt: "Check it",
-    session_id: "root", child_session_id: "child", parent_session_id: "root", depth: 1, profile: "assistant", mode: "build", followups: 0, activation: 0, trigger: "delegation" };
-  const activity = (sequence: number, payload: TaskActivity["payload"], activation = 0): TaskActivity => ({ event: "task_activity", task_id: "worker", activation, sequence, timestamp: sequence, payload });
-  const first = metadata({ response_id: "child-one", response_session_id: "child", status: "completed", history_id: "child-row" });
-  const second = metadata({ response_id: "child-two", response_session_id: "child", summary: "New activation" });
+  const task: RetainedTask = { session_id: "worker", title: "Worker", parent_session_id: "", status: "running", result: "", error: "", prompt: "Check it",
+    root_session_id: "root",   depth: 1, profile: "assistant", mode: "build", followups: 0, activation: 0, trigger: "delegation" };
+  const activity = (sequence: number, payload: TaskActivity["payload"], activation = 0): TaskActivity => ({ event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: "worker", activation, sequence, timestamp: sequence, payload });
+  const first = metadata({ response_id: "child-one", response_session_id: "worker", status: "completed", history_id: "child-row" });
+  const second = metadata({ response_id: "child-two", response_session_id: "worker", summary: "New activation" });
   const detail: TaskDetail = { task, history: [row(first, "Saved child answer")], activity_cursor: 1 };
   const entries = taskEntries(detail, [
     activity(2, { type: "response_metadata", ...first }),
-    activity(7, { type: "text_done", text: "Saved child answer", response_id: "child-one", response_session_id: "child" }),
+    activity(7, { type: "text_done", text: "Saved child answer", response_id: "child-one", response_session_id: "worker" }),
     activity(3, { type: "response_metadata", ...metadata({ response_id: "forged", response_session_id: "sibling" }) }),
     activity(4, { type: "reasoning_chunk", chunk: "Raw protocol text" }),
     activity(5, { type: "response_metadata", ...second }, 1),

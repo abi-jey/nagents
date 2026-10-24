@@ -34,6 +34,6 @@ def test_structured_shell_outcomes(result: object, expected: str) -> None:
     assert shell_outcome("shell", result) == expected
 
 
-@pytest.mark.parametrize("name", ["read_file", "delegate", "custom_tool", "subagent / shell", ""])
+@pytest.mark.parametrize("name", ["read_file", "to_agent", "custom_tool", "subagent / shell", ""])
 def test_other_tools_and_tasks_do_not_inherit_shell_meanings(name: str) -> None:
     assert shell_outcome(name, {"exit_code": 7, "timed_out": True}) == ""

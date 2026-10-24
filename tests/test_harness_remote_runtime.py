@@ -172,7 +172,7 @@ async def test_configure_then_delegate_uses_remote_sdk_and_preserves_remote_hist
             elif round_number == 2:
                 yield ToolCallEvent(
                     id="delegate-remote",
-                    name="delegate",
+                    name="to_agent",
                     arguments={"agent": "peer", "prompt": "Return the deterministic peer answer."},
                 )
             else:
@@ -203,7 +203,7 @@ async def test_configure_then_delegate_uses_remote_sdk_and_preserves_remote_hist
 
             assert round_number >= 3
             assert len(schemas) >= 3
-            delegate = schemas[1]["delegate"]
+            delegate = schemas[1]["to_agent"]
             assert isinstance(delegate, dict)
             properties = delegate["properties"]
             assert isinstance(properties, dict)
@@ -212,9 +212,9 @@ async def test_configure_then_delegate_uses_remote_sdk_and_preserves_remote_hist
             assert "peer" in agent["enum"]
             assert observed == ["Return the deterministic peer answer."]
             delegated = next(info for info in harness.tasks.list() if info.profile == "peer")
-            worker = harness.tasks._workers[delegated.id]
+            worker = harness.tasks._workers[delegated.session_id]
             await worker
-            child_history = await harness.tasks.history(delegated.id)
+            child_history = await harness.tasks.history(delegated.session_id)
             assert delegated.status == "completed"
             assert any("Remote peer answer." in str(message.content) for message in child_history)
             assert sum(len(provider.requests) for provider in providers) == round_number

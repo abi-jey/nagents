@@ -33,10 +33,10 @@ test("compact task branches start closed with names/states in summaries and full
     const summary = new RegExp(`data-disclosure-key="task:${id}"[^>]*>([\\s\\S]*?)</summary>`).exec(html)?.[1] || "";
     assert.match(summary, /agent/);
     assert.match(summary, /execution-state/);
-    assert.doesNotMatch(summary, /record-identity|Parent task ID|Task .*full-id/);
+    assert.doesNotMatch(summary, /record-identity|Parent session ID|Session .*full-id/);
   }
   assert.match(html, /data-task-id="child-full-id"[^>]*data-parent-task-id="parent-full-id"/);
-  for (const evidence of ["Task parent-full-id", "Task child-full-id", "Parent task ID: parent-full-id", "call-full-id", "approval-full-id", "Full tool inputs", "Partial tool output", "Full failure", "Full child result"])
+  for (const evidence of ["Session parent-full-id", "Session child-full-id", "Parent session ID: parent-full-id", "call-full-id", "approval-full-id", "Full tool inputs", "Partial tool output", "Full failure", "Full child result"])
     assert.ok(html.includes(evidence), evidence);
 });
 
@@ -57,11 +57,11 @@ test("notification and wake-up payloads start collapsed with distinct delivery/f
 test("notifications and pending timers without activation provenance do not claim execution zero in inspection", () => {
   const notification = appendEvent([], {
     event: "task_notification", notification_id: "notice-no-activation",
-    source_task_id: "source", recipient_task_id: "recipient", text: "Delivered text",
+    source_session_id: "source", recipient_session_id: "recipient", text: "Delivered text",
   });
   const pending = appendActivity([], {
     session_id: "root", cursor: 0, active_run_id: "", events: [], truncated: false,
-    pending_wakeups: [{ wakeup_id: "timer-no-activation", task_id: "recipient", due_at: "2026-09-12T12:00:00Z", reason: "Pending timer" }],
+    pending_wakeups: [{ wakeup_id: "timer-no-activation", session_id: "recipient", due_at: "2026-09-12T12:00:00Z", reason: "Pending timer" }],
   });
   for (const entry of [...notification, ...pending]) {
     assert.equal(entry.activation, 0, "The reducer's matching default is not activation provenance");

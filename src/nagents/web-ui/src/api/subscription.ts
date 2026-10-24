@@ -21,7 +21,7 @@ function integer(value: unknown): value is number {
 export function validRecord(value: unknown): value is WireEvent {
   return object(value) && typeof value.event === "string" &&
     (value.uploads === undefined || uploadedAttachments(value.uploads)) &&
-    ["session_id", "run_id", "task_id", "call_id", "id", "approval_id", "parent_task_id", "message_id"].every(
+    ["session_id", "root_session_id", "run_id", "call_id", "id", "approval_id", "parent_session_id", "message_id"].every(
       (key) => value[key] === undefined || typeof value[key] === "string",
     ) && ["activation", "followup", "depth"].every((key) => value[key] === undefined || integer(value[key]));
 }
@@ -64,7 +64,7 @@ export function validSnapshot(value: unknown): value is Snapshot {
       Array.isArray(item.tool_calls) && item.tool_calls.every((call: unknown) => object(call) &&
         typeof call.id === "string" && typeof call.name === "string")) &&
     Array.isArray(value.retained_tasks) && value.retained_tasks.every((item: unknown) => object(item) &&
-      ["id", "name", "status", "session_id", "parent_task_id", "prompt", "result", "error"].every(
+      ["session_id", "title", "status", "root_session_id", "parent_session_id", "prompt", "result", "error"].every(
         (key) => typeof item[key] === "string") && integer(item.activation) && integer(item.followups));
 }
 export function parseFrame(data: unknown): EventFrame {
@@ -76,7 +76,7 @@ export function parseFrame(data: unknown): EventFrame {
   if (value.type === "status" && typeof value.active_session_id === "string" && typeof value.active_run_id === "string" && activeRuns(value.active_runs)) return value as EventFrame;
   if (typeof value.session_id !== "string") throw new Error("Invalid event session.");
   if (value.type === "event" && validRecord(value.record) &&
-      (value.record.session_id === undefined || value.record.session_id === value.session_id)) return value as EventFrame;
+      (value.record.root_session_id === undefined || value.record.root_session_id === value.session_id)) return value as EventFrame;
   if (value.type === "snapshot" && validSnapshot(value.snapshot) && value.snapshot.session_id === value.session_id)
     return value as EventFrame;
   throw new Error("Invalid event payload.");

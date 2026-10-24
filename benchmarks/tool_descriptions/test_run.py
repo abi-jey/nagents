@@ -74,11 +74,22 @@ def test_grader_rejects_unknown_arguments_and_extra_calls() -> None:
     assert "expected_one_call" in grade(CASES[0], [call, call], tools(), "current")
 
 
-def test_task_status_requires_text_and_no_invented_call() -> None:
+def test_task_status_uses_the_available_read_only_session_inspector() -> None:
     case = next(case for case in CASES if case.name == "task_status")
-    assert grade(case, [], tools(), "current", "No polling tool is exposed.") == []
-    assert grade(case, [], tools(), "current")
-    assert grade(case, [ToolCall("id", "task_status", {})], tools(), "current", "No polling tool.")
+    offered = [
+        ToolDefinition(
+            "agent_status",
+            "Inspect status",
+            {
+                "type": "object",
+                "properties": {"session_id": {"type": "string"}},
+                "required": [],
+            },
+        )
+    ]
+    assert grade(case, [ToolCall("id", "agent_status", {"session_id": "s1"})], offered, "current") == []
+    assert grade(case, [], offered, "current", "No status tool is exposed.")
+    assert grade(case, [ToolCall("id", "task_status", {})], offered, "current")
 
 
 def test_runtime_limit_checked_even_when_schema_has_no_bound() -> None:
@@ -99,7 +110,9 @@ def test_private_json_refuses_overwrite(tmp_path: Path) -> None:
 
 def test_shipping_schema_capture_does_not_execute_tools(tmp_path: Path) -> None:
     captured = asyncio.run(shipping_tools(tmp_path))
-    assert {"read_file", "find", "search", "edit", "write", "shell", "delegate"} <= {tool.name for tool in captured}
+    assert {"read_file", "find", "search", "edit", "write", "shell", "to_agent", "agent_status"} <= {
+        tool.name for tool in captured
+    }
     assert all(tool.func is None for tool in captured)
     assert "demo_preview" not in {tool.name for tool in captured}
 
@@ -126,7 +139,7 @@ def test_provider_text_done_event_is_terminal(tmp_path: Path, monkeypatch: pytes
     ) -> AsyncIterator[Event]:
         case = next(case for case in CASES if case.prompt == messages[-1].content)
         yield TextDoneEvent(
-            text="No status polling tool is exposed.",
+            text="I will use the advertised tool for this request.",
             usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12, cached_tokens=4, reasoning_tokens=1),
         )
         if case.tool:
@@ -146,9 +159,9 @@ def test_provider_text_done_event_is_terminal(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr(OpenAIProvider, "generate", fake_generate)
     monkeypatch.setattr(benchmark, "OpenAIProvider", fake_provider)
     result = asyncio.run(benchmark.run("offline", 2, tmp_path / "results", 1, "current"))
-    assert result["passed"] == len(CASES) - 1
+    assert result["passed"] == len(CASES)
     assert result["structural_passed"] == len(CASES)
-    assert result["manual_review_cases"] == 1
+    assert result["manual_review_cases"] == 0
     assert result["usage"] == {
         "prompt_tokens": 120,
         "completion_tokens": 24,
@@ -264,7 +277,7 @@ def test_suite_selection_and_manual_denominators() -> None:
     assert len(suite_cases("challenge")) == 11
     assert len(suite_cases("all")) == 23
     assert sum(not manual_case(case) for case in suite_cases("challenge")) == 9
-    assert sum(manual_case(case) for case in suite_cases("all")) == 3
+    assert sum(manual_case(case) for case in suite_cases("all")) == 2
 
 
 @pytest.mark.parametrize("variant", ["current", "clarified", "tool_names", "arg_names", "explicit_names"])

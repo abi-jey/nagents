@@ -9,14 +9,14 @@ import { taskAgent, type TeamAgent, type TeamProfile } from "../team/model.js";
 import type { RetainedTask } from "../../types.js";
 
 const task = (id: string, parent = "", updated = 1, status: RetainedTask["status"] = "running"): RetainedTask => ({
-  id, name: id, parent_task_id: parent, status, result: "", error: "", prompt: `${id} task`, session_id: "root",
-  child_session_id: `child-${id}`, parent_session_id: "root", depth: parent ? 2 : 1, profile: "assistant", mode: "build",
+  session_id: id, title: id, parent_session_id: parent, status, result: "", error: "", prompt: `${id} task`, root_session_id: "root",
+    depth: parent ? 2 : 1, profile: "assistant", mode: "build",
   followups: 0, activation: 0, trigger: "delegation", provider: "my-openai", provider_kind: "openai", model: "test-model",
   updated_at: updated, started_at: updated, phase: status === "completed" ? "done" : "running", can_message: true,
 });
 const profile = (id: string, name = id, provider = "openai"): TeamProfile => ({ id, name, description: name,
   provider, model: "test-model", used: true, available: true, can_start: true });
-const main = taskAgent({ ...task("main"), id: "", name: "Assistant", profile: "", phase: "ready" });
+const main = taskAgent({ ...task("main"), session_id: "", title: "Assistant", profile: "", phase: "ready" });
 const agents = (...items: RetainedTask[]): TeamAgent[] => [main, ...items.map(taskAgent)];
 const renderMarkup = (items: TeamAgent[], profiles: TeamProfile[], selected = "") => renderToStaticMarkup(createElement(TeamTree, {
   agents: items, profiles, selected, inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
@@ -24,8 +24,8 @@ const renderMarkup = (items: TeamAgent[], profiles: TeamProfile[], selected = ""
 
 test("definition groups are scoped to each parent and unused profiles stay in the selector", () => {
   const items = agents(
-    { ...task("parent-a", "", 10), name: "Parent A", profile: "assistant" },
-    { ...task("parent-b", "", 9), name: "Parent B", profile: "assistant" },
+    { ...task("parent-a", "", 10), title: "Parent A", profile: "assistant" },
+    { ...task("parent-b", "", 9), title: "Parent B", profile: "assistant" },
     { ...task("a-old", "parent-a", 10), profile: "writer" },
     { ...task("a-new", "parent-a", 20), profile: "writer" },
     { ...task("b-only", "parent-b", 15), profile: "writer" },
@@ -69,9 +69,9 @@ test("search reveals matching past descendants and clearing it restores manual c
     dom.window.close();
   });
   const react = createRoot(dom.window.document.getElementById("root")!);
-  const parent = { ...task("parent", "", 10), name: "Parent", profile: "assistant" };
-  const past = { ...task("old-worker", "parent", 2, "completed"), name: "Archive match", profile: "worker" };
-  const running = { ...task("current-worker", "parent", 12), name: "Current worker", profile: "worker" };
+  const parent = { ...task("parent", "", 10), title: "Parent", profile: "assistant" };
+  const past = { ...task("old-worker", "parent", 2, "completed"), title: "Archive match", profile: "worker" };
+  const running = { ...task("current-worker", "parent", 12), title: "Current worker", profile: "worker" };
   const view = () => createElement(TeamTree, { agents: agents(parent, running, past), profiles: [profile("worker", "Worker")], selected: "",
     inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} });
   await act(async () => react.render(view()));

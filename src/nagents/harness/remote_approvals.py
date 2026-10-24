@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def _remote_operation_allowed(harness: Harness) -> bool:
-    """Honor current root/child lifecycle and inherited delegate restrictions."""
+    """Honor current root/child lifecycle and inherited to_agent restrictions."""
     root = harness.tasks.root.harness
     if (
         harness._closed
@@ -34,7 +34,7 @@ def _remote_operation_allowed(harness: Harness) -> bool:
         return False
     try:
         harness.refresh_tool_policy()
-        return harness.tool_enabled("delegate")
+        return harness.tool_enabled("to_agent")
     except (OSError, ValueError, RuntimeError):
         return False
 
@@ -111,7 +111,7 @@ async def review_action(harness: Harness, remote: RemoteAgent, task_id: str, tex
     elif allowed:
         try:
             await harness.approve(
-                "delegate",
+                "to_agent",
                 {"agent": harness.config.agent, "remote_operation": operation},
                 f"Remote agent {harness.config.agent} requests an operation: {safe_tool_name}",
                 preview=encoded,
@@ -122,7 +122,7 @@ async def review_action(harness: Harness, remote: RemoteAgent, task_id: str, tex
             pass
     else:
         logger.info(
-            "Remote operation denied by local policy: agent=%s tool=%s policy=delegate_disabled",
+            "Remote operation denied by local policy: agent=%s tool=%s policy=to_agent_disabled",
             harness.config.agent,
             safe_tool_name,
         )

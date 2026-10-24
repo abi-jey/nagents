@@ -22,7 +22,7 @@ export function ApprovalDialog({
   const heading = useRef<HTMLHeadingElement>(null);
   const argumentsValue = approval.arguments && typeof approval.arguments === "object" && !Array.isArray(approval.arguments) ? approval.arguments as Record<string, unknown> : undefined;
   const operation = argumentsValue?.remote_operation;
-  const remoteOperation = approval.tool === "delegate" && operation && typeof operation === "object" && !Array.isArray(operation) ? operation as Record<string, unknown> : undefined;
+  const remoteOperation = approval.tool === "to_agent" && operation && typeof operation === "object" && !Array.isArray(operation) ? operation as Record<string, unknown> : undefined;
   const remoteTool = typeof remoteOperation?.tool === "string" ? remoteOperation.tool : "operation";
   const remoteAgent = typeof argumentsValue?.agent === "string" ? argumentsValue.agent : "remote agent";
   const allowTool = !!approval.allow_tool && !remoteOperation;
@@ -78,11 +78,11 @@ export function ApprovalDialog({
         <dl className="request-identity">
           <dt>Call</dt>
           <dd>{approval.call_id}</dd>
-          {approval.task_id && (
+          {approval.session_id && (
             <>
-              <dt>Task</dt>
+              <dt>Session</dt>
               <dd>
-                {approval.task_name} ({approval.task_id}), depth{" "}
+                {approval.title || approval.session_id}{approval.title && ` (${approval.session_id})`}, depth{" "}
                 {approval.depth}, activation {approval.activation}
               </dd>
             </>

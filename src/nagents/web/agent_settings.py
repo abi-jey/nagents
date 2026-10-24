@@ -62,7 +62,7 @@ def _runtime_reason(
     """
     builtin = tool.func is not None and tool.func == harness.tools.builtins.get(tool.name)
     root = harness.tasks.root.harness if harness._is_subagent else harness
-    if tool.name == "delegate":
+    if tool.name == "to_agent":
         if not harness.allow_subagents or not root.allow_subagents:
             return "Delegation is disabled for this runtime."
         if harness.subagent_depth >= min(harness.config.max_subagent_depth, root.config.max_subagent_depth):
@@ -73,7 +73,7 @@ def _runtime_reason(
             for name in harness.config.profile_names
         ):
             return "No agents are eligible for delegation from this profile."
-    if harness.config.demo and (not builtin or tool.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}):
+    if harness.config.demo and (not builtin or tool.name not in READ_ONLY_TOOLS | {"demo_preview", "to_agent"}):
         return "Unavailable in offline demo mode."
     if (
         scope == "agent"

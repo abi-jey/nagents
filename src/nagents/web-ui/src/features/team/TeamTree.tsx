@@ -40,8 +40,8 @@ export function AgentRow({ agent, selected, inspect, settings, connection, arriv
   const hasDefinition = !!agent.id && !!agent.profile;
   return <article className={`team-agent-row${remote ? " is-remote" : ""}${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
     <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={[marker?.description, agent.providerKind === "a2a" && remoteAuthLabel(agent.authentication)].filter(Boolean).join(". ") || undefined}
-      aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${agent.profile ? `. Definition ${agent.profile}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
-      <span className="team-agent-heading"><span className="team-agent-identity"><strong className={grouped ? "team-agent-run-name" : hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${agent.profile}` : undefined}>{grouped ? agent.name : hasDefinition ? agent.profile : agent.name}</strong>{!grouped && hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}</span><AgentState agent={agent} /></span>
+      aria-label={`Open ${agent.name} conversation.${agent.id ? ` Session ${agent.id}.` : ""} ${phaseLabel(agent)}${agent.profile ? `. Definition ${agent.profile}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
+      <span className="team-agent-heading"><span className="team-agent-identity"><strong className={grouped ? "team-agent-run-name" : hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${agent.profile}` : undefined}>{grouped ? agent.name : hasDefinition ? agent.profile : agent.name}</strong>{!grouped && hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}{agent.id && agent.name !== agent.id && <code className="team-agent-session-id">{agent.id}</code>}</span><AgentState agent={agent} /></span>
       {!remote && <><span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
       <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}${marker ? `; ${marker.description}` : ""}` : undefined}>
         {context ? contextSummary(context) : "Context unavailable"}
@@ -92,7 +92,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   const query = search.trim().toLowerCase();
   function matchesTree(agent: TeamAgent, seen = new Set<string>()): boolean {
     if (seen.has(agent.id)) return false;
-    if (!query || [agent.name, agent.profile, catalog.get(agent.profile)?.name || ""].some(value => value.toLowerCase().includes(query))) return true;
+    if (!query || [agent.id, agent.name, agent.profile, catalog.get(agent.profile)?.name || ""].some(value => value.toLowerCase().includes(query))) return true;
     const visited = new Set(seen).add(agent.id);
     return (children.get(agent.id) || []).some(child => matchesTree(child, visited));
   }
@@ -213,19 +213,19 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   </div>;
 }
 
-export function useAgentArrivals(tasks: readonly { id: string; started_at?: number }[], sessionId: string, loaded: boolean): ArrivalTimes {
+export function useAgentArrivals(tasks: readonly { session_id: string; started_at?: number }[], sessionId: string, loaded: boolean): ArrivalTimes {
   const previous = useRef<{ session: string; hydrated: boolean; ids: Set<string> }>({ session: sessionId, hydrated: false, ids: new Set() });
   const [arrivals, setArrivals] = useState<{ session: string; times: ArrivalTimes }>({ session: sessionId, times: {} });
-  const identity = tasks.map(task => task.id).join("\u0000");
+  const identity = tasks.map(task => task.session_id).join("\u0000");
   useEffect(() => {
     if (previous.current.session !== sessionId) { previous.current = { session: sessionId, hydrated: false, ids: new Set() }; setArrivals({ session: sessionId, times: {} }); }
     if (!loaded) return;
-    if (!previous.current.hydrated) { previous.current.hydrated = true; previous.current.ids = new Set(tasks.map(task => task.id)); return; }
+    if (!previous.current.hydrated) { previous.current.hydrated = true; previous.current.ids = new Set(tasks.map(task => task.session_id)); return; }
     const now = Date.now();
-    const fresh = tasks.filter(task => !previous.current.ids.has(task.id) && task.started_at && now - task.started_at * 1000 >= -1000 && now - task.started_at * 1000 < 5000);
-    previous.current.ids = new Set(tasks.map(task => task.id));
+    const fresh = tasks.filter(task => !previous.current.ids.has(task.session_id) && task.started_at && now - task.started_at * 1000 >= -1000 && now - task.started_at * 1000 < 5000);
+    previous.current.ids = new Set(tasks.map(task => task.session_id));
     if (!fresh.length) return;
-    setArrivals(current => ({ session: sessionId, times: { ...(current.session === sessionId ? current.times : {}), ...Object.fromEntries(fresh.map(task => [task.id, now])) } }));
+    setArrivals(current => ({ session: sessionId, times: { ...(current.session === sessionId ? current.times : {}), ...Object.fromEntries(fresh.map(task => [task.session_id, now])) } }));
   }, [identity, sessionId, loaded]);
   useEffect(() => {
     const times = Object.values(arrivals.times);

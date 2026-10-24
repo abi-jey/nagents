@@ -139,7 +139,7 @@ def test_history_read_racing_complete_run_has_consistent_snapshot(
                 snapshot = frame["snapshot"]
                 cursor = frame["cursor"]
                 notice: dict[str, object] = {
-                    "session_id": app.main,
+                    "root_session_id": app.main,
                     "event": "notice",
                     "text": "after checkpoint",
                 }
@@ -176,12 +176,12 @@ def test_replay_during_hydration_delivers_each_event_then_live_handoff() -> None
             peer.subscribe("ngn-root", after=initial["cursor"], epoch=initial["epoch"])
             await reached.wait()
             for index in range(3):
-                bus.event({"session_id": "ngn-root", "event": "notice", "text": str(index)})
+                bus.event({"root_session_id": "ngn-root", "event": "notice", "text": str(index)})
             release.set()
             frames = [await peer.frame() for _ in range(3)]
             assert [cast("dict[str, object]", frame["record"])["text"] for frame in frames] == ["0", "1", "2"]
             assert [frame["cursor"] for frame in frames] == [1, 2, 3]
-            bus.event({"session_id": "ngn-root", "event": "notice", "text": "live"})
+            bus.event({"root_session_id": "ngn-root", "event": "notice", "text": "live"})
             assert (await peer.frame())["cursor"] == 4
             assert reads >= 3 and peer.outgoing.empty()
         finally:
@@ -288,7 +288,7 @@ def test_hydration_departure_retains_pending_decision_but_cannot_authorize_witho
             assert run is not None and run.pending is not None
             answer = run.pending.answer
             queued_notice: dict[str, object] = {
-                "session_id": app.main,
+                "root_session_id": app.main,
                 "event": "notice",
                 "text": "queued before same-root hydration",
             }
@@ -400,7 +400,7 @@ def test_superseded_noncooperative_hydration_cannot_publish_or_close_new_subscri
             await returned.wait()
             await asyncio.sleep(0)
             assert not task.done() and not bus.listening("ngn-old") and peer.outgoing.empty()
-            bus.event({"session_id": "ngn-new", "event": "notice", "text": "still live"})
+            bus.event({"root_session_id": "ngn-new", "event": "notice", "text": "still live"})
             assert cast("dict[str, object]", (await peer.frame())["record"])["text"] == "still live"
         finally:
             release.set()
@@ -415,7 +415,7 @@ def test_failed_membership_never_publishes_snapshot_or_replay(failure: str) -> N
     async def scenario() -> None:
         bus = EventBus()
         peer = Peer()
-        bus.event({"session_id": "ngn-hidden", "event": "notice", "text": "private evidence"})
+        bus.event({"root_session_id": "ngn-hidden", "event": "notice", "text": "private evidence"})
 
         async def snapshot(root: str) -> dict[str, object]:
             if failure == "missing":
@@ -506,7 +506,7 @@ def test_checkpoint_timeout_does_not_starve_event_publisher(monkeypatch: pytest.
         peer = Peer()
 
         async def snapshot(root: str) -> dict[str, object]:
-            bus.event({"session_id": root, "event": "notice", "text": "concurrent write"})
+            bus.event({"root_session_id": root, "event": "notice", "text": "concurrent write"})
             return {"session_id": root, "history": []}
 
         monkeypatch.setattr(subscriptions, "SNAPSHOT_TIMEOUT", 0.03)

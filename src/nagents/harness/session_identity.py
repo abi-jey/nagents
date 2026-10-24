@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import unicodedata
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
@@ -27,7 +28,9 @@ def validate_title(title: str) -> str:
     if not isinstance(title, str):
         raise ValueError("Agent title must be text")
     value = title.strip()
-    if len(value) > MAX_TITLE or any(ord(character) < 32 or ord(character) == 127 for character in value):
+    if len(value) > MAX_TITLE or any(
+        unicodedata.category(character) in {"Cc", "Cs", "Zl", "Zp"} for character in value
+    ):
         raise ValueError(f"Agent title must be one line of at most {MAX_TITLE} characters")
     try:
         value.encode("utf-8")

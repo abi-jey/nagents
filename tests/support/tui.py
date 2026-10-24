@@ -81,7 +81,7 @@ class FakeHarness:
     async def history(self) -> list[Message]:
         return self.messages
 
-    async def task_history(self, task_id: str, limit: int = 100) -> list[Message]:
+    async def task_history(self, session_id: str, limit: int = 100) -> list[Message]:
         return []
 
     async def run(self, prompt: str) -> AsyncIterator[HarnessEvent]:

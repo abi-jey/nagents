@@ -1,6 +1,5 @@
 """Deferred credentials and a genuinely offline provider for the core run loop."""
 
-import ast
 import asyncio
 import json
 import os
@@ -169,11 +168,11 @@ class HarnessProvider(Provider):
             return
 
         prompt = next((str(message.content) for message in reversed(messages) if message.role == "user"), "")
-        if prompt.startswith("BACKGROUND TASK NOTIFICATION:"):
+        if prompt.startswith("BACKGROUND AGENT UPDATES:"):
             payload = json.loads(prompt.split("\n", 1)[1])
-            tasks = payload.get("tasks", [])
+            tasks = payload.get("sessions", [])
             text = "## OFFLINE DEMO / background results\n\nThese are genuine asyncio jobs using scripted offline responses, not model calls.\n\n"
-            text += "\n".join(f"- **{task['name']}**: {task['status']}." for task in tasks)
+            text += "\n".join(f"- **{task['session_id']}**: {task['status']}." for task in tasks)
             text += "\n\nThe coordinator received the results and resumed through the normal agent loop."
             for offset in range(0, len(text), 48):
                 await asyncio.sleep(0.01)
@@ -183,12 +182,12 @@ class HarnessProvider(Provider):
         if (
             prompt.lower().strip() == "demo subagents"
             and messages[-1].role != "tool"
-            and any(tool.name == "delegate" for tool in tools or [])
+            and any(tool.name == "to_agent" for tool in tools or [])
         ):
             for topic in ("file layout", "available instructions", "documentation"):
                 yield ToolCallEvent(
                     id=f"demo-{uuid.uuid4().hex[:12]}",
-                    name="delegate",
+                    name="to_agent",
                     arguments={"prompt": f"Offline reviewer: inspect {topic}. Do not modify anything."},
                 )
             return
@@ -209,11 +208,7 @@ class HarnessProvider(Provider):
             try:
                 result = json.loads(message.content)
             except json.JSONDecodeError:
-                # Persisted histories from older agents used Python literals.
-                try:
-                    result = ast.literal_eval(message.content)
-                except (ValueError, SyntaxError):
-                    continue
+                continue
             if isinstance(result, dict) and message.name == "list_files":
                 files = [str(path) for path in result.get("paths", [])]
             if isinstance(result, dict) and message.name == "demo_preview":

@@ -592,7 +592,7 @@ def test_children_do_not_inherit_channel_tools_or_instructions(tmp_path: Path, m
             if provider.index:
                 yield TextDoneEvent(text="child result")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "inspect"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "inspect"})
             else:
                 yield TextDoneEvent(text="ordinary parent response")
 
@@ -601,7 +601,7 @@ def test_children_do_not_inherit_channel_tools_or_instructions(tmp_path: Path, m
         async with app.run_test() as pilot:
             await idle(app, pilot)
             harness.approval_handler = approve
-            await send(app, pilot, "delegate")
+            await send(app, pilot, "to_agent")
             await idle(app, pilot)
             assert len(providers) == 2
             assert "channel_send" in providers[0].schemas[0]

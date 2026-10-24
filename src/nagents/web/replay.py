@@ -30,8 +30,8 @@ class RunReplay:
                 for key in (
                     "event",
                     "run_id",
+                    "root_session_id",
                     "session_id",
-                    "task_id",
                     "activation",
                     "followup",
                     "stream",

@@ -160,28 +160,29 @@ class HarnessToolRegistry(ToolRegistry):
                     for name, (minimum, maximum) in zip(LIMIT_FIELDS, LIMIT_RANGES, strict=True):
                         properties[name]["minimum"] = minimum
                         properties[name]["maximum"] = maximum
-            if tool.func == self.harness.tasks.delegate:
+            if tool.func == self.harness.tasks.to_agent:
                 tool = replace(tool, parameters=deepcopy(tool.parameters))
                 tool.description += "\nCurrent shared limits and usage: " + str(self.harness.tasks.usage())
                 tools[index] = tool
                 parameter = tool.parameters.get("properties", {}).get("agent")
                 if parameter is not None:
-                    parameter["description"] = "Select an available agent. " + self.harness.delegation_catalog()
-                    parameter["enum"] = list(self.harness.delegatable_profile_names)
+                    parameter["description"] = (
+                        "For a new session select a profile (omission chooses assistant); "
+                        "for an existing session omit to retain its profile. " + self.harness.delegation_catalog()
+                    )
+                    parameter["enum"] = ["", *self.harness.delegatable_profile_names]
                     required = [name for name in tool.parameters.get("required", []) if name != "agent"]
-                    if "assistant" not in self.harness.delegatable_profile_names:
-                        required.append("agent")
                     tool.parameters["required"] = required
         return tools
 
     def _available(self, tool: ToolDefinition) -> bool:
         harness = self.harness
         builtin = tool.func is not None and tool.func == harness.tools.builtins.get(tool.name)
-        if tool.name == "delegate" and not harness.can_delegate:
+        if tool.name == "to_agent" and not harness.can_delegate:
             return False
         if tool.name == "subagent_configure" and (harness._is_subagent or harness.mode != "build"):
             return False
-        if harness.config.demo and (not builtin or tool.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}):
+        if harness.config.demo and (not builtin or tool.name not in READ_ONLY_TOOLS | {"demo_preview", "to_agent"}):
             return False
         if harness.mode == "reviewer" and (not builtin or tool.name in MODIFYING_TOOLS):
             return False

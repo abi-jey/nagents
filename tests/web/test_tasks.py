@@ -16,6 +16,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.session_identity import SessionIdentityStore
 from nagents.harness.tools import CodingTools
 from nagents.types import JsonValue
 from nagents.types import Message
@@ -104,7 +105,7 @@ def test_task_api_start_inspect_busy_fifo_and_retained_continuation(
                 json={"message_id": first_id, "agent": "reviewer", "text": "PRIVATE CHILD ASSIGNMENT"},
             )
             assert response.status_code == 200, response.text
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             async with asyncio.timeout(HANG_GUARD):
                 await started.wait()
             try:
@@ -180,7 +181,8 @@ def test_task_evidence_restores_from_trash_and_permanent_delete_scrubs_bodies(
 
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
             root = state.selected_session_id
-            child, task_id, message_id = "ngn-retained-child", "retained-task", str(uuid4())
+            identity = await SessionIdentityStore(state.history.db_path).reserve(root, "", "")
+            child, task_id, message_id = identity.storage_id, identity.session_id, str(uuid4())
             store = state.tasks.store
             await store.validate(root)
             await state.history.get_or_create_session(child, "harness")
@@ -194,7 +196,15 @@ def test_task_evidence_restores_from_trash_and_permanent_delete_scrubs_bodies(
                 ),
             )
             await store.save(
-                root, {"id": task_id, "child_session_id": child, "status": "completed", "profile": "reviewer"}
+                root,
+                {
+                    "session_id": task_id,
+                    "title": "",
+                    "root_session_id": root,
+                    "status": "completed",
+                    "profile": "reviewer",
+                },
+                child,
             )
             await store.insert(root, task_id, message_id, "private receipt body", task_id)
             await store.fail(message_id, "Previous process ended")
@@ -218,7 +228,7 @@ def test_task_evidence_restores_from_trash_and_permanent_delete_scrubs_bodies(
             assert row["text"] == "" and row["text_pruned"]
             assert row["message_id"] == message_id
             assert not await store.db._transaction(
-                lambda db: db.execute("SELECT 1 FROM ngn_web_tasks WHERE root = ?", (root,)).fetchone()
+                lambda db: db.execute("SELECT 1 FROM ngn_web_agent_sessions WHERE root = ?", (root,)).fetchone()
             )
 
     asyncio.run(scenario())
@@ -256,7 +266,7 @@ def test_mid_tool_history_watermark_does_not_repeat_persisted_activity(
             response = await client.post(
                 path, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "inspect"}
             )
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             try:
                 async with asyncio.timeout(HANG_GUARD):
                     await entered.wait()
@@ -294,7 +304,7 @@ def test_task_routes_scope_and_history_query_allowlist(tmp_path: Path, monkeypat
             response = await client.post(
                 prefix, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "inspect"}
             )
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             await until(lambda: state.run_for(root) is None)
             assert (await client.get(f"{prefix}/{task_id}?limit=1&before=9999999", headers=headers)).status_code == 200
             for query in ("limit=0", "limit=201", "limit=1&limit=2", "limit=1&token=secret", "before=-1", "limit=1&x="):
@@ -307,7 +317,7 @@ def test_task_routes_scope_and_history_query_allowlist(tmp_path: Path, monkeypat
                     f"{other}/messages", headers=headers, json={"message_id": str(uuid4()), "text": "wrong root"}
                 )
             ).status_code == 404
-            child = state.executions.owners[root].tasks._lookup(task_id).child_session_id
+            child = state.executions.owners[root].tasks._lookup(task_id)._storage_id
             assert (await client.get(f"/api/sessions/{child}/tasks/{task_id}", headers=headers)).status_code == 404
             assert (await client.get(f"{prefix}/{task_id}")).status_code == 403
             assert state.selected_session_id == root
@@ -329,7 +339,15 @@ def test_restart_receipts_are_terminal_and_manifest_is_read_only(
             identifier = str(uuid4())
             await old.insert(root, "old-task", identifier, "unread note", "old-task")
             await old.save(
-                root, {"id": "old-task", "child_session_id": "ngn-child", "status": "running", "profile": "reviewer"}
+                root,
+                {
+                    "session_id": "s1",
+                    "title": "",
+                    "root_session_id": root,
+                    "status": "running",
+                    "profile": "reviewer",
+                },
+                "ngn-child",
             )
             recovered = TaskStore(state.history.db_path, "new-process")
             await recovered.initialize()
@@ -366,7 +384,7 @@ def test_task_settings_are_saved_for_next_activation_without_changing_busy_input
             response = await client.post(
                 path, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "first"}
             )
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             async with asyncio.timeout(HANG_GUARD):
                 await entered.wait()
             configured = await client.put(
@@ -418,15 +436,15 @@ def test_cancel_racing_receipt_commit_terminalizes_unread_message(
             response = await client.post(
                 path, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "original"}
             )
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             async with asyncio.timeout(HANG_GUARD):
                 await entered.wait()
             insert = state.tasks.store.insert
 
             async def delayed(
-                root: str, target: str, identifier: str, text: str, task_id: str = ""
+                root: str, target: str, identifier: str, text: str, session_id: str = ""
             ) -> dict[str, object]:
-                receipt = await insert(root, target, identifier, text, task_id)
+                receipt = await insert(root, target, identifier, text, session_id)
                 commit.set()
                 await release.wait()
                 return receipt
@@ -459,7 +477,7 @@ def test_profile_start_receipt_stays_on_first_task_when_it_spawns_a_child(
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 1 and messages[-1].role == "user" and messages[-1].content == "spawn nested":
-                yield ToolCallEvent(id="nested", name="delegate", arguments={"prompt": "nested child"})
+                yield ToolCallEvent(id="nested", name="to_agent", arguments={"prompt": "nested child"})
             else:
                 yield TextDoneEvent(text="done")
 
@@ -469,18 +487,18 @@ def test_profile_start_receipt_stays_on_first_task_when_it_spawns_a_child(
             body = {"message_id": str(uuid4()), "agent": "reviewer", "text": "spawn nested"}
             response = await client.post(path, headers=headers, json=body)
             assert response.status_code == 200, response.text
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             await until(lambda: state.run_for(root) is None)
             tasks = (await client.get(path, headers=headers)).json()["tasks"]
             assert len(tasks) == 2
-            parent = next(task for task in tasks if task["id"] == task_id)
-            child = next(task for task in tasks if task["id"] != task_id)
-            assert parent["parent_task_id"] == "" and child["parent_task_id"] == task_id
+            parent = next(task for task in tasks if task["session_id"] == task_id)
+            child = next(task for task in tasks if task["session_id"] != task_id)
+            assert parent["parent_session_id"] == "" and child["parent_session_id"] == task_id
             assert parent["origin_history_id"] == child["origin_history_id"] == ""
             retry = (await client.post(path, headers=headers, json=body)).json()
-            assert retry["receipt"]["task_id"] == task_id and retry["receipt"]["status"] == "picked_up"
-            assert retry["task"]["id"] == task_id
-            assert not (await client.get(f"{path}/{child['id']}", headers=headers)).json()["receipts"]
+            assert retry["receipt"]["session_id"] == task_id and retry["receipt"]["status"] == "picked_up"
+            assert retry["task"]["session_id"] == task_id
+            assert not (await client.get(f"{path}/{child['session_id']}", headers=headers)).json()["receipts"]
 
     asyncio.run(scenario())
 
@@ -497,7 +515,7 @@ def test_native_delegation_origin_is_exact_durable_tool_row_and_survives_followu
                 ]
                 # Deliberately reuse the provider call ID; it is not an anchor.
                 yield ToolCallEvent(
-                    id="reused-call", name="delegate", arguments={"prompt": assignment, "agent": "reviewer"}
+                    id="reused-call", name="to_agent", arguments={"prompt": assignment, "agent": "reviewer"}
                 )
             else:
                 yield TextDoneEvent(text="done")
@@ -530,20 +548,22 @@ def test_native_delegation_origin_is_exact_durable_tool_row_and_survives_followu
             events = [event for event in [*first_events, *second_events] if event.get("event") == "task_started"]
             assert all(event["origin_history_id"] for event in events)
             response = await client.post(
-                f"/api/sessions/{root}/tasks/{parent['id']}/messages",
+                f"/api/sessions/{root}/tasks/{parent['session_id']}/messages",
                 headers=headers,
                 json={"message_id": str(uuid4()), "text": "follow up"},
             )
             assert response.status_code == 200, response.text
             await until(lambda: state.run_for(root) is None)
-            retained = next(task for task in await state.tasks.store.tasks(root) if task["id"] == parent["id"])
+            retained = next(
+                task for task in await state.tasks.store.tasks(root) if task["session_id"] == parent["session_id"]
+            )
             assert retained["origin_history_id"] == first_row["history_id"]
             assert retained["origin_run_id"] == parent["origin_run_id"]
             restarted = TaskStore(state.history.db_path, "origin-restart")
             await restarted.initialize()
-            restored = {task["id"]: task for task in await restarted.tasks(root)}
-            assert restored[parent["id"]]["origin_history_id"] == first_row["history_id"]
-            assert restored[nested["id"]]["origin_history_id"] == first_row["history_id"]
+            restored = {task["session_id"]: task for task in await restarted.tasks(root)}
+            assert restored[parent["session_id"]]["origin_history_id"] == first_row["history_id"]
+            assert restored[nested["session_id"]]["origin_history_id"] == first_row["history_id"]
 
     asyncio.run(scenario())
 
@@ -568,7 +588,7 @@ def test_delayed_old_completion_does_not_terminalize_new_activation_notes(
                 headers=headers,
                 json={"message_id": str(uuid4()), "agent": "reviewer", "text": "first activation"},
             )
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             await until(lambda: state.run_for(root) is None)
             response = await client.post(
                 f"{path}/{task_id}/messages",
@@ -585,7 +605,7 @@ def test_delayed_old_completion_does_not_terminalize_new_activation_notes(
                 run = state.run_for(root)
                 assert run is not None
                 assert state.executions.owners[root].tasks._lookup(task_id).activation == 1
-                await state.tasks.record(run, {"event": "task_completed", "task_id": task_id, "activation": 0})
+                await state.tasks.record(run, {"event": "task_completed", "session_id": task_id, "activation": 0})
                 retry = await client.post(f"{path}/{task_id}/messages", headers=headers, json=note)
                 assert retry.json()["status"] == "queued"
             finally:
@@ -621,11 +641,11 @@ def test_completion_transaction_racing_next_activation_only_fails_matching_recei
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
             original = state.tasks.store.fail_task
 
-            async def delayed(root: str, task_id: str, activation: int) -> list[dict[str, object]]:
+            async def delayed(root: str, session_id: str, activation: int) -> list[dict[str, object]]:
                 if activation == 0:
                     completing.set()
                     await release_completion.wait()
-                result = await original(root, task_id, activation)
+                result = await original(root, session_id, activation)
                 if activation == 0:
                     completed_transaction.set()
                 return result
@@ -636,7 +656,7 @@ def test_completion_transaction_racing_next_activation_only_fails_matching_recei
             response = await client.post(
                 path, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "first"}
             )
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             try:
                 async with asyncio.timeout(HANG_GUARD):
                     await completing.wait()
@@ -779,19 +799,19 @@ def test_profile_start_observer_survives_http_waiter_removing_its_ready_event(
             message_id = str(uuid4())
             bind = state.tasks.store.bind
 
-            async def ordered_bind(identifier: str, task: dict[str, object]) -> dict[str, object]:
+            async def ordered_bind(identifier: str, task: dict[str, object], storage_id: str) -> dict[str, object]:
                 run = state.run_for(root)
                 if identifier == message_id and run is not None:
                     if asyncio.current_task() is run.task:
                         observer_binding.set()
                         await release_observer.wait()
-                        receipt = await bind(identifier, task)
+                        receipt = await bind(identifier, task, storage_id)
                         observer_bound.set()
                         return receipt
                     # The actual child input completes its binding first, after
                     # the observer has captured the same HTTP readiness event.
                     await observer_binding.wait()
-                return await bind(identifier, task)
+                return await bind(identifier, task, storage_id)
 
             monkeypatch.setattr(state.tasks.store, "bind", ordered_bind)
             try:
@@ -799,7 +819,7 @@ def test_profile_start_observer_survives_http_waiter_removing_its_ready_event(
                     path, headers=headers, json={"message_id": message_id, "agent": "reviewer", "text": "initial"}
                 )
                 assert response.status_code == 200, response.text
-                task_id = response.json()["task"]["id"]
+                task_id = response.json()["task"]["session_id"]
                 async with asyncio.timeout(HANG_GUARD):
                     await child_running.wait()
                 assert message_id not in state.tasks.created
@@ -867,9 +887,9 @@ def test_child_followup_waits_for_exact_draining_owner_without_blocking_other_ro
                 await finish(run)
 
             async def held_insert(
-                root: str, target: str, identifier: str, text: str, task_id: str = ""
+                root: str, target: str, identifier: str, text: str, session_id: str = ""
             ) -> dict[str, object]:
-                receipt = await insert(root, target, identifier, text, task_id)
+                receipt = await insert(root, target, identifier, text, session_id)
                 if identifier == note["message_id"] and stage != "before_insert":
                     inserted.set()
                     await release_insert.wait()
@@ -888,7 +908,7 @@ def test_child_followup_waits_for_exact_draining_owner_without_blocking_other_ro
                 path, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "first"}
             )
             assert response.status_code == 200, response.text
-            task_id = response.json()["task"]["id"]
+            task_id = response.json()["task"]["session_id"]
             async with asyncio.timeout(HANG_GUARD):
                 await parent_waiting.wait()
                 if stage == "before_insert":
@@ -924,7 +944,7 @@ def test_child_followup_waits_for_exact_draining_owner_without_blocking_other_ro
                         headers=headers,
                         json={"message_id": str(uuid4()), "agent": "reviewer", "text": "other"},
                     )
-                assert other.status_code == 200 and other.json()["task"]["id"]
+                assert other.status_code == 200 and other.json()["task"]["session_id"]
                 used = state.executions.owners[root].tasks._used
                 retry = asyncio.create_task(client.post(f"{path}/{task_id}/messages", headers=headers, json=note))
                 release_cleanup.set()
@@ -952,8 +972,8 @@ def test_child_followup_joins_post_run_web_claim_cleanup(tmp_path: Path, monkeyp
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             prompt = str(messages[-1].content)
-            if provider.index == 0 and messages[-1].role == "user" and prompt == "delegate":
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "first", "agent": "reviewer"})
+            if provider.index == 0 and messages[-1].role == "user" and prompt == "to_agent":
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "first", "agent": "reviewer"})
             else:
                 if prompt == "follow":
                     assert root not in state.channels.work_tasks
@@ -981,12 +1001,12 @@ def test_child_followup_joins_post_run_web_claim_cleanup(tmp_path: Path, monkeyp
             response = await client.post(
                 "/api/messages",
                 headers=headers,
-                json={"session_id": root, "message_id": root_message_id, "prompt": "delegate"},
+                json={"session_id": root, "message_id": root_message_id, "prompt": "to_agent"},
             )
             assert response.status_code == 200, response.text
             async with asyncio.timeout(HANG_GUARD):
                 await finishing.wait()
-            task_id = state.executions.owners[root].tasks.list()[0].id
+            task_id = state.executions.owners[root].tasks.list()[0].session_id
             note = {"message_id": str(uuid4()), "text": "follow"}
             request = asyncio.create_task(
                 client.post(f"/api/sessions/{root}/tasks/{task_id}/messages", headers=headers, json=note)
@@ -1016,7 +1036,7 @@ def test_root_inbox_uuid_does_not_own_unbound_child_receipt(tmp_path: Path, monk
             root = state.selected_session_id
             ordinary_id, task_id = str(uuid4()), str(uuid4())
             await state.tasks.store.validate(root)
-            await state.tasks.store.insert(root, "retained", ordinary_id, "waiting for admission", "retained")
+            await state.tasks.store.insert(root, "retained", ordinary_id, "waiting for admission", "s1")
             await state.tasks.store.insert(root, "profile:reviewer", task_id, "initial task input")
             await state.tasks.finish(Run(root, server_owned=True, message_id=ordinary_id))
             unbound = await state.tasks.store.duplicate(root, "retained", ordinary_id, "waiting for admission")

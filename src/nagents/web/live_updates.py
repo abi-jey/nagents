@@ -82,7 +82,7 @@ class AssistantUpdates:
                 else ""
             )
         if marker.kind == "notification":
-            origins = {self._tasks.get(task, "") for task in marker.task_ids}
+            origins = {self._tasks.get(task, "") for task in marker.session_ids}
             return next(iter(origins)) if len(origins) == 1 else ""
         if marker.kind in {"human", "wakeup"}:
             return self._roots.get(run_id, "")
@@ -145,7 +145,7 @@ class AssistantUpdates:
                 self.state.run_observers.discard(self.observe)
 
     def observe(self, run: Run | None, record: dict[str, object]) -> None:
-        if record.get("session_id") != self.session_id:
+        if record.get("root_session_id") != self.session_id:
             return
         if record.get("event") in {"task_activity", "task_message_receipt"}:
             # Inspection evidence and child input receipts belong to the task
@@ -202,21 +202,27 @@ class AssistantUpdates:
                 self._turns[run_id] = _Turn(self.turn_origin(marker, run_id), marker.kind)
             return
         turn = self._turns.get(run_id, _Turn(self._roots.get(run_id, "")))
-        task = str(record.get("task_id", ""))
+        task = str(record.get("session_id", ""))
         if event == "task_started":
-            parent = str(record.get("parent_task_id", ""))
+            parent = str(record.get("parent_session_id", ""))
             origin = self._tasks.get(parent, "") if parent else turn.origin
             self._tasks[task] = origin
-            self.append("thinking", f"Background task {str(record.get('name', ''))[:128]} started.", origin)
+            self.append(
+                "thinking",
+                f"Background task {str(record.get('title') or record.get('session_id', ''))[:128]} started.",
+                origin,
+            )
         elif event == "task_completed":
             status = record.get("status", "completed")
             summary = "finished" if status == "completed" else "was cancelled" if status == "cancelled" else "failed"
             self.append(
-                "thinking", f"Background task {str(record.get('name', ''))[:128]} {summary}.", self._tasks.get(task, "")
+                "thinking",
+                f"Background task {str(record.get('title') or record.get('session_id', ''))[:128]} {summary}.",
+                self._tasks.get(task, ""),
             )
         elif event == "text_done":
             extra = record.get("extra", {})
-            if task or (isinstance(extra, dict) and extra.get("task_id")):
+            if task or (isinstance(extra, dict) and extra.get("session_id")):
                 return  # Child reasoning/results reach voice only through its parent's answer.
             text = record.get("text")
             if isinstance(text, str) and text.strip() and text not in turn.texts:
@@ -235,7 +241,7 @@ class AssistantUpdates:
             extra = record.get("extra", {})
             if (
                 not task
-                and not (isinstance(extra, dict) and extra.get("task_id"))
+                and not (isinstance(extra, dict) and extra.get("session_id"))
                 and isinstance(text, str)
                 and text.strip()
                 and not turn.texts

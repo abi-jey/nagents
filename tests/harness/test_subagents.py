@@ -8,8 +8,6 @@ import gc
 import inspect
 import json
 import re
-import secrets
-import uuid
 from types import ModuleType
 from typing import TYPE_CHECKING
 
@@ -155,7 +153,7 @@ def test_tool_free_waiting_turn_resumes_synthesis_without_premature_done(
                 assert "Review finding" in str(notifications(messages)[0].content)
                 yield TextDoneEvent(text="Verified synthesis")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="review", name="delegate", arguments={"prompt": "Review independently"})
+                yield ToolCallEvent(id="review", name="to_agent", arguments={"prompt": "Review independently"})
             else:
                 yield TextDoneEvent(text="Waiting for the independent review")
 
@@ -215,7 +213,7 @@ def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_pare
             elif len(provider.requests) == 1:
                 for index in range(count):
                     yield ToolCallEvent(
-                        id=f"delegate-{index}", name="delegate", arguments={"prompt": f"Review part {index}"}
+                        id=f"delegate-{index}", name="to_agent", arguments={"prompt": f"Review part {index}"}
                     )
                 yield ToolCallEvent(id="own", name="own_work")
             else:
@@ -245,16 +243,16 @@ def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_pare
             await asyncio.wait_for(preliminary.wait(), HANG_GUARD)
             assert not task.done()
             assert len([event for event in observed if isinstance(event, TaskStarted)]) == count
-            acks = [event for event in observed if isinstance(event, ToolResultEvent) and event.name == "delegate"]
+            acks = [event for event in observed if isinstance(event, ToolResultEvent) and event.name == "to_agent"]
             assert len(acks) == count
             assert not any(isinstance(event, TaskCompleted | DoneEvent) for event in observed)
             names: set[str] = set()
             for ack in acks:
                 assert isinstance(ack.result, dict)
+                assert set(ack.result) == {"session_id", "status"}
                 assert ack.result["status"] == "running"
-                uuid.UUID(ack.result["task_id"])
-                assert re.fullmatch(r"[a-z]+ [a-z]+", ack.result["name"])
-                names.add(ack.result["name"])
+                assert re.fullmatch(r"s[0-9a-z]+", ack.result["session_id"])
+                names.add(ack.result["session_id"])
             assert len(names) == count
             assert all(not provider.closed for provider in providers)
             release.set()
@@ -267,16 +265,16 @@ def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_pare
             assert_balanced(history)
             notes = notifications(history)
             for completion in completions:
-                assert sum(str(note.content).count(completion.task_id) for note in notes) == 1
+                assert sum(str(note.content).count(completion.session_id) for note in notes) == 1
             assert (
-                len([message for message in history if message.role == "tool" and message.name == "delegate"]) == count
+                len([message for message in history if message.role == "tool" and message.name == "to_agent"]) == count
             )
             assert all("untrusted" in str(note.content) and not note.tool_call_id for note in notes)
             for child in providers[1:]:
                 assert child.closed and child.harness_config.agent == "assistant"
                 assert child.harness_config.model == harness.agent.provider.model
                 assert all(
-                    "delegate" in schema and "own_work" not in schema and "shell" in schema for schema in child.schemas
+                    "to_agent" in schema and "own_work" not in schema and "shell" in schema for schema in child.schemas
                 )
             assert all(info.status == "completed" for info in harness.tasks.list())
             assert "fake-secret-never-in-task-data" not in repr(observed) + repr(history) + repr(harness.tasks.list())
@@ -304,8 +302,8 @@ def test_ready_results_are_batched_and_custom_context_hooks_still_run(
             elif notifications(messages):
                 yield TextDoneEvent(text="Synthesis")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "First"})
-                yield ToolCallEvent(id="b", name="delegate", arguments={"prompt": "Second"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "First"})
+                yield ToolCallEvent(id="b", name="to_agent", arguments={"prompt": "Second"})
             else:
                 parent_waiting.set()
                 await continue_parent.wait()
@@ -329,7 +327,7 @@ def test_ready_results_are_batched_and_custom_context_hooks_still_run(
             notes = notifications(await harness.history())
             assert len(notes) == 1
             data = json.loads(str(notes[0].content).split("\n", 1)[1])
-            assert len(data["tasks"]) == 2
+            assert len(data["sessions"]) == 2
             assert any(notifications(messages) for messages in hook_inputs)
             assert all(messages[0].content == "ephemeral context" for messages in providers[0].requests)
             assert not any(message.content == "ephemeral context" for message in await harness.history())
@@ -356,7 +354,7 @@ def test_child_failure_is_delivered_once_without_exception_secrets(
                     raise TimeoutError("fake-secret-never-in-task-data")
                 yield ErrorEvent(message="fake-secret-never-in-task-data")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review"})
             else:
                 yield TextDoneEvent(text="Failure acknowledged")
 
@@ -393,7 +391,7 @@ def test_parent_interruption_awaits_children_and_does_not_close_shared_auth_earl
                 child_started.set()
                 await asyncio.Event().wait()
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Wait"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Wait"})
             else:
                 parent_waiting.set()
                 await asyncio.Event().wait()
@@ -409,7 +407,7 @@ def test_parent_interruption_awaits_children_and_does_not_close_shared_auth_earl
         try:
             if method == "aclose":
                 async for event in stream:
-                    if isinstance(event, ToolResultEvent) and event.name == "delegate":
+                    if isinstance(event, ToolResultEvent) and event.name == "to_agent":
                         await asyncio.wait_for(child_started.wait(), HANG_GUARD)
                         await stream.aclose()
                         break
@@ -456,7 +454,7 @@ def test_full_ui_queue_cancellation_does_not_deadlock(tmp_path: Path, monkeypatc
                 child_started.set()
                 await asyncio.Event().wait()
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Wait"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Wait"})
             else:
                 for _ in range(200):
                     yield TextChunkEvent(chunk="flood")
@@ -495,7 +493,7 @@ def test_stop_on_start_ack_repairs_tool_history_and_cancels_unstarted_child(
             if provider.index:
                 await asyncio.Event().wait()
             else:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review"})
 
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
         stream = harness.run("Stop immediately")
@@ -506,7 +504,7 @@ def test_stop_on_start_ack_repairs_tool_history_and_cancels_unstarted_child(
                     break
             assert all(worker.done() for worker in harness.tasks._workers.values())
             info = harness.tasks.list()[0]
-            worker = harness.tasks._workers[info.id]
+            worker = harness.tasks._workers[info.session_id]
             assert info.status == "cancelled", (info.error, worker.cancelled(), worker.cancelling())
             assert_balanced(await harness.history())
         finally:
@@ -539,10 +537,10 @@ def test_repeated_cancellation_waits_for_child_provider_cleanup(
         await set_limits(harness, SubagentLimits(max_concurrent_subagents=1))
         harness.tasks.begin(harness.session_id)
         try:
-            await harness.tasks.delegate("Review")
+            await harness.tasks.to_agent("Review")
             await asyncio.wait_for(closing.wait(), HANG_GUARD)
             with pytest.raises(ValueError, match="concurrently"):
-                await harness.tasks.delegate("Cannot reuse a slot before cleanup")
+                await harness.tasks.to_agent("Cannot reuse a slot before cleanup")
             stop = asyncio.create_task(harness.tasks.end())
             await asyncio.sleep(0)
             stop.cancel()
@@ -575,13 +573,13 @@ def test_cancel_before_worker_first_step_records_terminal_status(
         await harness.initialize()
         harness.tasks.begin(harness.session_id)
         try:
-            ack = await harness.tasks.delegate("Review")
-            harness.tasks._workers[ack["task_id"]].cancel()
+            ack = await harness.tasks.to_agent("Review")
+            harness.tasks._workers[ack["session_id"]].cancel()
             await harness.tasks.end()
             info = harness.tasks.list()[0]
             assert info.status == "cancelled" and info.error
-            info.name = "mutated snapshot"
-            assert harness.tasks.list()[0].name == ack["name"]
+            info.title = "mutated snapshot"
+            assert harness.tasks.list()[0].title == ""
         finally:
             await harness.close()
 
@@ -597,7 +595,7 @@ def test_parent_failure_does_not_autocontinue_and_cancels_jobs(tmp_path: Path, m
                 child_started.set()
                 await asyncio.Event().wait()
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review"})
             else:
                 await child_started.wait()
                 yield ErrorEvent(message="parent failed", recoverable=False)
@@ -616,7 +614,7 @@ def test_parent_failure_does_not_autocontinue_and_cancels_jobs(tmp_path: Path, m
     asyncio.run(scenario())
 
 
-def test_task_limits_names_and_shared_recursive_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_task_limits_identity_and_shared_recursive_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         release = asyncio.Event()
 
@@ -625,26 +623,25 @@ def test_task_limits_names_and_shared_recursive_budget(tmp_path: Path, monkeypat
             yield TextDoneEvent(text="done")
 
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
-        monkeypatch.setattr(secrets, "choice", lambda values: values[0])
         await harness.initialize()
         try:
             await set_limits(harness, SubagentLimits(max_concurrent_subagents=3, max_subagent_executions=8))
             with pytest.raises(RuntimeError, match="active parent run"):
-                await harness.tasks.delegate("Outside a run")
+                await harness.tasks.to_agent("Outside a run")
             harness.tasks.begin(harness.session_id)
-            acks = await asyncio.gather(*(harness.tasks.delegate(f"Review {i}") for i in range(3)))
-            assert len({ack["name"] for ack in acks}) == 3
-            assert inspect.iscoroutinefunction(harness.tasks.delegate)
+            acks = await asyncio.gather(*(harness.tasks.to_agent(f"Review {i}") for i in range(3)))
+            assert len({ack["session_id"] for ack in acks}) == 3
+            assert inspect.iscoroutinefunction(harness.tasks.to_agent)
             with pytest.raises(ValueError, match="concurrently"):
-                await harness.tasks.delegate("Fourth")
+                await harness.tasks.to_agent("Fourth")
             with pytest.raises(ValueError, match="concurrently"):
-                await harness.tasks.delegate("Build", agent="build")
+                await harness.tasks.to_agent("Build", agent="build")
             child = harness.tasks._create_child("reviewer")
             try:
                 child.tasks.begin(child.session_id)
                 with pytest.raises(ValueError, match="concurrently"):
-                    await child.tasks.delegate("Nested")
-                assert "delegate" in child.agent.tool_registry.names()
+                    await child.tasks.to_agent("Nested")
+                assert "to_agent" in child.agent.tool_registry.names()
                 # The read-only child registry keeps compact_history and drops
                 # every modifying tool.
                 names = child.agent.tool_registry.names()
@@ -657,10 +654,10 @@ def test_task_limits_names_and_shared_recursive_budget(tmp_path: Path, monkeypat
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             await set_limits(harness, SubagentLimits(max_concurrent_subagents=3, max_subagent_executions=3))
             with pytest.raises(ValueError, match="budget exhausted"):
-                await harness.tasks.delegate("New wave must not reset total budget")
+                await harness.tasks.to_agent("New wave must not reset total budget")
             await harness.tasks.notification()
             with pytest.raises(ValueError, match="budget exhausted"):
-                await harness.tasks.delegate("Nor after notification delivery")
+                await harness.tasks.to_agent("Nor after notification delivery")
         finally:
             release.set()
             await harness.tasks.end()
@@ -678,7 +675,7 @@ def test_auto_continuations_share_one_total_budget(tmp_path: Path, monkeypatch: 
                 yield TextDoneEvent(text="Parent settled")
             else:
                 yield ToolCallEvent(
-                    id=f"spawn-{len(provider.requests)}", name="delegate", arguments={"prompt": "Review again"}
+                    id=f"spawn-{len(provider.requests)}", name="to_agent", arguments={"prompt": "Review again"}
                 )
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
@@ -704,13 +701,13 @@ def test_reviewer_delegation_and_post_hook_escalation_denial(tmp_path: Path, mon
             if provider.index and len(provider.requests) == 1:
                 yield ToolCallEvent(id="write", name="write", arguments={"path": "forbidden", "content": "bad"})
             elif not provider.index and len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review", "agent": "audit"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review", "agent": "audit"})
             else:
                 yield TextDoneEvent(text="done")
 
         class Escalate(AgentPlugin):
             async def before_tool(self, context: RunContext, call: ToolCall) -> ToolCall:
-                if call.name == "delegate":
+                if call.name == "to_agent":
                     call.arguments["agent"] = "assistant"
                 return call
 
@@ -727,7 +724,7 @@ def test_reviewer_delegation_and_post_hook_escalation_denial(tmp_path: Path, mon
             assert all("write" not in schema and "shell" not in schema for schema in providers[1].schemas)
             assert any(
                 message.role == "tool" and "Read-only mode denies" in str(message.content)
-                for message in await harness.task_history(harness.tasks.list()[0].id)
+                for message in await harness.task_history(harness.tasks.list()[0].session_id)
             )
             harness.agent.plugins.clear()
             harness.tasks.begin(harness.session_id)
@@ -757,7 +754,7 @@ def test_sessions_hidden_and_no_cross_session_delivery(tmp_path: Path, monkeypat
             if provider.index or len(provider.requests) != 1:
                 yield TextDoneEvent(text="bounded " + "x" * (MAX_RESULT + 100))
             else:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review"})
 
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
         try:
@@ -796,7 +793,7 @@ def test_plugin_commands_attributed_and_not_reimported_into_child(
             if provider.index or len(provider.requests) > 1:
                 yield TextDoneEvent(text="done")
             else:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Review"})
 
         extension = tmp_path / "subagent_test_plugin.py"
         extension.write_text(
@@ -838,7 +835,7 @@ def test_codex_child_shares_auth_not_provider_or_close_ownership(tmp_path: Path)
             assert child.agent.provider is not harness.agent.provider
             assert child.agent.provider._credentials == harness.openai_auth.credentials
             assert child.openai_auth is harness.openai_auth and not child._owns_auth
-            assert "delegate" in child.agent.tool_registry.names()
+            assert "to_agent" in child.agent.tool_registry.names()
         finally:
             await child.close()
             await harness.close()
@@ -856,7 +853,7 @@ def test_genuine_offline_children_use_existing_demo_provider(tmp_path: Path) -> 
         await harness.initialize()
         harness.tasks.begin(harness.session_id)
         try:
-            ack = await harness.tasks.delegate("Inspect the workspace read-only")
+            ack = await harness.tasks.to_agent("Inspect the workspace read-only")
             assert ack["status"] == "running"
             assert harness.tasks.list()[0].status == "running"
             notification = await asyncio.wait_for(harness.tasks.notification(), HANG_GUARD)
@@ -878,7 +875,7 @@ def test_demo_subagents_run_asynchronously_through_delegate_tool(tmp_path: Path)
             started = [event for event in events if isinstance(event, TaskStarted)]
             completed = [event for event in events if isinstance(event, TaskCompleted)]
             assert len(started) == len(completed) == 3
-            assert len({event.name for event in started}) == 3
+            assert len({event.session_id for event in started}) == 3
             assert all(not event.error for event in completed)
             assert all(task.status == "completed" for task in harness.tasks.list())
             done = [event for event in events if isinstance(event, DoneEvent)]
@@ -897,7 +894,7 @@ def test_recursive_tree_depth_permission_ceiling_and_fail_fast_slots(
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
-                yield ToolCallEvent(id=f"nested-{provider.index}", name="delegate", arguments={"prompt": "Nested work"})
+                yield ToolCallEvent(id=f"nested-{provider.index}", name="to_agent", arguments={"prompt": "Nested work"})
             else:
                 yield TextDoneEvent(text=f"Finished {provider.index}")
 
@@ -909,7 +906,7 @@ def test_recursive_tree_depth_permission_ceiling_and_fail_fast_slots(
             infos = harness.tasks.list()
             assert len(infos) == min(depth, limits.max_concurrent_subagents)
             assert [info.depth for info in infos] == list(range(1, len(infos) + 1))
-            assert len({info.name for info in infos}) == len(infos)
+            assert len({info.session_id for info in infos}) == len(infos)
             assert all(
                 info.status == "completed" and info.mode == mode and info.profile == "assistant" for info in infos
             )
@@ -917,13 +914,15 @@ def test_recursive_tree_depth_permission_ceiling_and_fail_fast_slots(
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == len(infos)
             assert harness.tasks._used == len(infos)
             for index, info in enumerate(infos):
-                assert info.parent_task_id == (infos[index - 1].id if index else "")
-                assert info.parent_session_id == (infos[index - 1].child_session_id if index else harness.session_id)
-                assert info.child_session_id != info.session_id == harness.session_id
+                assert info.parent_session_id == (infos[index - 1].session_id if index else "")
+                assert info.root_session_id == harness.session_id
+                assert info._storage_id != info.session_id
+                if index:
+                    assert info._parent_storage_id == infos[index - 1]._storage_id
                 assert providers[index + 1].closed
                 assert all(("shell" in schema) == (mode == "build") for schema in providers[index + 1].schemas)
-                assert_balanced(await harness.task_history(info.id))
-            leaf_history = await harness.task_history(infos[-1].id) if infos else await harness.history()
+                assert_balanced(await harness.task_history(info.session_id))
+            leaf_history = await harness.task_history(infos[-1].session_id) if infos else await harness.history()
             denial = "concurrently" if depth > limits.max_concurrent_subagents else "depth limit"
             assert any(message.role == "tool" and denial in str(message.content) for message in leaf_history)
             assert_balanced(await harness.history())
@@ -947,7 +946,7 @@ def test_descendant_notification_waves_do_not_reset_root_budget(
             ):
                 yield ToolCallEvent(
                     id=f"spawn-{provider.index}-{len(provider.requests)}",
-                    name="delegate",
+                    name="to_agent",
                     arguments={"prompt": "Next job"},
                 )
             else:
@@ -962,7 +961,9 @@ def test_descendant_notification_waves_do_not_reset_root_budget(
             assert harness.tasks._used == execution_limit
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == execution_limit
             child = harness.tasks.list()[0]
-            assert any("budget exhausted" in str(message.content) for message in await harness.task_history(child.id))
+            assert any(
+                "budget exhausted" in str(message.content) for message in await harness.task_history(child.session_id)
+            )
             again = await asyncio.wait_for(collect(harness, "An unrelated root turn"), HANG_GUARD)
             assert not any(isinstance(event, TaskStarted | TaskCompleted) for event in again)
             assert harness.tasks._used == 0
@@ -1003,15 +1004,15 @@ def test_general_children_use_root_serialized_approval_and_no_custom_tools(
         await harness.initialize()
         harness.tasks.begin(harness.session_id)
         try:
-            await harness.tasks.delegate("Create a file")
-            await harness.tasks.delegate("Run a command")
+            await harness.tasks.to_agent("Create a file")
+            await harness.tasks.to_agent("Run a command")
             await harness.tools.write("parent.txt", "parent")
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             assert peak == 1 and len(requests) == 3
             assert (tmp_path / "child.txt").read_text() == "child"
             assert (tmp_path / "parent.txt").read_text() == "parent"
-            assert len([request for request in requests if request.task_id and request.depth == 1]) == 2
-            assert all(request.task_name in request.description for request in requests if request.task_id)
+            assert len([request for request in requests if request.session_id and request.depth == 1]) == 2
+            assert all(request.title in request.description for request in requests if request.session_id)
             assert all(info.status == "completed" for info in harness.tasks.list())
             child = harness.tasks._create_child("assistant")
             try:
@@ -1041,7 +1042,7 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Original child request"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Original child request"})
             else:
                 yield TextDoneEvent(text=f"Response from worker {provider.index}")
 
@@ -1052,15 +1053,21 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
         try:
             await collect(harness)
             info = harness.tasks.list()[0]
-            with pytest.raises(ValueError, match="Unknown task"):
+            with pytest.raises(ValueError, match="short session_id"):
                 _ = [event async for event in harness.continue_task("", "Must not run on the parent")]
-            old_history = await harness.task_history(info.id)
+            old_history = await harness.task_history(info.session_id)
             old_history[0].content = "mutated detached history"
-            assert (await harness.task_history(info.id))[0].content == "Original child request"
+            assert (await harness.task_history(info.session_id))[0].content == "Original child request"
             await harness.set_model("new-parent-model")
-            events = [event async for event in harness.continue_task(info.id, "Human follow-up: inspect the result")]
+            events = [
+                event async for event in harness.continue_task(info.session_id, "Human follow-up: inspect the result")
+            ]
             updated = harness.tasks.list()[0]
-            assert (updated.id, updated.name, updated.child_session_id) == (info.id, info.name, info.child_session_id)
+            assert (updated.session_id, updated.title, updated._storage_id) == (
+                info.session_id,
+                info.title,
+                info._storage_id,
+            )
             assert updated.followups == 1 and updated.status == "completed"
             assert providers[1].closed and providers[2].closed
             assert providers[2].model == "fake-model" and providers[0].model == "new-parent-model"
@@ -1076,7 +1083,7 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
             assert "Human follow-up: inspect the result" not in str(providers[0].requests)
             assert "Response from worker 2" in str(providers[0].requests[-1][-1].content)
             assert isinstance(events[-1], DoneEvent) and events[-1].session_id == harness.session_id
-            history = await harness.task_history(info.id)
+            history = await harness.task_history(info.session_id)
             assert [message.content for message in history if message.role == "user"] == [
                 "Original child request",
                 "Human follow-up: inspect the result",
@@ -1089,15 +1096,15 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
             )
             assert any("Response from worker 2" in str(note.content) for note in notes)
             assert all("untrusted" in str(note.content) for note in notes)
-            assert len(await harness.task_history(info.id, limit=1)) == 1
+            assert len(await harness.task_history(info.session_id, limit=1)) == 1
             with pytest.raises(ValueError, match="History limit"):
-                await harness.task_history(info.id, limit=True)
+                await harness.task_history(info.session_id, limit=True)
             assert [session.id for session in await harness.list_sessions()] == [harness.session_id]
             await harness.new_session()
-            with pytest.raises(ValueError, match="Unknown task"):
-                await harness.task_history(info.id)
-            with pytest.raises(ValueError, match="Unknown task"):
-                _ = [event async for event in harness.continue_task(info.id, "Wrong session")]
+            with pytest.raises(ValueError, match="Unknown or unavailable child session"):
+                await harness.task_history(info.session_id)
+            with pytest.raises(ValueError, match="Unknown or unavailable child session"):
+                _ = [event async for event in harness.continue_task(info.session_id, "Wrong session")]
         finally:
             await harness.close()
 
@@ -1113,7 +1120,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Original"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Original"})
                 yield ToolCallEvent(id="parent-pause", name="pause")
             elif provider.index == 2:
                 child_waiting.set()
@@ -1139,14 +1146,16 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
             info = harness.tasks.list()[0]
             await set_limits(harness, SubagentLimits(max_subagent_executions=1))
             with pytest.raises(ValueError, match="budget exhausted"):
-                _ = [event async for event in harness.continue_task(info.id, "Must share the root budget")]
+                _ = [event async for event in harness.continue_task(info.session_id, "Must share the root budget")]
             assert harness.tasks.list()[0].followups == 0
             await set_limits(harness, SubagentLimits())
-            accepted = [event async for event in harness.continue_task(info.id, "Human message while parent busy")]
+            accepted = [
+                event async for event in harness.continue_task(info.session_id, "Human message while parent busy")
+            ]
             assert len(accepted) == 1
             await asyncio.wait_for(child_waiting.wait(), HANG_GUARD)
-            with pytest.raises(RuntimeError, match="Child is busy"):
-                _ = [event async for event in harness.continue_task(info.id, "Do not silently queue this")]
+            with pytest.raises(RuntimeError, match="Child session is busy"):
+                _ = [event async for event in harness.continue_task(info.session_id, "Do not silently queue this")]
             assert harness.tasks._used == 2 and harness.tasks.list()[0].followups == 1
             assert not notifications(await harness.history())
             release_child.set()
@@ -1156,7 +1165,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
             assert len([event for event in events if isinstance(event, TaskMessage)]) == 1
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 2
             assert_balanced(await harness.history())
-            child_history = await harness.task_history(info.id)
+            child_history = await harness.task_history(info.session_id)
             assert_balanced(child_history)
             assert not any("silently queue" in str(message.content) for message in child_history)
             assert any(
@@ -1181,7 +1190,7 @@ def test_manual_descendant_followup_reaches_immediate_parent_not_root_model(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index < 2 and len(provider.requests) == 1:
-                yield ToolCallEvent(id=f"spawn-{provider.index}", name="delegate", arguments={"prompt": "Nested"})
+                yield ToolCallEvent(id=f"spawn-{provider.index}", name="to_agent", arguments={"prompt": "Nested"})
             else:
                 if provider.index == 1 and len(provider.requests) == 2:
                     ancestor_waiting.set()
@@ -1193,29 +1202,27 @@ def test_manual_descendant_followup_reaches_immediate_parent_not_root_model(
         try:
             await asyncio.wait_for(ancestor_waiting.wait(), HANG_GUARD)
             descendant = next(info for info in harness.tasks.list() if info.depth == 2)
-            await asyncio.wait_for(harness.tasks._workers[descendant.id], HANG_GUARD)
-            _ = [event async for event in harness.continue_task(descendant.id, "Human to grandchild")]
-            await asyncio.wait_for(harness.tasks._workers[descendant.id], HANG_GUARD)
+            await asyncio.wait_for(harness.tasks._workers[descendant.session_id], HANG_GUARD)
+            _ = [event async for event in harness.continue_task(descendant.session_id, "Human to grandchild")]
+            await asyncio.wait_for(harness.tasks._workers[descendant.session_id], HANG_GUARD)
             assert harness.tasks._used == 3
             release_ancestor.set()
             events = await asyncio.wait_for(task, HANG_GUARD)
             ancestor = next(info for info in harness.tasks.list() if info.depth == 1)
-            parent_history = await harness.task_history(ancestor.id)
+            parent_history = await harness.task_history(ancestor.session_id)
             root_history = await harness.history()
             assert_balanced(parent_history)
             assert_balanced(root_history)
             pickups = [event for event in events if isinstance(event, TaskMessage)]
-            assert len(pickups) == 1 and pickups[0].task_id == descendant.id
-            assert pickups[0].parent_task_id == ancestor.id and pickups[0].message_id
-            assert any(
-                "A human message was picked up by this agent." in str(note.content)
-                and pickups[0].message_id in str(note.content)
-                for note in notifications(parent_history)
-            )
+            assert len(pickups) == 1 and pickups[0].session_id == descendant.session_id
+            assert pickups[0].parent_session_id == ancestor.session_id and pickups[0].message_id
+            parent_notices = [str(note.content) for note in notifications(parent_history)]
+            assert any("A human message was picked up by this agent." in notice for notice in parent_notices)
+            assert all(pickups[0].message_id not in notice for notice in parent_notices)
             assert "Human to grandchild" not in str(parent_history)
             assert any(
                 item.role == "user" and item.content == "Human to grandchild"
-                for item in await harness.task_history(descendant.id)
+                for item in await harness.task_history(descendant.session_id)
             )
             assert any("Result 3" in str(note.content) for note in notifications(parent_history))
             assert not any(
@@ -1242,7 +1249,7 @@ def test_followup_and_retention_limits_and_cancelled_children_are_not_replayed(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Original"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Original"})
             elif provider.index == 2:
                 child_waiting.set()
                 await asyncio.Event().wait()
@@ -1255,15 +1262,15 @@ def test_followup_and_retention_limits_and_cancelled_children_are_not_replayed(
             info = harness.tasks.list()[0]
             await set_limits(harness, SubagentLimits(max_subagent_depth=0))
             with pytest.raises(PermissionError, match="depth limit"):
-                _ = [event async for event in harness.continue_task(info.id, "Disabled")]
+                _ = [event async for event in harness.continue_task(info.session_id, "Disabled")]
             await set_limits(harness, SubagentLimits(max_subagent_depth=2))
             monkeypatch.setattr(subagents, "MAX_FOLLOWUPS", 0)
             with pytest.raises(ValueError, match="human follow-ups"):
-                _ = [event async for event in harness.continue_task(info.id, "Too many")]
+                _ = [event async for event in harness.continue_task(info.session_id, "Too many")]
             monkeypatch.setattr(subagents, "MAX_FOLLOWUPS", 8)
 
             async def consume() -> list[HarnessEvent]:
-                return [event async for event in harness.continue_task(info.id, "Explicit continuation")]
+                return [event async for event in harness.continue_task(info.session_id, "Explicit continuation")]
 
             task = asyncio.create_task(consume())
             await asyncio.wait_for(child_waiting.wait(), HANG_GUARD)
@@ -1272,14 +1279,14 @@ def test_followup_and_retention_limits_and_cancelled_children_are_not_replayed(
                 await task
             assert providers[2].closed and harness.tasks.list()[0].status == "cancelled"
             with pytest.raises(RuntimeError, match="cancellation"):
-                _ = [event async for event in harness.continue_task(info.id, "Never replay")]
+                _ = [event async for event in harness.continue_task(info.session_id, "Never replay")]
             events = await collect(harness, "A new request")
             assert not any(isinstance(event, TaskStarted | TaskCompleted | TaskMessage) for event in events)
             assert len(providers) == 3
             harness.tasks.begin(harness.session_id)
             monkeypatch.setattr(subagents, "MAX_RETAINED_TASKS", 1)
             with pytest.raises(ValueError, match="retention limit"):
-                await harness.tasks.delegate("No unbounded retained conversations")
+                await harness.tasks.to_agent("No unbounded retained conversations")
         finally:
             await harness.close()
 
@@ -1301,10 +1308,10 @@ def test_tree_shutdown_under_backpressure_and_repeated_close_cancellation(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Branch A"})
-                yield ToolCallEvent(id="b", name="delegate", arguments={"prompt": "Branch B"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Branch A"})
+                yield ToolCallEvent(id="b", name="to_agent", arguments={"prompt": "Branch B"})
             elif provider.index == 1 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="grandchild", name="delegate", arguments={"prompt": "Grandchild"})
+                yield ToolCallEvent(id="grandchild", name="to_agent", arguments={"prompt": "Grandchild"})
             elif provider.index == 0:
                 await grandchild_waiting.wait()
                 for _ in range(200):
@@ -1358,10 +1365,10 @@ def test_indefinitely_waiting_child_stays_active_until_explicit_tree_stop(
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             branch = actor(messages)
             if branch == "Root task" and len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Branch A"})
-                yield ToolCallEvent(id="b", name="delegate", arguments={"prompt": "Branch B"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "Branch A"})
+                yield ToolCallEvent(id="b", name="to_agent", arguments={"prompt": "Branch B"})
             elif branch == "Branch A" and len(provider.requests) == 1:
-                yield ToolCallEvent(id="nested", name="delegate", arguments={"prompt": "Waiting descendant"})
+                yield ToolCallEvent(id="nested", name="to_agent", arguments={"prompt": "Waiting descendant"})
             elif branch in {"Branch A", "Waiting descendant"}:
                 if branch == "Waiting descendant":
                     grandchild_started.set()
@@ -1384,12 +1391,12 @@ def test_indefinitely_waiting_child_stays_active_until_explicit_tree_stop(
         harness.tasks.begin(harness.session_id)
         try:
             async with asyncio.timeout(HANG_GUARD):
-                await harness.tasks.delegate("Branch A")
-                await harness.tasks.delegate("Branch B")
+                await harness.tasks.to_agent("Branch A")
+                await harness.tasks.to_agent("Branch B")
                 await grandchild_started.wait()
                 await sibling_working.wait()
                 infos = {info.prompt: info for info in harness.tasks.list()}
-                await asyncio.wait_for(asyncio.shield(harness.tasks._workers[infos["Branch B"].id]), HANG_GUARD)
+                await asyncio.wait_for(asyncio.shield(harness.tasks._workers[infos["Branch B"].session_id]), HANG_GUARD)
                 while True:
                     infos = {info.prompt: info for info in harness.tasks.list()}
                     if infos.get("Branch B") is not None and infos["Branch B"].status == "completed":
@@ -1397,8 +1404,8 @@ def test_indefinitely_waiting_child_stays_active_until_explicit_tree_stop(
                     await asyncio.sleep(0)
                 assert infos["Branch A"].status == "running"
                 assert infos["Waiting descendant"].status == "running"
-                assert not harness.tasks._workers[infos["Branch A"].id].done()
-                assert not harness.tasks._workers[infos["Waiting descendant"].id].done()
+                assert not harness.tasks._workers[infos["Branch A"].session_id].done()
+                assert not harness.tasks._workers[infos["Waiting descendant"].session_id].done()
                 # This is the explicit tree-stop boundary; the two indefinitely
                 # waiting tasks remain active until the owner stops them.
                 await harness.tasks.end()
@@ -1425,7 +1432,7 @@ def test_continuation_permission_ceiling_and_no_restored_job_handles(
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index == 0 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "General work"})
+                yield ToolCallEvent(id="a", name="to_agent", arguments={"prompt": "General work"})
             else:
                 yield TextDoneEvent(text="Completed")
 
@@ -1437,18 +1444,18 @@ def test_continuation_permission_ceiling_and_no_restored_job_handles(
         try:
             await collect(harness)
             info = harness.tasks.list()[0]
-            retained = harness.tasks._children[info.id]
+            retained = harness.tasks._children[info.session_id]
             original_prompt = retained.agent.system_prompt or ""
             assert original_prompt.count("Retained nested project context") == 1
             retained.agent.system_prompt = original_prompt + "\nCustom continuation instruction"
             await harness.set_agent("reviewer")
-            _ = [event async for event in harness.continue_task(info.id, "Continue read-only")]
+            _ = [event async for event in harness.continue_task(info.session_id, "Continue read-only")]
             assert harness.tasks.list()[0].mode == "reviewer"
             assert "shell" not in providers[2].schemas[0]
-            continued_prompt = harness.tasks._children[info.id].agent.system_prompt or ""
+            continued_prompt = harness.tasks._children[info.session_id].agent.system_prompt or ""
             assert original_prompt + "\nCustom continuation instruction" in continued_prompt
             await harness.set_agent("assistant")
-            _ = [event async for event in harness.continue_task(info.id, "Do not escalate this child")]
+            _ = [event async for event in harness.continue_task(info.session_id, "Do not escalate this child")]
             assert harness.tasks.list()[0].mode == "reviewer"
             assert "shell" not in providers[3].schemas[0]
             restored = Harness(harness.config)
@@ -1456,7 +1463,9 @@ def test_continuation_permission_ceiling_and_no_restored_job_handles(
                 await restored.resume(harness.session_id)
                 assert restored.tasks.list() == []
                 with pytest.raises(ValueError, match="not restored"):
-                    _ = [event async for event in restored.continue_task(info.id, "No restored background jobs")]
+                    _ = [
+                        event async for event in restored.continue_task(info.session_id, "No restored background jobs")
+                    ]
             finally:
                 await restored.close()
         finally:
@@ -1486,7 +1495,7 @@ def test_cancellation_fails_closed_for_shared_approval_queue(
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if not provider.index and len(provider.requests) == 1:
                 for index in range(3):
-                    yield ToolCallEvent(id=f"child-{index}", name="delegate", arguments={"prompt": "Propose a file"})
+                    yield ToolCallEvent(id=f"child-{index}", name="to_agent", arguments={"prompt": "Propose a file"})
             elif provider.index:
                 yield ToolCallEvent(
                     id="write", name="write", arguments={"path": f"child-{provider.index}.txt", "content": "bad"}
@@ -1522,7 +1531,7 @@ def test_continuation_intersects_retained_ancestor_ceiling(
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index < depth and len(provider.requests) == 1:
                 yield ToolCallEvent(
-                    id=f"child-{provider.index}", name="delegate", arguments={"prompt": "Build descendant"}
+                    id=f"child-{provider.index}", name="to_agent", arguments={"prompt": "Build descendant"}
                 )
             elif provider.index == depth + 2 and len(provider.requests) == 1:
                 yield ToolCallEvent(
@@ -1547,13 +1556,15 @@ def test_continuation_intersects_retained_ancestor_ceiling(
             assert len(infos) == depth and all(info.mode == "build" for info in infos)
             ancestor, descendant = infos[0], infos[-1]
             await harness.set_agent("reviewer")
-            _ = [event async for event in harness.continue_task(ancestor.id, "Continue ancestor read-only")]
+            _ = [event async for event in harness.continue_task(ancestor.session_id, "Continue ancestor read-only")]
             assert harness.tasks.list()[0].mode == "reviewer"
             await harness.set_agent("assistant")
-            _ = [event async for event in harness.continue_task(descendant.id, "Respect all retained ancestors")]
+            _ = [
+                event async for event in harness.continue_task(descendant.session_id, "Respect all retained ancestors")
+            ]
             assert harness.mode == "build" and harness.tasks.list()[-1].mode == "reviewer"
             assert all("write" not in schema and "shell" not in schema for schema in providers[-1].schemas)
-            history = await harness.task_history(descendant.id)
+            history = await harness.task_history(descendant.session_id)
             denied = [message for message in history if message.role == "tool" and message.name in {"write", "shell"}]
             assert len(denied) == 2 and all("Read-only mode denies" in str(message.content) for message in denied)
             assert not approvals and not (tmp_path / "escalated.txt").exists()
@@ -1588,7 +1599,7 @@ def test_cancelled_child_with_cleanup_error_cannot_continue(
                     await asyncio.Event().wait()
                 yield TextDoneEvent(text="Finished before cleanup")
             elif len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Wait for cancellation"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Wait for cancellation"})
             else:
                 yield TextDoneEvent(text="Waiting")
 
@@ -1597,7 +1608,7 @@ def test_cancelled_child_with_cleanup_error_cannot_continue(
         task = asyncio.create_task(collect(harness))
         try:
             await asyncio.wait_for((started if phase == "execution" else closing).wait(), HANG_GUARD)
-            worker = harness.tasks._workers[harness.tasks.list()[0].id]
+            worker = harness.tasks._workers[harness.tasks.list()[0].session_id]
             task.cancel()
             async with asyncio.timeout(HANG_GUARD):
                 while not worker.cancelling():
@@ -1606,20 +1617,20 @@ def test_cancelled_child_with_cleanup_error_cannot_continue(
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(task, HANG_GUARD)
             info = harness.tasks.list()[0]
-            worker = harness.tasks._workers[info.id]
+            worker = harness.tasks._workers[info.session_id]
             assert worker.cancelled() and providers[1].closed
             assert info.status == "cancelled"
             assert "cancelled" in info.error and "cleanup failed" in info.error
             assert "fake-secret-never-in-task-data" not in repr(info)
-            histories = await harness.history(), await harness.task_history(info.id)
+            histories = await harness.history(), await harness.task_history(info.session_id)
             # Admission must also fail closed if terminal metadata is stale.
-            harness.tasks._infos[info.id].status = "failed"
+            harness.tasks._infos[info.session_id].status = "failed"
             with pytest.raises(RuntimeError, match="cancellation"):
-                _ = [event async for event in harness.continue_task(info.id, "Never resume cancelled work")]
-            assert harness.tasks._workers[info.id] is worker
+                _ = [event async for event in harness.continue_task(info.session_id, "Never resume cancelled work")]
+            assert harness.tasks._workers[info.session_id] is worker
             assert harness.tasks.list()[0].followups == 0
             assert len(providers) == 2
-            assert (await harness.history(), await harness.task_history(info.id)) == histories
+            assert (await harness.history(), await harness.task_history(info.session_id)) == histories
         finally:
             release_close.set()
             task.cancel()
@@ -1644,7 +1655,7 @@ def test_idle_followup_cannot_reset_exhausted_budget_but_new_root_run_can(
             ):
                 spawned += 1
                 yield ToolCallEvent(
-                    id=f"spawn-{len(provider.requests)}", name="delegate", arguments={"prompt": "Use the shared budget"}
+                    id=f"spawn-{len(provider.requests)}", name="to_agent", arguments={"prompt": "Use the shared budget"}
                 )
             elif provider.index > SubagentLimits().max_subagent_executions and len(provider.requests) == 1:
                 yield ToolCallEvent(
@@ -1666,18 +1677,18 @@ def test_idle_followup_cannot_reset_exhausted_budget_but_new_root_run_can(
             assert harness.tasks._used == SubagentLimits().max_subagent_executions == 8
             info = harness.tasks.list()[0]
             workers = dict(harness.tasks._workers)
-            histories = await harness.history(), await harness.task_history(info.id)
+            histories = await harness.history(), await harness.task_history(info.session_id)
             rejected_events: list[HarnessEvent] = []
             for _ in range(2):
                 with pytest.raises(ValueError, match="budget exhausted"):
-                    async for event in harness.continue_task(info.id, "Do not launch execution nine"):
+                    async for event in harness.continue_task(info.session_id, "Do not launch execution nine"):
                         rejected_events.append(event)
                 assert harness.tasks._used == 8
                 assert harness.tasks._workers == workers
                 assert harness.tasks.list()[0] == info
                 assert len(providers) == 9
                 assert not approvals and not (tmp_path / "ninth-job.txt").exists()
-                assert (await harness.history(), await harness.task_history(info.id)) == histories
+                assert (await harness.history(), await harness.task_history(info.session_id)) == histories
             assert not any(
                 isinstance(event, TaskMessage | TaskStarted | TaskCompleted | DoneEvent) for event in rejected_events
             )
@@ -1685,7 +1696,9 @@ def test_idle_followup_cannot_reset_exhausted_budget_but_new_root_run_can(
             assert harness.tasks._used == 0
             assert not any(isinstance(event, TaskStarted | TaskCompleted) for event in events)
             assert harness.tasks.list()[0] == info
-            events = [event async for event in harness.continue_task(info.id, "Explicit follow-up in the new budget")]
+            events = [
+                event async for event in harness.continue_task(info.session_id, "Explicit follow-up in the new budget")
+            ]
             assert harness.tasks.list()[0].followups == 1 and harness.tasks._used == 1
             assert any(isinstance(event, TaskCompleted) for event in events)
         finally:
@@ -1705,7 +1718,7 @@ def test_incompletely_initialized_child_cannot_continue(tmp_path: Path, monkeypa
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if not provider.index and len(provider.requests) == 1:
-                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Cannot initialize"})
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Cannot initialize"})
             else:
                 yield TextDoneEvent(text="Completed")
 
@@ -1716,11 +1729,11 @@ def test_incompletely_initialized_child_cannot_continue(tmp_path: Path, monkeypa
             info = harness.tasks.list()[0]
             assert info.status == "failed" and providers[1].closed and not providers[1].requests
             assert "fake-secret-never-in-task-data" not in repr(events) + repr(info)
-            assert await harness.task_history(info.id) == []
+            assert await harness.task_history(info.session_id) == []
             with pytest.raises(RuntimeError, match="incomplete setup"):
-                _ = [event async for event in harness.continue_task(info.id, "No retained conversation")]
+                _ = [event async for event in harness.continue_task(info.session_id, "No retained conversation")]
             assert len(providers) == 2 and harness.tasks.list()[0].followups == 0
-            assert await harness.task_history(info.id) == []
+            assert await harness.task_history(info.session_id) == []
         finally:
             await harness.close()
 

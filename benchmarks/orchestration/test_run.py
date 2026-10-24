@@ -127,7 +127,7 @@ def test_native_harness_instrumentation_includes_child_generations(
                     for number in range(2):
                         yield ToolCallEvent(
                             id=f"delegate-{number}",
-                            name="delegate",
+                            name="to_agent",
                             arguments={
                                 "prompt": "Read ledgers/north.json and report its entries.",
                                 "agent": "reviewer",

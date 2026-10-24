@@ -266,7 +266,7 @@ class AuthorizationSession:
                 "description": request.description,
                 "arguments": request.arguments,
                 "preview": request.preview,
-                "agent": request.task_name,
+                "agent": request.title or request.session_id,
                 "depth": request.depth,
                 "mandatory": request.mandatory,
             }

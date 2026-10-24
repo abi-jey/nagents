@@ -13,7 +13,7 @@ export function ActivityRecord({ entry, open, toggle }: {
     : "Wake-up";
   const identity = [
     ["Notification", entry.notificationId], ["Wake-up", entry.wakeupId],
-    ["Run", entry.runId], ["Source task", entry.sourceTaskId],
+    ["Run", entry.runId], ["Source session", entry.sourceTaskId],
     ["Recipient task", entry.taskId], ["Cause", entry.cause],
   ];
   return (

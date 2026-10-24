@@ -3,18 +3,18 @@ import type { WireEvent } from "../../../src/types.js";
 export { reasoningParts } from "../../../src/features/chat/reasoningSummary.js";
 
 export type TimedEvent = { at: number; label: string; event: WireEvent };
-type Actor = { task_id: string; parent_task_id: string; task_name: string; depth: number; activation: number };
-const explorer: Actor = { task_id: "explorer", parent_task_id: "", task_name: "Explorer", depth: 1, activation: 0 };
-export const demoAgents = { explorer: { name: "Explorer", parent: "Assistant", provider: "OpenAI", model: "gpt-6-luna", prompt: "Locate attachment styles and report their narrow-screen behavior." } };
+type Actor = { session_id: string; parent_session_id: string; title: string; depth: number; activation: number };
+const explorer: Actor = { session_id: "s1", parent_session_id: "", title: "Explorer", depth: 1, activation: 0 };
+export const demoAgents = { s1: { name: "Explorer", parent: "Assistant", provider: "OpenAI", model: "gpt-6-luna", prompt: "Locate attachment styles and report their narrow-screen behavior." } };
 export const DURATION = 36;
 const run = "image-change", session = "chat-flow-demo";
 const events: TimedEvent[] = [];
 const summaries = new Map<string, string>();
-function add(at: number, label: string, event: WireEvent) { events.push({ at, label, event: { run_id: run, ...event } }); }
+function add(at: number, label: string, event: WireEvent) { events.push({ at, label, event: { root_session_id: session, run_id: run, ...event } }); }
 function summary(at: number, id: string, revision: number, value: string, status = "thinking", runId = run, actor?: Actor) {
   summaries.set(id, value);
   add(at, status === "thinking" ? "Reasoning arrives" : "Reasoning complete", {
-    event: "response_metadata", response_id: id, response_session_id: actor ? `${session}:${actor.task_id}` : session, run_id: runId, ...actor,
+    event: "response_metadata", response_id: id, response_session_id: actor ? actor.session_id : session, run_id: runId, ...actor,
     revision, round_number: 1, history_id: "", status, summary: value,
     summary_truncated: false, summary_expired: false, usage_reported: false,
   });
@@ -55,14 +55,14 @@ function call(start: number, ready: number, end: number, index: number, name: st
 add(.5, "User message arrives", { event: "user_message", message_id: "image-request", history_id: "1", text: "Make delivered images visible in chat and keep a download action." });
 reasoning(1, 4, "inspect", "Check the rendering path", "I’ll inspect the attachment component and keep original downloads separate from the displayed image. Then I’ll check the mobile layout.");
 call(4.3, 6, 7.5, 1, "read_file", { path: "src/features/chat/ChatMedia.tsx" }, { content: "The image currently sits behind a preview action. The original file is already available for download." });
-call(4.8, 6.4, 6.8, 5, "delegate", { agent: "mini", name: "Explorer", prompt: demoAgents.explorer.prompt }, { task_id: "explorer", name: "Explorer", status: "running" });
-add(6.7, "Explorer is spawned", { event: "task_started", ...explorer, name: "Explorer", origin_history_id: "1", prompt: demoAgents.explorer.prompt, trigger: "delegation", provider: "openai", model: "gpt-6-luna" });
+call(4.8, 6.4, 6.8, 5, "to_agent", { agent: "mini", title: "Explorer", prompt: demoAgents.s1.prompt }, { session_id: "s1", status: "running" });
+add(6.7, "Explorer is spawned", { event: "task_started", ...explorer, title: "Explorer", origin_history_id: "1", prompt: demoAgents.s1.prompt, trigger: "delegation", provider: "openai", model: "gpt-6-luna" });
 reasoning(6.9, 7.8, "explore-plan", "Locate the shared styles", "I’ll find the attachment styles and check whether narrow screens already have a layout rule.", run, explorer);
 message(7.9, 8.2, "explore-plan", "I’ll check the shared attachment styles.", run, explorer, 9.3);
 call(8.4, 9.2, 10.2, 2, "find", { pattern: "**/attachment*.css" }, { paths: ["src/features/chat/attachment.css"] }, explorer);
 message(10.4, 11.4, "explore-result", "Found attachment.css. The narrow-screen rule already wraps the footer; preserve it when moving the download action.", run, explorer);
-add(11.5, "Explorer returns its result", { event: "task_completed", ...explorer, name: "Explorer", status: "completed", result: "Found the shared attachment styles and the existing narrow-screen wrapping rule." });
-add(11.6, "Result is delivered to Assistant", { event: "task_notification", notification_id: "explorer-return", source_task_id: "explorer", source_name: "Explorer", recipient_task_id: "", recipient_name: "Assistant", cause: "completion", text: "Found attachment.css. Preserve its narrow-screen footer wrapping rule." });
+add(11.5, "Explorer returns its result", { event: "task_completed", ...explorer, title: "Explorer", status: "completed", result: "Found the shared attachment styles and the existing narrow-screen wrapping rule." });
+add(11.6, "Result is delivered to Assistant", { event: "task_notification", notification_id: "explorer-return", source_session_id: "s1", source_title: "Explorer", recipient_session_id: "", recipient_title: "Assistant", cause: "completion", text: "Found attachment.css. Preserve its narrow-screen footer wrapping rule." });
 summary(6.8, "inspect", 100, summaries.get("inspect")!, "completed");
 reasoning(8.5, 10.6, "plan", "Keep the image in the conversation", "The original file and the displayed image can share a compact footer. I’ll keep the filename wrapping and make the download action easy to reach.");
 message(10.8, 12, "plan", "I found the image renderer. I’ll keep the image visible and group the filename with its download action.", run, undefined, 14.3);

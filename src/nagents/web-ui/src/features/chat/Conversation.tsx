@@ -170,9 +170,9 @@ export function TranscriptItems({
               </span>
             </summary>
             <div className="task-contents">
-              <p className="record-identity"><strong>{task.name}</strong><br />Task {task.id}<br />
+              <p className="record-identity"><strong>{task.name}</strong><br />Session {task.id}<br />
                 {task.issue || `Parent: ${task.parentId ? names.get(task.parentId) || task.parentId : "Main"}`}
-                {task.parentId && <><br />Parent task ID: {task.parentId}</>}
+                {task.parentId && <><br />Parent session ID: {task.parentId}</>}
               </p>
               <TranscriptItems
                 items={task.items}

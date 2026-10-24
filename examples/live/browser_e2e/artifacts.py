@@ -1943,16 +1943,16 @@ def check_capture(
                 identifier = str(event.get("delegation_id", ""))
                 lifecycles.setdefault(identifier, set()).add(str(event.get("status", "")))
             if event.get("eventType") in {"task_started", "task_completed"}:
-                task_id = str(event.get("task_id", ""))
+                session_id = str(event.get("session_id", ""))
                 run_id = str(event.get("run_id", ""))
-                if task_id and run_id:
+                if session_id and run_id:
                     event_type = str(event.get("eventType", ""))
                     task_state = (
                         ("task_completed" if event.get("status") == "completed" else "task_failed")
                         if event_type == "task_completed"
                         else event_type
                     )
-                    task_lifecycles.setdefault(f"{run_id}:{task_id}", set()).add(task_state)
+                    task_lifecycles.setdefault(f"{run_id}:{session_id}", set()).add(task_state)
         direct_delegation = any(
             identifier and {"queued", "working", "completed"} <= statuses for identifier, statuses in lifecycles.items()
         )
@@ -2055,9 +2055,9 @@ def check_authenticated_scenario(
                 if identifier:
                     lifecycles.setdefault(identifier, set()).add(str(event.get("status", "")))
             if event.get("eventType") in {"task_started", "task_completed"}:
-                task_id = str(event.get("task_id", ""))
+                session_id = str(event.get("session_id", ""))
                 run_id = str(event.get("run_id", ""))
-                if task_id and run_id:
+                if session_id and run_id:
                     event_type = str(event.get("eventType", ""))
                     status = str(event.get("status", ""))
                     task_state = (
@@ -2065,7 +2065,7 @@ def check_authenticated_scenario(
                         if event_type == "task_completed"
                         else event_type
                     )
-                    task_lifecycles.setdefault(f"{run_id}:{task_id}", set()).add(task_state)
+                    task_lifecycles.setdefault(f"{run_id}:{session_id}", set()).add(task_state)
         requires_delegation = scenario_round.get("require_delegation") is True
         direct_delegation_complete = any(
             {"queued", "working", "completed"} <= statuses for statuses in lifecycles.values()

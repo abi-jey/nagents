@@ -101,7 +101,7 @@
   };
   const safeEvent = (value) => {
     if (!value || typeof value !== "object") return {};
-    const fields = ["seq", "type", "id", "name", "tool", "call_id", "task_id", "activation", "parent_task_id", "session_id", "speaker", "text", "status", "message", "delegation_id", "voice_session_id",
+    const fields = ["seq", "type", "id", "name", "tool", "call_id", "session_id", "title", "activation", "parent_session_id", "root_session_id", "speaker", "text", "status", "message", "delegation_id", "voice_session_id",
       "chat_session_id", "run_id", "provider", "model", "detail_type", "phase", "error", "code", "kind", "outcome", "wire_type",
       "start_ms", "end_ms", "offset_ms"];
     return Object.fromEntries(fields.filter(key => ["string", "number", "boolean"].includes(typeof value[key]))
@@ -122,16 +122,16 @@
     const eventType = nested.event || nested.type;
     if (!new Set(["run_started", "run_finished", "tool_call", "tool_execution_started", "tool_result",
       "task_started", "task_completed", "task_activity", "approval_closed"]).has(eventType)) return;
-    const allowed = ["id", "name", "tool", "call_id", "task_id", "activation", "parent_task_id", "run_id", "status"];
+    const allowed = ["id", "name", "tool", "call_id", "session_id", "title", "activation", "parent_session_id", "root_session_id", "run_id", "status"];
     const detail = Object.fromEntries(allowed.filter(key => ["string", "number", "boolean"].includes(typeof nested[key]))
       .map(key => [key, typeof nested[key] === "string" ? nested[key].slice(0, 300) : nested[key]]));
-    for (const key of ["task_id", "activation", "parent_task_id", "run_id"])
+    for (const key of ["session_id", "title", "activation", "parent_session_id", "root_session_id", "run_id"])
       if (detail[key] === undefined && ["string", "number", "boolean"].includes(typeof outer[key])) detail[key] = outer[key];
     record("live.event", {
       ...detail,
       eventType,
       call_id: detail.call_id || (String(eventType).startsWith("tool_") ? detail.id : ""),
-      session_id: frame.session_id,
+      root_session_id: frame.session_id,
       eventCursor: frame.cursor,
     });
   };
@@ -715,7 +715,7 @@
         speaker: event.speaker || "", text: event.text || "", monotonicMs: event.monotonicMs,
       }));
       const delegations = liveEvents.filter(event => ["delegation", "task_started", "task_completed"].includes(event.eventType)).map(event => ({
-        delegationId: event.delegation_id || "", taskId: event.task_id || "", runId: event.run_id || "",
+        delegationId: event.delegation_id || "", sessionId: event.session_id || "", runId: event.run_id || "",
         eventType: event.eventType, status: event.status || "", monotonicMs: event.monotonicMs,
       }));
       const toolCalls = liveEvents.filter(event => ["tool_call", "tool_execution_started", "tool_result"].includes(event.eventType)).map(event => ({

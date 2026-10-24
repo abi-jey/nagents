@@ -124,7 +124,7 @@ class QueuedInputs:
             run,
             {
                 "event": "input_admitted",
-                "session_id": run.session_id,
+                "root_session_id": run.session_id,
                 "run_id": run.id,
                 "_work": work,
                 "initial": initial,

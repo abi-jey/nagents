@@ -21,6 +21,7 @@ from nagents.channels import sanitize_channel_tool_arguments
 from nagents.events import Event
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.harness.session_identity import session_sequence
 
 from ._async import finish_on_cancel
 from .channel_privacy import CredentialProtectionError
@@ -52,7 +53,7 @@ class _Tool:
     name: str
     arguments: object
     failed: bool = False
-    task_id: str = ""
+    agent_session_id: str = ""
 
 
 _EMPTY_TOOL = _Tool("", "", "", {})
@@ -76,10 +77,10 @@ def _tool(record: Mapping[str, object], *, allow_transport: bool = False) -> _To
     extra = record.get("extra", {})
     if not isinstance(extra, dict):
         return None
-    for key in ("task_id", "activation"):
+    for key in ("session_id", "activation"):
         if key in record and key in extra and (type(record[key]) is not type(extra[key]) or record[key] != extra[key]):
             return None
-    task = record.get("task_id", extra.get("task_id", ""))
+    task = record.get("session_id", extra.get("session_id", ""))
     activation = record.get("activation", extra.get("activation", 0))
     id, name = record.get("id"), record.get("name")
     if (
@@ -94,6 +95,11 @@ def _tool(record: Mapping[str, object], *, allow_transport: bool = False) -> _To
         or (not allow_transport and name.casefold() in _TRANSPORT)
     ):
         return None
+    if task:
+        try:
+            session_sequence(task)
+        except ValueError:
+            return None
     error = record.get("error")
     if error is not None and type(error) is not str:
         return None
@@ -166,7 +172,7 @@ class ChannelNotices:
                 record = _record(event)
                 if (
                     record.get("run_id", self.run_id) != self.run_id
-                    or record.get("session_id", self.session_id) != self.session_id
+                    or record.get("root_session_id", self.session_id) != self.session_id
                 ):
                     return
                 kind = record.get("event")
@@ -189,7 +195,7 @@ class ChannelNotices:
             self._seen.add(key)  # Failed/uncertain attempts cannot replay.
             # Child events carry a task identity, but no verified inbox receipt.
             # Do not mislabel them with whichever root input is now active.
-            await self._emit(phase, self._active, tool, message_id="" if tool.task_id else None)
+            await self._emit(phase, self._active, tool, message_id="" if tool.agent_session_id else None)
 
     async def waiting_for_approval(self, request: ApprovalRequest, *, live: bool = False) -> None:
         """Call after installing real Pending, before awaiting its answer; not for auto-approval."""
@@ -201,13 +207,13 @@ class ChannelNotices:
 
         def waiting() -> bool:
             worker = harness._worker
-            if request.task_id:
-                info = harness.tasks._infos.get(request.task_id)
-                child = harness.tasks._children.get(request.task_id)
+            if request.session_id:
+                info = harness.tasks._infos.get(request.session_id)
+                child = harness.tasks._children.get(request.session_id)
                 if (
                     info is None
                     or child is None
-                    or info.session_id != self.session_id
+                    or info.root_session_id != self.session_id
                     or info.activation != request.activation
                 ):
                     return False
@@ -225,7 +231,7 @@ class ChannelNotices:
                 and pending.record.get("approval_id") == pending.id
                 and pending.record.get("id") == request.id
                 and pending.record.get("tool") == request.tool
-                and pending.record.get("task_id", "") == request.task_id
+                and pending.record.get("session_id", "") == request.session_id
                 and pending.record.get("activation", 0) == request.activation
             )
 
@@ -237,7 +243,7 @@ class ChannelNotices:
                     "id": request.id,
                     "name": request.tool,
                     "arguments": request.arguments,
-                    "task_id": request.task_id,
+                    "session_id": request.session_id,
                     "activation": request.activation,
                 },
                 allow_transport=True,
@@ -250,7 +256,7 @@ class ChannelNotices:
             self._approvals.add(key)
             work = self.state.queued_inputs.current.get()
             turn = harness.followups.current
-            if request.task_id:
+            if request.session_id:
                 # Children retain their spawning input context while the root
                 # may already have moved on to a different queued request.
                 message_id = (

@@ -38,10 +38,10 @@ def test_late_subagent_result_does_not_overwrite_parent_answer(tmp_path: Path) -
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
         backend.events = [
-            TaskStarted("task-1", "quiet maple", "Review the docs"),
+            TaskStarted("s1", "", "Review the docs"),
             TextChunkEvent(chunk="The reviewer is working."),
             TextDoneEvent(text="The reviewer is working."),
-            TaskCompleted("task-1", "quiet maple", "Documentation checked."),
+            TaskCompleted("s1", "", "Documentation checked."),
             TextChunkEvent(chunk="The review is complete."),
             TextDoneEvent(text="The review is complete."),
             DoneEvent(),
@@ -56,7 +56,7 @@ def test_late_subagent_result_does_not_overwrite_parent_answer(tmp_path: Path) -
                 "The review is complete.",
             ]
             card = app.query_one(ToolCard)
-            assert "quiet maple" in card.title
+            assert "s1" in card.title
             assert "complete" in card.title
             assert "Documentation checked." in card.output_text
 
@@ -77,14 +77,14 @@ def test_three_offline_jobs_render_in_tui_and_tasks_view(tmp_path: Path) -> None
             tasks = harness.tasks.list()
             assert len(tasks) == 3
             assert all(task.status == "completed" for task in tasks)
-            cards = [card for card in app.query(ToolCard) if card.call_id.startswith("task:")]
+            cards = [card for card in app.query(ToolCard) if card.call_id.startswith("session:")]
             assert len(cards) == 3
             assert all("complete" in card.title for card in cards)
             app.command("/tasks")
             await pilot.pause()
             assert isinstance(app.screen, TaskScreen)
-            assert set(app.screen.query_one(AgentTree).task_nodes) == {task.id for task in tasks}
-            assert all(task.name in [info.name for info in app.screen.infos.values()] for task in tasks)
+            assert set(app.screen.query_one(AgentTree).task_nodes) == {task.session_id for task in tasks}
+            assert set(app.screen.infos) == {task.session_id for task in tasks}
 
     asyncio.run(scenario())
 
@@ -105,15 +105,15 @@ def test_agent_tree_continues_saved_child_and_notifies_parent(tmp_path: Path) ->
             await pilot.press("ctrl+t", "down", "enter")
             await pilot.pause()
             assert isinstance(app.screen, TaskScreen)
-            task_id = app.screen.selected_id
-            child_session = next(task.child_session_id for task in harness.tasks.list() if task.id == task_id)
+            session_id = app.screen.selected_session_id
+            child_storage = next(task._storage_id for task in harness.tasks.list() if task.session_id == session_id)
             app.screen.query_one("#task-followup", TextArea).load_text("Follow-up marker: inspect the result again.")
             await pilot.click("#task-send")
             await idle(app, pilot)
-            info = next(task for task in harness.tasks.list() if task.id == task_id)
+            info = next(task for task in harness.tasks.list() if task.session_id == session_id)
             assert info.followups == 1 and info.status == "completed"
-            assert info.child_session_id == child_session
-            history = await harness.task_history(task_id)
+            assert info._storage_id == child_storage
+            history = await harness.task_history(session_id)
             assert any(
                 message.role == "user" and message.content == "Follow-up marker: inspect the result again."
                 for message in history
@@ -123,21 +123,21 @@ def test_agent_tree_continues_saved_child_and_notifies_parent(tmp_path: Path) ->
                 str(message.content).split("\n", 1)[1]
                 for message in parent
                 if isinstance(message.content, str)
-                and message.content.startswith("BACKGROUND TASK NOTIFICATION:")
+                and message.content.startswith("BACKGROUND AGENT UPDATES:")
                 and '"human_messages"' in message.content
             ]
             pickup = next(
                 item
                 for notice in notifications
                 for item in json.loads(notice)["human_messages"]
-                if item["task_id"] == task_id
+                if item["session_id"] == session_id
             )
             assert pickup["prompt"] == "A human message was picked up by this agent."
-            assert pickup["message_id"]
+            assert set(pickup) == {"session_id", "prompt"}
             assert all("Follow-up marker" not in str(message.content) for message in parent)
             assert any("Follow-up to" in str(turn.body.render()) for turn in app.query(Turn) if turn.role == "user")
-            assert len([card for card in app.query(ToolCard) if card.call_id.startswith("task:")]) == 4
-            assert task_id not in app._task_drafts
+            assert len([card for card in app.query(ToolCard) if card.call_id.startswith("session:")]) == 4
+            assert session_id not in app._task_drafts
 
     asyncio.run(scenario())
 
@@ -154,10 +154,10 @@ def test_narrow_task_tree_keeps_unsent_draft_on_escape(tmp_path: Path) -> None:
             await pilot.press("ctrl+t")
             await pilot.pause()
             assert isinstance(app.screen, TaskScreen)
-            task_id = app.screen.selected_id
+            session_id = app.screen.selected_session_id
             app.screen.query_one("#task-followup", TextArea).load_text("Keep my follow-up draft")
             await pilot.press("escape")
-            assert app._task_drafts[task_id] == "Keep my follow-up draft"
+            assert app._task_drafts[session_id] == "Keep my follow-up draft"
             await pilot.press("ctrl+t")
             await pilot.pause()
             assert isinstance(app.screen, TaskScreen)

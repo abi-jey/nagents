@@ -1,3 +1,4 @@
+import { AGENT_UPDATES_PREFIX } from "./backgroundUpdates.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { act, createElement } from "react";
@@ -28,35 +29,35 @@ function options(agents: TeamAgent[], activity: TaskActivity[] = [], parentId = 
 
 function delegateCall(entries: Entry[], id = "delegate-call", taskId = ""): Entry[] {
   return appendEvent(entries, {
-    event: "tool_call", run_id: runId, ...(taskId ? { task_id: taskId } : {}), id, name: "delegate",
+    event: "tool_call", run_id: runId, ...(taskId ? { session_id: taskId } : {}), id, name: "to_agent",
     arguments: { agent: "mini", prompt },
   });
 }
 
 function delegateResult(entries: Entry[], taskId = "child", id = "delegate-call", parentTaskId = ""): Entry[] {
   return appendEvent(entries, {
-    event: "tool_result", run_id: runId, ...(parentTaskId ? { task_id: parentTaskId } : {}), id, name: "delegate",
-    result: { task_id: taskId, name: taskId === "child" ? "gentle willow" : "bright reed", status: "running" },
+    event: "tool_result", run_id: runId, ...(parentTaskId ? { session_id: parentTaskId } : {}), id, name: "to_agent",
+    result: { session_id: taskId, status: "running" },
   });
 }
 
 function taskStarted(entries: Entry[], taskId = "child", parentTaskId = ""): Entry[] {
   return appendEvent(entries, {
-    event: "task_started", run_id: runId, task_id: taskId, parent_task_id: parentTaskId,
-    activation: 0, name: taskId === "child" ? "gentle willow" : "bright reed", prompt,
+    event: "task_started", run_id: runId, session_id: taskId, parent_session_id: parentTaskId,
+    activation: 0, title: taskId === "child" ? "gentle willow" : "bright reed", prompt,
   });
 }
 
 function taskCompleted(entries: Entry[], taskId = "child", parentTaskId = ""): Entry[] {
   return appendEvent(entries, {
-    event: "task_completed", run_id: runId, task_id: taskId, parent_task_id: parentTaskId,
-    activation: 0, name: taskId === "child" ? "gentle willow" : "bright reed",
+    event: "task_completed", run_id: runId, session_id: taskId, parent_session_id: parentTaskId,
+    activation: 0, title: taskId === "child" ? "gentle willow" : "bright reed",
     status: "completed", result: "The focused checks passed.",
   });
 }
 
 function activity(taskId: string, sequence: number, payload: TaskActivity["payload"], activation = 0): TaskActivity {
-  return { event: "task_activity", task_id: taskId, activation, sequence, timestamp: sequence, payload };
+  return { event: "task_activity", root_session_id: "root", parent_session_id: "", session_id: taskId, activation, sequence, timestamp: sequence, payload };
 }
 
 function delegationRows(entries: Entry[]): Entry[] {
@@ -64,8 +65,8 @@ function delegationRows(entries: Entry[]): Entry[] {
 }
 
 function savedContext(taskId: string): Entry {
-  const payload = { tasks: [{ task_id: taskId, activation: 0, followup: 0, trigger: "delegation" }], human_messages: [] };
-  return { id: "saved-context", kind: "context", text: `BACKGROUND TASK NOTIFICATION: saved task evidence.\n${JSON.stringify(payload)}` };
+  const payload = { sessions: [{ session_id: taskId, status: "completed", result: "Done" }], human_messages: [] };
+  return { id: "saved-context", kind: "context", text: AGENT_UPDATES_PREFIX + JSON.stringify(payload) };
 }
 
 function browserFixture() {
@@ -89,9 +90,9 @@ function browserFixture() {
   });
   const container = dom.window.document.getElementById("root")!;
   const root = createRoot(container);
-  const render = (entries: Entry[], agents: TeamAgent[] = [agent("child")]) => act(async () => root.render(createElement(Conversation, {
+  const render = (entries: Entry[], agents: TeamAgent[] = [agent("child")], activity: TaskActivity[] = []) => act(async () => root.render(createElement(Conversation, {
     entries, sessionId: "root", demo: false, canSubmit: false, submit() {}, appearance: defaultAppearance,
-    delegation: options(agents),
+    delegation: options(agents, activity),
   })));
   return {
     container,
@@ -109,8 +110,8 @@ function browserFixture() {
 
 function historyTask(id: string, name: string, profile: string, result: string): RetainedTask {
   return {
-    id, name, status: "completed", result, error: "", session_id: "root", prompt: `Work for ${name}`,
-    child_session_id: `session-${id}`, parent_task_id: "", parent_session_id: "root", depth: 1,
+    session_id: id, title: name, status: "completed", result, error: "", root_session_id: "root", prompt: `Work for ${name}`,
+     parent_session_id: "",  depth: 1,
     profile, mode: "build", followups: 0, activation: 0, trigger: "delegation",
   };
 }
@@ -119,13 +120,13 @@ function savedDelegationHistory(): Snapshot["history"] {
   return [
     { role: "user", content: "Check two things.", name: "", tool_call_id: "", tool_calls: [] },
     { role: "assistant", content: "I will delegate both checks.", name: "", tool_call_id: "", tool_calls: [
-      { id: "call-willow", name: "delegate", arguments: { agent: "mini", prompt: "Check the session reader." } },
-      { id: "call-reed", name: "delegate", arguments: { agent: "verifier", prompt: "Check the session writer." } },
+      { id: "call-willow", name: "to_agent", arguments: { agent: "mini", prompt: "Check the session reader." } },
+      { id: "call-reed", name: "to_agent", arguments: { agent: "verifier", prompt: "Check the session writer." } },
     ] },
-    { role: "tool", content: JSON.stringify({ task_id: "task-willow", name: "gentle willow", status: "running" }),
-      name: "delegate", tool_call_id: "call-willow", tool_calls: [] },
-    { role: "tool", content: JSON.stringify({ task_id: "task-reed", name: "bright reed", status: "running" }),
-      name: "delegate", tool_call_id: "call-reed", tool_calls: [] },
+    { role: "tool", content: JSON.stringify({ session_id: "task-willow", status: "running" }),
+      name: "to_agent", tool_call_id: "call-willow", tool_calls: [] },
+    { role: "tool", content: JSON.stringify({ session_id: "task-reed", status: "running" }),
+      name: "to_agent", tool_call_id: "call-reed", tool_calls: [] },
   ];
 }
 
@@ -154,7 +155,7 @@ test("a cold retained-task update enriches the existing delegate-call article", 
   const ui = browserFixture();
   const history = savedDelegationHistory().slice(0, 3);
   const cold = fromHistory({ session_id: "root", history, retained_tasks: [] });
-  const coldCall = cold.find(entry => entry.kind === "tool" && entry.title === "delegate")!;
+  const coldCall = cold.find(entry => entry.kind === "tool" && entry.title === "to_agent")!;
   const retained = historyTask("task-willow", "gentle willow", "mini", "The session reader passed.");
   try {
     await ui.render(cold, []);
@@ -247,15 +248,15 @@ test("completion is appended at task_completed after intervening main and user m
 test("completion anchor survives an active checkpoint that rebinds the main acknowledgement ID", () => {
   const events: WireEvent[] = [
     { event: "user_message", run_id: runId, history_id: "h1", message_id: "u1", text: "Check the child result." },
-    { event: "tool_call", run_id: runId, id: "delegate-call", name: "delegate", arguments: { agent: "mini", prompt } },
-    { event: "tool_result", run_id: runId, id: "delegate-call", name: "delegate",
-      result: { task_id: "child", name: "gentle willow", status: "running" } },
-    { event: "task_started", run_id: runId, task_id: "child", parent_task_id: "", activation: 0,
-      name: "gentle willow", prompt },
+    { event: "tool_call", run_id: runId, id: "delegate-call", name: "to_agent", arguments: { agent: "mini", prompt } },
+    { event: "tool_result", run_id: runId, id: "delegate-call", name: "to_agent",
+      result: { session_id: "child", status: "running" } },
+    { event: "task_started", run_id: runId, session_id: "child", parent_session_id: "", activation: 0,
+      title: "gentle willow", prompt },
     { event: "user_message", run_id: runId, history_id: "h2", message_id: "u2", text: "Still checking?" },
     { event: "text_done", run_id: runId, response_id: "main-ack", text: "I am waiting for the check." },
-    { event: "task_completed", run_id: runId, task_id: "child", parent_task_id: "", activation: 0,
-      name: "gentle willow", status: "completed", result: "The focused checks passed." },
+    { event: "task_completed", run_id: runId, session_id: "child", parent_session_id: "", activation: 0,
+      title: "gentle willow", status: "completed", result: "The focused checks passed." },
   ];
   let preexisting: Entry[] = [];
   for (const event of events.slice(0, -1)) preexisting = appendEvent(preexisting, event);
@@ -310,8 +311,8 @@ test("initial completion context and delivery fold into two stable delegation ro
   entries = taskCompleted(entries);
   entries.push(savedContext("child"));
   entries = appendEvent(entries, {
-    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_task_id: "child",
-    recipient_task_id: "", cause: "completion", text: "The focused checks passed.",
+    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_session_id: "child",
+    recipient_session_id: "", cause: "completion", text: "The focused checks passed.",
   });
   assert.equal(entries.length, 4);
 
@@ -323,8 +324,8 @@ test("initial completion context and delivery fold into two stable delegation ro
 
   entries = taskCompleted(entries);
   entries = appendEvent(entries, {
-    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_task_id: "child",
-    recipient_task_id: "", cause: "completion", text: "The focused checks passed.",
+    event: "task_notification", run_id: runId, notification_id: "completion-notice", source_session_id: "child",
+    recipient_session_id: "", cause: "completion", text: "The focused checks passed.",
   });
   const replayed = flow.project(entries, options([agent("child", "", "done")]));
   assert.deepEqual(delegationRows(replayed).map(entry => entry.id), rows.map(entry => entry.id));
@@ -358,12 +359,12 @@ test("genuine later wake-up and information notifications remain after the compl
   entries = taskStarted(entries);
   entries = taskCompleted(entries);
   entries = appendEvent(entries, {
-    event: "task_notification", run_id: runId, notification_id: "wake-notice", source_task_id: "child",
-    recipient_task_id: "", cause: "wakeup", text: "A scheduled check woke up.",
+    event: "task_notification", run_id: runId, notification_id: "wake-notice", source_session_id: "child",
+    recipient_session_id: "", cause: "wakeup", text: "A scheduled check woke up.",
   });
   entries = appendEvent(entries, {
-    event: "task_notification", run_id: runId, notification_id: "info-notice", source_task_id: "child",
-    recipient_task_id: "", cause: "additional_information", text: "The follow-up found no issues.",
+    event: "task_notification", run_id: runId, notification_id: "info-notice", source_session_id: "child",
+    recipient_session_id: "", cause: "additional_information", text: "The follow-up found no issues.",
   });
 
   const projected = flow.project(entries, options([agent("child", "", "done")]));
@@ -377,7 +378,7 @@ test("genuine later wake-up and information notifications remain after the compl
 test("errors and pending approvals remain visible while delegate calls are projected", () => {
   let entries = delegateCall([]);
   entries = appendEvent(entries, {
-    event: "approval", run_id: runId, call_id: "delegate-call", tool: "delegate", approval_id: "approval-1",
+    event: "approval", run_id: runId, call_id: "delegate-call", tool: "to_agent", approval_id: "approval-1",
     arguments: { agent: "mini", prompt },
   });
   entries = appendEvent(entries, { event: "error", run_id: runId, message: "The parent run also encountered an error." });
@@ -405,7 +406,7 @@ test("a streamed tool becoming a delegate keeps its article mounted and leaves o
 
     entries = appendEvent(entries, {
       event: "tool_call", run_id: runId, generation_id: "delegate-generation", index: 0,
-      id: "delegate-call", name: "delegate", arguments: { agent: "mini", prompt },
+      id: "delegate-call", name: "to_agent", arguments: { agent: "mini", prompt },
     });
     await ui.render(entries);
     const updated = ui.container.querySelector<HTMLElement>(`article[data-record-key="${sourceId}"]`);
@@ -413,4 +414,72 @@ test("a streamed tool becoming a delegate keeps its article mounted and leaves o
     assert.equal(ui.container.querySelectorAll("article.delegation-entry").length, 1);
     assert.equal(article.querySelectorAll(".delegation-line").length, 1);
   } finally { await ui.close(); }
+});
+
+
+test("a streaming resume retains every Relay article and owns only its exact activation", async () => {
+  const ui = browserFixture();
+  let entries = taskCompleted(taskStarted(delegateResult(delegateCall([]))));
+  const firstCall = entries[0].id;
+  const articles = () => [...ui.container.querySelectorAll("article[data-record-key]")];
+  const removed: Node[] = [];
+  const observer = new window.MutationObserver(records => {
+    for (const record of records) for (const node of record.removedNodes)
+      if (node instanceof window.HTMLElement && (node.matches("article[data-record-key]") || node.querySelector("article[data-record-key]"))) removed.push(node);
+  });
+  try {
+    await ui.render(entries, [agent("child", "", "done")]);
+    const original = articles();
+    assert.equal(original.length, 2);
+    observer.observe(ui.container, { childList: true, subtree: true });
+    entries = appendEvent(entries, { event: "tool_call_progress", run_id: runId, generation_id: "resume-generation", index: 0,
+      id: "resume", name: "to_agent", status: "streaming", arguments_text: '{"session_id":' });
+    const resumeId = entries.at(-1)!.id;
+    await ui.render(entries, [agent("child", "", "done")]);
+    const resumeArticle = ui.container.querySelector(`article[data-record-key="${resumeId}"]`);
+    assert.ok(resumeArticle);
+    entries = appendEvent(entries, { event: "tool_call", run_id: runId, generation_id: "resume-generation", index: 0,
+      id: "resume", history_id: "resume-history", call_position: 1, name: "to_agent", arguments: { session_id: "child", prompt: "Next check", title: "Updated title" } });
+    entries = appendEvent(entries, { event: "tool_result", run_id: runId, id: "resume", result: { session_id: "child", status: "running" } });
+    await ui.render(entries, [agent("child", "", "done")]);
+    assert.equal(ui.container.querySelector(`article[data-record-key="${resumeId}"]`), resumeArticle);
+    assert.equal(ui.container.querySelectorAll('[data-event="result"]').length, 1, "the receipt cannot borrow the original result");
+    entries = appendEvent(entries, { event: "task_started", run_id: runId, session_id: "child", parent_session_id: "", activation: 1,
+      title: "Updated title", prompt: "Next check", activation_history_id: "resume-history", activation_run_id: runId,
+      activation_call_id: "resume", activation_call_position: 1 });
+    const renamed = { ...agent("child"), name: "Updated title" };
+    await ui.render(entries, [renamed], [activity("child", 1, { type: "text_done", text: "Second activity" }, 1)]);
+    assert.equal(ui.container.querySelector(`article[data-record-key="${resumeId}"]`), resumeArticle);
+    assert.match(resumeArticle.textContent || "", /Second activity/);
+    assert.doesNotMatch(original[0].textContent || "", /Updated title|Second activity/);
+    entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", activation: 1, title: "Updated title", result: "Second result" });
+    entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "resume-complete", source_session_id: "child",
+      recipient_session_id: "", cause: "completion", text: "Second result" });
+    entries.push({ ...savedContext("child"), id: "resume-context" });
+    await ui.render(entries, [{ ...renamed, phase: "done" }]);
+    await Promise.resolve();
+    assert.equal(ui.container.querySelector(`article[data-record-key="${firstCall}"]`), original[0]);
+    assert.equal(ui.container.querySelector(`article[data-record-key="delegation-result:child:0"]`), original[1]);
+    assert.equal(ui.container.querySelector(`article[data-record-key="${resumeId}"]`), resumeArticle);
+    assert.equal(ui.container.querySelectorAll('[data-event="result"]').length, 2);
+    assert.equal(ui.container.querySelectorAll("article[data-record-key]").length, 4, "completion delivery and saved context fold into activation evidence");
+    assert.equal(removed.length, 0);
+  } finally { observer.disconnect(); await ui.close(); }
+});
+
+test("reused call IDs bind by history row and call position without adopting another activation", () => {
+  const flow = new DelegationFlow();
+  const first: Entry = { id: "first", kind: "tool", title: "to_agent", text: "", callId: "same", historyId: "h1", callPosition: 0,
+    inputs: JSON.stringify({ session_id: "child", prompt: "First" }), result: JSON.stringify({ session_id: "child", status: "running" }) };
+  const wrongSlot: Entry = { ...first, id: "wrong-slot", historyId: "h2" };
+  const wrongRun: Entry = { ...first, id: "wrong-run", historyId: "h2", callPosition: 1, runId: "other-run" };
+  const second: Entry = { ...first, id: "second", historyId: "h2", callPosition: 1 };
+  const lifecycle: Entry = { id: "activation", kind: "task", taskId: "child", text: "", activation: 2, title: "Review", result: "Exact result",
+    activationHistoryId: "h2", activationCallId: "same", activationCallPosition: 1 };
+  const projected = flow.project([first, wrongSlot, wrongRun, second, lifecycle], options([agent("child", "", "done")]));
+  assert.equal(projected.find(entry => entry.id === "first")?.delegation?.accepted, false);
+  assert.equal(projected.find(entry => entry.id === "wrong-slot")?.delegation?.accepted, false);
+  assert.equal(projected.find(entry => entry.id === "wrong-run")?.delegation?.accepted, false);
+  assert.equal(projected.find(entry => entry.id === "second")?.delegation?.activation, 2);
+  assert.deepEqual(projected.filter(entry => entry.delegation?.kind === "result").map(entry => entry.delegation?.text), ["Exact result"]);
 });

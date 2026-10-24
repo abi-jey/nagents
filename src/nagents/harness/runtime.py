@@ -36,6 +36,7 @@ from .agent_behavior import AgentBehavior
 from .agent_behavior import load_behavior
 from .agent_catalog import AgentCatalog
 from .agent_documents import ensure_agent_documents
+from .agent_status import AgentStatusResult
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .config import AgentProfile
@@ -69,7 +70,9 @@ from .reasoning import resolve_effort
 from .remote_tools import RemoteAgentTools
 from .resources import HarnessResources
 from .skills import HarnessSkillDiscoverer
+from .subagents import DEFAULT_TASK_OPTIONS
 from .subagents import SubagentManager
+from .task_activity import TaskOptions
 from .tool_config import HarnessToolRegistry
 from .tool_config import WorkspaceTools
 from .tools import CodingTools
@@ -171,10 +174,6 @@ class Harness:
             reasoning_summary="auto" if self.config.reasoning_summaries else "off", reasoning_effort=effort
         )
 
-    def create_defined_child(self, name: str) -> "Harness | None":
-        """Optional definition-driven construction; ordinary profiles use cloning."""
-        return None
-
     def load_project_instructions(self) -> None:
         """Coding harnesses discover workspace instructions during initialization."""
         self.tools.instructions(Path("AGENTS.md"))
@@ -222,8 +221,8 @@ class Harness:
         self.allow_subagents = allow_subagents
         self._is_subagent = False
         self.subagent_depth = 0
-        self._task_id = ""
-        self._task_name = ""
+        self._agent_session_id = ""
+        self._agent_title = ""
         self._activation = 0
         self._delivery_definition: ToolDefinition | None = None
         self._delivery_binding: ToolDefinition | None = None
@@ -636,9 +635,10 @@ class Harness:
         # the effective contracts and propagates invalid settings.
         advertised = self.agent.tool_registry.get_all() if not self._defer_prompt_capabilities else []
         scheduler_available = any(tool.func == self.tools.schedule_wakeup for tool in advertised)
-        delegation_names = [tool.name for tool in advertised if tool.func == self.tasks.delegate]
-        delegation_name = "delegate" if "delegate" in delegation_names else next(iter(delegation_names), "delegate")
-        delegation_available = self.can_delegate and (self._defer_prompt_capabilities or bool(delegation_names))
+        delegation_available = self.can_delegate and (
+            self._defer_prompt_capabilities
+            or any(tool.name == "to_agent" and tool.func == self.tasks.to_agent for tool in advertised)
+        )
         base = (
             f"Runtime context: workspace {self.workspace}; active profile {self.config.agent}; mode {self.mode}.\n"
             f"\n{self._behavior.instructions if not self._defer_prompt_capabilities else profile.prompt if profile.prompt_present else load_default_instructions()}\n\n"
@@ -670,12 +670,15 @@ class Harness:
             )
             base += (
                 "\nHandle small or tightly coupled work directly unless delegation is requested. "
-                f"When available in your tools, use {delegation_name}(prompt, agent='{example_agent}') for substantial independent work, or select an explicitly configured agent profile. "
+                f"When available in your tools, use to_agent(prompt, agent='{example_agent}') for substantial independent work, or select an explicitly configured agent profile. "
                 f"Available agents: {self.delegation_catalog()}. "
                 "Children cannot exceed your permission ceiling; writes and shell still pass through the host approval policy. It returns immediately; "
                 "continue useful independent work while children run. When only waiting, end this model turn without tool calls; "
                 "the harness waits and resumes you with their untrusted background results. Then complete the task. "
                 "No wake-up scheduler is needed to receive child results. "
+                "The acknowledgement contains the child's short session_id and status, not its completed result. "
+                "Use that same ID for agent_status, history, or to_agent(prompt, session_id=...) after it becomes idle. "
+                "Busy targets reject; titles are display labels, never addresses. "
                 "Do not poll or duplicate already delegated work. "
                 f"Shared delegation limits and actual accounting: {self.tasks.usage()}. "
                 f"Your depth is {self.subagent_depth}; delegation stops at depth {self.tasks.admission_limits().max_subagent_depth}. "
@@ -799,20 +802,20 @@ class Harness:
     ) -> None:
         root = self.tasks.root.harness
         if self._is_subagent:
-            description = f"[{self._task_name}, depth {self.subagent_depth}] {description}"
+            description = f"[{self._agent_title}, depth {self.subagent_depth}] {description}"
         request = ApprovalRequest(
             call_id or uuid.uuid4().hex,
             tool,
             description,
             copy.deepcopy(arguments),
             preview,
-            self._task_id,
-            self._task_name,
+            self._agent_session_id,
+            self._agent_title,
             self.subagent_depth,
             self._activation,
             mandatory,
         )
-        task_info = self.tasks.root._infos.get(self._task_id) if self._is_subagent else None
+        task_info = self.tasks.root._infos.get(self._agent_session_id) if self._is_subagent else None
         if task_info is not None:
             await self.tasks._emit_activity(
                 task_info,
@@ -909,7 +912,7 @@ class Harness:
         self.tasks._changed.set()
         return True
 
-    async def wake(self, prompt: str, *, task_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
+    async def wake(self, prompt: str, *, session_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
         """Automatically activate this root or a retained child, without a budget reset.
 
         The lifecycle owner must serialize this with other runs and select the
@@ -920,14 +923,14 @@ class Harness:
             raise PermissionError("Wake-ups must be submitted to the root harness")
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16_000:
             raise ValueError("Wake-up prompt must contain 1 to 16000 characters and not be blank")
-        if task_id:
-            self.tasks._lookup(task_id)
-        async with aclosing(self._run(prompt, task_id=task_id, trigger="wakeup")) as events:
+        if session_id:
+            self.tasks._lookup(session_id)
+        async with aclosing(self._run(prompt, target_session_id=session_id, trigger="wakeup")) as events:
             async for event in events:
                 yield event
 
     async def continue_task(
-        self, task_id: str, prompt: str, *, message: RunInput | None = None
+        self, session_id: str, prompt: str, *, message: RunInput | None = None
     ) -> AsyncGenerator[HarnessEvent, None]:
         """Explicitly continue a retained child conversation in this root session.
 
@@ -938,17 +941,23 @@ class Harness:
         """
         if self._is_subagent:
             raise PermissionError("Human follow-ups must be submitted to the root harness")
-        self.tasks._lookup(task_id)
+        self.tasks._lookup(session_id)
         if self._busy == "run":
-            info = self.tasks.continue_task(task_id, prompt, message=message)
-            yield Notice(f"Human follow-up accepted for {info.name}; task events will arrive on the active run.")
+            info = await self.tasks.continue_task(session_id, prompt, message=message)
+            yield Notice(f"Human follow-up accepted for {info.label}; task events will arrive on the active run.")
             return
-        async with aclosing(self._run(prompt, task_id=task_id, initial_input=message)) as events:
+        async with aclosing(self._run(prompt, target_session_id=session_id, initial_input=message)) as events:
             async for event in events:
                 yield event
 
     async def start_task(
-        self, prompt: str, agent: str = "assistant", *, message: RunInput | None = None
+        self,
+        prompt: str,
+        agent: str = "assistant",
+        *,
+        title: str = "",
+        options: TaskOptions = DEFAULT_TASK_OPTIONS,
+        message: RunInput | None = None,
     ) -> AsyncGenerator[HarnessEvent, None]:
         """Start a configured profile directly, retaining ordinary root ownership.
 
@@ -961,26 +970,40 @@ class Harness:
         if message is not None and message.prompt != prompt:
             raise ValueError("Initial task input must match its prompt")
         if self._busy == "run":
-            info = await self.tasks.start_task(prompt, agent, message=message)
-            yield Notice(f"Task accepted for {info.name}; task events will arrive on the active run.")
+            info = await self.tasks.start_task(prompt, agent, title=title, options=options, message=message)
+            yield Notice(f"Task accepted for {info.label}; task events will arrive on the active run.")
             return
-        async with aclosing(self._run(prompt, initial_input=message, start_profile=agent)) as events:
+        async with aclosing(
+            self._run(
+                prompt,
+                initial_input=message,
+                start_profile=agent,
+                start_title=title,
+                start_options=options,
+            )
+        ) as events:
             async for event in events:
                 yield event
 
-    async def task_history(self, task_id: str, limit: int = 100) -> list["Message"]:
+    async def task_history(self, session_id: str, limit: int = 100) -> list["Message"]:
         """Read detached child messages without resuming it; see tasks.history()."""
-        return await self.tasks.history(task_id, limit)
+        return await self.tasks.history(session_id, limit)
+
+    async def agent_status(self, session_id: str = "", *, limit: int = 20, history_limit: int = 6) -> AgentStatusResult:
+        """Inspect retained descendants without activation or provider calls."""
+        return await self.tasks.status(session_id, limit=limit, history_limit=history_limit)
 
     async def _run(
         self,
         prompt: str | list[ContentPart],
         *,
-        task_id: str = "",
+        target_session_id: str = "",
         trigger: str = "human",
         notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
         initial_input: RunInput | None = None,
         start_profile: str = "",
+        start_title: str = "",
+        start_options: TaskOptions = DEFAULT_TASK_OPTIONS,
     ) -> AsyncGenerator[HarnessEvent, None]:
         """Stream the same core Agent.run, merging bounded live tool output.
 
@@ -1023,24 +1046,31 @@ class Harness:
             async def produce() -> None:
                 self.tasks.begin(
                     session_id,
-                    reset_budget=not self._is_subagent and not task_id and not start_profile and trigger == "human",
+                    reset_budget=not self._is_subagent
+                    and not target_session_id
+                    and not start_profile
+                    and trigger == "human",
                 )
                 self.followups.begin(session_id)
                 message: RunInput | None = initial_input or self.followups.first(prompt)
                 final: DoneEvent | None = None
                 try:
                     await self.tasks.refresh_limits()
-                    if (
-                        self._delivery_definition is not None
-                        and not self._is_subagent
-                        and _is_owned_adapter(self.agent.session)
-                    ):
+                    if not self._is_subagent and _is_owned_adapter(self.agent.session):
                         self.agent._execution_bridge = ExecutionBridge(self, self.agent.session, run_id)
                     if start_profile:
-                        await self.tasks.start_task(prompt_text, start_profile, message=initial_input)
+                        await self.tasks.start_task(
+                            prompt_text,
+                            start_profile,
+                            title=start_title,
+                            options=start_options,
+                            message=initial_input,
+                        )
                         message = await self.followups.next(self.tasks, wait_for_tasks=True)
-                    elif task_id:
-                        self.tasks.continue_task(task_id, prompt_text, trigger=trigger, message=initial_input)
+                    elif target_session_id:
+                        await self.tasks.continue_task(
+                            target_session_id, prompt_text, trigger=trigger, message=initial_input
+                        )
                         message = await self.followups.next(self.tasks, wait_for_tasks=True)
                     elif notifications:
                         self.tasks._ready.extend(notifications)

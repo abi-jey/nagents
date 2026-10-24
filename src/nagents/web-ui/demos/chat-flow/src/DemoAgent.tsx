@@ -23,7 +23,7 @@ export function DemoAgent({ thread, appearance, renderReasoning }: { thread: Tas
     </button>
     <div id={id} hidden={!open} className="demo-agent-body">
       <p className="demo-agent-assignment">{profile.prompt}</p>
-      {entries.length ? <Conversation entries={entries} agentName={profile.name} parentAgentName={profile.parent} sessionId={`chat-flow-demo:${thread.id}`} appearance={appearance}
+      {entries.length ? <Conversation entries={entries} agentName={profile.name} parentAgentName={profile.parent} sessionId={thread.id} appearance={appearance}
         demo={false} canSubmit={false} submit={() => {}} renderReasoning={renderReasoning} /> : <p className="demo-agent-assignment">Waiting for its first message…</p>}
     </div>
   </section>;

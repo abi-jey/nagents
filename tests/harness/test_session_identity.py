@@ -42,10 +42,20 @@ def test_base36_short_session_ids_round_trip_and_parse_strictly() -> None:
 
 def test_title_is_trimmed_unicode_bounded_and_rejects_controls() -> None:
     assert validate_title("  Review 雪 🛰️  ") == "Review 雪 🛰️"
+    assert validate_title("\u3000Review 👩‍💻\u3000") == "Review 👩‍💻"
     assert validate_title("雪" * MAX_TITLE) == "雪" * MAX_TITLE
     assert validate_title(" ") == ""
 
-    for value in ("x" * (MAX_TITLE + 1), "multi\nline", "tab\there", "delete\x7f", "bad\ud800"):
+    for value in (
+        "x" * (MAX_TITLE + 1),
+        "multi\nline",
+        "tab\there",
+        "delete\x7f",
+        "C1\x85control",
+        "line\u2028separator",
+        "paragraph\u2029separator",
+        "bad\ud800",
+    ):
         with pytest.raises(ValueError, match="title"):
             validate_title(value)
     with pytest.raises(ValueError, match="title"):

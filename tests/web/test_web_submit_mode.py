@@ -47,7 +47,10 @@ def inbox_rows(app: Site) -> dict[str, str]:
             return {str(message_id): str(status) for message_id, status in await cursor.fetchall()}
 
     assert app.client.portal is not None
-    return app.client.portal.call(read)
+    rows = app.client.portal.call(read)
+    if not isinstance(rows, dict):
+        raise AssertionError("Inbox query returned a non-object result")
+    return {str(message_id): str(status) for message_id, status in rows.items()}
 
 
 def holding_first_script(started: asyncio.Event) -> Script:
