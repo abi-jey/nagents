@@ -441,6 +441,19 @@ class Harness:
         """Refresh the discoverable catalog without changing an accepted tool batch."""
         return self._agent_catalog.refresh(self.config)
 
+    def _refresh_provider_registry_for_generation(self) -> None:
+        """Refresh delegation routes while retaining this runtime's selected connection snapshot."""
+        active_provider = self.config.provider
+        active_profile = self.config.providers.get(active_provider) if active_provider else None
+        registry = self.provider_store.load()
+        self._providers = replace(registry, providers=dict(registry.providers))
+        providers = dict(registry.providers)
+        if "" in self.config.providers:
+            providers[""] = self.config.providers[""]
+        if active_provider and active_profile is not None:
+            providers[active_provider] = active_profile
+        self.config.providers = providers
+
     def current_profile(self) -> AgentProfile:
         """The active identity survives source removal until this runtime is retired."""
         if self.config.agent != self._current_profile_name:
@@ -461,6 +474,7 @@ class Harness:
 
     def activate_agent_definitions(self) -> None:
         """Accept current definitions only at a new model-generation boundary."""
+        self._refresh_provider_registry_for_generation()
         profile = self.current_profile()
         if self._preserve_first_profile:
             self._preserve_first_profile = False

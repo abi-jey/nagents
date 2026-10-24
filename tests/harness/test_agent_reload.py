@@ -618,6 +618,68 @@ async def test_model_generation_pins_overlay_and_default_bindings_until_next_req
 
 
 @pytest.mark.asyncio
+async def test_new_workspace_agent_sees_saved_provider_on_the_next_model_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    main = ProviderProfile(kind="openai", auth="api-key")
+    store = ScopedProviderRegistryStore(workspace)
+    saved = store.workspace_store.save(ProviderRegistry(active="main", providers={"main": main}), expected="0" * 64)
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="Done")
+
+    def factory(profile: ProviderProfile, config: HarnessConfig, auth: object) -> FakeProvider:
+        return FakeProvider(config, 0, script)
+
+    monkeypatch.setattr(runtime, "build_provider", factory)
+    config = HarnessConfig(
+        workspace=workspace,
+        data_dir=tmp_path / "state",
+        provider="main",
+        model="parent-model",
+        providers={"main": main},
+        trust_project=True,
+    )
+    harness = Harness(config)
+    parent_provider = harness.agent.provider
+    context = RunContext(harness.agent, harness.session_id, "harness")
+    try:
+        await harness.resources.before_generation(context)
+
+        openrouter = ProviderProfile(kind="openai_compatible", base_url="https://api.example/v1", auth="api-key")
+        store.workspace_store.save(
+            ProviderRegistry(active="main", providers={"main": main, "openrouter": openrouter}),
+            expected=saved.revision,
+        )
+        store.agent_models.save(
+            "smart-mini", ModelBinding("openrouter", "deepseek/deepseek-v4.1-flash"), expected="0" * 64
+        )
+        agents = workspace / ".ngn" / "agents"
+        agents.mkdir(parents=True)
+        (agents / "smart-mini.md").write_text(definition("smart-mini"), encoding="utf-8")
+
+        assert "openrouter" not in harness.providers.providers
+        assert "smart-mini" not in harness.delegation_profiles()
+
+        await harness.resources.before_generation(context)
+
+        assert harness.providers.providers["openrouter"] == openrouter
+        assert "smart-mini" in harness.delegation_profiles()
+        assert harness.delegation_model_binding("smart-mini") == ModelBinding(
+            "openrouter", "deepseek/deepseek-v4.1-flash"
+        )
+        assert "smart-mini" in catalog(harness)
+        assert harness.config.provider == "main" and harness.config.model == "parent-model"
+        assert harness.config.provider_profile() == main
+        assert harness.agent.provider is parent_provider
+        assert harness.agent.provider.model == "parent-model"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
 async def test_runtime_clone_keeps_authoritative_default_after_agent_override_and_inherit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

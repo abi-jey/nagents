@@ -91,7 +91,10 @@ def test_children_and_retained_followups_use_accepted_provider_snapshot(
             }
             registry = ProviderRegistry(
                 active="replacement" if removed else "main",
-                providers={"replacement": changed["main"]} if removed else changed,
+                providers={
+                    **({"replacement": changed["main"]} if removed else changed),
+                    "newly-saved": ProviderProfile(kind="openai", auth="api-key"),
+                },
             )
             late = parent.tasks._create_child(agent)
             children.append(late)
@@ -100,6 +103,10 @@ def test_children_and_retained_followups_use_accepted_provider_snapshot(
             expected = profiles["audit" if agent == "auditor" else "main"]
             expected_model = "audit-model" if agent == "auditor" else "original-model"
             for child, provider in zip(children, built[1:], strict=True):
+                accepted_provider = child.agent.provider
+                child.activate_agent_definitions()
+                assert child.providers.providers == registry.providers
+                assert child.agent.provider is accepted_provider
                 assert provider.accepted_profile == expected
                 assert child.config.provider_profile() == expected
                 assert provider.model == expected_model
