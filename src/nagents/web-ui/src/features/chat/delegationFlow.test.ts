@@ -483,3 +483,70 @@ test("reused call IDs bind by history row and call position without adopting ano
   assert.equal(projected.find(entry => entry.id === "second")?.delegation?.activation, 2);
   assert.deepEqual(projected.filter(entry => entry.delegation?.kind === "result").map(entry => entry.delegation?.text), ["Exact result"]);
 });
+
+
+test("a completion-context checkpoint ahead of terminal events never inserts a Notice or replaces Relay rows", async () => {
+  const ui = browserFixture();
+  let entries = taskStarted(delegateResult(delegateCall([])));
+  entries = delegateCall(entries, "second-call");
+  entries = delegateResult(entries, "second", "second-call");
+  entries = taskStarted(entries, "second");
+  const ids = entries.filter(entry => entry.kind === "tool").map(entry => entry.id);
+  const agents = [agent("child"), agent("second")];
+  const addedNotices: Node[] = [], removedArticles: Node[] = [];
+  const observer = new window.MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node instanceof window.HTMLElement &&
+        (node.matches('[data-category="notices"]') || node.querySelector('[data-category="notices"]'))) addedNotices.push(node);
+      for (const node of record.removedNodes) if (node instanceof window.HTMLElement &&
+        (node.matches("article[data-record-key]") || node.querySelector("article[data-record-key]"))) removedArticles.push(node);
+    }
+  });
+  try {
+    await ui.render(entries, agents);
+    const calls = ids.map(id => ui.container.querySelector(`article[data-record-key="${id}"]`));
+    assert.ok(calls.every(Boolean));
+    observer.observe(ui.container, { childList: true, subtree: true });
+    const checkpoint = fromHistory({ session_id: "root", retained_tasks: [], history: [{ role: "user", name: "", tool_call_id: "", tool_calls: [],
+      history_id: "checkpoint-context", content: AGENT_UPDATES_PREFIX + JSON.stringify({ sessions: [
+        { session_id: "second", status: "completed", result: "The focused checks passed." },
+        { session_id: "child", status: "completed", result: "The focused checks passed." },
+      ], human_messages: [] }) }] })[0];
+    entries.push({ ...checkpoint, id: "checkpoint-context" });
+    const pending = new DelegationFlow().project(entries, options(agents));
+    assert.equal(pending.some(entry => entry.kind === "context"), false);
+    assert.equal(pending.filter(entry => entry.delegation?.kind === "result").length, 0, "saved context does not authorize terminal state");
+    assert.ok(pending.filter(entry => entry.delegation).every(entry => entry.delegation?.phase === "running" && entry.delegation.sources.some(source => source.id === "checkpoint-context")));
+    await ui.render(entries, agents);
+    assert.equal(ui.container.querySelector('[data-category="notices"]'), null);
+    entries = appendEvent(entries, { event: "text_done", run_id: runId, text: "The parent has already used the saved checkpoint." });
+    await ui.render(entries, agents);
+    entries = taskCompleted(entries, "second");
+    await ui.render(entries, agents);
+    const firstResult = ui.container.querySelector('article[data-record-key="delegation-result:second:0"]');
+    assert.ok(firstResult);
+    assert.equal(ui.container.querySelector('[data-category="notices"]'), null);
+    entries = taskCompleted(entries);
+    await ui.render(entries, agents);
+    await Promise.resolve();
+    assert.equal(ui.container.querySelector('article[data-record-key="delegation-result:second:0"]'), firstResult);
+    assert.equal(ui.container.querySelectorAll('[data-event="result"]').length, 2);
+    for (const [index, id] of ids.entries()) assert.equal(ui.container.querySelector(`article[data-record-key="${id}"]`), calls[index]);
+    assert.equal(addedNotices.length, 0);
+    assert.equal(removedArticles.length, 0);
+  } finally { observer.disconnect(); await ui.close(); }
+});
+
+test("early compact context remains visible for unknown or unaccepted targets, human notes and overflow", () => {
+  const accepted = taskStarted(delegateResult(delegateCall([])));
+  const context = savedContext("child");
+  const variants = [
+    { ...context, text: context.text.replace('"completed"', '"running"') },
+    { ...context, text: context.text.replace('"child"', '"unknown"') },
+    { ...context, text: AGENT_UPDATES_PREFIX + JSON.stringify({ sessions: [{ session_id: "child", status: "completed", result: "Done" }], human_messages: [{ session_id: "child", prompt: "Human note" }] }) },
+    { ...context, text: AGENT_UPDATES_PREFIX + JSON.stringify({ sessions: [{ session_id: "child", status: "completed", result: "Done" }], human_messages: [], more: 1 }) },
+  ];
+  for (const variant of variants) assert.ok(new DelegationFlow().project([...accepted, variant], options([agent("child")])).some(entry => entry.id === context.id));
+  const unaccepted = appendEvent([], { event: "tool_call", run_id: runId, id: "resume", name: "to_agent", arguments: { session_id: "child", prompt: "Continue" } });
+  assert.ok(new DelegationFlow().project([...unaccepted, context], options([agent("child")])).some(entry => entry.id === context.id));
+});

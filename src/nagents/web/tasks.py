@@ -161,7 +161,12 @@ class Tasks:
         ):
             # Keep saved conversations inspectable after an administrator removes
             # a profile; the main picker can select a replacement before work.
-            return {"tasks": list(saved.values()), "profiles": []}
+            return {
+                "tasks": list(saved.values()),
+                "activations": await self.store.activations(root),
+                "profiles": [],
+                "profile_revision": primary.profile_revision,
+            }
         # One discovery pass per primary owner in this request. A distinct
         # session runtime still refreshes in view(), and a swapped primary is
         # never mistaken for the owner whose catalog we already refreshed.

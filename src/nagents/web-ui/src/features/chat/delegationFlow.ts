@@ -41,7 +41,7 @@ function terminal(entry: Entry | undefined): boolean {
 
 type Binding = { taskId: string; activation: number };
 type Finished = {
-  anchor: string; phase: AgentPhase; text: string; name: string; profile: string; prompt: string;
+  anchor: string; offset: number; phase: AgentPhase; text: string; name: string; profile: string; prompt: string;
   latest?: Entry; lastTool?: Entry; provider?: string; model?: string; observed: boolean;
 };
 
@@ -73,7 +73,7 @@ export class DelegationFlow {
     // These saved messages locate an already verified host completion; they
     // never establish its status, result, identity or activation.
     const contextSlots = entries.flatMap(entry => (agentUpdates(entry.text)?.sessions || [])
-      .map((update, index) => ({ entry, update, key: `${entry.id}:${index}` })));
+      .map((update, index, updates) => ({ entry, update, key: `${entry.id}:${index}`, offset: .25 + index / (updates.length + 1) * .25 })));
     const anchoredContexts = new Set<string>();
     // Partial JSON must not change a canonical request's presentation branch.
     const calls = entries.filter(entry => entry.kind === "tool" && entry.title === "to_agent" &&
@@ -137,12 +137,17 @@ export class DelegationFlow {
       if (context) anchoredContexts.add(context.key);
       if (binding && direct && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
         this.finished.set(key, { anchor: lifecycle?.completionAfterId || context?.entry.id || entries.at(-1)?.id || call.id,
-          phase, text: result, name, profile, prompt, latest, lastTool, provider, model, observed: !!lifecycle && !lifecycle.recorded });
+          offset: .25, phase, text: result, name, profile, prompt, latest, lastTool, provider, model, observed: !!lifecycle && !lifecycle.recorded });
       }
       const finished = this.finished.get(key);
-      if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId)) finished.anchor = lifecycle.completionAfterId;
-      else if (finished && !finished.observed && context) finished.anchor = context.entry.id;
-      return { call, binding, target, evidence, lifecycle, key, finished, name, profile, prompt, phase, latest, lastTool, provider, model, sources: [call, ...evidence] };
+      if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId)) {
+        finished.anchor = lifecycle.completionAfterId; finished.offset = .25;
+      } else if (finished && !finished.observed && context) {
+        // A cold completion batch retains its saved delivery order, even when
+        // the children were started in a different order. Live anchors stay put.
+        finished.anchor = context.entry.id; finished.offset = context.offset;
+      }
+      return { call, binding, target, direct, evidence, lifecycle, key, finished, name, profile, prompt, phase, latest, lastTool, provider, model, sources: [call, ...evidence] };
     });
     // Delivery/context records have no activation. Match them in completion
     // order, independently for each evidence channel.
@@ -163,7 +168,13 @@ export class DelegationFlow {
           (positions.get(item.finished!.anchor) ?? 0) <= positions.get(entry.id)!);
         const update = updates?.sessions[index];
         const text = notice ? entry.text : update?.result ?? update?.error;
-        const match = candidates.find(item => item.finished!.text === text || !!update?.truncated && !!text && item.finished!.text.startsWith(text)) || candidates.at(-1);
+        // A saved checkpoint can precede the live terminal lifecycle event.
+        // Keep known accepted requests' compact context in their inspector
+        // from the first render, without treating that data as a completion.
+        const accepted = !notice && update && ["completed", "failed", "cancelled"].includes(update.status)
+          ? items.findLast(item => item.binding && item.direct && item.target === id &&
+            !chosen.has(item.key) && positions.get(item.call.id)! < positions.get(entry.id)!) : undefined;
+        const match = candidates.find(item => item.finished!.text === text || !!update?.truncated && !!text && item.finished!.text.startsWith(text)) || accepted || candidates.at(-1);
         if (match) chosen.add(match.key);
         return match;
       });
@@ -185,7 +196,7 @@ export class DelegationFlow {
         error: finished.phase === "failed" ? finished.text || "The subagent failed." : undefined,
         runId: call.runId, activity: lifecycle?.activity,
         delegation: { ...presentation, kind: "result", text: finished.text } },
-        position: (positions.get(finished.anchor) ?? entries.length - 1) + .25 });
+        position: (positions.get(finished.anchor) ?? entries.length - 1) + finished.offset });
     }
     const originals = entries.flatMap((entry, index) => {
       if (calls.includes(entry) || entry.kind === "retained_tasks" || entry.taskId || folded.has(entry.id)) return [];

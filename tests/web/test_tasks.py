@@ -605,7 +605,15 @@ def test_delayed_old_completion_does_not_terminalize_new_activation_notes(
                 run = state.run_for(root)
                 assert run is not None
                 assert state.executions.owners[root].tasks._lookup(task_id).activation == 1
-                await state.tasks.record(run, {"event": "task_completed", "session_id": task_id, "activation": 0})
+                await state.tasks.record(
+                    run,
+                    {
+                        "event": "task_completed",
+                        "session_id": task_id,
+                        "root_session_id": root,
+                        "activation": 0,
+                    },
+                )
                 retry = await client.post(f"{path}/{task_id}/messages", headers=headers, json=note)
                 assert retry.json()["status"] == "queued"
             finally:

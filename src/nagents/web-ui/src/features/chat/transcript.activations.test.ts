@@ -6,7 +6,7 @@ import { TaskTranscript, taskEntries } from "../team/TaskConversation.js";
 import { AGENT_UPDATES_PREFIX } from "./backgroundUpdates.js";
 import { DelegationFlow } from "./delegationFlow.js";
 import { applySnapshot } from "./liveTranscript.js";
-import { fromHistory, type Entry } from "./transcript.js";
+import { appendEvent, fromHistory, type Entry } from "./transcript.js";
 
 function savedActivation(session_id: string, activation: number, history: string, position: number, parent_session_id = ""): RetainedTask {
   return {
@@ -129,4 +129,51 @@ test("a frozen empty completion cannot borrow a newer registry result", () => {
   assert.equal(first.provider, "");
   assert.equal(first.model, "");
   assert.doesNotMatch(JSON.stringify(projected.filter(entry => entry.delegation)), /LATEST REGISTRY RESULT/);
+});
+
+
+test("cold completion batches retain delivery order when children finish in reverse start order", () => {
+  const snapshot = coldSnapshot(1);
+  const context = snapshot.history.find(row => row.history_id === "context-0")!;
+  const reversed = [...snapshot.retained_activations!].reverse();
+  context.content = AGENT_UPDATES_PREFIX + JSON.stringify({ sessions: reversed.map(task => ({
+    session_id: task.session_id, status: "completed", result: task.result,
+  })), human_messages: [] });
+  const cold = applySnapshot({ entries: [] }, snapshot).entries;
+  const projected = project(cold, snapshot);
+  assert.deepEqual(projected.filter(entry => entry.delegation?.kind === "start").map(entry => entry.delegation?.taskId), ["s1", "s2"]);
+  const results = projected.filter(entry => entry.delegation?.kind === "result");
+  assert.deepEqual(results.map(entry => entry.delegation?.taskId), ["s2", "s1"]);
+  const answer = projected.findIndex(entry => entry.text === "Parent answer 0");
+  assert.ok(results.every(entry => projected.indexOf(entry) < answer));
+  assert.equal(projected.some(entry => entry.kind === "context"), false);
+  const refreshed = applySnapshot({ entries: cold, history: snapshot.history }, snapshot).entries;
+  assert.deepEqual(project(refreshed, snapshot).filter(entry => entry.delegation?.kind === "result").map(entry => entry.id), results.map(entry => entry.id));
+});
+
+test("saved batch order cannot reposition an already observed live completion", () => {
+  const snapshot = coldSnapshot(1);
+  const context = snapshot.history.find(row => row.history_id === "context-0")!;
+  // The later saved batch uses the opposite order. It may enrich inspection
+  // records, but the connection's observed completion anchors remain canonical.
+  context.content = AGENT_UPDATES_PREFIX + JSON.stringify({ sessions: snapshot.retained_activations!.map(task => ({
+    session_id: task.session_id, status: "completed", result: task.result,
+  })), human_messages: [] });
+  const unfinished: Snapshot = { ...snapshot, history: snapshot.history.slice(0, -2), retained_activations: snapshot.retained_activations!.map(task => ({ ...task, status: "running", result: "" })), retained_tasks: [] };
+  let entries = fromHistory(unfinished);
+  const flow = new DelegationFlow();
+  const options = { agents: snapshot.retained_activations!.map(task => taskAgent({ ...task, status: "running", result: "" })), activity: [], inspect() {} };
+  const resultIds = (rows: Entry[]) => rows.filter(entry => entry.delegation?.kind === "result").map(entry => entry.id);
+  // Convert the matching host-start records to observed lifecycle evidence.
+  entries = entries.map(entry => entry.kind === "task" ? { ...entry, recorded: false, runId: "live-run" } : entry);
+  entries = appendEvent(entries, { event: "task_completed", run_id: "live-run", session_id: "s2", activation: 0, result: "Verified s2 activation 0" });
+  const first = flow.project(entries, options);
+  entries = appendEvent(entries, { event: "text_done", run_id: "live-run", text: "Between live completions" });
+  entries = appendEvent(entries, { event: "task_completed", run_id: "live-run", session_id: "s1", activation: 0, result: "Verified s1 activation 0" });
+  const before = flow.project(entries, options);
+  assert.deepEqual(resultIds(before), ["delegation-result:s2:0", "delegation-result:s1:0"]);
+  entries.push({ ...fromHistory({ session_id: snapshot.session_id, retained_tasks: [], history: [context] })[0]!, id: "late-context" });
+  const after = flow.project(entries, options);
+  assert.deepEqual(resultIds(after), resultIds(before));
+  assert.equal(after.findIndex(entry => entry.id === resultIds(first)[0]) < after.findIndex(entry => entry.text === "Between live completions"), true);
 });

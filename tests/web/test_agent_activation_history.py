@@ -57,7 +57,11 @@ def test_activation_history_survives_restart_and_stays_root_scoped(
                 yield ToolCallEvent(
                     id="activation-one",
                     name="to_agent",
-                    arguments={"prompt": "Initial assignment", "title": "Original title"},
+                    arguments={
+                        "prompt": "Initial assignment",
+                        "agent": "reviewer",
+                        "title": "Original title",
+                    },
                 )
             elif notifications(messages) and not did_agent_continue:
                 did_agent_continue = True
@@ -88,6 +92,8 @@ def test_activation_history_survives_restart_and_stays_root_scoped(
             assert alias == second["session_id"] == "s1"
             assert [first["activation"], second["activation"]] == [0, 1]
             assert first["title"] == "Original title" and second["title"] == "Updated title"
+            assert first["mode"] == second["mode"] == "reviewer"
+            assert first["mode"] == second["mode"] == "reviewer"
             assert first["status"] == second["status"] == "completed"
             assert first["result"] == "Child result 1" and second["result"] == "Child result 2"
             assert first["activation_call_id"] == "activation-one"
