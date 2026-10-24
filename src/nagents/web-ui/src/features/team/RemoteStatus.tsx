@@ -17,16 +17,20 @@ export function remoteAuthLabel(auth?: RemoteAuthentication, now = Date.now() / 
     not_required: "No sign-in required", storage_error: "Credentials unavailable", host_setup_required: "Sign-in setup required" }[auth.state];
 }
 
-export function RemoteStatus({ authentication }: { authentication?: RemoteAuthentication }) {
-  const [, tick] = useState(0);
+export function useRemoteAuthLabel(authentication?: RemoteAuthentication): string {
+  const [revision, tick] = useState(0);
   useEffect(() => {
-    if (!authentication?.expires_at || authentication.refreshable) return;
+    if (authentication?.state !== "signed_in" || !authentication.expires_at || authentication.refreshable) return;
     const remaining = authentication.expires_at * 1000 - Date.now() - 10000;
     if (remaining <= 0) return;
     const timer = setTimeout(() => tick(value => value + 1), Math.min(remaining + 10, 2147483647));
     return () => clearTimeout(timer);
-  }, [authentication?.expires_at, authentication?.refreshable]);
-  const label = remoteAuthLabel(authentication);
+  }, [authentication?.state, authentication?.expires_at, authentication?.refreshable, revision]);
+  return remoteAuthLabel(authentication);
+}
+
+export function RemoteStatus({ authentication }: { authentication?: RemoteAuthentication }) {
+  const label = useRemoteAuthLabel(authentication);
   const ready = ["Signed in", "Signed in · auto refresh", "Server token configured", "No sign-in required"].includes(label);
   const expires = authentication?.expires_at;
   const expiry = expires && Number.isFinite(expires) ? new Date(expires * 1000).toLocaleString() : "";

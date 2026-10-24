@@ -15,6 +15,14 @@ definition starts a new conversation through the shared composer; selecting a
 named conversation messages that existing agent. See [Inspecting and messaging delegated agents](task-inspection.md)
 for message delivery, settings, and restart behavior.
 
+A2A conversations show a compact **A2A** connection chip. An open lock means
+credentials are ready or no sign-in is required; an amber closed lock needs
+attention. An unknown status uses a question mark. Hover for the exact status,
+or select the chip to open that agent's connection settings and sign-in controls.
+Authentication and task state are separate: completed work stays **Done** when
+its connection needs sign-in. Expiry and automatic-refresh details remain in
+connection settings. The lock and activity animations respect reduced motion.
+
 Generated conversation names are separate from their definitions. A named child
 shows its recorded definition (such as `assistant` or `mini`) beside its name and
 in its conversation header and settings. Definition entries expose their current
