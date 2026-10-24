@@ -150,8 +150,23 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
     assert.doesNotMatch(JSON.stringify(ui.animationCalls[0]), /opacity/i, "the entrance motion never fades text");
     assert.ok(ui.frames.size <= 2, "one pending frame per animated mark/text at most");
 
+    for (const [text, activity] of [
+      ["", "assistant:response-2"], [" ", "assistant:response-2"],
+      ["", "assistant:response-2"], ["restored words", "assistant:response-2"],
+      ["tool output", "tool:call-1"],
+    ] as const) {
+      await ui.render("running", text, activity);
+      assert.equal(ui.container.querySelector(".delegation-tail-content")?.firstChild, textNode,
+        "empty, whitespace and semantic activity changes retain the same text node");
+      assert.equal((textNode as Text).data, text.replace(/\s+/g, " ").trim());
+    }
+    assert.equal(ui.animationCalls.length, 3, "only the two semantic activity changes trigger entrance motion");
+    assert.equal((textNode as Text).data, "tool output");
+
     await ui.render("done", "final result", "result");
     assert.equal(mark?.getAttribute("data-state"), "done", "completion overrides any arrival appearance immediately");
+    assert.equal(ui.container.querySelector(".delegation-tail-content")?.firstChild, textNode,
+      "terminal text still uses the mounted text node");
   } finally {
     await ui.close();
     assert.equal(ui.frames.size, 0, "unmount cancels every scheduled animation frame");

@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 export function SlidingActivityText({ text, activity, tool = false }: { text: string; activity: string; tool?: boolean }) {
   const viewport=useRef<HTMLSpanElement>(null),content=useRef<HTMLSpanElement>(null),entrance=useRef<HTMLSpanElement>(null);
+  const textNode=useRef<Text|undefined>(undefined);
   const runtime=useRef({current:0,target:0,frame:0,previous:0});
   const measure=useRef<()=>void>(()=>{});
   const [overflow,setOverflow]=useState(false);
@@ -42,6 +43,10 @@ export function SlidingActivityText({ text, activity, tool = false }: { text: st
     preference?.addEventListener("change",reduce);measure.current();
     return()=>{animation?.cancel();preference?.removeEventListener("change",reduce);};
   },[activity]);
-  useLayoutEffect(()=>{measure.current();},[text]);
-  return <span ref={viewport} className="delegation-tail" data-overflow={overflow} data-tool={tool} title={text}><span ref={entrance} className="delegation-tail-entrance"><span ref={content} className="delegation-tail-content">{text.replace(/\s+/g," ").trim()}</span></span></span>;
+  useLayoutEffect(()=>{
+    const element=content.current;if(!element)return;
+    if(!textNode.current){textNode.current=element.ownerDocument.createTextNode("");element.append(textNode.current);}
+    const value=text.replace(/\s+/g," ").trim();if(textNode.current.data!==value)textNode.current.data=value;measure.current();
+  },[text]);
+  return <span ref={viewport} className="delegation-tail" data-overflow={overflow} data-tool={tool} title={text}><span ref={entrance} className="delegation-tail-entrance"><span ref={content} className="delegation-tail-content" /></span></span>;
 }
