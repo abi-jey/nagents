@@ -195,6 +195,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     // Replace the active run's replayable records, rather than append chunks again.
     // Map equivalent scopes back to stable local IDs for expanded disclosures.
     const claimed = new Set<string>();
+    const replayIds = new Map<string, string>();
     const oldOwners = turnOwners(entries), replayOwners = turnOwners(replay);
     const positions = new Map<Entry, number>();
     replay = replay.map((entry, index) => {
@@ -216,12 +217,16 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
           : !!owner && i > (positions.get(owner) ?? -1) &&
             !conflictingRows(entry, item) && sameTurn(owner, oldOwners.get(item))));
       if (old) { claimed.add(old.id); if (owner) positions.set(owner, entries.indexOf(old)); }
-      return { ...entry, id: old?.id || (entry.kind === "live_caption" ? entry.id : `run:${run.id}:${index}`),
+      const stableId = old?.id || (entry.kind === "live_caption" ? entry.id : `run:${run.id}:${index}`);
+      replayIds.set(entry.id, stableId);
+      return { ...entry, id: stableId,
         responseMetadata: latestResponseMetadata(entry.responseMetadata, old?.responseMetadata),
         historyId: entry.historyId || old?.historyId, resultHistoryId: entry.resultHistoryId || old?.resultHistoryId,
         historyIndex: old?.historyIndex, historyTurn: old?.historyTurn,
       };
     });
+    replay = replay.map(entry => entry.completionAfterId
+      ? { ...entry, completionAfterId: replayIds.get(entry.completionAfterId) || entry.completionAfterId } : entry);
     const first = entries.findIndex((entry) => entry.runId === run.id || claimed.has(entry.id));
     const before = first < 0 ? entries : entries.slice(0, first);
     const keep = (entry: Entry) => !claimed.has(entry.id) && (entry.runId !== run.id ||

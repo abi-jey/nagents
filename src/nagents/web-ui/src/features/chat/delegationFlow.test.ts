@@ -5,10 +5,11 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { defaultAppearance } from "../settings/appearance.js";
 import { taskAgent, type TaskActivity, type TeamAgent } from "../team/model.js";
-import type { RetainedTask, Snapshot } from "../../types.js";
+import type { RetainedTask, Snapshot, WireEvent } from "../../types.js";
 import { Conversation } from "./Conversation.js";
 import { DelegationFlow, delegationPreview } from "./delegationFlow.js";
 import { appendEvent, fromHistory, type Entry } from "./transcript.js";
+import { applySnapshot } from "./liveTranscript.js";
 
 const runId = "root-run";
 const prompt = "Check the session read and close paths.";
@@ -240,6 +241,40 @@ test("completion is appended at task_completed after intervening main and user m
   assert.ok(projected.findIndex(entry => entry.id === rows[1].id) > projected.findIndex(entry => entry.id === answerId));
   assert.ok(projected.findIndex(entry => entry.id === rows[1].id) > projected.findIndex(entry => entry.id === followUpId));
   assert.equal(rows[1].delegation?.text, "The focused checks passed.");
+});
+
+test("completion anchor survives an active checkpoint that rebinds the main acknowledgement ID", () => {
+  const events: WireEvent[] = [
+    { event: "user_message", run_id: runId, history_id: "h1", message_id: "u1", text: "Check the child result." },
+    { event: "tool_call", run_id: runId, id: "delegate-call", name: "delegate", arguments: { agent: "mini", prompt } },
+    { event: "tool_result", run_id: runId, id: "delegate-call", name: "delegate",
+      result: { task_id: "child", name: "gentle willow", status: "running" } },
+    { event: "task_started", run_id: runId, task_id: "child", parent_task_id: "", activation: 0,
+      name: "gentle willow", prompt },
+    { event: "user_message", run_id: runId, history_id: "h2", message_id: "u2", text: "Still checking?" },
+    { event: "text_done", run_id: runId, response_id: "main-ack", text: "I am waiting for the check." },
+    { event: "task_completed", run_id: runId, task_id: "child", parent_task_id: "", activation: 0,
+      name: "gentle willow", status: "completed", result: "The focused checks passed." },
+  ];
+  let preexisting: Entry[] = [];
+  for (const event of events.slice(0, -1)) preexisting = appendEvent(preexisting, event);
+  const mainAcknowledgement = preexisting.find(entry => entry.kind === "assistant" && entry.responseId === "main-ack")!;
+  const checkpointed = applySnapshot({ entries: preexisting }, {
+    session_id: "root", history: [], retained_tasks: [], sessions: [],
+    active_run: { id: runId, status: "running", events },
+  });
+  const lifecycle = checkpointed.entries.find(entry => entry.kind === "task" && entry.taskId === "child")!;
+  assert.equal(lifecycle.completionAfterId, mainAcknowledgement.id,
+    "completion anchor must be rebound to the stable local main-ack ID, not a replay-local ID");
+
+  const withFinalAnswer = appendEvent(checkpointed.entries, {
+    event: "text_done", run_id: runId, response_id: "main-final", text: "The final answer after the check is ready.",
+  });
+  const finalAnswer = withFinalAnswer.find(entry => entry.kind === "assistant" && entry.responseId === "main-final")!;
+  const projected = new DelegationFlow().project(withFinalAnswer, options([agent("child", "", "done")]));
+  const result = delegationRows(projected).find(entry => entry.delegation?.kind === "result")!;
+  assert.ok(projected.findIndex(entry => entry.id === result.id) > projected.findIndex(entry => entry.id === mainAcknowledgement.id));
+  assert.ok(projected.findIndex(entry => entry.id === result.id) < projected.findIndex(entry => entry.id === finalAnswer.id));
 });
 
 test("initial completion context and delivery fold into two stable delegation rows", () => {
