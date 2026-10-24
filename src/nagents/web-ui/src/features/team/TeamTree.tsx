@@ -7,6 +7,7 @@ import { agentAncestors, definitionUsage, orderedTeam, phaseLabel, providerLabel
 import { profileTarget } from "./useTeam.js";
 import { scrollWithin } from "../../components/scrollWithin.js";
 import { remoteAuthLabel, RemoteStatus } from "./RemoteStatus.js";
+import { RemoteConnectionChip } from "./RemoteConnectionChip.js";
 
 export type ArrivalTimes = Readonly<Record<string, number>>;
 export function useArrivalStyle(at = 0): CSSProperties {
@@ -18,31 +19,37 @@ export function TeamIcon({ size = 18 }: { size?: number }) {
 }
 
 export function AgentState({ agent }: { agent: TeamAgent }) {
+  if (agent.providerKind === "a2a") return <span className={`team-state state-${agent.phase} remote-agent-state`} title={agent.phase === "waiting" ? "Waiting" : phaseLabel(agent)}>
+    {agent.phase === "running" ? <span className="remote-running-mark" aria-hidden="true" /> : agent.phase === "waiting" ? <span className="remote-waiting-mark" aria-hidden="true"><i /><i /></span> : agent.phase === "done" ? <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 10 4 4 8-8" /></svg> : <i aria-hidden="true" />}
+    {agent.phase === "waiting" ? "Waiting" : phaseLabel(agent)}
+  </span>;
   return <span className={`team-state state-${agent.phase}`} title={agent.reason}><i aria-hidden="true" />{phaseLabel(agent)}</span>;
 }
 
-export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: {
-  agent: TeamAgent; selected: boolean; inspect: () => void; settings: () => void; arrivalAt?: number;
+export function AgentRow({ agent, selected, inspect, settings, connection, arrivalAt = 0 }: {
+  agent: TeamAgent; selected: boolean; inspect: () => void; settings: () => void; connection?: () => void; arrivalAt?: number;
 }) {
-  const context = agent.providerKind === "a2a" ? undefined : agent.context;
+  const remote = agent.providerKind === "a2a";
+  const context = remote ? undefined : agent.context;
   const marker = compactionMarker(agent);
   const warning = compactionWarning(agent);
   const provider = providerLabel(agent);
   const motion = useArrivalStyle(arrivalAt);
   const hasDefinition = !!agent.id && !!agent.profile;
-  return <article className={`team-agent-row${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
+  return <article className={`team-agent-row${remote ? " is-remote" : ""}${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
     <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={[marker?.description, agent.providerKind === "a2a" && remoteAuthLabel(agent.authentication)].filter(Boolean).join(". ") || undefined}
       aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${agent.profile ? `. Definition ${agent.profile}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
       <span className="team-agent-heading"><span className="team-agent-identity"><strong className={hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${agent.profile}` : undefined}>{hasDefinition ? agent.profile : agent.name}</strong>{hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}</span><AgentState agent={agent} /></span>
-      <span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
+      {!remote && <><span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
       <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}${marker ? `; ${marker.description}` : ""}` : undefined}>
-        {context ? contextSummary(context) : agent.providerKind === "a2a" ? <RemoteStatus authentication={agent.authentication} /> : "Context unavailable"}
+        {context ? contextSummary(context) : "Context unavailable"}
       </span>
       {context?.context_window ? <span className="team-agent-meter" aria-hidden="true"><i style={{ width: `${contextPercent(context)}%` }} />
         {marker && <b className="team-agent-threshold" style={{ left: `${marker.percent}%` }} title={marker.description} />}
       </span> : null}
-      {warning && <span className="team-context-warning">{warning}</span>}
+      {warning && <span className="team-context-warning">{warning}</span>}</>}
     </button>
+    {remote && <div className="team-agent-connection"><RemoteConnectionChip authentication={agent.authentication} name={agent.profile || agent.name} activate={connection || settings} /></div>}
     <button type="button" className="team-agent-settings" aria-label={`Settings for ${agent.name}`} onClick={settings}><Icon name="settings" size={14} /></button>
   </article>;
 }
@@ -105,7 +112,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     return <li key={agent.id || "main"} className="team-tree-branch">
       <div className="team-tree-row"><span className="team-tree-toggle-slot">{!!descendants.length && <button type="button" className="team-tree-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${agent.name}'s agents`} aria-expanded={open}
         onClick={() => setExpanded(current => new Map(current).set(agent.id, !open))}><Icon name="chevron" size={12} /></button>}</span>
-        <AgentRow agent={agent} selected={selected === agent.id} inspect={() => inspect(agent.id)} settings={() => configure(agent.id)} arrivalAt={arrivals[agent.id]} />
+        <AgentRow agent={agent} selected={selected === agent.id} inspect={() => inspect(agent.id)} settings={() => configure(agent.id)} connection={agent.providerKind === "a2a" && profiles.some(profile => profile.id === agent.profile && profile.provider === "a2a") ? () => configure(profileTarget(agent.profile)) : undefined} arrivalAt={arrivals[agent.id]} />
       </div>
       {!!descendants.length && (open ? <ol className="team-tree-children">
         {descendants.slice(0, limit).map(child => branch(child, depth + 1))}

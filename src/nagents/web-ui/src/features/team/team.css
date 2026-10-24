@@ -109,6 +109,27 @@
 .remote-auth-status > i { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: currentColor; }
 .remote-auth-status[data-state="ready"] { color: var(--accent-teal); }
 .remote-auth-status[data-state="attention"] { color: var(--accent-rose); }
+.team-agent-row.is-remote > .team-agent-open { min-height: 32px; padding-bottom: 2px; }
+.team-agent-connection { padding: 3px 9px 8px; }
+.remote-connection-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 23px; border: 1px solid color-mix(in srgb, var(--text-secondary) 32%, transparent); border-radius: 5px; padding: 3px 6px; background: color-mix(in srgb, var(--text-secondary) 3%, transparent); color: var(--text-secondary); font-size: 10px; line-height: 15px; }
+.remote-connection-chip > span:first-child { font-size: 9px; font-weight: 550; letter-spacing: .025em; }
+.remote-connection-separator { color: var(--text-secondary); opacity: .7; }
+.remote-connection-lock { flex-shrink: 0; }
+.remote-connection-chip[data-state="ready"] .remote-connection-lock { color: var(--accent-teal); }
+.remote-connection-chip[data-state="attention"] { border-color: color-mix(in srgb, var(--accent-amber) 30%, transparent); background: color-mix(in srgb, var(--accent-amber) 4%, transparent); animation: remote-auth-attention 1.7s ease-out 3; }
+.remote-connection-chip[data-state="attention"] .remote-connection-lock { color: var(--accent-amber); }
+.remote-connection-chip[data-state="unknown"] .remote-connection-lock { opacity: .7; }
+.remote-running-mark { width: 9px; height: 9px; border: 1.5px solid color-mix(in srgb, var(--accent-blue) 22%, transparent); border-top-color: var(--accent-blue); border-right-color: var(--accent-blue); border-radius: 50%; animation: remote-agent-rotate 1s linear infinite; }
+.remote-waiting-mark { display: inline-flex; gap: 2px; align-items: center; }
+.remote-agent-state .remote-waiting-mark i { width: 2px; height: 6px; border-radius: 1px; background: currentColor; animation: remote-agent-wait 1.7s ease-in-out infinite; }
+.remote-agent-state .remote-waiting-mark i:last-child { animation-delay: .35s; }
+.remote-agent-state.state-done svg path { stroke-dasharray: 20; animation: remote-agent-check 450ms ease-out both; }
+@keyframes remote-auth-attention { 0%,100% { box-shadow: 0 0 0 0 transparent; } 35% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-amber) 8%, transparent); } }
+@keyframes remote-agent-rotate { to { transform: rotate(360deg); } }
+@keyframes remote-agent-wait { 0%,100% { opacity: .45; transform: scaleY(.7); } 50% { opacity: 1; transform: scaleY(1); } }
+@keyframes remote-agent-check { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
+@media (max-width: 1100px) { .team-drawer .remote-connection-chip { min-height: 36px; min-width: 52px; } }
+@media (prefers-reduced-motion: reduce) { .remote-connection-chip, .remote-agent-state, .remote-agent-state * { animation: none !important; } }
 .task-remote-connection { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 0 28px 10px; font-size: 11px; color: var(--text-secondary); }
 .task-remote-connection > button { margin-left: auto; color: var(--text-reading); padding: 3px 0; font-size: 11px; background: transparent; border: 0; text-decoration: underline; text-underline-offset: 3px; }
 .task-failure { margin: 8px 28px; padding: 10px 12px; border-left: 2px solid var(--accent-rose); background: color-mix(in srgb, var(--accent-rose) 5%, transparent); font-size: 12px; color: var(--text-reading); }
