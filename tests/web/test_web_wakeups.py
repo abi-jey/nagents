@@ -302,7 +302,15 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
             retained = snapshot["retained_tasks"]
             expected = [
-                {**asdict(info), "can_message": True, "unavailable_reason": ""} for info in state.harness.tasks.list()
+                {
+                    **asdict(info),
+                    "can_message": True,
+                    "unavailable_reason": "",
+                    "can_start_children": False,
+                    "child_agents": [],
+                    "child_start_unavailable_reason": "This parent must be running to start a child. Send it a message to resume.",
+                }
+                for info in state.harness.tasks.list()
             ]
             assert retained == expected
             assert len(retained) == 1 and retained[0]["session_id"] == first
@@ -324,11 +332,21 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             resumed = (await client.post("/api/sessions/resume", json={"session_id": first}, headers=headers)).json()
             restored = resumed["retained_tasks"]
             assert resumed["session_id"] == first and len(restored) == 1
-            assert {
-                key: value for key, value in restored[0].items() if key not in {"can_message", "unavailable_reason"}
-            } == {key: value for key, value in retained[0].items() if key not in {"can_message", "unavailable_reason"}}
+            runtime_capabilities = {
+                "can_message",
+                "unavailable_reason",
+                "can_start_children",
+                "child_agents",
+                "child_start_unavailable_reason",
+            }
+            assert {key: value for key, value in restored[0].items() if key not in runtime_capabilities} == {
+                key: value for key, value in retained[0].items() if key not in runtime_capabilities
+            }
             assert restored[0]["can_message"] is False
             assert restored[0]["unavailable_reason"]
+            assert restored[0]["can_start_children"] is False
+            assert restored[0]["child_agents"] == []
+            assert "history is read-only" in restored[0]["child_start_unavailable_reason"]
             task_detail = (await client.get(f"/api/sessions/{first}/tasks/{restored[0]['id']}", headers=headers)).json()
             assert task_detail["history"]
             assert task_detail["history"][-1]["content"] == "recorded result"
@@ -374,7 +392,15 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             # Identity membership is stable; SQLite query order is not an API contract.
             retained = resumed["retained_tasks"]
             expected = [
-                {**asdict(info), "can_message": True, "unavailable_reason": ""} for info in state.harness.tasks.list()
+                {
+                    **asdict(info),
+                    "can_message": True,
+                    "unavailable_reason": "",
+                    "can_start_children": False,
+                    "child_agents": [],
+                    "child_start_unavailable_reason": "This parent must be running to start a child. Send it a message to resume.",
+                }
+                for info in state.harness.tasks.list()
             ]
             assert len(retained) == len(expected) == 2
             assert sorted(retained, key=lambda task: task["id"]) == sorted(expected, key=lambda task: task["id"])
