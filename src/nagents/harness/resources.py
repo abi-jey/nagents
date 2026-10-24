@@ -464,7 +464,8 @@ class HarnessResources(AgentPlugin):
         registry = harness.agent.tool_registry
         # Baseline includes current host registrations, restoring definitions
         # shadowed by the retiring extension only when it still owns that slot.
-        baseline = {tool.name: tool for tool in ToolRegistry.get_all(registry)}
+        advertised = {tool.name: tool for tool in ToolRegistry.get_all(registry)}
+        baseline = dict(advertised)
         for name in self._owned_names:
             if baseline.get(name) is self.current.registry.get(name):
                 baseline.pop(name, None)
@@ -631,6 +632,21 @@ class HarnessResources(AgentPlugin):
             # Refreshing the cache must not make an old edit snapshot appear
             # to have observed newly changed project instructions.
             harness.tools.read_hashes.clear()
+        # Setup/discovery can yield while the host registers or removes a tool.
+        # Commit those newer host decisions instead of restoring our old copy.
+        # They are host baselines, never owned by this extension generation.
+        latest = {tool.name: tool for tool in ToolRegistry.get_all(registry)}
+        host_changes = {
+            name for name in advertised.keys() | latest.keys() if advertised.get(name) is not latest.get(name)
+        }
+        for name in host_changes:
+            if name in latest:
+                baseline[name] = latest[name]
+                fresh.registry._tools[name] = latest[name]
+            else:
+                baseline.pop(name, None)
+                fresh.registry._tools.pop(name, None)
+            fresh.approval_identities.pop(name, None)
         for name, original in baseline.items():
             replacement = fresh.registry.get(name)
             if replacement == original:
@@ -638,6 +654,7 @@ class HarnessResources(AgentPlugin):
         old = self.current
         if self._running:
             self._retained_names.update(self._owned_names)
+        self._retained_names.difference_update(host_changes)
         self._owned_names = {
             name
             for name in baseline.keys() | fresh.registry._tools.keys()
