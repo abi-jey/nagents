@@ -1,6 +1,7 @@
-export type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit" | "branch" | "download" | "expand" | "image" | "terminal" | "file-read" | "file-write" | "book" | "team" | "clock" | "compact" | "plug";
+export type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit" | "branch" | "download" | "expand" | "image" | "terminal" | "file-read" | "file-write" | "book" | "team" | "clock" | "compact" | "plug" | "check";
 
 const paths: Record<IconName, string> = {
+  check: "m4 10 4 4 8-8",
   terminal: "M2 3h16v14H2ZM5 7l3 3-3 3M10 13h5",
   "file-read": "M4 2h8l4 4v12H4ZM12 2v5h4M7 10h6M7 13h6",
   "file-write": "M4 2h8l4 4v12H4ZM12 2v5h4M7 12h6M10 9v6",

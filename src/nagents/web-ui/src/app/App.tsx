@@ -12,12 +12,12 @@ import type { NavigatorAudio } from "../features/settings/navigator/AgentNavigat
 import type { SettingsReply } from "../features/settings/types.js";
 import type { NavigatorRequest, NavigatorSection } from "../features/settings/navigator/state.js";
 import { isProfileTarget, profileTarget } from "../features/team/useTeam.js";
-import { TaskTimeline } from "../features/team/TaskTimeline.js";
 import { TaskConversation } from "../features/team/TaskConversation.js";
 import { WorkspaceActivity } from "./WorkspaceActivity.js";
 import { useAppearance } from "../features/settings/appearance.js";
 import { useAppViewport } from "./useAppViewport.js";
 import "../features/team/team.css";
+import "../features/chat/delegationActivity.css";
 import "../features/settings/navigator/agentNavigator.css";
 
 export function App() {
@@ -89,11 +89,11 @@ export function App() {
         <WorkspaceSidebar client={client} composer={composer} open={navOpen} close={closeNavigation}
           select={select} collapsed={sidebarCollapsed} toggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)} />
         <WorkspaceActivity sessionId={client.sessions.sessionId}
-          task={client.team.selected && <TaskConversation appearance={appearance} team={client.team} agents={agents} arrivals={arrivals} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} configureConnection={name => openAgentSettings(name)} back={() => { client.team.select(""); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true })); }} />}
+          task={client.team.selected && <TaskConversation appearance={appearance} team={client.team} agents={agents} arrivals={arrivals} activity={client.chat.taskActivity} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} configureConnection={name => openAgentSettings(name)} back={() => { client.team.select(""); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true })); }} />}
           conversation={{ appearance, agentName: root.name, token: client.sessions.config?.token || "", active: !client.team.selected,
             entries: client.chat.entries, sessionId: client.sessions.sessionId, demo: !!client.sessions.config?.demo,
             providerSetup: root.providerKind === "a2a" ? undefined : client.sessions.config?.provider_setup, canSubmit: client.available.submit, submit: value => void submit(value),
-            renderTask: thread => <TaskTimeline id={thread.id} thread={thread} agents={agents} inspect={client.team.select} arrivals={arrivals} /> }}
+            delegation: { agents, activity: client.chat.taskActivity, inspect: client.team.select } }}
           composer={<WorkspaceComposer client={client} composer={composer} submit={() => void submit()} select={select}
             configureSettings={() => openAgentSettings(client.sessionAgent.selection?.agent || "assistant", "Voice")} audioChanged={setNavigatorAudio} />}
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />

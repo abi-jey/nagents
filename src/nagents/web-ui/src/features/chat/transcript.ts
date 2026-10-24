@@ -31,6 +31,8 @@ function commandOutcome(value: unknown): CommandOutcome | undefined {
 }
 
 export type Entry = {
+  delegation?: import("./delegationFlow.js").DelegationPresentation;
+  completionAfterId?: string;
   id: string;
   kind:
     | "user"
@@ -670,6 +672,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     if (typeof event.depth === "number") entry.depth = event.depth;
     if (typeof event.trigger === "string") entry.trigger = event.trigger;
     if (event.event === "task_completed") {
+      entry.completionAfterId ||= entries.at(-1)?.id;
       entry.result = text(event, "result");
       entry.error = text(event, "error");
       entry.state =
