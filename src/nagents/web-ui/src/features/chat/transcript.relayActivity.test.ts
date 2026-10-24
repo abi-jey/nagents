@@ -126,9 +126,10 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
     const packets = [...(svg?.querySelectorAll(".relay-packets circle") || [])];
     const viewport = ui.container.querySelector<HTMLElement>(".delegation-tail")!;
     const entrance = viewport.firstElementChild;
-    const content = viewport.lastElementChild;
+    const content = viewport.querySelector(".delegation-tail-content");
     const textNode = content?.firstChild;
     assert.ok(textNode);
+    assert.equal(textNode.nodeType, 3, "the preserved child is the actual text node");
 
     for (let index = 1; index <= 115; index++) {
       await ui.render("running", `token-${index}`, "assistant:response-1");
@@ -140,7 +141,7 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
       assert.deepEqual([...svg!.querySelectorAll(".relay-packets circle")], packets);
       assert.equal(ui.container.querySelector(".delegation-tail"), viewport);
       assert.equal(viewport.firstElementChild, entrance);
-      assert.equal(viewport.lastElementChild, content);
+      assert.equal(viewport.querySelector(".delegation-tail-content"), content);
       assert.equal(content?.firstChild, textNode);
       assert.equal((content?.textContent || "").trim(), `token-${index}`);
       assert.notEqual(content?.getAttribute("style")?.includes("opacity: 0"), true);
@@ -151,7 +152,10 @@ test("token chunks preserve the row, SVG nodes, sliding span, and text node with
 
     await ui.render("done", "final result", "result");
     assert.equal(mark?.getAttribute("data-state"), "done", "completion overrides any arrival appearance immediately");
-  } finally { await ui.close(); }
+  } finally {
+    await ui.close();
+    assert.equal(ui.frames.size, 0, "unmount cancels every scheduled animation frame");
+  }
 });
 
 test("the fresh appearance cue runs once and is not replayed by later content updates", async () => {
