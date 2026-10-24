@@ -24,6 +24,8 @@ export function pendingApprovals(run?: ActiveRun): WireEvent[] {
   return [...pending.values()];
 }
 function compatible(saved: Entry, previous: Entry): boolean {
+  if (saved.activationOmission || previous.activationOmission) return saved.kind === "status" && previous.kind === "status" &&
+    !!saved.activationOmission && saved.activationOmission.sessionId === previous.activationOmission?.sessionId;
   if (saved.kind === "live_caption" || previous.kind === "live_caption") return sameLiveCaption(saved, previous);
   if (saved.delivery || previous.delivery) return !!saved.delivery && saved.delivery.delivery_id === previous.delivery?.delivery_id;
   if (saved.abandoned || previous.abandoned) return false;
@@ -43,7 +45,7 @@ function conflictingRows(left: Entry, right: Entry): boolean {
 }
 function sameSavedEntry(saved: Entry, previous: Entry): boolean {
   if (!compatible(saved, previous)) return false;
-  if (saved.delivery) return true;
+  if (saved.delivery || saved.activationOmission) return true;
   if (saved.kind === "user" && sameTranscriptUser(saved, previous)) return true;
   if (saved.responseId && saved.responseId === previous.responseId) return true;
   const a = rowIds(saved), b = rowIds(previous);
@@ -136,7 +138,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot & { root_
     }
     for (let i = after; i < index; i++) keep(previous[i]);
     const old = previous[index];
-    next.push(entry.delivery ? { ...entry, id: old.id } : entry.kind === "live_caption"
+    next.push(entry.delivery || entry.activationOmission ? { ...entry, id: old.id } : entry.kind === "live_caption"
       ? { ...entry, id: old.id, activity: old.activity } : entry.kind === "user"
       ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, admission: undefined, state: undefined, activity: old.activity,
           voice: entry.voice, voiceSessionId: entry.voiceSessionId,

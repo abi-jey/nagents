@@ -58,6 +58,7 @@ export type RetainedTask = {
   updated_at?: number;
   completed_at?: number;
   activity_sequence?: number;
+  details_truncated?: boolean;
   can_message?: boolean;
   can_start_children?: boolean;
   child_agents?: string[];
@@ -92,6 +93,7 @@ export type Snapshot = {
   activity_cursor?: number;
   retained_tasks: RetainedTask[];
   retained_activations?: RetainedTask[];
+  retained_activations_omitted?: number;
   sessions: Session[];
   active_run?: ActiveRun | null;
   active_run_id?: string;

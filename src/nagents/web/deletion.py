@@ -122,6 +122,25 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str, tables: set[str
                 "UPDATE ngn_web_agent_sessions SET data = ? WHERE root = ? AND session_id = ?",
                 (json.dumps(task), session_id, agent_session_id),
             )
+    if "ngn_web_agent_activations" in tables:
+        incomplete = db.execute(
+            "SELECT session_id, activation FROM ngn_web_agent_activations WHERE root = ? AND completed = '{}'",
+            (session_id,),
+        ).fetchall()
+        for agent_session_id, activation in incomplete:
+            terminal = {
+                "root_session_id": session_id,
+                "session_id": agent_session_id,
+                "activation": activation,
+                "status": "cancelled",
+                "result": "",
+                "error": "Session removed before completion.",
+            }
+            db.execute(
+                "UPDATE ngn_web_agent_activations SET completed = ? "
+                "WHERE root = ? AND session_id = ? AND activation = ? AND completed = '{}'",
+                (json.dumps(terminal), session_id, agent_session_id, activation),
+            )
     with closing(
         db.execute(
             "UPDATE ngn_web_inbox SET status = 'interrupted' "

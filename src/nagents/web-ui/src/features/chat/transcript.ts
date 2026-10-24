@@ -33,6 +33,7 @@ function commandOutcome(value: unknown): CommandOutcome | undefined {
 
 export type Entry = {
   delegation?: import("./delegationFlow.js").DelegationPresentation;
+  activationOmission?: { sessionId: string; count: number };
   completionAfterId?: string;
   id: string;
   kind:
@@ -75,6 +76,7 @@ export type Entry = {
   taskProfile?: string;
   taskProvider?: string;
   taskModel?: string;
+  detailsTruncated?: boolean;
   parentTaskId?: string;
   originHistoryId?: string;
   activationHistoryId?: string;
@@ -992,8 +994,9 @@ export function fromHistory({
   session_id,
   retained_tasks = [],
   retained_activations = [],
+  retained_activations_omitted = 0,
   root_session_id = session_id,
-}: Pick<Snapshot, "history" | "session_id" | "retained_tasks" | "retained_activations"> & { root_session_id?: string }): Entry[] {
+}: Pick<Snapshot, "history" | "session_id" | "retained_tasks" | "retained_activations" | "retained_activations_omitted"> & { root_session_id?: string }): Entry[] {
   let entries: Entry[] = [];
   let historyTurn = -1;
   function deliver(delivery: LocalDelivery) {
@@ -1088,6 +1091,12 @@ export function fromHistory({
       ? { ...entry, state: "No result recorded" }
       : entry,
   );
+  if (retained_activations_omitted > 0) entries.push({
+    id: `activation-history-omitted:${session_id}`, kind: "status", title: "Earlier agent activity",
+    activationOmission: { sessionId: session_id, count: retained_activations_omitted },
+    text: `${retained_activations_omitted} activation records are not included in this view. Open an agent conversation to inspect its recorded messages.`,
+    recorded: true,
+  });
   // Each host activation record owns its original identity and settings. The
   // current registry only fills activations not present in that manifest.
   const activations = new Map(retained_activations.filter(task => task.root_session_id === root_session_id && task.session_id)
@@ -1115,6 +1124,7 @@ export function fromHistory({
       taskProfile: task.profile,
       taskProvider: task.provider,
       taskModel: task.model,
+      detailsTruncated: task.details_truncated,
       parentTaskId: task.parent_session_id,
       originHistoryId: task.origin_history_id,
       activationHistoryId: task.activation_history_id,

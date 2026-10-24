@@ -57,6 +57,7 @@ function retainedTasks(value: unknown): boolean {
     ["session_id", "title", "status", "root_session_id", "parent_session_id", "prompt", "result", "error"].every(
       (key) => typeof item[key] === "string") && integer(item.activation) && integer(item.followups) &&
     ["activation_history_id", "activation_run_id", "activation_call_id"].every(key => item[key] === undefined || typeof item[key] === "string") &&
+    (item.details_truncated === undefined || typeof item.details_truncated === "boolean") &&
     (item.activation_call_position === undefined || Number.isSafeInteger(item.activation_call_position) && Number(item.activation_call_position) >= -1));
 }
 export function validSnapshot(value: unknown): value is Snapshot {
@@ -70,7 +71,8 @@ export function validSnapshot(value: unknown): value is Snapshot {
       (item.uploads === undefined || uploadedAttachments(item.uploads)) &&
       Array.isArray(item.tool_calls) && item.tool_calls.every((call: unknown) => object(call) &&
         typeof call.id === "string" && typeof call.name === "string")) &&
-    retainedTasks(value.retained_tasks) && (value.retained_activations === undefined || retainedTasks(value.retained_activations));
+    retainedTasks(value.retained_tasks) && (value.retained_activations === undefined || retainedTasks(value.retained_activations)) &&
+    (value.retained_activations_omitted === undefined || integer(value.retained_activations_omitted));
 }
 export function parseFrame(data: unknown): EventFrame {
   if (typeof data !== "string" || data.length > 8 * 1024 * 1024) throw new Error("Invalid event frame.");

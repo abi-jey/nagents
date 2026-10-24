@@ -33,7 +33,7 @@ function appendTaskRecord(entries: Entry[], event: TaskActivity, childSession: s
 
 export function taskEntries(detail: TaskDetail | undefined, streamed: TaskActivity[]): Entry[] {
   if (!detail) return [];
-  let entries = fromHistory({ session_id: detail.task.session_id, root_session_id: detail.task.root_session_id, history: detail.history, retained_tasks: [], retained_activations: detail.retained_activations });
+  let entries = fromHistory({ session_id: detail.task.session_id, root_session_id: detail.task.root_session_id, history: detail.history, retained_tasks: [], retained_activations: detail.retained_activations, retained_activations_omitted: detail.retained_activations_omitted });
   for (const event of taskRecords(detail, streamed)) entries = appendTaskRecord(entries, event, detail.task.session_id);
   return entries;
 }
@@ -55,7 +55,7 @@ export class TaskTranscript {
       for (const event of records) if (!this.applied.has(`${event.activation}:${event.sequence}`))
         this.entries = appendTaskRecord(this.entries, event, detail.task.session_id);
       this.entries = reconcileHistory(this.entries,
-        { session_id: detail.task.session_id, root_session_id: detail.task.root_session_id, history: detail.history, retained_tasks: [], retained_activations: detail.retained_activations, sessions: [] }, false, this.history, new Set(), !detail.activity_truncated);
+        { session_id: detail.task.session_id, root_session_id: detail.task.root_session_id, history: detail.history, retained_tasks: [], retained_activations: detail.retained_activations, retained_activations_omitted: detail.retained_activations_omitted, sessions: [] }, false, this.history, new Set(), !detail.activity_truncated);
     }
     for (const event of records) this.applied.add(`${event.activation}:${event.sequence}`);
     this.history = detail.history;

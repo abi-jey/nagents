@@ -120,7 +120,9 @@ class Tasks:
             raise HTTPException(409, "This task runtime is unavailable. Start a new agent.")
         return owner
 
-    async def index(self, root: str) -> dict[str, object]:
+    async def index(
+        self, root: str, *, history_ids: frozenset[str] | None = None, include_activations: bool = True
+    ) -> dict[str, object]:
         await self.store.validate(root)
         refreshed_primary = self.state.harness
         refreshed_primary.refresh_agent_definitions()
@@ -155,6 +157,9 @@ class Tasks:
             # This fallback never grants authority to message/start a task, and
             # must not relabel another root's last-run budget as this session's.
             usage_owner = primary
+        activations, omitted = (
+            await self.store.activation_projection(root, history_ids=history_ids) if include_activations else ([], 0)
+        )
         if (
             self.state.session_agents.unavailable(self.state.session_agents.selected(root))
             and self.state.run_for(root) is None
@@ -163,7 +168,8 @@ class Tasks:
             # a profile; the main picker can select a replacement before work.
             return {
                 "tasks": list(saved.values()),
-                "activations": await self.store.activations(root),
+                "activations": activations,
+                "activations_omitted": omitted,
                 "profiles": [],
                 "profile_revision": primary.profile_revision,
             }
@@ -248,7 +254,8 @@ class Tasks:
                 )
             return {
                 "tasks": list(saved.values()),
-                "activations": await self.store.activations(root),
+                "activations": activations,
+                "activations_omitted": omitted,
                 "profiles": profiles,
                 "profile_revision": profile_owner.profile_revision,
                 **({"subagent_usage": usage_owner.tasks.usage()} if usage_owner is not None else {}),
@@ -783,7 +790,7 @@ class Tasks:
 
     async def detail(self, root: str, agent_session_id: str, *, limit: int = 100, before: int = 0) -> dict[str, object]:
         async def snapshot(_: str) -> dict[str, object]:
-            indexed = await self.index(root)
+            indexed = await self.index(root, include_activations=False)
             tasks = indexed["tasks"]
             assert isinstance(tasks, list)
             task = next((item for item in tasks if item["session_id"] == agent_session_id), None)
@@ -869,10 +876,16 @@ class Tasks:
                 context = await self.owner(root).tasks.context_stats(agent_session_id)
                 if "session_id" in context:
                     context = {**context, "session_id": agent_session_id}
+            activations, omitted = await self.store.activation_projection(
+                root,
+                history_ids=frozenset(str(row["history_id"]) for row in history if row.get("history_id")),
+                parent_session_id=agent_session_id,
+            )
             return {
                 "task": task,
                 "history": history,
-                "retained_activations": await self.store.activations(root),
+                "retained_activations": activations,
+                "retained_activations_omitted": omitted,
                 "activity": activity,
                 "receipts": await self.store.receipts(root, agent_session_id),
                 "context": context,

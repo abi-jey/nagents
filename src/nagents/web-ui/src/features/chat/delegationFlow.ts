@@ -3,7 +3,7 @@ import { appendEvent, type Entry } from "./transcript.js";
 import type { AgentPhase, TaskActivity, TeamAgent } from "../team/model.js";
 
 export type DelegationPresentation = {
-  kind: "start" | "result"; taskId: string; name: string; profile: string;
+  kind: "start" | "result"; detailsTruncated?: boolean; taskId: string; name: string; profile: string;
   phase: AgentPhase; provider?: string; model?: string; activation?: number; accepted?: boolean; prompt: string; text: string; latest?: Entry; lastTool?: Entry; sources: Entry[];
 };
 export type DelegationOptions = {
@@ -42,7 +42,7 @@ function terminal(entry: Entry | undefined): boolean {
 type Binding = { taskId: string; activation: number };
 type Finished = {
   anchor: string; offset: number; phase: AgentPhase; text: string; name: string; profile: string; prompt: string;
-  latest?: Entry; lastTool?: Entry; provider?: string; model?: string; observed: boolean;
+  latest?: Entry; lastTool?: Entry; provider?: string; model?: string; detailsTruncated?: boolean; observed: boolean;
 };
 
 function matchesActivation(call: Entry, lifecycle: Entry): boolean {
@@ -133,11 +133,12 @@ export class DelegationFlow {
       const context = binding && terminal(lifecycle) ? contextSlots.find(slot => !anchoredContexts.has(slot.key) &&
         slot.update.session_id === binding.taskId && slot.update.status === (phase === "done" ? "completed" : phase) &&
         positions.get(slot.entry.id)! > positions.get(call.id)! && ((slot.update.error ?? slot.update.result) === result ||
-          !!slot.update.truncated && result.startsWith(slot.update.error ?? slot.update.result ?? ""))) : undefined;
+          !!slot.update.truncated && result.startsWith(slot.update.error ?? slot.update.result ?? "") ||
+          !!lifecycle?.detailsTruncated && (slot.update.error ?? slot.update.result ?? "").startsWith(result))) : undefined;
       if (context) anchoredContexts.add(context.key);
       if (binding && direct && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
         this.finished.set(key, { anchor: lifecycle?.completionAfterId || context?.entry.id || entries.at(-1)?.id || call.id,
-          offset: .25, phase, text: result, name, profile, prompt, latest, lastTool, provider, model, observed: !!lifecycle && !lifecycle.recorded });
+          offset: .25, phase, text: result, name, profile, prompt, latest, lastTool, provider, model, detailsTruncated: lifecycle?.detailsTruncated, observed: !!lifecycle && !lifecycle.recorded });
       }
       const finished = this.finished.get(key);
       if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId)) {
@@ -186,7 +187,7 @@ export class DelegationFlow {
     for (const item of items) {
       const { call, binding, target, lifecycle, key, finished, sources } = item;
       const presentation: DelegationPresentation = { kind: "start", taskId: target, activation: binding?.activation,
-        accepted: !!binding, name: finished?.name || item.name, profile: finished?.profile || item.profile,
+        accepted: !!binding, detailsTruncated: finished?.detailsTruncated ?? lifecycle?.detailsTruncated, name: finished?.name || item.name, profile: finished?.profile || item.profile,
         phase: finished?.phase || item.phase, provider: finished?.provider ?? item.provider, model: finished?.model ?? item.model, prompt: finished?.prompt || item.prompt,
         text: call.error || finished?.text || "", latest: finished?.latest || item.latest, lastTool: finished?.lastTool || item.lastTool, sources };
       rows.push({ entry: { ...call, kind: "status", delegation: presentation, taskId: undefined,

@@ -31,6 +31,43 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+MAX_ACTIVATION_BYTES = 2 * 1024 * 1024
+MAX_ACTIVATION_RECORDS = 1024
+
+
+def _preview(value: str, maximum: int) -> str:
+    return value.encode("utf-8", errors="replace")[:maximum].decode("utf-8", errors="ignore")
+
+
+def _compact_activations(records: list[dict[str, object]]) -> tuple[list[dict[str, object]], int]:
+    """Bound presentation details before omitting any host identity or state."""
+    projected: list[dict[str, object]] = []
+    for prompt, result, error in ((512, 2048, 1024), (256, 512, 256), (64, 128, 64), (0, 0, 0)):
+        projected = []
+        for record in records:
+            item = dict(record)
+            shortened = False
+            for field, limit in (("prompt", prompt), ("result", result), ("error", error)):
+                original = str(record.get(field, ""))
+                item[field] = _preview(original, limit)
+                shortened |= item[field] != original
+            if shortened:
+                item["details_truncated"] = True
+            projected.append(item)
+        if len(json.dumps(projected).encode("ascii")) <= MAX_ACTIVATION_BYTES:
+            return projected, 0
+    # Exceptional histories/metadata can exceed even the detail-free budget.
+    # Keep the newest authoritative records and report every omitted record.
+    kept: list[dict[str, object]] = []
+    size = 2
+    for item in reversed(projected):
+        encoded = len(json.dumps(item).encode("ascii")) + (2 if kept else 0)
+        if size + encoded <= MAX_ACTIVATION_BYTES:
+            kept.append(item)
+            size += encoded
+    return list(reversed(kept)), len(projected) - len(kept)
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -339,16 +376,64 @@ class TaskStore:
         await self.db._transaction(save)
 
     async def activations(self, root: str) -> list[dict[str, object]]:
-        """Read historical activation records; they never authorize a new execution."""
+        """Compact visible host evidence; execution never derives from this view."""
+        records, _ = await self.activation_projection(root)
+        return records
+
+    async def activation_projection(
+        self, root: str, *, history_ids: frozenset[str] | None = None, parent_session_id: str = ""
+    ) -> tuple[list[dict[str, object]], int]:
+        """Project visible call anchors and latest unanchored activations, root-scoped.
+
+        Explicit history IDs select one conversation's currently loaded page.
+        The team index instead follows each actor's persisted compaction boundary.
+        Full started/completed records are never changed by this projection.
+        """
         await self.initialize()
 
-        def read(db: sqlite3.Connection) -> list[dict[str, object]]:
+        def read(db: sqlite3.Connection) -> tuple[list[dict[str, object]], int]:
             self.root(db, root)
-            result: list[dict[str, object]] = []
+            metadata = db.execute(
+                "SELECT sequence, session_id, activation, "
+                "COALESCE(json_extract(started, '$.parent_session_id'), json_extract(completed, '$.parent_session_id'), ''), "
+                "COALESCE(json_extract(started, '$.activation_history_id'), '') "
+                "FROM ngn_web_agent_activations WHERE root = ? ORDER BY sequence",
+                (root,),
+            ).fetchall()
+            latest = {str(row[1]): int(row[2]) for row in sorted(metadata, key=lambda row: row[2])}
+            visible: set[tuple[str, str]] = set()
+            if history_ids is None:
+                visible = {
+                    (str(actor), str(identifier))
+                    for actor, identifier in db.execute(
+                        "SELECT CASE WHEN m.session_id = ? THEN '' ELSE a.session_id END, m.id "
+                        "FROM v2_messages m JOIN v2_sessions v ON v.id = m.session_id "
+                        "LEFT JOIN ngn_web_agent_sessions a ON a.root = ? AND a.storage_id = m.session_id "
+                        "WHERE m.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) "
+                        "AND (m.session_id = ? OR a.session_id IS NOT NULL) "
+                        "AND m.id >= COALESCE(v.compacted_at_message_id, 0)",
+                        (root, root, json.dumps(list({str(row[4]) for row in metadata if row[4]})), root),
+                    )
+                }
+            selected = [
+                int(sequence)
+                for sequence, alias, activation, parent, anchor in metadata
+                if (history_ids is None or parent == parent_session_id)
+                and (
+                    (
+                        bool(anchor)
+                        and ((str(parent), str(anchor)) in visible if history_ids is None else anchor in history_ids)
+                    )
+                    or (not anchor and activation == latest[str(alias)])
+                )
+            ]
+            omitted = max(0, len(selected) - MAX_ACTIVATION_RECORDS)
+            selected = selected[-MAX_ACTIVATION_RECORDS:]
+            records: list[dict[str, object]] = []
             for session_id, activation, epoch, started, completed in db.execute(
                 "SELECT session_id, activation, epoch, started, completed FROM ngn_web_agent_activations "
-                "WHERE root = ? ORDER BY sequence",
-                (root,),
+                "WHERE root = ? AND sequence IN (SELECT value FROM json_each(?)) ORDER BY sequence",
+                (root, json.dumps(selected)),
             ):
                 initial: dict[str, object] = json.loads(started)
                 terminal: dict[str, object] = json.loads(completed)
@@ -357,7 +442,7 @@ class TaskStore:
                 public = {key: value for key, value in asdict(info).items() if not key.startswith("_")}
                 public.update({key: value for key, value in values.items() if key in public})
                 public.update(
-                    followups=values.get("followup", 0),
+                    followups=values.get("followup", public["followups"]),
                     started_at=initial.get("timestamp", 0),
                     phase=values.get("status", "running"),
                     can_message=False,
@@ -368,10 +453,12 @@ class TaskStore:
                 )
                 if epoch != self.epoch and public["status"] == "running":
                     public.update(status="cancelled", phase="cancelled", error="Interrupted by server restart.")
-                result.append(public)
-            return result
+                records.append(public)
+            return records, omitted
 
-        return await self.db._transaction(read)
+        records, omitted = await self.db._transaction(read)
+        compact, oversized = await asyncio.to_thread(_compact_activations, records)
+        return compact, omitted + oversized
 
     async def storage_id(self, root: str, session_id: str) -> str:
         """Resolve a private conversation only within an authenticated root."""

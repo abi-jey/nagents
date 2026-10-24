@@ -14,7 +14,7 @@ export function profileSelection(target: string): { profile: string; parentId: s
 export function useTeam(token: string, sessionId: string, revision: number, running: boolean, activity: TaskActivity[]) {
   const [selectedState, setSelected] = useState({ session: sessionId, id: "" });
   const selected = selectedState.session === sessionId ? selectedState.id : "";
-  const [index, setIndex] = useState<{ session: string; tasks: RetainedTask[]; profiles: TeamProfile[]; activations?: RetainedTask[]; subagentUsage?: TeamSubagentUsage }>({ session: "", tasks: [], profiles: [] });
+  const [index, setIndex] = useState<{ session: string; tasks: RetainedTask[]; profiles: TeamProfile[]; activations?: RetainedTask[]; activationsOmitted?: number; subagentUsage?: TeamSubagentUsage }>({ session: "", tasks: [], profiles: [] });
   const [details, setDetails] = useState<{ session: string; task: string; value: TaskDetail }>();
   const [failure, setFailure] = useState<{ session: string; text: string; source?: string }>({ session: "", text: "" });
   const [startNotice, setStartNotice] = useState({ session: "", target: "", text: "" });
@@ -41,9 +41,9 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
       pending = true;
       try {
         const result = await (await request(path, token, undefined, controller.signal)).json() as {
-          tasks: RetainedTask[]; profiles: TeamProfile[]; activations?: RetainedTask[]; subagent_usage?: TeamSubagentUsage;
+          tasks: RetainedTask[]; profiles: TeamProfile[]; activations?: RetainedTask[]; activations_omitted?: number; subagent_usage?: TeamSubagentUsage;
         };
-        if (!disposed) { setIndex({ session: sessionId, tasks: result.tasks, profiles: result.profiles || [], activations: result.activations, subagentUsage: result.subagent_usage }); setFailure(current => current.session === sessionId && current.source === "index" ? { session: sessionId, text: "" } : current); }
+        if (!disposed) { setIndex({ session: sessionId, tasks: result.tasks, profiles: result.profiles || [], activations: result.activations, activationsOmitted: result.activations_omitted, subagentUsage: result.subagent_usage }); setFailure(current => current.session === sessionId && current.source === "index" ? { session: sessionId, text: "" } : current); }
       } catch (error) { if (!disposed) setFailure({ session: sessionId, source: "index", text: error instanceof Error ? error.message : "Could not load agents." }); }
       finally { pending = false; if (rerun && !disposed) { rerun = false; void refresh(); } }
     };
@@ -86,6 +86,7 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
   const savedDetail = details?.session === sessionId && details.task === selected ? details.value : undefined;
   const older = earlier?.session === sessionId && earlier.task === selected ? earlier : undefined;
   const detail: typeof savedDetail = savedDetail ? { ...savedDetail, retained_activations: savedDetail.retained_activations ?? (index.session === sessionId ? index.activations : undefined),
+    retained_activations_omitted: savedDetail.retained_activations_omitted ?? (index.session === sessionId ? index.activationsOmitted : undefined),
     ...(older ? { before: older.before,
       history: [...older.history.filter(row => !savedDetail.history.some(current => current.history_id === row.history_id)), ...savedDetail.history] } : {}) } : undefined;
   const prompt = drafts.current.get(sessionId, selected);
@@ -115,7 +116,7 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
       }
       drafts.current.confirmed(root, target, message); setDraftVersion(value => value + 1);
       if ("task" in result && result.task.session_id && active.current.session === root && active.current.selected === target) {
-        setIndex(current => ({ session: root, tasks: [...(current.session === root ? current.tasks.filter(item => item.session_id !== result.task.session_id) : []), result.task], profiles: current.profiles, activations: current.activations, subagentUsage: current.subagentUsage }));
+        setIndex(current => ({ session: root, tasks: [...(current.session === root ? current.tasks.filter(item => item.session_id !== result.task.session_id) : []), result.task], profiles: current.profiles, activations: current.activations, activationsOmitted: current.activationsOmitted, subagentUsage: current.subagentUsage }));
         setSelected({ session: root, id: result.task.session_id });
       } else if ("task" in result && !result.task.session_id) {
         setStartNotice({ session: root, target, text: "Your message is queued while this agent starts. Its conversation will appear in the team tree." });

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DelegationActivity } from "./DelegationActivity.js";
 import type { RetainedTask, Snapshot } from "../../types.js";
 import { taskAgent, type TaskDetail } from "../team/model.js";
 import { TaskTranscript, taskEntries } from "../team/TaskConversation.js";
@@ -176,4 +179,40 @@ test("saved batch order cannot reposition an already observed live completion", 
   const after = flow.project(entries, options);
   assert.deepEqual(resultIds(after), resultIds(before));
   assert.equal(after.findIndex(entry => entry.id === resultIds(first)[0]) < after.findIndex(entry => entry.text === "Between live completions"), true);
+});
+
+
+test("shortened host previews retain exact activation authority and saved completion placement", () => {
+  const snapshot = coldSnapshot(1);
+  const first = snapshot.retained_activations![0]!;
+  first.result = "Verified s1";
+  first.prompt = "Prompt preview";
+  first.details_truncated = true;
+  const projected = project(applySnapshot({ entries: [] }, snapshot).entries, snapshot);
+  const result = projected.find(entry => entry.delegation?.kind === "result" && entry.delegation.taskId === "s1")!;
+  assert.equal(result.delegation?.phase, "done");
+  assert.equal(result.delegation?.text, "Verified s1", "saved context cannot replace the host's shortened result");
+  assert.equal(result.delegation?.detailsTruncated, true);
+  assert.ok(projected.indexOf(result) < projected.findIndex(entry => entry.text === "Parent answer 0"));
+  assert.equal(projected.some(entry => entry.kind === "context"), false);
+  const html = renderToStaticMarkup(createElement(DelegationActivity, { item: result.delegation!, open: true, toggle() {}, inspect() {} }));
+  assert.match(html, /This preview was shortened/);
+  assert.match(html, /Open conversation/);
+  assert.doesNotMatch(html, /LATEST REGISTRY RESULT/);
+});
+
+test("exceptional manifest omissions are explicit without inventing historical state", () => {
+  const snapshot = { ...coldSnapshot(1), retained_activations_omitted: 7 };
+  const projected = project(fromHistory(snapshot), snapshot);
+  const notices = projected.filter(entry => entry.kind === "status" && !entry.delegation);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!.text, /7 activation records are not included/);
+  assert.match(notices[0]!.text, /Open an agent conversation/);
+  assert.equal(projected.filter(entry => entry.delegation?.kind === "result").length, 2);
+  const cold = applySnapshot({ entries: [] }, snapshot);
+  const first = cold.entries.find(entry => entry.activationOmission)!;
+  const refreshed = applySnapshot(cold, { ...snapshot, retained_activations_omitted: 9 });
+  const next = refreshed.entries.find(entry => entry.activationOmission)!;
+  assert.equal(next.id, first.id, "the omission notice retains its displayed row across polls");
+  assert.match(next.text, /9 activation records/);
 });

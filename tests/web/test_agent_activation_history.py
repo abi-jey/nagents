@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from typing import TypeGuard
 
@@ -14,6 +15,8 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.session_identity import SessionIdentityStore
 from nagents.harness.subagents import TaskInfo
+from nagents.types import Message
+from nagents.web.routing import RoutingStore
 from tests.support.providers import notifications
 from tests.support.web import submit_and_wait
 from tests.web.test_web_wakeups import scheduled_app
@@ -23,7 +26,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.types import Message
     from tests.support.providers import FakeProvider
 
 
@@ -124,7 +126,7 @@ def test_activation_history_survives_restart_and_stays_root_scoped(
             details = (await client.get(f"/api/sessions/{root}/tasks/{alias}", headers=headers)).json()
             detail_activations = details.get("retained_activations")
             assert is_activation_list(detail_activations)
-            assert [item["activation"] for item in detail_activations] == [0, 1]
+            assert detail_activations == [], "a selected child has no native child calls in its own history"
             cold = await state.snapshot(root)
             cold_activations = cold.get("retained_activations")
             assert is_activation_list(cold_activations)
@@ -179,7 +181,7 @@ def test_activation_history_survives_restart_and_stays_root_scoped(
             detail = (await client.get(f"/api/sessions/{root}/tasks/{alias}", headers=headers)).json()
             detail_activations = detail.get("retained_activations")
             assert is_activation_list(detail_activations)
-            assert [item["activation"] for item in detail_activations if item["session_id"] == alias] == [0, 1]
+            assert detail_activations == [], "parent-origin activation records are not resent as child-call evidence"
             tasks_value = restarted_index.get("tasks")
             assert is_activation_list(tasks_value)
             latest = next(item for item in tasks_value if item["session_id"] == alias)
@@ -195,5 +197,127 @@ def test_activation_history_survives_restart_and_stays_root_scoped(
                 ).fetchone()[0]
             )
             assert remaining == 0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
+def test_soft_delete_restore_cancels_only_incomplete_activation_records_in_the_same_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="No model execution should be requested")
+
+    async def scenario() -> None:
+        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, _):
+            root = state.selected_session_id
+            other_root = await state.history.store._transaction(lambda db: RoutingStore.new_root(db, "Unrelated root"))
+            assert other_root != root
+            identities = SessionIdentityStore(state.history.db_path)
+            identity = await identities.reserve(root, "", "Original title")
+            other_identity = await identities.reserve(other_root, "", "Unrelated title")
+            first = TaskInfo(
+                identity.session_id,
+                "Original title",
+                root_session_id=root,
+                _storage_id=identity.storage_id,
+                prompt="Original assignment",
+                profile="reviewer",
+                mode="reviewer",
+                provider="fixture",
+                model="original-model",
+                activation_history_id=str(
+                    await state.history.add_message(root, Message(role="assistant", content="First host row"))
+                ),
+                activation_run_id="first-run",
+                activation_call_id="first-call",
+                activation_call_position=0,
+            )
+            latest = replace(
+                first,
+                activation=1,
+                title="Continued title",
+                prompt="Continued assignment",
+                model="continued-model",
+                activation_history_id=str(
+                    await state.history.add_message(root, Message(role="assistant", content="Second host row"))
+                ),
+                activation_run_id="second-run",
+                activation_call_id="second-call",
+            )
+            unrelated = TaskInfo(
+                other_identity.session_id,
+                "Unrelated title",
+                root_session_id=other_root,
+                _storage_id=other_identity.storage_id,
+                prompt="Unrelated assignment",
+            )
+            for info in (latest, unrelated):
+                await state.history.get_or_create_session(info._storage_id, "harness")
+                await state.tasks.store.save(info.root_session_id, asdict(info), info._storage_id)
+            for info in (first, latest, unrelated):
+                await state.tasks.store.record_activation(
+                    info.root_session_id, {**asdict(info), "event": "task_started", "timestamp": info.activation + 1.0}
+                )
+            await state.tasks.store.record_activation(
+                root,
+                {**asdict(first), "event": "task_completed", "status": "completed", "result": "Original result"},
+            )
+
+            async def raw(root_id: str) -> list[tuple[str, int, str, str]]:
+                return await state.tasks.store.db._transaction(
+                    lambda db: db.execute(
+                        "SELECT session_id, activation, started, completed FROM ngn_web_agent_activations "
+                        "WHERE root = ? ORDER BY sequence",
+                        (root_id,),
+                    ).fetchall()
+                )
+
+            before = await raw(root)
+            other_before = await raw(other_root)
+            epoch = state.tasks.store.epoch
+            deleted = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+            assert deleted.status_code == 200, deleted.text
+            deletion_id = deleted.json()["trash"]["deletion_id"]
+            restored = await client.post(
+                f"/api/trash/{root}/restore", headers=headers, json={"deletion_id": deletion_id}
+            )
+            assert restored.status_code == 200, restored.text
+            assert state.tasks.store.epoch == epoch
+            after = await raw(root)
+            assert after[0] == before[0], "the original completed activation is immutable"
+            assert after[1][:3] == before[1][:3], "the interrupted activation keeps its exact started metadata"
+            assert await raw(other_root) == other_before
+            index = await state.tasks.index(root)
+            latest_value = index["tasks"]
+            assert is_activation_list(latest_value)
+            assert [(item["activation"], item["status"]) for item in latest_value] == [(1, "cancelled")]
+            activations = index["activations"]
+            assert is_activation_list(activations)
+            assert [(item["activation"], item["status"]) for item in activations] == [
+                (0, "completed"),
+                (1, "cancelled"),
+            ]
+            assert activations[0]["result"] == "Original result"
+            assert activations[1]["error"] == "Session removed before completion."
+            for field in (
+                "title",
+                "prompt",
+                "profile",
+                "mode",
+                "provider",
+                "model",
+                "activation_history_id",
+                "activation_call_id",
+            ):
+                assert activations[1][field] == asdict(latest)[field]
+            cold = await state.snapshot(root)
+            assert cold["retained_activations"] == activations
+            other_activations = (await state.tasks.index(other_root))["activations"]
+            assert is_activation_list(other_activations)
+            assert other_activations[0]["status"] == "running"
+            assert root not in state.executions.owners
+            assert not state.executions.runs
+            assert not any(provider.requests for provider in providers)
 
     asyncio.run(scenario())

@@ -119,6 +119,16 @@ the page cannot replace earlier results with a later follow-up. Incomplete
 records from a previous server are displayed as interrupted. Historical records
 are read-only and never reconstruct workers or authorize a new request.
 
+Activation projections include visible call anchors after compaction and the
+latest unanchored activation for each child. Detail previews initially allow
+512 UTF-8 bytes for the prompt, 2,048 for the result, and 1,024 for an error.
+They shorten further before omitting records to keep the projection within
+2 MiB and 1,024 records. `details_truncated` identifies shortened previews;
+`activations_omitted` on the index and `retained_activations_omitted` on snapshots
+and child details report any exceptional omissions. The immutable database
+records and paged child conversation retain the recorded content. These display
+limits do not change model inputs, context budgets, or execution state.
+
 Each `history_committed` marker contains a row watermark captured in the child
 producer. A detail response combines history through that watermark with the
 in-flight activity after it, avoiding duplicate messages while tools run.
