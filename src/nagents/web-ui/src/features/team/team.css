@@ -57,13 +57,15 @@
 .team-profile-list { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .team-profile { display: block; width: 100%; text-align: left; border-color: transparent; background: transparent; padding: 7px; margin: 2px 0; }
 .team-profile > span { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.team-profile strong { font-size: 11px; font-weight: 550; }
-.team-profile > span > span { font-size: 9px; color: var(--text-secondary); }
+.team-profile strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 550; }
+.team-profile > span > span { flex-shrink: 0; font-size: 9px; color: var(--text-secondary); }
 .team-profile small { display: block; color: var(--text-secondary); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
 .team-profile small.team-profile-remote { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; white-space: normal; overflow: hidden; text-overflow: ellipsis; }
 .team-profile.is-selected { background: color-mix(in srgb, var(--accent-blue) 8%, transparent); border-color: color-mix(in srgb, var(--accent-blue) 20%, transparent); }
 .team-profile-row { display: flex; align-items: center; min-width: 0; }
 .team-profile-row .team-profile { flex: 1; min-width: 0; }
+.team-profile-row .remote-connection-chip { flex-shrink: 0; margin-inline: 3px; min-height: 24px; padding: 2px 5px; font-size: 9px; }
+.team-profile .team-profile-unavailable { color: var(--accent-amber); }
 .team-profile-settings { flex: none; display: grid; place-items: center; padding: 6px; border-color: transparent; background: transparent; color: var(--text-secondary); }
 .team-profile-settings:hover { color: var(--text-reading); background: var(--surface-hover); }
 .team-load-error { font-size: 11px; line-height: 1.6; padding: 8px; overflow-wrap: anywhere; color: var(--accent-amber); }

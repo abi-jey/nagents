@@ -162,7 +162,7 @@ test("timeline renders nested task branches with compact terminal rows and reada
   assert.match(markup, /Spawned by a/); assert.doesNotMatch(markup, /started 2 agents|View agents/);
 });
 
-test("used children group by their definition and unused definitions remain only in the start selector", () => {
+test("used children group by their definition and all definitions remain visible in the catalog list", () => {
   const research = taskAgent({ ...task("market-survey"), title: "Market survey", profile: "research" });
   const profiles: TeamProfile[] = [
     { id: "research", name: "Researcher", description: "Survey", provider: "openai", model: "model",
@@ -180,9 +180,12 @@ test("used children group by their definition and unused definitions remain only
   assert.equal(usedDefinition.querySelector(".team-definition-toggle strong")?.textContent, "Researcher");
   assert.equal(document.querySelector('.team-definition-group[data-profile="summary"]'), null,
     "unused definitions do not create empty groups");
-  const startSelector = document.querySelector<HTMLSelectElement>(".team-start-agent select");
-  assert.deepEqual([...startSelector!.options].map(option => option.value), ["research", "summary", "assistant"],
-    "unused definitions remain selectable from the start control");
+  const definitions = [...document.querySelectorAll<HTMLElement>(".team-profiles [data-profile-id]")];
+  assert.deepEqual(definitions.map(row => row.dataset.profileId), ["research", "summary", "assistant"],
+    "all predefined agents remain visible, including unused definitions");
+  assert.match(definitions[1]!.textContent || "", /Summarizer.*Not started/);
+  assert.equal(document.querySelector(".team-start-agent"), null);
+  assert.equal(document.querySelector(".team-run-search"), null);
 
   const taskRow = document.querySelector<HTMLElement>('[data-agent-id="market-survey"]');
   const taskIdentity = taskRow?.querySelector(".team-agent-identity");
@@ -271,8 +274,8 @@ test("starting a definition creates a separate child while preserving running ro
     await act(async () => team.select("active-research"));
     await act(async () => team.setPrompt("Keep this draft on the active run"));
 
-    const startButton = document.querySelector<HTMLButtonElement>(".team-start-agent button");
-    assert.ok(startButton, "the selector starts a new child under the selected parent");
+    const startButton = document.querySelector<HTMLButtonElement>('.team-profiles [data-profile-id="research"] .team-profile');
+    assert.ok(startButton, "the visible definition selects a new child under the selected parent");
     await act(async () => startButton.click());
     assert.equal(team.selected, profileTarget("research", "active-research"));
     assert.equal(team.profile?.id, "research");
@@ -353,7 +356,7 @@ test("team refreshes added and renamed definitions during a run without retarget
   const respond = async (index: number, profiles: TeamProfile[], tasks: RetainedTask[] = []) => act(async () => {
     requests[index].respond(Response.json({ tasks, profiles }));
   });
-  const shownProfiles = () => [...document.querySelectorAll<HTMLSelectElement>(".team-start-agent select option")].map(option => option.value);
+  const shownProfiles = () => [...document.querySelectorAll<HTMLElement>(".team-profiles [data-profile-id]")].map(row => row.dataset.profileId);
   try {
     await act(async () => react.render(createElement(View, { revision: 0 })));
     await respond(0, []);

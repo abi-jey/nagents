@@ -7,6 +7,7 @@ import { JSDOM } from "jsdom";
 import { TeamTree } from "../team/TeamTree.js";
 import { taskAgent, type TeamAgent, type TeamProfile } from "../team/model.js";
 import type { RetainedTask } from "../../types.js";
+import { profileTarget } from "../team/useTeam.js";
 
 const task = (id: string, parent = "", updated = 1, status: RetainedTask["status"] = "running"): RetainedTask => ({
   session_id: id, title: id, parent_session_id: parent, status, result: "", error: "", prompt: `${id} task`, root_session_id: "root",
@@ -22,7 +23,7 @@ const renderMarkup = (items: TeamAgent[], profiles: TeamProfile[], selected = ""
   agents: items, profiles, selected, inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
 }));
 
-test("definition groups are scoped to each parent and unused profiles stay in the selector", () => {
+test("definition groups are scoped to each parent and unused profiles stay in the visible definition list", () => {
   const items = agents(
     { ...task("parent-a", "", 10), title: "Parent A", profile: "assistant" },
     { ...task("parent-b", "", 9), title: "Parent B", profile: "assistant" },
@@ -37,7 +38,9 @@ test("definition groups are scoped to each parent and unused profiles stay in th
   const parentList = groups[0]!.parentElement!;
   assert.deepEqual([...parentList.querySelectorAll<HTMLElement>('[data-agent-id]')].map(row => row.dataset.agentId).filter(id => id?.startsWith("a-")), ["a-new", "a-old"]);
   assert.equal(dom.window.document.querySelector('.team-definition-group[data-profile="unused"]'), null);
-  assert.deepEqual([...dom.window.document.querySelectorAll<HTMLSelectElement>(".team-start-agent select option")].map(option => option.value), ["writer", "unused"]);
+  assert.deepEqual([...dom.window.document.querySelectorAll<HTMLElement>(".team-profiles [data-profile-id]")].map(row => row.dataset.profileId), ["writer", "unused"]);
+  assert.equal(dom.window.document.querySelector(".team-run-search"), null);
+  assert.equal(dom.window.document.querySelector(".team-start-agent"), null);
 });
 
 test("A2A connection chip appears once per parent and definition group", () => {
@@ -56,11 +59,10 @@ test("A2A connection chip appears once per parent and definition group", () => {
   }
 });
 
-test("search reveals matching past descendants and clearing it restores manual collapses", async t => {
+test("visible definitions keep parent policy, configuration access and manual group collapse", async t => {
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
-    Event: dom.window.Event, HTMLInputElement: dom.window.HTMLInputElement,
     IS_REACT_ACT_ENVIRONMENT: true, requestAnimationFrame: (callback: FrameRequestCallback) => { callback(0); return 0; },
     cancelAnimationFrame() {}, matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) });
   t.after(() => {
@@ -69,31 +71,39 @@ test("search reveals matching past descendants and clearing it restores manual c
     dom.window.close();
   });
   const react = createRoot(dom.window.document.getElementById("root")!);
-  const parent = { ...task("parent", "", 10), title: "Parent", profile: "assistant" };
-  const past = { ...task("old-worker", "parent", 2, "completed"), title: "Archive match", profile: "worker" };
+  const parent = { ...task("parent", "", 10), title: "Parent", profile: "assistant", can_start_children: true, child_agents: ["worker"] };
+  const past = { ...task("old-worker", "parent", 2, "completed"), title: "Archived worker", profile: "worker" };
   const running = { ...task("current-worker", "parent", 12), title: "Current worker", profile: "worker" };
-  const view = () => createElement(TeamTree, { agents: agents(parent, running, past), profiles: [profile("worker", "Worker")], selected: "",
-    inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} });
+  const opened: string[] = [], configured: string[] = [];
+  let selected = "parent";
+  const view = () => createElement(TeamTree, { agents: agents(parent, running, past),
+    profiles: [profile("worker", "Worker"), { ...profile("unused", "Unused"), used: false }], selected,
+    inspect(id) { opened.push(id); }, configure(id) { configured.push(id); }, arrivals: {}, error: "", refresh() {} });
   await act(async () => react.render(view()));
   const group = () => dom.window.document.querySelector<HTMLElement>('.team-definition-group[data-parent-id="parent"][data-profile="worker"]')!;
   const toggle = group().querySelector<HTMLButtonElement>(".team-definition-toggle")!;
+  const runningRow = dom.window.document.querySelector('[data-agent-id="current-worker"]');
+  assert.ok(runningRow);
   await act(async () => toggle.click());
-  assert.equal(toggle.getAttribute("aria-expanded"), "false", "past definition groups start collapsed and manual collapse is retained");
-  const input = dom.window.document.querySelector<HTMLInputElement>('input[aria-label="Find an agent or run"]')!;
-  const setInput = async (value: string) => {
-    input.value = value;
-    const propsKey = Object.keys(input).find(key => key.startsWith("__reactProps$"));
-    assert.ok(propsKey, "React attaches the search change handler");
-    const props = (input as unknown as Record<string, { onChange?: (event: { target: HTMLInputElement }) => void }>)[propsKey!];
-    await act(async () => props.onChange?.({ target: input }));
-  };
-  await setInput("Archive match");
-  assert.equal(group().hidden, false, "search reveals the matching ancestor group");
-  assert.equal(group().parentElement!.querySelector<HTMLButtonElement>('[data-bucket-heading="past"] button')?.getAttribute("aria-expanded"), "true");
-  const result = dom.window.document.querySelector<HTMLElement>('[data-agent-id="old-worker"]');
-  assert.ok(result && !result.closest(".team-tree-branch")!.hasAttribute("hidden"), `matching past child is revealed (query=${input.value}; ${result?.closest(".team-tree-branch")?.outerHTML.slice(0, 180)})`);
-  await setInput("");
-  assert.equal(group().querySelector<HTMLButtonElement>(".team-definition-toggle")!.getAttribute("aria-expanded"), "false",
-    "clearing search restores the user's explicit collapse choice");
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  const definition = (id: string) => dom.window.document.querySelector<HTMLElement>(`.team-profiles [data-profile-id="${id}"]`)!;
+  assert.match(definition("worker").textContent || "", /1 active/);
+  assert.match(definition("unused").textContent || "", /Not started/);
+  assert.equal(dom.window.document.querySelector('input[type="search"]'), null);
+  assert.equal(dom.window.document.querySelector(".team-start-agent"), null);
+  await act(async () => definition("worker").querySelector<HTMLButtonElement>(".team-profile")!.click());
+  assert.equal(opened.at(-1), profileTarget("worker", "parent"));
+  selected = opened.at(-1)!;
+  await act(async () => react.render(view()));
+  assert.equal(group().querySelector(".team-definition-toggle")?.getAttribute("aria-expanded"), "false",
+    "choosing a definition does not reopen a manually collapsed child group");
+  assert.equal(dom.window.document.querySelector('[data-agent-id="current-worker"]'), runningRow);
+  const unavailable = definition("unused").querySelector<HTMLButtonElement>(".team-profile")!;
+  assert.equal(unavailable.disabled, false, "an unavailable definition remains inspectable");
+  assert.match(unavailable.getAttribute("aria-description") || "", /parent's policy/);
+  await act(async () => unavailable.click());
+  assert.equal(opened.at(-1), profileTarget("unused", "parent"), "changing definitions retains the selected parent");
+  await act(async () => definition("unused").querySelector<HTMLButtonElement>(".team-profile-settings")!.click());
+  assert.equal(configured.at(-1), profileTarget("unused"));
   await act(async () => react.unmount());
 });
