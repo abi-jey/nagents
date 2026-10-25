@@ -1166,7 +1166,9 @@ class Harness:
                     pending.cancel()
                     with suppress(asyncio.CancelledError):
                         await pending
-                worker.cancel()
+                # Stop may already be joining asynchronous provider cleanup.
+                if not worker.done() and not worker.cancelling():
+                    worker.cancel()
                 try:
                     if not observed:
                         with suppress(asyncio.CancelledError):
@@ -1739,10 +1741,11 @@ class Harness:
 
             async def stop() -> None:
                 try:
-                    if self._worker is not None:
-                        self._worker.cancel()
+                    if (worker := self._worker) is not None:
+                        if not worker.done() and not worker.cancelling():
+                            worker.cancel()
                         with suppress(asyncio.CancelledError):
-                            await _await_cleanup(self._worker)
+                            await _await_cleanup(worker)
                 finally:
                     try:
                         await self.tasks.end()
