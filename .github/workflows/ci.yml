@@ -219,7 +219,7 @@ jobs:
         run: pip install -e ".[dev,tui,voice,web]"
 
       - name: Repeat fixed SQLite contention diagnostics
-        run: python -m tests.support.sqlite_trace_runner --parallel-shard
+        run: python -m tests.support.sqlite_trace_runner --busy-snapshot
 
   # =============================================================================
   # BUMP VERSION (runs only after all tests pass)

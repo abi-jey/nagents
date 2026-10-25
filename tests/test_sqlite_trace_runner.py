@@ -45,7 +45,8 @@ def test_diagnostic_command_is_fixed_and_trace_targets_are_registered() -> None:
     )
     assert "tests/web/test_response_metadata.py" in shard_files
     assert "tests/channels/test_channels_runtime.py" in shard_files
-    assert sqlite_trace_runner.parallel_shard_pytest_command(["tests/example_test.py"]) == [
+    files = ["tests/example_test.py"]
+    assert sqlite_trace_runner.parallel_shard_pytest_command(files) == [
         sys.executable,
         "-m",
         "pytest",
@@ -56,6 +57,19 @@ def test_diagnostic_command_is_fixed_and_trace_targets_are_registered() -> None:
         "4",
         "-p",
         "tests.support.sqlite_trace",
+        "tests/example_test.py",
+    ]
+    assert sqlite_trace_runner.parallel_shard_pytest_command(files, busy_snapshot=True) == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--no-header",
+        "--tb=no",
+        "-q",
+        "-n",
+        "4",
+        "-p",
+        "tests.support.sqlite_busy_snapshot",
         "tests/example_test.py",
     ]
     with pytest.raises(ValueError, match="fixed tests shard"):
@@ -89,3 +103,15 @@ unsafe traceback content
     }
     other_output = "========== NGN_SQLITE_TRACE 1/1 ==========\n" + json.dumps(other_target)
     assert sqlite_trace_runner.safe_trace_sections(other_output) == [json.dumps(other_target, separators=(",", ":"))]
+
+    shard_snapshot = {
+        "mode": "busy_snapshot",
+        "test": "tests/web/test_web.py::test_unlisted_by_old_trace_targets",
+        "events": [{"logger": "nagents.channels.store", "sqlite_code": 5}],
+    }
+    shard_output = "========== NGN_SQLITE_TRACE busy_snapshot ==========\n" + json.dumps(shard_snapshot)
+    assert sqlite_trace_runner.safe_trace_sections(shard_output) == [json.dumps(shard_snapshot, separators=(",", ":"))]
+
+    outside_shard = {**shard_snapshot, "test": "tests/test_sqlite_trace_runner.py::test_not_selected"}
+    outside_output = "========== NGN_SQLITE_TRACE busy_snapshot ==========\n" + json.dumps(outside_shard)
+    assert sqlite_trace_runner.safe_trace_sections(outside_output) == []
