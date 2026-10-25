@@ -70,6 +70,7 @@ _TARGETS = (
     "tests/web/test_web_child_failure_scope.py::test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_voice",
     "tests/web/test_agent_models.py::test_next_real_response_uses_the_saved_provider_and_model_together",
     "tests/web/test_web_settings.py::test_settings_cancellation_joins_transaction_and_keeps_get_consistent",
+    "tests/web/test_web_settings.py::test_settings_save_and_reset_while_run_or_approval_continues",
     "tests/web/test_web_trash.py::test_policy_is_separate_revisioned_persistent_and_affects_only_future_deletions",
     "tests/web/test_subagent_limits.py::test_approved_limits_are_read_on_next_model_turn_without_resetting_usage",
     "tests/test_web_live_update_edges.py::test_attention_cue_rechecks_quiet_state_and_never_speaks_native_instruction_text",
