@@ -9,7 +9,7 @@ from contextlib import closing
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from nagents._async import join_owned
+from nagents._sqlite import write_database
 from nagents.channels.delivery_types import DeliveryOrigin
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.types import ChannelError
@@ -244,4 +244,4 @@ async def transaction(path: Path, change: Callable[[sqlite3.Connection], str]) -
             db.execute("BEGIN IMMEDIATE")
             return change(db)
 
-    return await join_owned(asyncio.create_task(asyncio.to_thread(apply)))
+    return await write_database(path, lambda: asyncio.to_thread(apply))
