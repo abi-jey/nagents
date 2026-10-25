@@ -673,7 +673,10 @@ def test_settings_wait_for_bookkeeping_guard_without_waiting_for_a_model(
 
 
 @pytest.mark.parametrize("prompt", ["approval", "wait"])
-def test_settings_save_and_reset_while_run_or_approval_continues(tmp_path: Path, prompt: str) -> None:
+@pytest.mark.parametrize("_sqlite_probe", range(20) if os.environ.get("NGN_SQLITE_TRACE") == "1" else [0])
+def test_settings_save_and_reset_while_run_or_approval_continues(
+    tmp_path: Path, prompt: str, _sqlite_probe: int
+) -> None:
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
