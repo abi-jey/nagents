@@ -16,7 +16,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from nagents._async import finish_on_cancel
+from nagents._sqlite import write_database
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -155,7 +155,7 @@ class SessionIdentityStore:
                     return ChildIdentity(public_id, storage_id)
                 raise RuntimeError("Could not allocate a unique child conversation; no session was started")
 
-        return await finish_on_cancel(asyncio.to_thread(allocate))
+        return await write_database(self.path, lambda: asyncio.to_thread(allocate))
 
     async def save_title(self, root_session_id: str, session_id: str, title: str) -> None:
         session_id, title = validate_session_id(session_id), validate_title(title)
@@ -171,4 +171,4 @@ class SessionIdentityStore:
                 if cursor.rowcount != 1:
                     raise ValueError("Child conversation is unavailable in this root tree")
 
-        await finish_on_cancel(asyncio.to_thread(save))
+        await write_database(self.path, lambda: asyncio.to_thread(save))
