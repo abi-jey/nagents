@@ -494,7 +494,9 @@ permitted loading mechanism; package locations are not general workspace paths.
 `session_id` with status; it does not wait for the result. Supply `session_id` to
 continue that same idle child conversation. An optional `title` is a display
 label, not an identifier. `agent_status()` lists visible children and
-`agent_status(session_id="s1")` inspects one, without exposing private reasoning.
+`agent_status(session_id="s-a7f2c9d1")` inspects one, without exposing private reasoning.
+New child IDs use an eight-character lowercase UUID prefix after `s-`; use the
+exact returned ID for continuation. Existing saved base-36 IDs remain valid.
 Choose an explicitly configured profile for other behavior; permissions cannot
 exceed the parent. Results notify the immediate parent as bounded, untrusted
 data. `Harness.tasks.list()`, `task_history(session_id, limit=...)`, and

@@ -280,19 +280,23 @@ Bot avatar or a separate team-view implementation.
 The canonical model-facing tools are `to_agent` and `agent_status`. Use
 `to_agent` to start a child conversation or address an existing child by the
 short `session_id` it returned. Use `agent_status()` to list children in the
-caller’s subtree or `agent_status(session_id="s1")` to inspect one child. Status
+caller’s subtree or `agent_status(session_id="s-a7f2c9d1")` to inspect one child. Status
 is read-only, respects subtree ownership, and does not expose private reasoning.
 The exact status result fields are defined by the active tool schema.
 
-A short child ID such as `s1` is the model-facing identity across acknowledgments,
-status, history, continuation, and notifications. It is a durable base-36 alias
-from a workspace database counter shared across all root conversations. The
-counter increases monotonically from 1 through 2**63-1; an alias is never
-reassigned while that database is retained. The host maps it to a private UUID
-storage ID with a uniqueness constraint and up to five allocation attempts. If
-allocation still fails, the start fails explicitly; it does not pick another
-target or silently fall back. Private storage IDs never reach the model or UI.
-Titles are display labels only and never identify a target.
+A short child ID such as `s-a7f2c9d1` is the model-facing identity across
+acknowledgments, status, history, continuation, and notifications. New IDs use
+`s-` followed by the first eight lowercase hexadecimal characters of a generated
+UUID. The workspace database reserves them atomically across all root
+conversations and maps them to separate private storage IDs. Public or private
+collisions cause a fresh candidate, with at most five allocation attempts. If
+allocation still fails, the start fails explicitly without acknowledging a
+session. Opaque public-ID reservations survive conversation deletion and server
+restarts, so an allocated ID is never reassigned while that database is retained.
+Existing base-36 IDs such as `s8` keep their original mapping and remain usable
+for history and retained-runtime continuation. Persisted IDs do not restore
+workers after restart. Private storage IDs never reach the model or UI; titles
+are display labels only and never identify a target.
 
 Start a child with a concise request and optional title and model settings:
 
@@ -309,7 +313,7 @@ to_agent(
 The acceptance acknowledgment is deliberately small:
 
 ```json
-{"session_id":"s1","status":"running"}
+{"session_id":"s-a7f2c9d1","status":"running"}
 ```
 
 This is acceptance, not completion. Results arrive later as untrusted data for

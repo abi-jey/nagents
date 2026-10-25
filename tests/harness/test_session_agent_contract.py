@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sqlite3
 from dataclasses import asdict
 from typing import TYPE_CHECKING
@@ -42,6 +43,8 @@ if TYPE_CHECKING:
 
 
 pytestmark = pytest.mark.requires_posix
+
+PUBLIC_SESSION_ID_PATTERN = re.compile(r"s-[0-9a-f]{8}")
 
 
 def is_status_record(value: AgentStatusResult) -> TypeGuard[AgentStatusRecord]:
@@ -100,7 +103,7 @@ def test_native_agent_tools_start_continue_and_report_the_same_session(
             )
             assert set(ack) == {"session_id", "status"}
             session_id = ack["session_id"]
-            assert session_id == "s1" and ack["status"] == "running"
+            assert PUBLIC_SESSION_ID_PATTERN.fullmatch(session_id) and ack["status"] == "running"
             initial = harness.tasks._lookup(session_id)
             storage_id = initial._storage_id
             original_title, original_model, original_provider = initial.title, initial.model, initial.provider
@@ -275,7 +278,7 @@ def test_ack_persists_effective_identity_before_child_initialization(
                 "alternate",
                 "accepted-model",
             )
-            assert session_id == "s1"
+            assert PUBLIC_SESSION_ID_PATTERN.fullmatch(session_id)
             with sqlite3.connect(harness.agent.session.db_path) as db:
                 row = db.execute(
                     "SELECT root_session_id, storage_id, title FROM nagents_agent_sessions WHERE sequence = 1"
@@ -413,9 +416,10 @@ def test_task_started_tracks_each_native_activation_and_keeps_origin_identity(
 ) -> None:
     async def scenario() -> None:
         continued = False
+        first_session_id = ""
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-            nonlocal continued
+            nonlocal continued, first_session_id
             if provider.index:
                 yield TextDoneEvent(text=f"Child answer {provider.index}")
             elif len(provider.requests) == 1:
@@ -426,10 +430,13 @@ def test_task_started_tracks_each_native_activation_and_keeps_origin_identity(
                 )
             elif notifications(messages) and not continued:
                 continued = True
+                session_ids = PUBLIC_SESSION_ID_PATTERN.findall(str(messages))
+                assert session_ids
+                first_session_id = session_ids[-1]
                 yield ToolCallEvent(
                     id="child-agent-followup",
                     name="to_agent",
-                    arguments={"prompt": "Continue the same child", "session_id": "s1"},
+                    arguments={"prompt": "Continue the same child", "session_id": first_session_id},
                 )
             else:
                 yield TextDoneEvent(text="Parent finished")
@@ -451,11 +458,13 @@ def test_task_started_tracks_each_native_activation_and_keeps_origin_identity(
                 for event in events
                 if isinstance(event, TaskNotification)
                 and event.cause == "completion"
-                and event.source_session_id == "s1"
+                and event.source_session_id == initial.session_id
             ]
             assert [event.source_activation for event in completion_notices] == [0, 1]
 
-            assert continuation.session_id == initial.session_id == "s1"
+            assert PUBLIC_SESSION_ID_PATTERN.fullmatch(initial.session_id)
+            assert initial.session_id == first_session_id
+            assert continuation.session_id == initial.session_id
             assert continuation.activation == initial.activation + 1
             assert continuation.activation_call_id == "child-agent-followup"
             assert continuation.activation_call_position == 0
@@ -488,7 +497,7 @@ def test_task_started_tracks_each_native_activation_and_keeps_origin_identity(
                 for event in host_events
                 if isinstance(event, TaskNotification)
                 and event.cause == "completion"
-                and event.source_session_id == "s1"
+                and event.source_session_id == initial.session_id
             ]
             assert [event.source_activation for event in host_completion] == [2]
             assert private_storage_id not in str(asdict(host_started))

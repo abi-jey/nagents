@@ -29,6 +29,7 @@ from nagents.harness.reasoning import ReasoningPreference
 from nagents.harness.reasoning import resolve_effort
 from nagents.harness.remote_credentials import RemoteCredentials
 from nagents.harness.runtime import _HarnessSession
+from nagents.harness.session_identity import SESSION_ID_PATTERN
 from nagents.harness.session_identity import validate_title
 from nagents.harness.task_activity import TaskOptions
 from nagents.session import response_metadata
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
     from .service import WebState
 
 RootId = Annotated[str, PathParameter(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")]
-AgentSessionId = Annotated[str, PathParameter(min_length=2, max_length=14, pattern=r"^s[1-9a-z][0-9a-z]*$")]
+AgentSessionId = Annotated[str, PathParameter(min_length=2, max_length=14, pattern=rf"^{SESSION_ID_PATTERN}$")]
 TASK_DRAIN_TIMEOUT = 5.0
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class TaskMessageInput(BaseModel):
 
 class TaskStartInput(TaskMessageInput):
     agent: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
-    parent_session_id: str = Field(default="", max_length=14, pattern=r"^(|s[1-9a-z][0-9a-z]*)$")
+    parent_session_id: str = Field(default="", max_length=14, pattern=rf"^(?:{SESSION_ID_PATTERN})?$")
     title: str = Field(default="", max_length=120)
 
     @field_validator("title", mode="before")
