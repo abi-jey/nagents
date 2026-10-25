@@ -7,6 +7,12 @@ export function transcriptEntries(items: TranscriptItem[]): Entry[] {
     : item.kind === "thread" ? transcriptEntries(item.thread.items) : transcriptEntries(item.items));
 }
 
+/** Whitespace alone is not a message; attachments and live surfaces still are. */
+export function hasAssistantContent(entry: Entry): boolean {
+  return !!entry.text.trim() || !!entry.uploads?.length || !!entry.channel || !!entry.provenance ||
+    !!entry.delivery || !!entry.liveCaption;
+}
+
 /** One agent byline per admitted turn, including reasoning that arrives before text. */
 export function agentLabels(entries: Entry[], name: string, names: Map<string, string>, appearance?: ChatAppearance, parent = ""): Map<string, string> {
   const labels = new Map<string, string>(), seen = new Set<string>(), turns = new Map<string, string>();
@@ -19,7 +25,7 @@ export function agentLabels(entries: Entry[], name: string, names: Map<string, s
     if (entry.kind !== "assistant" && !live) continue;
     const interrupted = entry.responseMetadata && ["failed", "cancelled"].includes(entry.responseMetadata.status);
     const reasoning = appearance?.activity.reasoning.placement !== "hidden" && hasResponseDetails(entry.responseMetadata);
-    if (!entry.text && !reasoning && !interrupted) continue;
+    if (!hasAssistantContent(entry) && !reasoning && !interrupted) continue;
     const agent = entry.taskId ? names.get(entry.taskId) || entry.taskName || entry.taskId : entry.agentName || rootName;
     const origin = entry.taskId ? entry.parentTaskId ? names.get(entry.parentTaskId) || rootName : rootName : parent;
     const turn = entry.runId || (entry.historyTurn !== undefined ? `history:${entry.historyTurn}` : turns.get(actor) || "opening");

@@ -251,40 +251,112 @@ test("TeamTree keeps run and nested subtree DOM stable as a child moves running 
   } finally { await ui.close(); }
 });
 
-test("a Thinking row remains the same DOM node through empty completion metadata and the first text chunk", async () => {
+test("reasoning stays absent until readable summary text, then keeps its node through completion and history", async () => {
   const ui = fixture();
   let entries: Entry[] = [];
-  const metadata = (revision: number, status: "thinking" | "completed") => ({
-    event: "response_metadata" as const,
-    run_id: "run",
-    response_id: "response",
-    response_session_id: "root",
-    revision,
-    round_number: 0,
-    history_id: "",
-    status,
-    summary: "",
-    summary_truncated: false,
-    summary_expired: false,
-    usage_reported: false,
+  const metadata = (revision: number, status: "thinking" | "responding" | "completed", summary: string): WireEvent => ({
+    event: "response_metadata", run_id: "run", response_id: "response", response_session_id: "root",
+    revision, round_number: 0, history_id: "", status, summary,
+    summary_truncated: false, summary_expired: false, usage_reported: true,
+    usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16, reasoning_tokens: 0,
+      prompt_reported: true, completion_reported: true, total_reported: true,
+      reasoning_reported: false, reasoning_in_output: "unknown" },
   });
   try {
-    entries = appendEvent(entries, metadata(1, "thinking"));
+    let id = "";
+    for (const [index, summary] of ["", " \n\t", "## \n** **"].entries()) {
+      entries = appendEvent(entries, metadata(index + 1, "thinking", summary));
+      id ||= entries[0]!.id;
+      assert.equal(entries[0]!.id, id, "hidden metadata keeps its response identity in the transcript model");
+      assert.equal(entries[0]!.responseMetadata?.summary, summary);
+      await ui.render(entries);
+      assert.equal(ui.container.querySelector("article.entry.assistant"), null);
+      assert.equal(ui.container.querySelector(".response-details, .response-thinking, .response-reasoning-settled"), null);
+    }
+    const summary = "## Plan\n\nInspect the input before answering.";
+    entries = appendEvent(entries, metadata(4, "thinking", summary));
     await ui.render(entries);
-    const row = ui.container.querySelector<HTMLElement>("article.entry.assistant");
-    assert.ok(row);
-    assert.ok(row.querySelector(".response-thinking"));
+    const article = ui.container.querySelector<HTMLElement>("article.entry.assistant")!;
+    const reasoning = article.querySelector<HTMLDetailsElement>("details.response-reasoning")!;
+    const control = reasoning.querySelector<HTMLElement>("summary")!;
+    assert.ok(article && reasoning);
+    assert.equal(article.dataset.recordKey, id);
+    assert.match(article.textContent || "", /Inspect the input before answering/);
+    await act(async () => { reasoning.open = true; reasoning.dispatchEvent(new ui.dom.window.Event("toggle")); });
+    control.focus();
+    entries = appendEvent(entries, metadata(5, "responding", summary));
+    entries = appendEvent(entries, { event: "text_chunk", run_id: "run", response_id: "response", chunk: "The answer is ready." });
+    entries = appendEvent(entries, { event: "text_done", run_id: "run", response_id: "response", text: "The answer is ready." });
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector("article.entry.assistant"), article);
+    assert.equal(article.querySelector("details.response-reasoning"), reasoning);
+    assert.equal(reasoning.open, true);
+    assert.equal(ui.dom.window.document.activeElement, control);
+    assert.match(article.textContent || "", /The answer is ready/);
+    entries = appendEvent(entries, metadata(6, "completed", summary));
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector("article.entry.assistant"), article);
+    assert.equal(article.querySelector("details.response-reasoning"), reasoning);
+    assert.equal(reasoning.open, true);
+    assert.equal(ui.dom.window.document.activeElement, control);
+    assert.equal(article.querySelector(".response-thinking, .response-reasoning-settled"), null);
+    assert.equal(appendEvent(entries, { event: "text_chunk", run_id: "run", response_id: "response", chunk: " stale replay" }), entries,
+      "terminal response metadata still rejects late streaming deltas");
+    entries = applySnapshot({ entries }, snapshot([row("42", "assistant", "The answer is ready.", {
+      response_id: "response", response_metadata: { ...metadata(7, "completed", summary), history_id: "42" },
+    })])).entries;
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector("article.entry.assistant"), article);
+    assert.equal(article.querySelector("details.response-reasoning"), reasoning);
+    assert.equal(reasoning.open, true);
+    assert.equal(ui.dom.window.document.activeElement, control);
+    assert.equal(entries[0]!.responseMetadata?.response_id, "response");
+    assert.equal(entries[0]!.responseMetadata?.usage?.total_tokens, 16);
+  } finally { await ui.close(); }
+});
 
-    entries = appendEvent(entries, metadata(2, "completed"));
+test("empty completion leaves no marker and later canonical history reveals its summary and answer", async () => {
+  const ui = fixture();
+  let entries: Entry[] = [];
+  const metadata = (revision: number, summary: string): WireEvent => ({ event: "response_metadata", run_id: "run",
+    response_id: "late", response_session_id: "root", revision, round_number: 0, history_id: "", status: "completed",
+    summary, summary_truncated: false, summary_expired: false, usage_reported: false });
+  try {
+    entries = appendEvent(entries, metadata(1, " \t"));
+    const responseKey = entries[0]!.id;
     await ui.render(entries);
-    assert.equal(ui.container.querySelector("article.entry.assistant"), row,
-      "completed empty metadata must keep the previously shown Thinking row mounted");
-
-    entries = appendEvent(entries, { event: "text_chunk", run_id: "run", chunk: "The answer is ready." });
+    assert.equal(ui.container.querySelector("article.entry.assistant"), null);
+    assert.equal(ui.container.querySelector(".response-reasoning-meta"), null);
+    entries = applySnapshot({ entries }, snapshot([row("42", "response_metadata", "", {
+      response_id: "late", response_metadata: { ...metadata(2, "A late provider summary."), history_id: "42" },
+    })])).entries;
     await ui.render(entries);
-    assert.equal(ui.container.querySelector("article.entry.assistant"), row,
-      "the first text replaces the placeholder in place instead of reintroducing a new row");
-    assert.ok(ui.container.textContent?.includes("The answer is ready."), "the first text event should still render");
+    const article = ui.container.querySelector("article.entry.assistant");
+    assert.ok(article);
+    assert.equal(article.getAttribute("data-record-key"), responseKey);
+    assert.match(article.textContent || "", /A late provider summary/);
+    entries = applySnapshot({ entries }, snapshot([row("42", "assistant", "A late answer.", {
+      response_id: "late", response_metadata: { ...metadata(3, "A late provider summary."), history_id: "42" },
+    })])).entries;
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector("article.entry.assistant"), article);
+    assert.match(article.textContent || "", /A late answer/);
+    entries = appendEvent(entries, { ...metadata(1, ""), response_id: "no-summary", status: "responding" });
+    const answerOnlyId = entries.find(entry => entry.responseId === "no-summary")!.id;
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector(`[data-record-key="${answerOnlyId}"]`), null);
+    entries = appendEvent(entries, { event: "text_chunk", run_id: "run", response_id: "no-summary", chunk: "Answer without a summary." });
+    entries = appendEvent(entries, { event: "text_done", run_id: "run", response_id: "no-summary", text: "Answer without a summary." });
+    await ui.render(entries);
+    const answerOnly = ui.container.querySelector(`[data-record-key="${answerOnlyId}"]`)!;
+    assert.ok(answerOnly);
+    assert.match(answerOnly.textContent || "", /Answer without a summary/);
+    assert.equal(answerOnly.querySelector(".response-details, .response-reasoning-meta"), null);
+    entries = appendEvent(entries, { ...metadata(2, ""), response_id: "no-summary" });
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector(`[data-record-key="${answerOnlyId}"]`), answerOnly);
+    assert.equal(answerOnly.querySelector(".response-details, .response-reasoning-meta"), null);
+    assert.equal(ui.container.querySelector(`[data-record-key="${article.getAttribute("data-record-key")}"]`), article);
   } finally { await ui.close(); }
 });
 
@@ -634,5 +706,35 @@ test("child followup metadata and text without a followup counter stay in one ac
     assertSingleFollowup(answer);
     assert.equal(ui.container.querySelectorAll("article.entry.assistant").length, 2,
       "canonical polling leaves one response for each activation");
+  } finally { await ui.close(); }
+});
+
+
+test("whitespace-only assistant deltas stay hidden until real text without trimming the eventual message", async () => {
+  const ui = fixture();
+  let entries = appendEvent([], { event: "response_metadata", run_id: "whitespace-run", response_id: "whitespace-response",
+    response_session_id: "root", revision: 1, round_number: 0, history_id: "", status: "responding", summary: " \n",
+    summary_truncated: false, summary_expired: false, usage_reported: false });
+  try {
+    entries = appendEvent(entries, { event: "text_chunk", run_id: "whitespace-run", response_id: "whitespace-response", chunk: " \n" });
+    const id = entries[0]!.id;
+    await ui.render(entries);
+    assert.equal(entries[0]!.text, " \n");
+    assert.equal(entries[0]!.responseMetadata?.response_id, "whitespace-response");
+    assert.equal(ui.container.querySelector("article.entry.assistant, .entry-label, .entry-content, .response-details"), null);
+    const next = "    const answer = 1;\n";
+    entries = appendEvent(entries, { event: "text_chunk", run_id: "whitespace-run", response_id: "whitespace-response", chunk: next });
+    await ui.render(entries);
+    const article = ui.container.querySelector<HTMLElement>(`[data-record-key="${id}"]`)!;
+    assert.ok(article);
+    assert.equal(entries[0]!.text, ` \n${next}`, "the original whitespace and indentation remain in the display string");
+    assert.equal(article.querySelector(".entry-label:not([hidden])")?.textContent, "Assistant");
+    assert.equal(article.querySelector("pre code")?.textContent, "const answer = 1;\n", "leading indentation reaches Markdown unchanged");
+    assert.equal(article.classList.contains("reasoning-only"), false);
+    assert.equal(article.querySelector(".response-details"), null);
+    entries = appendEvent(entries, { event: "text_done", run_id: "whitespace-run", response_id: "whitespace-response", text: ` \n${next}` });
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector(`[data-record-key="${id}"]`), article);
+    assert.equal(entries[0]!.text, ` \n${next}`);
   } finally { await ui.close(); }
 });

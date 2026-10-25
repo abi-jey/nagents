@@ -3,7 +3,7 @@ import { Icon } from "../../components/Icon.js";
 import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { contextPercent, contextSummary, contextUsage, contextUsageLabel, contextWindowSource } from "../context/controller.js";
 import { compactionMarker, compactionWarning } from "./context.js";
-import { agentAncestors, orderedTeam, phaseLabel, providerLabel, type TeamAgent, type TeamProfile } from "./model.js";
+import { agentAncestors, definitionUsage, orderedTeam, phaseLabel, providerLabel, type TeamAgent, type TeamProfile } from "./model.js";
 import { isProfileTarget, profileSelection, profileTarget } from "./useTeam.js";
 import { bucketKey, definitionGroupKey, TeamGroups, teamBucket, type DefinitionGroup, type TeamBucket } from "./grouping.js";
 import { scrollWithin } from "../../components/scrollWithin.js";
@@ -68,17 +68,13 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   const groups = new Map([...children].map(([parent, direct]) => [parent, grouping.current.update(parent, direct)]));
   const [expanded, setExpanded] = useState(new Map<string, boolean>());
   const [limits, setLimits] = useState(new Map<string, number>());
-  const [startProfile, setStartProfile] = useState("");
-  const [search, setSearch] = useState("");
   const revealed = useRef(new Set<string>());
   const selection = useRef({ id: "", resolved: false });
   const tree = useRef<HTMLDivElement>(null);
   const positions = useRef(new Map<string, { top: number; left: number }>());
   const selectedScope = isProfileTarget(selected) ? profileSelection(selected) : { profile: "", parentId: selected };
   const focusedPath = new Set([selectedScope.parentId, ...agentAncestors(selectedScope.parentId, agents)]);
-  const startParent = known.get(selectedScope.parentId);
-  const chosen = catalog.has(startProfile) ? startProfile : catalog.has(selectedScope.profile) ? selectedScope.profile :
-    profiles.find(profile => permission(startParent, profile.id).allowed)?.id || profiles[0]?.id || "";
+  const definitionParent = known.get(selectedScope.parentId);
 
   function permission(parent: TeamAgent | undefined, profile: string): { allowed: boolean; reason: string } {
     const definition = catalog.get(profile);
@@ -88,17 +84,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     const allowed = parent.task?.can_start_children === true && parent.task.child_agents?.includes(profile) === true;
     return { allowed, reason: allowed ? "" : parent.task?.child_start_unavailable_reason || "This definition is unavailable under the parent's policy." };
   }
-  const startPermission = permission(startParent, chosen);
-  const query = search.trim().toLowerCase();
-  function matchesTree(agent: TeamAgent, seen = new Set<string>()): boolean {
-    if (seen.has(agent.id)) return false;
-    if (!query || [agent.id, agent.name, agent.profile, catalog.get(agent.profile)?.name || ""].some(value => value.toLowerCase().includes(query))) return true;
-    const visited = new Set(seen).add(agent.id);
-    return (children.get(agent.id) || []).some(child => matchesTree(child, visited));
-  }
   function toggle(key: string, open: boolean) { setExpanded(current => new Map(current).set(key, !open)); }
-
-  useEffect(() => { if (isProfileTarget(selected)) setStartProfile(profileSelection(selected).profile); }, [selected]);
 
   useEffect(() => {
     const target = isProfileTarget(selected) ? profileSelection(selected).parentId : selected;
@@ -145,11 +131,11 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
       }
     }
     positions.current = next;
-  }, [agents, expanded, limits, search]);
+  }, [agents, expanded, limits]);
 
   function branch(agent: TeamAgent, depth: number, hidden = false, bucket?: TeamBucket, sharedConnection = false): ReactNode {
     const direct = children.get(agent.id) || [];
-    const open = !!query && direct.some(child => matchesTree(child)) || (expanded.get(agent.id) ?? (!agent.id || depth < 2 && teamBucket(agent) === "running"));
+    const open = expanded.get(agent.id) ?? (!agent.id || depth < 2 && teamBucket(agent) === "running");
     const showConnection = agent.providerKind === "a2a" && catalog.get(agent.profile)?.provider === "a2a";
     return <li key={`run:${agent.id || "main"}`} className="team-tree-branch" data-run-id={agent.id || "main"} data-bucket={bucket} hidden={hidden}>
       <div className="team-tree-row"><span className="team-tree-toggle-slot">{!!direct.length && <button type="button" className="team-tree-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${agent.name}'s agents`} aria-expanded={open}
@@ -163,16 +149,14 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   function groupItems(parent: TeamAgent, group: DefinitionGroup, depth: number, parentOpen: boolean): ReactNode[] {
     const all = [...group.running, ...group.past], definition = catalog.get(group.profile);
     const name = definition?.name || group.profile || "Definition unavailable";
-    const matches = (agent: TeamAgent) => name.toLowerCase().includes(query) || matchesTree(agent);
-    const matching = !query || all.some(matches);
-    const open = !!query || (expanded.get(group.key) ?? (group.running.length > 0 || all.some(agent => focusedPath.has(agent.id))));
+    const open = expanded.get(group.key) ?? (group.running.length > 0 || all.some(agent => focusedPath.has(agent.id)));
     const domId = `${treeId}-${encodeURIComponent(group.key)}`;
     const remote = definition?.provider === "a2a" || !definition && all.every(agent => agent.providerKind === "a2a");
     const connection = remote ? () => configure(definition ? profileTarget(group.profile) : all[0].id) : undefined;
     const allowed = permission(parent, group.profile);
     const fresh = Math.max(0, ...all.map(agent => arrivals[agent.id] || 0));
     const count = group.running.length + group.past.length;
-    const result: ReactNode[] = [<li key={`group:${group.key}`} className={`team-definition-group${fresh ? " is-arriving" : ""}`} hidden={!matching} data-parent-id={parent.id} data-profile={group.profile}>
+    const result: ReactNode[] = [<li key={`group:${group.key}`} className={`team-definition-group${fresh ? " is-arriving" : ""}`} data-parent-id={parent.id} data-profile={group.profile}>
       <div className="team-definition-heading"><button type="button" className="team-definition-toggle" aria-expanded={open} aria-controls={(["running", "past"] as const).filter(bucket => group[bucket].length).map(bucket => `${domId}-${bucket}`).join(" ")} onClick={() => toggle(group.key, open)}>
         <Icon name="chevron" size={11} /><strong>{name}</strong>{!open && <span title={`${group.running.length} running · ${group.past.length} past`}>{count}</span>}
       </button>{remote && <RemoteConnectionChip authentication={definition?.authentication || all[0].authentication} name={name} activate={connection!} />}
@@ -182,33 +166,45 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     for (const bucket of ["running", "past"] as const) {
       const items = group[bucket];
       if (!items.length) continue;
-      const key = bucketKey(group.key, bucket), bucketOpen = !!query || (expanded.get(key) ?? (bucket === "running" || items.some(agent => focusedPath.has(agent.id))));
+      const key = bucketKey(group.key, bucket), bucketOpen = expanded.get(key) ?? (bucket === "running" || items.some(agent => focusedPath.has(agent.id)));
       const limit = limits.get(key) ?? (bucket === "running" ? 6 : 2);
-      if (query) items.filter(matches).forEach(agent => revealed.current.add(agent.id));
-      else if (parentOpen && open && bucketOpen) items.slice(0, limit).forEach(agent => revealed.current.add(agent.id));
+      if (parentOpen && open && bucketOpen) items.slice(0, limit).forEach(agent => revealed.current.add(agent.id));
       const visible = items.filter(agent => revealed.current.has(agent.id));
       const remaining = items.length - visible.length;
-      result.push(<li key={`bucket:${key}`} className="team-run-bucket" hidden={!open || !!query && !items.some(matches)} id={`${domId}-${bucket}`} data-parent-id={parent.id} data-profile={group.profile} data-bucket-heading={bucket}>
-        <button type="button" aria-expanded={bucketOpen} onClick={() => toggle(key, bucketOpen)}><Icon name="chevron" size={9} /><span>{bucket === "running" ? "Running" : "Past runs"}</span><span>{query ? items.filter(matches).length : items.length}</span></button>
+      result.push(<li key={`bucket:${key}`} className="team-run-bucket" hidden={!open} id={`${domId}-${bucket}`} data-parent-id={parent.id} data-profile={group.profile} data-bucket-heading={bucket}>
+        <button type="button" aria-expanded={bucketOpen} onClick={() => toggle(key, bucketOpen)}><Icon name="chevron" size={9} /><span>{bucket === "running" ? "Running" : "Past runs"}</span><span>{items.length}</span></button>
       </li>);
-      for (const agent of visible) result.push(branch(agent, depth, !open || !bucketOpen || !!query && !matches(agent), bucket, remote));
-      if (remaining) result.push(<li key={`more:${key}`} className="team-group-more" hidden={!open || !bucketOpen || !!query}><button type="button" onClick={() => setLimits(current => new Map(current).set(key, Math.max(limit, visible.length) + 3))}>Show {remaining} more<Icon name="chevron" size={10} /></button></li>);
+      for (const agent of visible) result.push(branch(agent, depth, !open || !bucketOpen, bucket, remote));
+      if (remaining) result.push(<li key={`more:${key}`} className="team-group-more" hidden={!open || !bucketOpen}><button type="button" onClick={() => setLimits(current => new Map(current).set(key, Math.max(limit, visible.length) + 3))}>Show {remaining} more<Icon name="chevron" size={10} /></button></li>);
     }
     return result;
   }
 
   return <div className="team-navigation">
-    <label className="team-run-search"><Icon name="search" size={13} /><input type="search" aria-label="Find an agent or run" placeholder="Find an agent or run…" value={search} onChange={event => setSearch(event.target.value)} /></label>
     <div className="team-tree-scroll" ref={tree}>
       {error && <p className="team-load-error" role="status">{error}<button type="button" onClick={refresh}>Retry</button></p>}
       <ol className="team-tree team-grouped-tree" aria-label="Agent conversations">{agents[0] && branch(agents[0], 0)}</ol>
     </div>
-    {!!profiles.length && <section className="team-start-agent" aria-label="Start an agent">
-      <label htmlFor={`${treeId}-start-definition`}>Under <strong>{startParent?.name || "Unavailable parent"}</strong></label>
-      <div><select id={`${treeId}-start-definition`} aria-label="Agent definition" value={chosen} onChange={event => setStartProfile(event.target.value)}>
-        {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-      </select><button type="button" aria-label={`Start ${catalog.get(chosen)?.name || "agent"} under ${startParent?.name || "parent"}`} title={startPermission.allowed ? "Start a new conversation under this parent" : startPermission.reason} disabled={!startPermission.allowed} onClick={() => inspect(profileTarget(chosen, startParent!.id))}><Icon name="plus" size={13} /><span>Start</span></button></div>
-      {!startPermission.allowed && <p>{startPermission.reason}</p>}
+    {!!profiles.length && <section className="team-profiles" aria-label="Agent definitions">
+      <h3 className="team-profiles-label">Agent definitions</h3>
+      <div className="team-profile-list">{profiles.map(profile => {
+        const target = profileTarget(profile.id, selectedScope.parentId);
+        const allowed = permission(definitionParent, profile.id);
+        return <div key={profile.id} className="team-profile-row" data-profile-id={profile.id}>
+          <button type="button" className={`team-profile${selected === target ? " is-selected" : ""}`}
+            aria-label={`Open ${profile.name} definition${definitionParent?.id ? ` under ${definitionParent.name}` : ""}`}
+            aria-current={selected === target ? "page" : undefined}
+            aria-description={!allowed.allowed ? allowed.reason : undefined}
+            title={[profile.source ? `Definition file: ${profile.source}` : "", !allowed.allowed ? allowed.reason : ""].filter(Boolean).join(" · ") || undefined}
+            onClick={() => inspect(target)}>
+            <span><strong>{profile.name}</strong><span>{definitionUsage(profile, agents)}</span></span>
+            <small>{profile.description || [profile.provider, profile.model].filter(Boolean).join(" · ")}</small>
+            {!allowed.allowed && <small className="team-profile-unavailable">{allowed.reason}</small>}
+          </button>
+          {profile.provider === "a2a" && <RemoteConnectionChip authentication={profile.authentication} name={profile.name} activate={() => configure(profileTarget(profile.id))} />}
+          <button type="button" className="team-profile-settings" aria-label={`Settings for ${profile.name} definition`} onClick={() => configure(profileTarget(profile.id))}><Icon name="settings" size={14} /></button>
+        </div>;
+      })}</div>
     </section>}
   </div>;
 }
