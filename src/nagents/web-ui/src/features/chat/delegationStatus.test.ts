@@ -91,6 +91,8 @@ test("repeated single-session agent_status polls fold into the verified child de
   assert.deepEqual(statusSources(rows[0]).map(source => source.callId), ["poll-one", "poll-two"]);
   assert.deepEqual(statusSources(rows[1]).map(source => source.callId), ["poll-one", "poll-two"]);
   assert.equal(rows[1].delegation?.text, "Verified activation 0.", "poll result text cannot replace lifecycle result text");
+  const again = delegationRows(flow.project(entries, options([agent("child", "", "done")])));
+  for (const row of again) assert.deepEqual(statusSources(row).map(source => source.callId), ["poll-one", "poll-two"]);
 });
 
 test("a terminal status response cannot invent lifecycle completion or an activation", () => {
@@ -155,7 +157,7 @@ test("failed calls and unknown, unmatched, or multi-session status responses sta
   assert.deepEqual(delegationRows(projected).map(row => row.delegation?.kind), ["start"]);
 });
 
-test("a pending streamed single-session status request does not add a separate tool row", () => {
+test("an unparsed streamed status request remains standalone until its direct child is proven", () => {
   let entries = delegateCall([]);
   entries = delegateResult(entries);
   entries = taskStarted(entries);
@@ -166,7 +168,56 @@ test("a pending streamed single-session status request does not add a separate t
 
   const projected = new DelegationFlow().project(entries, options([agent("child")]));
   assert.deepEqual(delegationRows(projected).map(row => row.delegation?.kind), ["start"]);
-  assert.equal(projected.some(entry => entry.kind === "tool" && entry.title === "agent_status"), false);
+  assert.equal(projected.some(entry => entry.kind === "tool" && entry.title === "agent_status"), true);
+});
+
+test("a status already displayed before lifecycle evidence stays visible when the child is later verified", () => {
+  const flow = new DelegationFlow();
+  let entries = statusPoll(delegateResult(delegateCall([])), "early-poll");
+  const first = flow.project(entries, options([agent("child")]));
+  const poll = first.find(entry => entry.callId === "early-poll");
+  assert.ok(poll);
+  entries = taskStarted(entries);
+  const second = flow.project(entries, options([agent("child")]));
+  assert.equal(second.find(entry => entry.callId === "early-poll"), poll);
+  assert.deepEqual(statusSources(delegationRows(second)[0]), []);
+});
+
+test("streamed list, unknown and matching status requests retain their already visible standalone records", () => {
+  for (const target of ["", "unknown", "child"]) {
+    const flow = new DelegationFlow();
+    let entries = taskStarted(delegateResult(delegateCall([])));
+    entries = appendEvent(entries, {
+      event: "tool_call_progress", run_id: runId, generation_id: "streamed-status", index: 0,
+      id: "streamed-poll", name: "agent_status", status: "streaming", arguments_text: "{",
+    });
+    const original = flow.project(entries, options([agent("child")])).find(entry => entry.callId === "streamed-poll")!;
+    assert.ok(original);
+    entries = appendEvent(entries, {
+      event: "tool_call", run_id: runId, generation_id: "streamed-status", index: 0,
+      id: "streamed-poll", name: "agent_status", arguments: target ? { session_id: target } : {},
+    });
+    entries = appendEvent(entries, {
+      event: "tool_result", run_id: runId, id: "streamed-poll", name: "agent_status",
+      result: target ? { session_id: target, status: "running" } : { sessions: [{ session_id: "child" }] },
+    });
+    const projected = flow.project(entries, options([agent("child")]));
+    assert.equal(projected.find(entry => entry.callId === "streamed-poll")?.id, original.id);
+    for (const row of delegationRows(projected)) assert.deepEqual(statusSources(row), []);
+  }
+});
+
+test("status during an unmatched host continuation does not become evidence for an old native activation", () => {
+  const flow = new DelegationFlow();
+  let entries = taskCompleted(taskStarted(delegateResult(delegateCall([]))));
+  entries = appendEvent(entries, {
+    event: "task_started", run_id: runId, session_id: "child", parent_session_id: "", activation: 1,
+    title: "Human continuation", trigger: "human",
+  });
+  entries = statusPoll(entries, "host-poll");
+  const projected = flow.project(entries, options([agent("child")]));
+  assert.ok(projected.find(entry => entry.callId === "host-poll"));
+  for (const row of delegationRows(projected)) assert.deepEqual(statusSources(row), []);
 });
 
 test("a child conversation folds status scoped to its normalized empty own-session ID", () => {

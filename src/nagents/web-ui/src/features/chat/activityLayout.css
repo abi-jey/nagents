@@ -11,7 +11,8 @@
 .chat-activity-group[data-state="Running"] > summary .chat-activity-label { color: var(--accent-teal); animation: activity-breathe 1.7s ease-in-out infinite; }
 .chat-activity-group[data-state="Done"] > summary { color: var(--text-secondary); }
 .chat-activity-group[data-state="Needs attention"] > summary { border-color: var(--border-group); color: var(--text-reading); }
-.chat-activity-body { margin: 0; padding: 3px 0 3px 14px; }
+.transcript-record:not(.chat-activity-body):not([hidden]) { display: contents; }
+.chat-activity-body { margin: 0; padding: 0 0 0 14px; min-width: 0; }
 .chat-activity-body > .entry { margin-block: 6px; }
 .chat-activity-body .tool-record { box-shadow: none; }
 .chat-activity-body .task-thread { margin-block: 6px; }

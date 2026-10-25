@@ -192,20 +192,20 @@ export class DelegationFlow {
     const folded = new Set<string>();
     for (const entry of entries) {
       if (entry.kind !== "tool" || entry.title !== "agent_status" || entry.remoteReview || entry.error ||
-        ["Error", "Cancelled", "Approval denied", "Approval required", "Waiting for approval", "Interrupted", "Not run"].includes(entry.state || "") ||
+        ["Error", "Failed", "Cancelled", "Approval denied", "Approval required", "Waiting for approval", "Interrupted", "Not run", "No result recorded"].includes(entry.state || "") ||
+        this.visibleEvidence.has(entry.id) ||
         (!!entry.taskId && entry.taskId !== parentId)) continue;
       const args = argumentsOf(entry);
       if ("remote_operation" in args) continue;
-      // An incomplete status request has no independent progress to display.
-      // Wait for its target before deciding whether it belongs to a run or is
-      // a standalone list/inspection. Errors remain ordinary visible records.
-      if (entry.toolProgress === "streaming" && entry.result === undefined &&
-        typeof args.session_id !== "string" && items.some(item => item.binding && item.direct && item.lifecycle)) {
-        folded.add(entry.id); continue;
-      }
+      // Partial arguments cannot prove a single direct-child target. Once a
+      // standalone record has been shown, retain its inspection controls.
       if (typeof args.session_id !== "string" || !args.session_id) continue;
       const owner = items.findLast(item => item.target === args.session_id && positions.get(item.call.id)! < positions.get(entry.id)!);
       if (!owner?.binding || !owner.direct || !owner.lifecycle) continue;
+      const activation = owner.binding.activation;
+      if (owner.lifecycle.parentTaskId !== undefined && owner.lifecycle.parentTaskId !== parentId ||
+        lifecycleEntries.some(lifecycle => lifecycle.taskId === owner.target &&
+          (lifecycle.activation || 0) > activation && positions.get(lifecycle.id)! < positions.get(entry.id)!)) continue;
       if (entry.result !== undefined) {
         try {
           const result: unknown = JSON.parse(entry.result);
@@ -282,7 +282,8 @@ export class DelegationFlow {
     }
     const originals: PositionedEntry[] = entries.flatMap((entry, index) => {
       if (calls.includes(entry) || entry.kind === "retained_tasks" || entry.taskId || folded.has(entry.id)) return [];
-      if (entry.kind === "context" || entry.kind === "notification") this.visibleEvidence.add(entry.id);
+      if (entry.kind === "context" || entry.kind === "notification" || entry.kind === "tool" && entry.title === "agent_status")
+        this.visibleEvidence.add(entry.id);
       return [{ entry, position: index }];
     });
     return [...originals, ...rows].sort((a, b) => a.position - b.position || (a.order || 0) - (b.order || 0)).map(item => item.entry);

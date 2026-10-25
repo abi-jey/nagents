@@ -88,7 +88,11 @@ test("a tool row stays mounted when late canonical data changes its activity cat
     await ui.render(entries, { appearance: defaultAppearance });
     const record = ui.container.querySelector<HTMLElement>(`[data-record-key="${secondKey}"]`);
     assert.ok(record);
-    assert.ok(record.closest(".chat-activity-group"));
+    const member = record.closest<HTMLElement>("[data-activity-group]")!;
+    assert.ok(member);
+    const group = [...ui.container.querySelectorAll<HTMLDetailsElement>("details.chat-activity-group")]
+      .find(header => header.dataset.recordKey === member.dataset.activityGroup)!;
+    assert.ok(group.querySelector("summary")?.getAttribute("aria-controls")?.split(" ").includes(member.id));
 
     entries = appendEvent(entries, {
       event: "tool_call", run_id: "run", generation_id: "generation", index: 1,

@@ -49,72 +49,35 @@ export function itemKey(item: TranscriptItem): string {
 export type ActivityGroup = { kind: "activity_group"; id: string; category: Exclude<ActivityCategory, "reasoning">; scope: string; items: TranscriptItem[] };
 export type PresentationItem = TranscriptItem | ActivityGroup;
 
-/** Keep the first displayed slot and parent of each live record. */
+/** Keep revealed activity visible while deriving groups from current content. */
 export class ActivityLayout {
   private appearance = "";
-  private slots = new Map<string, { group?: string }>();
-  private segments = new Map<string, string>();
+  private shown = new Set<string>();
 
   render(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false): PresentationItem[] {
     const signature = JSON.stringify([appearance, insideGroup]);
     if (signature !== this.appearance) {
       this.appearance = signature;
-      this.slots.clear();
-      this.segments.clear();
+      this.shown.clear();
     }
     const visibleItems = visibleTranscriptItems(items, appearance);
-    if (!visibleItems.length) this.slots.clear();
-
-    const segments = new Map<string, string>();
-    let boundary = "";
-    for (const item of visibleItems) {
-      const key = itemKey(item);
-      segments.set(key, boundary);
-      if (!activityCategory(item)) boundary = key;
-    }
-    for (const [key, segment] of segments) {
-      if (this.segments.has(key) && this.segments.get(key) !== segment) this.slots.delete(key);
-    }
-    this.segments = segments;
-
-    const result: PresentationItem[] = [], groups = new Map<string, ActivityGroup>();
-    for (const item of visibleItems) {
-      const key = itemKey(item), category = activityCategory(item), rule = category && appearance?.activity[category];
-      let slot = this.slots.get(key);
-      if (!slot) {
-        if (rule?.placement === "hidden" && !importantActivity(item)) continue;
-        if (category && rule?.placement === "grouped" && !insideGroup && !(item.kind === "entry" && item.entry.delegation)) {
-          const previous = result.at(-1), itemScope = scope(item);
-          // A streamed name can change category. Give that call its own stable
-          // group rather than moving it between parents as its name arrives.
-          const pending = item.kind === "entry" && item.entry.toolProgress === "streaming";
-          const previousPending = previous?.kind === "activity_group" && previous.items.some(child =>
-            child.kind === "entry" && child.entry.toolProgress === "streaming");
-          slot = { group: !pending && !previousPending && previous?.kind === "activity_group" &&
-            previous.category === category && previous.scope === itemScope ? previous.id : `activity:${key}` };
-        } else slot = {};
-        this.slots.set(key, slot);
-      }
-      if (slot.group) {
-        let group = groups.get(slot.group);
-        if (!group) {
-          group = { kind: "activity_group", id: slot.group, category: category || "tools", scope: scope(item), items: [] };
-          groups.set(group.id, group); result.push(group);
-        }
-        group.items.push(item);
-      } else result.push(item);
-    }
-    return result;
+    if (!visibleItems.length) this.shown.clear();
+    return groupActivity(visibleItems, appearance, insideGroup, this.shown);
   }
 }
 
 /** Derive reading layout without changing transcript identities or execution state. */
 export function activityLayout(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false): PresentationItem[] {
+  return groupActivity(visibleTranscriptItems(items, appearance), appearance, insideGroup);
+}
+function groupActivity(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false, shown = new Set<string>()): PresentationItem[] {
   const result: PresentationItem[] = [];
-  visibleTranscriptItems(items, appearance).forEach((item) => {
+  items.forEach((item) => {
     const category = activityCategory(item), rule = category && appearance?.activity[category];
-    const hidden = rule?.placement === "hidden" && !importantActivity(item);
+    const key = itemKey(item);
+    const hidden = rule?.placement === "hidden" && !importantActivity(item) && !shown.has(key);
     if (!hidden) {
+      shown.add(key);
       if (category && rule?.placement === "grouped" && !insideGroup && !(item.kind === "entry" && item.entry.delegation)) {
         const previous = result.at(-1), itemScope = scope(item);
         if (previous?.kind === "activity_group" && previous.category === category && previous.scope === itemScope) previous.items.push(item);
