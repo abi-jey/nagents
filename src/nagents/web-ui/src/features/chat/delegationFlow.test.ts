@@ -130,6 +130,46 @@ function savedDelegationHistory(): Snapshot["history"] {
   ];
 }
 
+test("a visible streamed status keeps its DOM, inspection and focus when lifecycle evidence arrives", async () => {
+  const ui = browserFixture();
+  let entries = delegateResult(delegateCall([]));
+  entries = appendEvent(entries, {
+    event: "tool_call_progress", run_id: runId, generation_id: "status-generation", index: 0,
+    id: "status", name: "agent_status", status: "streaming", arguments_text: '{"session_id":',
+  });
+  const key = entries.at(-1)!.id;
+  try {
+    await ui.render(entries);
+    const article = ui.container.querySelector<HTMLElement>(`[data-record-key="${key}"]`)!;
+    assert.ok(article);
+    const parent = article.parentElement!;
+    const group = [...ui.container.querySelectorAll<HTMLDetailsElement>("details.chat-activity-group")]
+      .find(header => header.dataset.recordKey === parent.dataset.activityGroup)!;
+    await act(async () => { group.open = true; group.dispatchEvent(new ui.container.ownerDocument.defaultView!.Event("toggle")); });
+    const details = article.querySelector<HTMLDetailsElement>("details.execution-record")!;
+    await act(async () => { details.open = true; details.dispatchEvent(new ui.container.ownerDocument.defaultView!.Event("toggle")); });
+    const summary = details.querySelector("summary")!;
+    summary.focus();
+    entries = appendEvent(entries, {
+      event: "tool_call", run_id: runId, generation_id: "status-generation", index: 0,
+      id: "status", name: "agent_status", arguments: { session_id: "child" },
+    });
+    entries = appendEvent(entries, {
+      event: "tool_result", run_id: runId, id: "status", name: "agent_status", result: { session_id: "child", status: "running" },
+    });
+    entries = taskStarted(entries);
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector(`[data-record-key="${key}"]`), article);
+    assert.equal(article.parentElement, parent);
+    assert.equal(article.querySelector("details.execution-record"), details);
+    assert.equal(details.open, true);
+    assert.equal(parent.hidden, false);
+    assert.equal(ui.container.ownerDocument.activeElement, summary);
+    assert.equal(ui.container.querySelectorAll(".delegation-evidence").length, 1);
+    assert.doesNotMatch(ui.container.querySelector(".delegation-evidence")?.textContent || "", /Status check/);
+  } finally { await ui.close(); }
+});
+
 test("cold history joins string delegate acknowledgements to completed retained tasks without synthetic notices", () => {
   const tasks = [
     historyTask("task-willow", "gentle willow", "mini", "The session reader passed."),

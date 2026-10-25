@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import { appearancePresets, defaultAppearance } from "../settings/appearance.js";
 import { Conversation } from "./Conversation.js";
 import type { ResponseMetadata } from "./responseMetadata.js";
-import type { Entry, TaskThread } from "./transcript.js";
+import { appendEvent, type Entry, type TaskThread } from "./transcript.js";
+import type { WireEvent } from "../../types.js";
 import type { LocalDelivery } from "./deliveries.js";
 
 const entry = (id: string, kind: Entry["kind"], text = "", extra: Partial<Entry> = {}): Entry => ({ id, kind, text, ...extra });
@@ -36,6 +38,21 @@ function browser() {
         if (previous[key]) Object.defineProperty(globalThis, key, previous[key]); else Reflect.deleteProperty(globalThis, key);
     },
   };
+}
+
+function groupRecords(group: HTMLDetailsElement): HTMLElement[] {
+  const controls = group.querySelector("summary")?.getAttribute("aria-controls")?.split(" ") || [];
+  assert.equal(controls.length, Number(group.querySelector(".chat-activity-count")?.textContent));
+  return controls.map(id => {
+    const record = group.ownerDocument.getElementById(id)!;
+    assert.ok(record, "each group member has an accessible controlled record");
+    assert.equal(record.dataset.activityGroup, group.dataset.recordKey);
+    assert.equal(record.hidden, !group.open, "closed groups hide every member without unmounting it");
+    return record;
+  });
+}
+function groupElements<T extends Element>(group: HTMLDetailsElement, selector: string): T[] {
+  return groupRecords(group).flatMap(record => [...record.querySelectorAll<T>(selector)]);
 }
 
 const shellDetails = (details: "collapsed" | "expanded") => ({
@@ -119,7 +136,7 @@ test("Compact keeps messages and preserves grouped tool rows, open details, and 
     assert.equal(group.open, true);
     assert.equal(ui.container.querySelector('[data-record-key="tool-one"]'), firstArticle);
     assert.equal(firstDetails.open, true);
-    assert.equal(group.querySelectorAll("article.entry.tool").length, 2);
+    assert.equal(groupElements(group, "article.entry.tool").length, 2);
     assert.equal(feed.scrollTop, 150);
 
     const completed = { ...first, state: "Completed", streaming: false, text: "first output\n", result: "first output\n" };
@@ -182,9 +199,9 @@ test("undisplayed response metadata does not split same-scope shell activity, wh
     assert.equal(groups[0], group);
     assert.equal(group.querySelector(".chat-activity-count")?.textContent, "2");
     assert.equal(group.dataset.state, "Running");
-    assert.deepEqual([...group.querySelectorAll<HTMLElement>("article.entry.tool")].map(row => row.dataset.recordKey),
+    assert.deepEqual(groupElements<HTMLElement>(group, "article.entry.tool").map(row => row.dataset.recordKey),
       ["round-one-tool", "round-two-tool"]);
-    assert.equal(group.querySelectorAll("details.execution-record").length, 2, "each tool keeps its inspection controls");
+    assert.equal(groupElements(group, "details.execution-record").length, 2, "each tool keeps its inspection controls");
     assert.equal(group.open, true);
     assert.equal(firstDetails.open, true);
     assert.equal(ui.dom.window.document.activeElement, firstSummary);
@@ -244,7 +261,7 @@ test("a later failure changes the collapsed activity group to Needs attention an
     assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
     assert.equal(group.dataset.state, "Needs attention");
     assert.equal(group.open, true, "An important failure overrides the collapsed preference");
-    assert.ok(group.querySelector('[data-record-key="later-error"]'));
+    assert.equal(groupElements<HTMLElement>(group, '[data-record-key="later-error"]').length, 1);
   } finally { await ui.close(); }
 });
 
@@ -372,5 +389,169 @@ test("delivery, upload, caption, and registry-only rows stay out of activity gro
     await ui.render([entry("registry", "retained_tasks", "Retained tasks")], defaultAppearance, () => null);
     assert.equal(ui.container.querySelector('.chat-activity-group[data-category="agents"]'), null,
       "An empty retained-task registry cannot create an empty Agent activity group");
+  } finally { await ui.close(); }
+});
+
+const diagnosticResponse: ResponseMetadata = {
+  response_id: "diagnostic-between-rounds", response_session_id: "root", run_id: "run", revision: 1,
+  round_number: 1, history_id: "", status: "completed", summary: "", summary_truncated: false,
+  summary_expired: false, usage_reported: false,
+};
+
+test("late reasoning preserves the second tool across visible and hidden boundaries", async () => {
+  const ui = browser();
+  const first = tool("diagnostic-first", { state: "Completed", streaming: false });
+  const second = tool("diagnostic-second", { state: "Completed", streaming: false });
+  const hidden = entry("diagnostic-response", "assistant", "", { runId: "run", responseId: diagnosticResponse.response_id,
+    responseMetadata: diagnosticResponse });
+  const visible = { ...hidden, responseMetadata: { ...diagnosticResponse, revision: 2, summary: "A real late provider summary." } };
+  const hiddenReasoning = { ...defaultAppearance, activity: { ...defaultAppearance.activity,
+    reasoning: { ...defaultAppearance.activity.reasoning, placement: "hidden" as const } } };
+  try {
+    await ui.render([first, hidden, second]);
+    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')!;
+    const secondArticle = ui.container.querySelector<HTMLElement>('[data-record-key="diagnostic-second"]')!;
+    const secondParent = secondArticle.parentElement!;
+    const transcriptParent = secondParent.parentElement;
+    const secondDetails = secondArticle.querySelector<HTMLDetailsElement>("details.execution-record")!;
+    const secondSummary = secondDetails.querySelector<HTMLElement>("summary")!;
+    await act(async () => { group.open = true; group.dispatchEvent(new ui.dom.window.Event("toggle")); });
+    await act(async () => { secondDetails.open = true; secondDetails.dispatchEvent(new ui.dom.window.Event("toggle")); });
+    secondSummary.focus();
+    assert.equal(ui.dom.window.document.activeElement, secondSummary);
+    const feed = ui.container.querySelector<HTMLElement>(".conversation")!;
+    Object.defineProperty(feed, "clientHeight", { configurable: true, value: 100 });
+    Object.defineProperty(feed, "scrollHeight", { configurable: true, value: 500 });
+    feed.scrollTop = 150;
+    feed.dispatchEvent(new ui.dom.window.Event("scroll"));
+    const states: { phase: string; groups: number; sameArticle: boolean; sameParent: boolean; visible: boolean; sameDetails: boolean; open: boolean; sameFocus: boolean; scrollTop: number }[] = [];
+    const capture = (phase: string) => {
+      const article = ui.container.querySelector<HTMLElement>('[data-record-key="diagnostic-second"]');
+      const details = article?.querySelector<HTMLDetailsElement>("details.execution-record");
+      for (const header of ui.container.querySelectorAll<HTMLDetailsElement>("details.chat-activity-group")) groupRecords(header);
+      states.push({ phase, groups: ui.container.querySelectorAll('.chat-activity-group[data-category="shell"]').length,
+        sameParent: article?.parentElement === secondParent && secondParent.parentElement === transcriptParent, visible: !secondParent.hidden,
+        sameArticle: article === secondArticle, sameDetails: details === secondDetails, open: details?.open === true,
+        sameFocus: ui.dom.window.document.activeElement === secondSummary, scrollTop: feed.scrollTop });
+    };
+    await ui.render([first, visible, second]);
+    capture("late-visible-summary");
+    await ui.render([first, visible, second], hiddenReasoning);
+    capture("reasoning-hidden");
+    await ui.render([first, visible, second]);
+    capture("reasoning-visible-again");
+    assert.deepEqual(states, [
+      { phase: "late-visible-summary", groups: 2, sameArticle: true, sameParent: true, visible: true, sameDetails: true, open: true, sameFocus: true, scrollTop: 150 },
+      { phase: "reasoning-hidden", groups: 1, sameArticle: true, sameParent: true, visible: true, sameDetails: true, open: true, sameFocus: true, scrollTop: 150 },
+      { phase: "reasoning-visible-again", groups: 2, sameArticle: true, sameParent: true, visible: true, sameDetails: true, open: true, sameFocus: true, scrollTop: 150 },
+    ], "late visible boundaries and settings changes must preserve the second tool, not only the first group");
+  } finally { await ui.close(); }
+});
+
+test("coalescing a focused activity header transfers focus to the surviving group", async () => {
+  const ui = browser();
+  const first = tool("first", { state: "Completed", streaming: false });
+  const pending = tool("second", { title: "lookup", toolProgress: "streaming" });
+  try {
+    await ui.render([first, pending]);
+    const headers = [...ui.container.querySelectorAll<HTMLDetailsElement>("details.chat-activity-group")];
+    assert.equal(headers.length, 2);
+    headers[1].querySelector("summary")!.focus();
+    const secondArticle = ui.container.querySelector('[data-record-key="second"]');
+    const secondParent = secondArticle?.parentElement;
+    await ui.render([first, { ...pending, title: "shell", toolProgress: undefined, streaming: false }]);
+    assert.equal(ui.container.querySelectorAll("details.chat-activity-group").length, 1);
+    assert.equal(ui.dom.window.document.activeElement, headers[0].querySelector("summary"));
+    assert.equal(ui.container.querySelector('[data-record-key="second"]'), secondArticle);
+    assert.equal(secondArticle?.parentElement, secondParent);
+    assert.equal(groupRecords(headers[0]).length, 2);
+  } finally { await ui.close(); }
+});
+
+test("new activity and task links reveal flat group members and retain their disclosure choice", async () => {
+  const ui = browser();
+  const command = tool("reveal-command", { activity: 1 });
+  try {
+    await ui.render([command]);
+    const feed = ui.container.querySelector<HTMLElement>(".conversation")!;
+    let scrolls = 0;
+    Object.defineProperty(feed, "scrollTo", { value: (options: ScrollToOptions) => { feed.scrollTop = options.top || 0; scrolls++; } });
+    const group = ui.container.querySelector<HTMLDetailsElement>("details.chat-activity-group")!;
+    assert.equal(group.open, false);
+    groupRecords(group);
+    await ui.render([{ ...command, activity: 2 }]);
+    const activity = ui.container.querySelector<HTMLButtonElement>(".activity-announcement button")!;
+    assert.ok(activity);
+    await act(async () => activity.click());
+    assert.equal(group.open, true);
+    groupRecords(group);
+    await ui.render([{ ...command, state: "Completed", streaming: false, activity: 2 }]);
+    assert.equal(group.open, true);
+    let tasks: Entry[] = appendEvent([], { event: "task_started", run_id: "run", session_id: "child", activation: 0, title: "Child" });
+    tasks = [...tasks, tool("task-link", { title: "inspect", delegatedTaskId: "child" })];
+    await ui.render(tasks, { ...defaultAppearance, activity: { ...defaultAppearance.activity,
+      tools: { placement: "separate", details: "expanded" } } });
+    const taskGroup = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="agents"]')!;
+    assert.equal(taskGroup.open, false);
+    const link = ui.container.querySelector<HTMLAnchorElement>('a[href="#task-child"]')!;
+    assert.ok(link);
+    await act(async () => link.click());
+    assert.equal(taskGroup.open, true);
+    groupRecords(taskGroup);
+    assert.equal(scrolls, 2, "both reveal paths scroll after opening their linked group members");
+  } finally { await ui.close(); }
+});
+
+test("actual streamed successive-round calls merge into one Commands 2 live and after reload", async () => {
+  const ui = browser();
+  let entries: Entry[] = [];
+  const send = (event: WireEvent) => { entries = appendEvent(entries, { run_id: "run", ...event }); };
+  const groups = () => [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+  try {
+    send({ event: "tool_call_progress", generation_id: "diagnostic-generation-one", index: 0, id: "", name: "shell",
+      status: "streaming", arguments_text: '{"command":"first' });
+    assert.equal(entries[0]!.toolProgress, "streaming");
+    await ui.render(entries);
+    const firstId = entries[0]!.id;
+    send({ event: "tool_call", generation_id: "diagnostic-generation-one", index: 0, id: "diagnostic-call-one", name: "shell",
+      arguments: { command: "first" } });
+    send({ event: "tool_execution_started", generation_id: "diagnostic-generation-one", index: 0, id: "diagnostic-call-one", name: "shell" });
+    send({ event: "tool_result", generation_id: "diagnostic-generation-one", index: 0, id: "diagnostic-call-one", name: "shell", result: "first result" });
+    assert.equal(entries[0]!.id, firstId);
+    assert.equal(entries[0]!.toolProgress, undefined);
+    assert.equal(entries[0]!.state, "Completed");
+    await ui.render(entries);
+    send({ event: "response_metadata", ...diagnosticResponse });
+    const metadata = entries.find(value => value.kind === "assistant")!;
+    assert.equal(metadata.text, "");
+    assert.equal(metadata.responseMetadata?.summary, "");
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector(`[data-record-key="${metadata.id}"]`), null);
+    send({ event: "tool_call_progress", generation_id: "diagnostic-generation-two", index: 0, id: "", name: "shell",
+      status: "streaming", arguments_text: '{"command":"second' });
+    const secondId = entries.at(-1)!.id;
+    assert.equal(entries.at(-1)!.toolProgress, "streaming");
+    await ui.render(entries);
+    send({ event: "tool_call", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "shell",
+      arguments: { command: "second" } });
+    send({ event: "tool_execution_started", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "shell" });
+    send({ event: "tool_result", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "shell", result: "second result" });
+    assert.equal(entries.at(-1)!.id, secondId);
+    assert.equal(entries.at(-1)!.toolProgress, undefined);
+    assert.equal(entries.at(-1)!.state, "Completed");
+    await ui.render(entries);
+    const live = { groups: groups().length, counts: groups().map(group => group.querySelector(".chat-activity-count")?.textContent),
+      order: [...ui.container.querySelectorAll<HTMLElement>("article.entry.tool")].map(row => row.dataset.recordKey) };
+    const cold = new JSDOM(renderToStaticMarkup(createElement(Conversation, {
+      entries, appearance: defaultAppearance, sessionId: "root", demo: false, canSubmit: false, submit() {},
+    })));
+    const coldGroups = [...cold.window.document.querySelectorAll('.chat-activity-group[data-category="shell"]')];
+    const reloaded = { groups: coldGroups.length, counts: coldGroups.map(group => group.querySelector(".chat-activity-count")?.textContent),
+      order: [...cold.window.document.querySelectorAll<HTMLElement>("article.entry.tool")].map(row => row.dataset.recordKey) };
+    cold.window.close();
+    assert.deepEqual({ live, reloaded }, {
+      live: { groups: 1, counts: ["2"], order: [firstId, secondId] },
+      reloaded: { groups: 1, counts: ["2"], order: [firstId, secondId] },
+    }, "argument streaming must not permanently pin successive rounds into two Commands 1 wrappers");
   } finally { await ui.close(); }
 });

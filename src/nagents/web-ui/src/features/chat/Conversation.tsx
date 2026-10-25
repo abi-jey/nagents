@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useId, type ReactNode } from "react";
 import { ExecutionRecord } from "./ExecutionRecord.js";
 import { DelegationActivity } from "./DelegationActivity.js";
 import { DelegationFlow, type DelegationOptions } from "./delegationFlow.js";
@@ -7,7 +7,7 @@ import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ResponseDetails, type ResponseDetailsProps } from "./ResponseDetails.js";
 import { agentLabels, hasAssistantContent, transcriptEntries } from "./agentLabels.js";
-import { ActivityLayout, activityCategory, activityLabels, activityState, hasDisplayableReasoning, importantActivity } from "./activityLayout.js";
+import { ActivityLayout, activityCategory, activityLabels, activityState, hasDisplayableReasoning, importantActivity, itemKey, type ActivityGroup } from "./activityLayout.js";
 import type { ChatAppearance } from "../settings/appearance.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
@@ -73,29 +73,39 @@ export function TranscriptItems({
   const expandedRecords = useRef(new Set<string>());
   const appearanceKey = JSON.stringify(appearance);
   const expandedAppearance = useRef(appearanceKey);
-  if (!items.length || expandedAppearance.current !== appearanceKey) {
+  const resetAppearance = !items.length || expandedAppearance.current !== appearanceKey;
+  if (resetAppearance) {
     expandedAppearance.current = appearanceKey;
     expandedRecords.current.clear();
   }
   const visibleItems = renderTask ? items.filter(item => item.kind !== "retained") : items;
   const bylines = labels ?? agentLabels(transcriptEntries(items), agentName, names, appearance);
-  return layout.current.render(visibleItems, appearance, insideGroup).map((item) => {
-    if (item.kind === "activity_group") {
-      const { label, icon } = activityLabels[item.category];
-      const state = activityState(item.items);
-      if (item.items.some(importantActivity)) expandedRecords.current.add(item.id);
-      const delegationOnly = item.items.every(child => child.kind === "entry" && child.entry.delegation);
-      const groupOpen = delegationOnly || (disclosures.get(item.id) ?? (expandedRecords.current.has(item.id) || appearance?.activity[item.category].details === "expanded"));
-      const targets = [...new Set(item.items.flatMap(child => child.kind === "entry" ? [executionTarget(child.entry)] : child.kind === "thread" ? [child.thread.name] : []).filter(Boolean))].slice(0, 2).join(" · ");
-      return <details key={item.id} className="chat-activity-group" data-category={item.category} data-delegation-shell={delegationOnly || undefined}
-        data-state={state} data-record-key={item.id} data-disclosure-key={item.id}
-        open={groupOpen}
-        onToggle={event => { if (event.currentTarget.open !== groupOpen) toggle(item.id, event.currentTarget.open); }}>
-        <summary hidden={delegationOnly}><Icon name={icon} size={14} /><span className="chat-activity-label">{label}<span className="chat-activity-count">{item.items.length}</span></span>
-          {targets && <span className="chat-activity-target">{targets}</span>}{state && <span className="chat-activity-state" role="status">{state}</span>}</summary>
-        <div className="chat-activity-body"><TranscriptItems items={item.items} names={names} disclosures={disclosures} toggle={toggle} renderTask={renderTask} appearance={appearance} labels={bylines} agentName={agentName} renderReasoning={renderReasoning} inspectTask={inspectTask} insideGroup /></div>
-      </details>;
-    }
+  const id = useId();
+  // Group controls and records are keyed siblings, so regrouping cannot change
+  // a record's React parent or replace its focused inspection controls.
+  const records = useRef(new Map<string, HTMLDivElement>());
+  const headers = useRef(new Map<string, HTMLDetailsElement>());
+  const previousGroups = useRef(new Map<string, string[]>());
+  const headerFocus = useRef("");
+  const revealedRecords = useRef(new Set<string>());
+  const inheritedDisclosures = useRef(new Map<string, boolean>());
+  if (resetAppearance) { revealedRecords.current.clear(); inheritedDisclosures.current.clear(); }
+  const presentation = layout.current.render(visibleItems, appearance, insideGroup);
+  const groups = presentation.filter((item): item is ActivityGroup => item.kind === "activity_group");
+  // A coalesced header transfers keyboard focus to its surviving group.
+  for (const [key, header] of headers.current) {
+    if (!header.contains(header.ownerDocument.activeElement) || groups.some(group => group.id === key)) continue;
+    const members = previousGroups.current.get(key) || [];
+    headerFocus.current = groups.find(group => group.items.some(child => members.includes(itemKey(child))))?.id || "";
+  }
+  previousGroups.current = new Map(groups.map(group => [group.id, group.items.map(itemKey)]));
+  useLayoutEffect(() => {
+    if (!headerFocus.current) return;
+    headers.current.get(headerFocus.current)?.querySelector("summary")?.focus({ preventScroll: true });
+    headerFocus.current = "";
+  });
+  const recordId = (item: TranscriptItem) => `${id}-record-${encodeURIComponent(itemKey(item))}`;
+  function renderItem(item: TranscriptItem): ReactNode {
     // Registry-only tasks have no proven location in this transcript. The team
     // tree still exposes them; do not attach them to its last user message.
     if (item.kind === "retained" && renderTask) return null;
@@ -259,6 +269,46 @@ export function TranscriptItems({
         )}
       </article>
     );
+  }
+  function renderRecord(item: TranscriptItem, group?: ActivityGroup, open = true): ReactNode {
+    const key = itemKey(item);
+    return <div key={`record:${key}`} id={recordId(item)} className={group ? "transcript-record chat-activity-body" : "transcript-record"}
+      data-activity-group={group?.id} data-activity-key={`activity:${key}`} hidden={!open}
+      ref={element => { if (element) records.current.set(key, element); else records.current.delete(key); }}>
+      {renderItem(item)}
+    </div>;
+  }
+  return presentation.flatMap(item => {
+    if (item.kind !== "activity_group") return [renderRecord(item)];
+    const { label, icon } = activityLabels[item.category];
+    const state = activityState(item.items);
+    const keys = item.items.map(child => `activity:${itemKey(child)}`);
+    if (item.items.some(importantActivity)) expandedRecords.current.add(item.id);
+    for (const child of item.items) {
+      const record = records.current.get(itemKey(child));
+      if (record?.contains(record.ownerDocument.activeElement)) revealedRecords.current.add(`activity:${itemKey(child)}`);
+    }
+    const manual = keys.map(key => disclosures.get(key) ?? inheritedDisclosures.current.get(key)).filter(value => value !== undefined);
+    const groupOpen = keys.some(key => revealedRecords.current.has(key)) || (manual.length ? manual.some(Boolean)
+      : expandedRecords.current.has(item.id) || item.items.some(child => expandedRecords.current.has(itemKey(child))) || appearance?.activity[item.category].details === "expanded");
+    // New members inherit a user's group choice before a later split occurs.
+    if (manual.length) for (const key of keys)
+      if (!disclosures.has(key) && !inheritedDisclosures.current.has(key)) inheritedDisclosures.current.set(key, groupOpen);
+    const targets = [...new Set(item.items.flatMap(child => child.kind === "entry" ? [executionTarget(child.entry)] : child.kind === "thread" ? [child.thread.name] : []).filter(Boolean))].slice(0, 2).join(" · ");
+    return [<details key={`group:${item.id}`} className="chat-activity-group" data-category={item.category}
+      data-state={state} data-record-key={item.id} data-disclosure-key={item.id} open={groupOpen}
+      ref={element => { if (element) headers.current.set(item.id, element); else headers.current.delete(item.id); }}
+      onToggle={event => {
+        if (event.currentTarget.open === groupOpen) return;
+        for (const key of keys) {
+          if (!event.currentTarget.open) revealedRecords.current.delete(key);
+          inheritedDisclosures.current.set(key, event.currentTarget.open);
+          toggle(key, event.currentTarget.open);
+        }
+      }}>
+      <summary aria-controls={item.items.map(recordId).join(" ")}><Icon name={icon} size={14} /><span className="chat-activity-label">{label}<span className="chat-activity-count">{item.items.length}</span></span>
+        {targets && <span className="chat-activity-target">{targets}</span>}{state && <span className="chat-activity-state" role="status">{state}</span>}</summary>
+    </details>, ...item.items.map(child => renderRecord(child, item, groupOpen))];
   });
 }
 
@@ -316,6 +366,16 @@ export function Conversation({
   function reveal(target: HTMLElement) {
     if (!feed.current) return;
     const keys = revealAncestors(target, feed.current);
+    const group = target.closest<HTMLElement>("[data-activity-group]")?.dataset.activityGroup;
+    if (group) {
+      for (const header of feed.current.querySelectorAll<HTMLDetailsElement>("details.chat-activity-group"))
+        if (header.dataset.recordKey === group) header.open = true;
+      for (const record of feed.current.querySelectorAll<HTMLElement>("[data-activity-group]")) {
+        if (record.dataset.activityGroup !== group) continue;
+        record.hidden = false;
+        if (record.dataset.activityKey) keys.push(record.dataset.activityKey);
+      }
+    }
     setDisclosures((current) => keys.reduce((next, key) => rememberDisclosure(next, key, true), current));
     scrollWithin(feed.current, target, "start");
   }
