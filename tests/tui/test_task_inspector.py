@@ -81,10 +81,14 @@ def test_pending_history_cannot_update_a_removed_or_replaced_view(tmp_path: Path
         app = HistoryInspectorApp(lambda: tasks, history)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            await app.workers.wait_for_complete()
             screen = app.screen
             assert isinstance(screen, TaskScreen)
             assert screen.get_history is history
+            # Selection can cancel an earlier exclusive history worker. Wait
+            # for this view's rendered data, rather than every global worker.
+            async with asyncio.timeout(HANG_GUARD):
+                while "Saved answer for s1" not in str(screen.query_one("#task-history", Static).render()):
+                    await pilot.pause()
             hold = True
             worker = screen.load_history("s1")
             async with asyncio.timeout(HANG_GUARD):
@@ -107,7 +111,9 @@ def test_pending_history_cannot_update_a_removed_or_replaced_view(tmp_path: Path
             reopened = TaskScreen(lambda: tasks, manager.get_history, parents=lambda: {}, selected_session_id="s2")
             await app.push_screen(reopened)
             await pilot.pause()
-            await app.workers.wait_for_complete()
+            async with asyncio.timeout(HANG_GUARD):
+                while "Saved answer for s2" not in str(reopened.query_one("#task-history", Static).render()):
+                    await pilot.pause()
             text = str(reopened.query_one("#task-history", Static).render())
             assert "Saved answer for s2" in text and "Saved answer for s1" not in text
 
