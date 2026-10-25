@@ -196,13 +196,15 @@ class RemoteConversation:
         elif kind == "artifact_update":
             candidate_task, candidate_context = event.artifact_update.task_id, event.artifact_update.context_id
         else:
-            raise RemoteAgentError("Remote agent returned an unsupported event")
+            raise RemoteAgentError("Remote agent returned an unsupported event", code="A2A_PROTOCOL_INVALID")
         if kind != "message" and (not candidate_task or not candidate_context):
-            raise RemoteAgentError("Remote event is missing its task or context identity")
+            raise RemoteAgentError("Remote event is missing its task or context identity", code="A2A_PROTOCOL_INVALID")
         if (previous_task and candidate_task != previous_task) or (
             previous_context and candidate_context != previous_context
         ):
-            raise RemoteAgentError("Remote stream changed its accepted task or context identity")
+            raise RemoteAgentError(
+                "Remote stream changed its accepted task or context identity", code="A2A_PROTOCOL_INVALID"
+            )
         status_text = ""
         if kind == "message":
             self.context_id = event.message.context_id or self.context_id
@@ -240,9 +242,9 @@ class RemoteConversation:
                 description=artifact.description,
             )
         else:
-            raise RemoteAgentError("Remote agent returned an unsupported event")
+            raise RemoteAgentError("Remote agent returned an unsupported event", code="A2A_PROTOCOL_INVALID")
         if len(self._artifacts) > 256 or len(self.text) > 1048576 or len(status_text) > 32768:
-            raise RemoteAgentError("Remote response exceeds the supported text limit")
+            raise RemoteAgentError("Remote response exceeds the supported text limit", code="A2A_PROTOCOL_INVALID")
         self._limits()
         if self.state == TaskState.TASK_STATE_COMPLETED:
             for artifact in self._artifacts.values():
@@ -305,7 +307,7 @@ class RemoteConversation:
                 "A2A_ARTIFACT_LIMIT",
                 "A2A_ARTIFACT_TYPE",
                 "A2A_ARTIFACT_URL",
-                "A2A_PROTOCOL",
+                "A2A_PROTOCOL_INVALID",
             }:
                 raise
         if self.state not in settled:

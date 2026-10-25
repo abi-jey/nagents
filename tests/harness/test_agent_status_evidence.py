@@ -312,6 +312,7 @@ def test_status_exposes_only_effective_public_identity_and_current_state(
         "last_output",
         "result",
         "error",
+        "artifacts",
         "history",
         "truncated",
     }
@@ -326,6 +327,7 @@ def test_status_exposes_only_effective_public_identity_and_current_state(
     assert record["status"] == state
     assert record["result"] == task.result
     assert record["error"] == task.error
+    assert record["artifacts"] == []
     assert not record["truncated"]
     serialized = json.dumps(record)
     assert "ngn-private" not in serialized

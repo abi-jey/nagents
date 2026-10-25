@@ -18,7 +18,6 @@ from nagents.artifacts import ImageArtifact
 from nagents.artifacts import ImageArtifactReference
 from nagents.session.manager import SessionManager
 from nagents.types import ImageContent
-from nagents.types import TextContent
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,7 +28,7 @@ def image_bytes(part: ImageContent) -> bytes:
         if len(part.base64_data) > (MAX_ARTIFACT_IMAGE_BYTES + 2) // 3 * 4:
             raise ValueError("Image artifact exceeds 8 MiB")
         data = base64.b64decode(part.base64_data, validate=True)
-        ImageArtifact(part.artifact_id, part.artifact_part, data, part.media_type, part.filename)
+        ImageArtifact(part.artifact_id, part.artifact_part, data, part.media_type, part.filename, part.caption)
         return data
     except (ValueError, TypeError, binascii.Error):
         raise ValueError("Stored image artifact is invalid or exceeds its limit") from None
@@ -38,11 +37,6 @@ def image_bytes(part: ImageContent) -> bytes:
 def image_references(content: object, root: str, history_id: int) -> tuple[ImageArtifactReference, ...]:
     if not isinstance(content, list) or history_id <= 0:
         return ()
-    caption = (
-        "\n".join(part.text for part in content if isinstance(part, TextContent))
-        .encode("utf-8")[:256]
-        .decode("utf-8", errors="ignore")
-    )
     references: list[ImageArtifactReference] = []
     size = 0
     for index, part in enumerate(content):
@@ -60,7 +54,7 @@ def image_references(content: object, root: str, history_id: int) -> tuple[Image
                 len(data),
                 f"/api/sessions/{quote(root, safe='')}/artifacts/{history_id}/{index}",
                 part.artifact_part,
-                caption,
+                part.caption.encode("utf-8")[:256].decode("utf-8", errors="ignore"),
             )
         )
     return tuple(references)

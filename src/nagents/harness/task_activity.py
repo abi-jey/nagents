@@ -262,6 +262,15 @@ class ChildActivity(AgentPlugin):
     async def remote_finished(self) -> None:
         await self._history_committed()
 
+    async def remote_cancelled_output(self, event: RemoteArtifacts) -> None:
+        """Retain committed images during Stop without queuing to a closed run."""
+        if event.response_session_id != self.info._storage_id or event.response_session_id != self.child.session_id:
+            raise RuntimeError("Stopped image output does not belong to this child")
+        self.info.artifacts = event.artifacts
+        # This observation is nonblocking. The mandatory completion snapshot
+        # carries the references even when the outer run has stopped reading.
+        await self.manager._emit_activity(self.info, {"type": "history_committed", "history_id": int(event.history_id)})
+
     async def after_run(self, context: RunContext) -> None:
         current = asyncio.current_task()
         if current is not None and not current.cancelling():

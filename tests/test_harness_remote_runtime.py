@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
+from contextlib import aclosing
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import cast
 
 import aiosqlite
 import httpx
 import pytest
+from a2a.types import Artifact
+from a2a.types import Part
+from a2a.types import StreamResponse
 from a2a.types import Task
+from a2a.types import TaskArtifactUpdateEvent
 from a2a.types import TaskState
 from a2a.types import TaskStatus
+from a2a.types import TaskStatusUpdateEvent
 
+from nagents import _sqlite
 from nagents.a2a import client as a2a_client
 from nagents.a2a.application import create_app
 from nagents.a2a.config import A2AConfig
@@ -22,17 +31,24 @@ from nagents.a2a.config import IssuerConfig
 from nagents.a2a.conversation import RemoteConversation
 from nagents.agent import Agent
 from nagents.events import DoneEvent
+from nagents.events import ErrorEvent
 from nagents.events import Event
 from nagents.events import ResponseMetadataEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
+from nagents.harness.remote_artifacts import referenced_images
 from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote_runtime import _load_state
 from nagents.harness.remote_runtime import owned_remote_task
+from nagents.harness.remote_runtime import run_remote
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.session import SessionManager
+from nagents.types import ImageContent
+from nagents.types import Message
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
@@ -46,15 +62,14 @@ from tests.test_a2a_auth import signing_key
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from collections.abc import AsyncIterator
-    from pathlib import Path
+    from collections.abc import Awaitable
+    from collections.abc import Callable
 
     from a2a.types import SendMessageRequest
-    from a2a.types import StreamResponse
 
     from nagents.a2a.agent import AgentContext
     from nagents.a2a.client import RemoteAgent
     from nagents.types import GenerationConfig
-    from nagents.types import Message
     from nagents.types import ToolDefinition
 
 
@@ -326,6 +341,383 @@ async def test_owned_remote_task_cancels_on_generator_close_and_not_after_termin
             terminal_row = await cursor.fetchone()
         assert terminal_row == (task_id, TaskState.TASK_STATE_CANCELED, 0)
     finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_state_load_queues_behind_active_session_database_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        del provider, messages
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_execute = cast("Callable[..., Awaitable[object]]", aiosqlite.Connection._execute)
+
+    async def pause_active_message_write(
+        connection: aiosqlite.Connection, operation: Callable[..., object], *args: object, **kwargs: object
+    ) -> object:
+        result = await original_execute(connection, operation, *args, **kwargs)
+        statement = args[0] if args else None
+        if (
+            isinstance(statement, str)
+            and statement.lstrip().startswith("INSERT INTO v2_messages")
+            and not entered.is_set()
+        ):
+            entered.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(aiosqlite.Connection, "_execute", pause_active_message_write)
+    active_write: asyncio.Task[int] | None = None
+    state_load: asyncio.Task[tuple[str, str, str, int, int] | None] | None = None
+    queued_write: asyncio.Task[int] | None = None
+    try:
+        await asyncio.wait_for(harness.initialize(), HANG_GUARD)
+        active_write = asyncio.create_task(
+            harness.agent.session.add_message(harness.session_id, Message(role="user", content="active write"))
+        )
+        await asyncio.wait_for(entered.wait(), HANG_GUARD)
+        state_load = asyncio.create_task(_load_state(harness))
+        queued_write = asyncio.create_task(
+            harness.agent.session.add_message(harness.session_id, Message(role="user", content="queued write"))
+        )
+        async with asyncio.timeout(HANG_GUARD):
+            while sum(gate.users for gates in _sqlite._gates.values() for gate in gates.values()) < 3:
+                await asyncio.sleep(0)
+        assert not state_load.done() and not queued_write.done()
+        release.set()
+        await asyncio.wait_for(active_write, HANG_GUARD)
+        assert await asyncio.wait_for(state_load, HANG_GUARD) is None
+        await asyncio.wait_for(queued_write, HANG_GUARD)
+        assert [message.content for message in await harness.agent.session.get_history(harness.session_id)] == [
+            "active write",
+            "queued write",
+        ]
+    finally:
+        release.set()
+        await asyncio.gather(
+            *(task for task in (active_write, state_load, queued_write) if task is not None), return_exceptions=True
+        )
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_binding_error_consumer_can_write_session_database_while_stream_is_suspended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        del provider, messages
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    store = harness._agent_catalog.remote_store
+    store.save(
+        {
+            "peer": AgentProfile(
+                description="Configured peer",
+                a2a=RemoteProfile(url="https://peer.example"),
+            )
+        },
+        expected=store.load().revision,
+    )
+    assert harness.refresh_agent_definitions()
+    try:
+        await harness.set_agent("peer")
+        await asyncio.wait_for(harness.initialize(), HANG_GUARD)
+        await _load_state(harness)
+        async with aiosqlite.connect(harness.agent.session.db_path) as db:
+            await db.execute(
+                "INSERT INTO ngn_remote_sessions VALUES(?,?,?,?,?,?,?)",
+                (harness.session_id, "stale-binding", "", "", "previous-message", 0, 0),
+            )
+            await db.commit()
+
+        async with aclosing(run_remote(harness, "This should stop at the binding check.")) as stream:
+            event = await asyncio.wait_for(anext(stream), HANG_GUARD)
+            assert isinstance(event, ErrorEvent)
+            assert event.code == "A2A_BINDING_CHANGED"
+            history_id = await asyncio.wait_for(
+                harness.agent.session.add_message(
+                    harness.session_id, Message(role="assistant", content="consumer database write")
+                ),
+                HANG_GUARD,
+            )
+            assert history_id > 0
+            history = await harness.agent.session.get_history(harness.session_id)
+            assert history[-1].content == "consumer database write"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete_image", [True, False], ids=["complete", "incomplete"])
+async def test_local_cancel_retains_only_complete_remote_child_images_without_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, complete_image: bool
+) -> None:
+    image_data = (Path(__file__).parent / "fixtures" / "a2a-images" / "red.png").read_bytes()
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        del provider, messages
+        yield TextDoneEvent(text="unused")
+
+    class BlockingImagePeer:
+        def __init__(self) -> None:
+            self.card = type("Card", (), {"name": "Image peer", "description": ""})()
+            self.started = asyncio.Event()
+            self.sent: list[object] = []
+            self.canceled: list[str] = []
+
+        async def __aenter__(self) -> BlockingImagePeer:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            del exc_type, exc, traceback
+
+        async def send(self, request: object) -> AsyncGenerator[StreamResponse, None]:
+            self.sent.append(request)
+            yield StreamResponse(
+                status_update=TaskStatusUpdateEvent(
+                    task_id="peer-task-image-stop",
+                    context_id="peer-context-image-stop",
+                    status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+                )
+            )
+            yield StreamResponse(
+                artifact_update=TaskArtifactUpdateEvent(
+                    task_id="peer-task-image-stop",
+                    context_id="peer-context-image-stop",
+                    artifact=Artifact(
+                        artifact_id="stopped-image",
+                        parts=[
+                            Part(text="A distinct image caption"),
+                            Part(raw=image_data, media_type="image/png", filename="stopped.png"),
+                        ],
+                        description="A distinct image caption",
+                    ),
+                    last_chunk=complete_image,
+                )
+            )
+            self.started.set()
+            await asyncio.Event().wait()
+
+        async def cancel(self, task_id: str) -> Task:
+            self.canceled.append(task_id)
+            return Task(
+                id=task_id,
+                context_id="peer-context-image-stop",
+                status=TaskStatus(state=TaskState.TASK_STATE_CANCELED),
+            )
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    peer = BlockingImagePeer()
+    monkeypatch.setattr(a2a_client, "RemoteAgent", lambda *args, **kwargs: peer)
+    store = harness._agent_catalog.remote_store
+    store.save(
+        {
+            "peer": AgentProfile(
+                description="Configured image peer",
+                a2a=RemoteProfile(url="https://peer.example"),
+            )
+        },
+        expected=store.load().revision,
+    )
+    assert harness.refresh_agent_definitions()
+
+    async def approve(request: object) -> bool:
+        del request
+        return True
+
+    harness.approval_handler = approve
+    try:
+        await asyncio.wait_for(harness.initialize(), HANG_GUARD)
+        harness.tasks.begin(harness.session_id)
+        accepted = await asyncio.wait_for(harness.tasks.to_agent("Return a captioned image.", agent="peer"), HANG_GUARD)
+        await asyncio.wait_for(peer.started.wait(), HANG_GUARD)
+        worker = harness.tasks._workers[accepted["session_id"]]
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(worker, HANG_GUARD)
+
+        info = harness.tasks._lookup(accepted["session_id"])
+        assert info.status == "cancelled"
+        assert len(peer.sent) == 1
+        assert peer.canceled == ["peer-task-image-stop"]
+        history = await harness.tasks.history(info.session_id)
+        assistant_images = [
+            part
+            for message in history
+            if message.role == "assistant" and isinstance(message.content, list)
+            for part in message.content
+            if isinstance(part, ImageContent)
+        ]
+        if complete_image:
+            assert len(assistant_images) == 1
+            assert assistant_images[0].caption == "A distinct image caption"
+            assert len(info.artifacts) == 1
+            assert info.artifacts[0].caption == "A distinct image caption"
+            owned = await referenced_images(
+                harness.agent.session.db_path,
+                harness.session_id,
+                info._storage_id,
+                info.artifacts,
+            )
+            assert len(owned) == 1
+            assert owned[0].base64_data == base64.b64encode(image_data).decode("ascii")
+            assert owned[0].caption == "A distinct image caption"
+        else:
+            assert assistant_images == []
+            assert info.artifacts == ()
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_committed_remote_image_insert_does_not_duplicate_history_or_references(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_data = (Path(__file__).parent / "fixtures" / "a2a-images" / "red.png").read_bytes()
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        del provider, messages
+        yield TextDoneEvent(text="unused")
+
+    class CompletingImagePeer:
+        def __init__(self) -> None:
+            self.card = type("Card", (), {"name": "Image peer", "description": ""})()
+            self.image_sent = asyncio.Event()
+            self.complete = asyncio.Event()
+            self.sent: list[object] = []
+
+        async def __aenter__(self) -> CompletingImagePeer:
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            del exc_type, exc, traceback
+
+        async def send(self, request: object) -> AsyncGenerator[StreamResponse, None]:
+            self.sent.append(request)
+            yield StreamResponse(
+                status_update=TaskStatusUpdateEvent(
+                    task_id="peer-task-image-complete",
+                    context_id="peer-context-image-complete",
+                    status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+                )
+            )
+            yield StreamResponse(
+                artifact_update=TaskArtifactUpdateEvent(
+                    task_id="peer-task-image-complete",
+                    context_id="peer-context-image-complete",
+                    artifact=Artifact(
+                        artifact_id="completed-image",
+                        parts=[
+                            Part(text="A committed image caption"),
+                            Part(raw=image_data, media_type="image/png", filename="committed.png"),
+                        ],
+                        description="A committed image caption",
+                    ),
+                    last_chunk=True,
+                )
+            )
+            self.image_sent.set()
+            await self.complete.wait()
+            yield StreamResponse(
+                status_update=TaskStatusUpdateEvent(
+                    task_id="peer-task-image-complete",
+                    context_id="peer-context-image-complete",
+                    status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+                )
+            )
+
+        async def cancel(self, task_id: str) -> Task:
+            raise AssertionError(f"A completed remote task must not be canceled: {task_id}")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    peer = CompletingImagePeer()
+    monkeypatch.setattr(a2a_client, "RemoteAgent", lambda *args, **kwargs: peer)
+    store = harness._agent_catalog.remote_store
+    store.save(
+        {
+            "peer": AgentProfile(
+                description="Configured image peer",
+                a2a=RemoteProfile(url="https://peer.example"),
+            )
+        },
+        expected=store.load().revision,
+    )
+    assert harness.refresh_agent_definitions()
+
+    async def approve(request: object) -> bool:
+        del request
+        return True
+
+    harness.approval_handler = approve
+    entered_insert, release_insert = asyncio.Event(), asyncio.Event()
+    original_execute = cast("Callable[..., Awaitable[object]]", aiosqlite.Connection._execute)
+
+    async def pause_actual_insert(
+        connection: aiosqlite.Connection, operation: Callable[..., object], *args: object, **kwargs: object
+    ) -> object:
+        result = await original_execute(connection, operation, *args, **kwargs)
+        statement = args[0] if args else None
+        if (
+            isinstance(statement, str)
+            and statement.lstrip().startswith("INSERT INTO v2_messages")
+            and not entered_insert.is_set()
+        ):
+            entered_insert.set()
+            await release_insert.wait()
+        return result
+
+    worker: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(harness.initialize(), HANG_GUARD)
+        harness.tasks.begin(harness.session_id)
+        accepted = await asyncio.wait_for(harness.tasks.to_agent("Complete this image task.", agent="peer"), HANG_GUARD)
+        await asyncio.wait_for(peer.image_sent.wait(), HANG_GUARD)
+        monkeypatch.setattr(aiosqlite.Connection, "_execute", pause_actual_insert)
+        peer.complete.set()
+        worker = harness.tasks._workers[accepted["session_id"]]
+        await asyncio.wait_for(entered_insert.wait(), HANG_GUARD)
+        worker.cancel()
+        await asyncio.sleep(0)
+        worker.cancel()
+        release_insert.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(worker, HANG_GUARD)
+
+        info = harness.tasks._lookup(accepted["session_id"])
+        assert info.status == "cancelled"
+        assert len(peer.sent) == 1
+        child_history = await harness.tasks.history(info.session_id)
+        assistant_messages = [message for message in child_history if message.role == "assistant"]
+        assistant_images = [
+            part
+            for message in assistant_messages
+            if isinstance(message.content, list)
+            for part in message.content
+            if isinstance(part, ImageContent)
+        ]
+        assert len(assistant_messages) == 1
+        assert len(assistant_images) == 1
+        assert len(info.artifacts) == 1
+        assert info.artifacts[0].caption == "A committed image caption"
+        owned = await referenced_images(
+            harness.agent.session.db_path,
+            harness.session_id,
+            info._storage_id,
+            info.artifacts,
+        )
+        assert len(owned) == 1
+        assert owned[0].base64_data == base64.b64encode(image_data).decode("ascii")
+        assert owned[0].caption == "A committed image caption"
+    finally:
+        release_insert.set()
+        if worker is not None and not worker.done():
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
         await harness.close()
 
 

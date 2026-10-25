@@ -35,6 +35,7 @@ _REMOTE_MESSAGES = {
     "A2A_TIMEOUT": "The remote agent request timed out. Check the remote server and its task status.",
     "A2A_TLS": "The remote agent's TLS connection could not be verified. Check its certificate and the additional CA bundle in Remote connection settings.",
     "A2A_PROTOCOL": "The remote agent returned an invalid or unsupported response. Check the remote server's A2A configuration and logs.",
+    "A2A_PROTOCOL_INVALID": "The remote agent changed its task identity or returned invalid response data. Check the remote server's A2A configuration and logs.",
     "A2A_ARTIFACT_INVALID": "The remote agent returned a malformed or incomplete image artifact. Ask it to send a complete PNG or JPEG.",
     "A2A_ARTIFACT_TYPE": "The remote artifact format is unsupported. Ask the remote agent to return inline PNG or JPEG image bytes.",
     "A2A_ARTIFACT_LIMIT": "Remote images exceeded the limit of three images or 8 MiB in total. Ask for smaller images.",

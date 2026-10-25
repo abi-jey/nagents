@@ -568,7 +568,16 @@ class SessionManager:
         part_type = data.get("type")
         fields = {
             "text": {"type", "text"},
-            "image": {"type", "base64_data", "media_type", "detail", "filename", "artifact_id", "artifact_part"},
+            "image": {
+                "type",
+                "base64_data",
+                "media_type",
+                "detail",
+                "filename",
+                "artifact_id",
+                "artifact_part",
+                "caption",
+            },
             "audio": {"type", "base64_data", "format"},
             "document": {"type", "base64_data", "media_type", "title"},
         }
@@ -600,6 +609,7 @@ class SessionManager:
                 filename=text("filename", ""),
                 artifact_id=text("artifact_id", ""),
                 artifact_part=artifact_part,
+                caption=text("caption", ""),
             )
         elif part_type == "audio":
             return AudioContent(

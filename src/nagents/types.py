@@ -98,6 +98,7 @@ class ImageContent:
     filename: str = ""
     artifact_id: str = ""
     artifact_part: int = 0
+    caption: str = ""
 
 
 @dataclass

@@ -567,6 +567,39 @@ async def test_image_publisher_rejects_over_budget_batch_before_sending_first_im
 
 
 @pytest.mark.asyncio
+async def test_image_publisher_rejects_caption_without_text_mode_before_budget_or_queue(
+    images: dict[str, bytes],
+) -> None:
+    queued: list[ImageArtifact] = []
+    consumed = 0
+    consume_calls = 0
+
+    async def sink(image: ImageArtifact) -> None:
+        queued.append(image)
+
+    def consume(size: int) -> None:
+        nonlocal consumed, consume_calls
+        consumed += size
+        consume_calls += 1
+
+    publisher = ImagePublisher(sink, consume, lambda: ("image/png",))
+    token = current_image_publisher.set(publisher)
+    try:
+        with pytest.raises(ValueError, match="did not accept text captions"):
+            await publish_image(
+                images["red.png"],
+                media_type="image/png",
+                filename="captioned.png",
+                caption="An image-specific caption",
+            )
+        assert queued == []
+        assert publisher.count == publisher.bytes == consumed == consume_calls == 0
+        assert publisher.identifiers == set()
+    finally:
+        current_image_publisher.reset(token)
+
+
+@pytest.mark.asyncio
 async def test_image_publisher_is_unavailable_outside_active_a2a_execution(images: dict[str, bytes]) -> None:
     with pytest.raises(RuntimeError, match="active A2A server execution"):
         await publish_image(images["red.png"], media_type="image/png", filename="red.png")

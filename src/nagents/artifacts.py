@@ -78,6 +78,7 @@ class ImageArtifact:
             filename=self.filename,
             artifact_id=self.artifact_id,
             artifact_part=self.artifact_part,
+            caption=self.caption,
         )
 
 

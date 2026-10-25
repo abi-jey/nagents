@@ -44,6 +44,8 @@ class ImagePublisher:
         modes = self.modes()
         if modes and any(image.media_type not in modes for image in images):
             raise ValueError("The client did not accept this image output mode")
+        if modes and "text/plain" not in modes and any(image.caption for image in images):
+            raise ValueError("The client did not accept text captions")
         size = sum(len(image.data) for image in images)
         if self.count + len(images) > MAX_ARTIFACT_IMAGES or self.bytes + size > MAX_ARTIFACT_IMAGE_BYTES:
             raise ValueError("Image output exceeds three images or 8 MiB in total")

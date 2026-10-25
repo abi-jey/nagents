@@ -14,6 +14,7 @@ import pytest
 from nagents.artifacts import ImageArtifactReference
 from nagents.harness.remote_artifacts import image_references
 from nagents.harness.remote_artifacts import referenced_images
+from nagents.types import ContentPart
 from nagents.types import ImageContent
 from nagents.types import Message
 from tests.support.channels import site
@@ -87,6 +88,59 @@ def test_assistant_image_history_has_metadata_reference_and_authenticated_exact_
         owned = app.client.portal.call(read_as_owner)
         assert len(owned) == 1
         assert owned[0].base64_data == base64.b64encode(expected).decode("ascii")
+
+
+def test_distinct_image_captions_survive_authenticated_history_roundtrip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_dir = Path(__file__).parents[1] / "fixtures" / "a2a-images"
+    png = (fixture_dir / "red.png").read_bytes()
+    jpeg = (fixture_dir / "blue.jpg").read_bytes()
+    with site(tmp_path, monkeypatch) as app:
+        assert app.client.portal is not None
+
+        async def add_captioned_images() -> tuple[int, str]:
+            content: list[ContentPart] = [
+                ImageContent(
+                    base64.b64encode(png).decode("ascii"),
+                    "image/png",
+                    filename="first.png",
+                    artifact_id="first",
+                    artifact_part=1,
+                    caption="First image caption",
+                ),
+                ImageContent(
+                    base64.b64encode(jpeg).decode("ascii"),
+                    "image/jpeg",
+                    filename="second.jpg",
+                    artifact_id="second",
+                    artifact_part=2,
+                    caption="Second image caption",
+                ),
+            ]
+            return await app.state.history.add_message(app.main, Message(role="assistant", content=content)), app.main
+
+        history_id, root = app.client.portal.call(add_captioned_images)
+        response = app.client.get(f"/api/sessions/{root}", headers=app.headers)
+        assert response.status_code == 200
+        history = cast("list[dict[str, object]]", response.json()["history"])
+        row = next(item for item in history if item.get("history_id") == str(history_id))
+        references = cast("list[dict[str, object]]", row["parts"])
+        assert [item["caption"] for item in references] == ["First image caption", "Second image caption"]
+        assert base64.b64encode(png).decode("ascii") not in json.dumps(references)
+        assert base64.b64encode(jpeg).decode("ascii") not in json.dumps(references)
+        assert [app.client.get(str(item["path"]), headers=app.headers).content for item in references] == [png, jpeg]
+
+        async def read_as_owner() -> tuple[list[str], list[str]]:
+            messages = await app.state.history.get_history(root)
+            projected = image_references(messages[-1].content, root, history_id)
+            owned = await referenced_images(app.state.history.db_path, root, root, projected)
+            return [item.caption for item in projected], [item.caption for item in owned]
+
+        projected_captions, stored_captions = app.client.portal.call(read_as_owner)
+        assert projected_captions == ["First image caption", "Second image caption"]
+        assert stored_captions == projected_captions
 
 
 def test_image_asset_does_not_cross_root_scope_or_survive_deleted_history(
