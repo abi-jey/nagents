@@ -14,7 +14,7 @@ export function activityCategory(item: TranscriptItem): Exclude<ActivityCategory
   if (item.kind !== "entry") return "agents";
   const entry = item.entry;
   if (entry.delegation) return "agents";
-  if (entry.delivery || entry.liveCaption || entry.uploads?.length) return undefined;
+  if (entry.delivery || entry.liveCaption || entry.uploads?.length || entry.artifacts?.length || entry.artifactError) return undefined;
   if (entry.kind === "tool") {
     const family = toolPresentation(entry.title || "", entry.remoteReview).family;
     return family === "command" ? "shell" : ["edit", "write"].includes(family) ? "files"

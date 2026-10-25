@@ -19,6 +19,7 @@ from a2a.types import Task
 from a2a.types import TaskState
 from a2a.utils.errors import InvalidParamsError
 
+from nagents.artifacts import ImageArtifact
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import TextChunkEvent
@@ -31,6 +32,8 @@ from .authorization import AuthorizationSession
 from .authorization import current_authorization
 from .authorization import unavailable_credentials
 from .diagnostics import error_frames
+from .images import ImagePublisher
+from .images import current_image_publisher
 from .store import MessageClaim
 from .store import principal
 
@@ -63,7 +66,7 @@ class PublicText:
     last: bool
 
 
-PublicUpdate = PublicStatus | PublicText
+PublicUpdate = PublicStatus | PublicText | ImageArtifact
 
 
 @dataclass
@@ -75,6 +78,7 @@ class Execution:
     worker: asyncio.Task[None] | None = None
     runtime: AgentRuntime | None = None
     input: asyncio.Future[str] | None = None
+    accepted_output_modes: tuple[str, ...] = ()
 
     async def report(self, state: TaskState, text: str) -> None:
         await self.events.put(PublicStatus(state, text))
@@ -107,10 +111,15 @@ class TextOutput:
         self.has_chunks = False
         self.published = False
 
-    async def chunk(self, text: str) -> None:
-        self.total += len(text.encode())
-        if self.total > self.maximum:
+    def consume(self, size: int) -> None:
+        if self.total + size > self.maximum:
             raise ValueError("Public output limit exceeded")
+        self.total += size
+
+    async def chunk(self, text: str) -> None:
+        if text and self.execution.accepted_output_modes and "text/plain" not in self.execution.accepted_output_modes:
+            raise ValueError("The client did not accept text/plain output")
+        self.consume(len(text.encode()))
         self.buffer += text
         self.has_chunks = True
         if len(self.buffer.encode()) >= 512:
@@ -170,10 +179,14 @@ class TaskExecutor(AgentExecutor):
                     credential_handler=self.credential_handler,
                 )
                 token = current_authorization.set(authorization)
+                output = TextOutput(execution, self.config.max_output_bytes)
+                publisher = ImagePublisher(
+                    execution.events.put, output.consume, lambda: execution.accepted_output_modes
+                )
+                image_token = current_image_publisher.set(publisher)
                 try:
                     runtime = self.build_runtime(execution, session_id, authorization)
                     execution.runtime = runtime
-                    output = TextOutput(execution, self.config.max_output_bytes)
                     finished = False
                     async with aclosing(runtime.run(text)) as events:
                         async for event in events:
@@ -202,6 +215,8 @@ class TaskExecutor(AgentExecutor):
                         raise authorization.failure from None
                     raise
                 finally:
+                    publisher.active = False
+                    current_image_publisher.reset(image_token)
                     try:
                         if execution.runtime is not None:
                             await execution.runtime.close()
@@ -258,7 +273,14 @@ class TaskExecutor(AgentExecutor):
             first.status.timestamp.GetCurrentTime()
         await event_queue.enqueue_event(first)
         if execution is None:
-            execution = Execution(claim.task_id, claim.context_id, user)
+            execution = Execution(
+                claim.task_id,
+                claim.context_id,
+                user,
+                accepted_output_modes=tuple(context.configuration.accepted_output_modes)
+                if context.configuration
+                else (),
+            )
             self._executions[claim.task_id] = execution
             execution.worker = asyncio.create_task(
                 self._produce(execution, context.get_user_input()), name=f"ngn-a2a-{claim.task_id}"
@@ -266,6 +288,9 @@ class TaskExecutor(AgentExecutor):
         else:
             if execution.user.user_name != user.user_name or execution.input is None or execution.input.done():
                 raise InvalidParamsError("This task is not awaiting new input")
+            execution.accepted_output_modes = (
+                tuple(context.configuration.accepted_output_modes) if context.configuration else ()
+            )
             execution.input.set_result(context.get_user_input())
             await execution.report(TaskState.TASK_STATE_WORKING, "Input received; resuming work.")
         updater = TaskUpdater(event_queue, claim.task_id, claim.context_id)
@@ -273,6 +298,13 @@ class TaskExecutor(AgentExecutor):
         try:
             while True:
                 update = await execution.events.get()
+                if isinstance(update, ImageArtifact):
+                    parts = [Part(text=update.caption, media_type="text/plain")] if update.caption else []
+                    parts.append(Part(raw=update.data, media_type=update.media_type, filename=update.filename))
+                    await updater.add_artifact(
+                        parts, artifact_id=update.artifact_id, name=update.filename, last_chunk=True
+                    )
+                    continue
                 if isinstance(update, PublicText):
                     await updater.add_artifact(
                         [Part(text=update.text, media_type="text/plain")],

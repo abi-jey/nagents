@@ -30,8 +30,8 @@ function ImageViewer({ url, filename, close }: { url: string; filename: string; 
   </dialog>;
 }
 
-export function ChatMedia({ token, path, asset, enabled = true }: {
-  token: string; path: string; asset: MediaAsset; enabled?: boolean;
+export function ChatMedia({ token, path, asset, enabled = true, caption = "" }: {
+  token: string; path: string; asset: MediaAsset; enabled?: boolean; caption?: string;
 }) {
   const filename = safeName(asset.filename);
   const kind = asset.media_type.startsWith("image/") ? "image" : asset.media_type.startsWith("audio/") ? "audio" : "video";
@@ -71,7 +71,8 @@ export function ChatMedia({ token, path, asset, enabled = true }: {
     </div>
     <figcaption className="chat-media-caption">
       <div className="chat-media-file"><span className="chat-media-name" title={filename}>{filename}</span>
-        <span className="chat-media-meta">{dimensions ? `${dimensions} · ` : ""}{fileSize(asset.byte_length)}</span></div>
+        <span className="chat-media-meta">{dimensions ? `${dimensions} · ` : ""}{fileSize(asset.byte_length)}</span>
+        {caption && <span className="chat-media-description">{caption}</span>}</div>
       {loaded ? <a className="chat-media-download" href={media.url} download={filename} aria-label={`Download ${filename}`}><Icon name="download" size={16} /><span>Download</span></a>
         : <span className="chat-media-download is-pending" aria-hidden="true"><Icon name="download" size={16} /><span>Download</span></span>}
     </figcaption>

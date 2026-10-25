@@ -1,11 +1,14 @@
 import { agentUpdates } from "./backgroundUpdates.js";
 import { appendEvent, type Entry } from "./transcript.js";
+import type { ArtifactImageRef } from "../../types.js";
+import { artifactState } from "./artifactImages.js";
 import { profileDescription, profileLabel, type AgentPhase, type TaskActivity, type TeamAgent, type TeamProfile } from "../team/model.js";
 
 export type DelegationPresentation = {
   kind: "start" | "result"; detailsTruncated?: boolean; taskId: string; name: string; profile: string;
   phase: AgentPhase; provider?: string; model?: string; activation?: number; accepted?: boolean; prompt: string; text: string; latest?: Entry; lastTool?: Entry; sources: Entry[];
   profileName?: string; profileDescription?: string;
+  artifacts?: ArtifactImageRef[]; artifactError?: string;
 };
 export type DelegationOptions = {
   agents: readonly TeamAgent[]; activity: readonly TaskActivity[]; parentId?: string;
@@ -29,7 +32,8 @@ function ownActivity(events: readonly TaskActivity[], taskId: string, activation
   let entries: Entry[] = [];
   for (const event of events) {
     if (event.session_id !== taskId || event.activation !== activation ||
-      !["response_metadata", "text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "error", "approval", "approval_closed"].includes(event.payload.type)) continue;
+      !["response_metadata", "remote_artifacts", "text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "error", "approval", "approval_closed"].includes(event.payload.type) ||
+      event.payload.type === "remote_artifacts" && event.payload.response_session_id !== taskId) continue;
     entries = appendEvent(entries, { ...event.payload, event: event.payload.type,
       session_id: "", parent_session_id: "", run_id: "", activation, followup: 0 });
   }
@@ -46,6 +50,7 @@ type Binding = { taskId: string; activation: number };
 type Finished = {
   anchor: string; offset: number; phase: AgentPhase; text: string; name: string; profile: string; prompt: string;
   latest?: Entry; lastTool?: Entry; provider?: string; model?: string; detailsTruncated?: boolean; observed: boolean;
+  artifacts?: ArtifactImageRef[]; artifactError?: string;
 };
 
 function matchesActivation(call: Entry, lifecycle: Entry): boolean {
@@ -145,9 +150,13 @@ export class DelegationFlow {
       if (context) anchoredContexts.add(context.key);
       if (binding && direct && terminal(lifecycle) && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
         this.finished.set(key, { anchor: lifecycle?.completionAfterId || context?.entry.id || entries.at(-1)?.id || call.id,
-          offset: .25, phase, text: result, name, profile, prompt, latest, lastTool, provider, model, detailsTruncated: lifecycle?.detailsTruncated, observed: !!lifecycle && !lifecycle.recorded });
+          offset: .25, phase, text: result, name, profile, prompt, latest, lastTool, provider, model,
+          artifacts: lifecycle?.artifacts, artifactError: lifecycle?.artifactError,
+          detailsTruncated: lifecycle?.detailsTruncated, observed: !!lifecycle && !lifecycle.recorded });
       }
       const finished = this.finished.get(key);
+      if (finished && terminal(lifecycle) && lifecycle?.artifacts)
+        Object.assign(finished, artifactState(lifecycle.artifacts, finished.artifacts));
       if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId)) {
         finished.anchor = lifecycle.completionAfterId; finished.offset = .25;
       } else if (finished && !finished.observed && context) {
@@ -239,7 +248,7 @@ export class DelegationFlow {
         title: finished.name || finished.profile, state: finished.phase === "failed" ? "Failed" : finished.phase,
         error: finished.phase === "failed" ? finished.text || "The subagent failed." : undefined,
         runId: call.runId, activity: lifecycle?.activity,
-        delegation: { ...presentation, kind: "result", text: finished.text } },
+        delegation: { ...presentation, kind: "result", text: finished.text, artifacts: finished.artifacts, artifactError: finished.artifactError } },
         position: Math.max((positions.get(finished.anchor) ?? entries.length - 1) + finished.offset, positions.get(call.id)! + .25) });
     }
     const originals = entries.flatMap((entry, index) => {
@@ -253,7 +262,7 @@ export class DelegationFlow {
 }
 
 export function delegationPreview(item: DelegationPresentation): { tool: string; text: string; live: boolean } {
-  if (item.kind === "result") return { tool: "", text: item.text, live: false };
+  if (item.kind === "result") return { tool: "", text: item.text || (item.artifacts?.length ? "Image artifact returned." : ""), live: false };
   if (item.latest?.kind === "tool") {
     const raw = item.latest.inputs || "";
     let text = raw;

@@ -11,6 +11,7 @@ import { ActivityLayout, activityCategory, activityLabels, activityState, hasDis
 import type { ChatAppearance } from "../settings/appearance.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
+import { ArtifactImages } from "./ArtifactImages.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
 import { Icon } from "../../components/Icon.js";
 import { TextLinks } from "../../components/TextLinks.js";
@@ -267,6 +268,7 @@ export function TranscriptItems({
             </details>}
           </>
         )}
+        {!entry.delegation && <ArtifactImages artifacts={entry.artifacts} error={entry.artifactError} />}
       </article>
     );
   }

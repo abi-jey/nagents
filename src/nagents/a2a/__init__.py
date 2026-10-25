@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from .discovery import discover_remote as discover_remote
     from .errors import RemoteAgentError as RemoteAgentError
     from .executor import request_input as request_input
+    from .images import publish_image as publish_image
+    from .images import publish_image_file as publish_image_file
     from .oauth import AccessGrant as AccessGrant
     from .oauth import request_credentials as request_credentials
     from .remote_config import RemoteAgentConfig as RemoteAgentConfig
@@ -44,6 +46,8 @@ __all__ = [
     "create_app",
     "create_harness_app",
     "discover_remote",
+    "publish_image",
+    "publish_image_file",
     "request_credentials",
     "request_input",
 ]
@@ -63,6 +67,8 @@ _MODULES = {
     "create_app": "application",
     "create_harness_app": "application",
     "request_input": "executor",
+    "publish_image": "images",
+    "publish_image_file": "images",
     "AccessGrant": "oauth",
     "request_credentials": "oauth",
 }

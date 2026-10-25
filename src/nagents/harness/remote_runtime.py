@@ -10,6 +10,7 @@ import uuid
 from contextlib import aclosing
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from typing import Literal
 
 import aiosqlite
 
@@ -21,10 +22,14 @@ from nagents.events import ErrorEvent
 from nagents.events import ResponseMetadataEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
+from nagents.types import ContentPart
 from nagents.types import Message
+from nagents.types import TextContent
 
+from .remote_artifacts import image_references
 from .remote_credentials import RemoteCredentials
 from .types import Notice
+from .types import RemoteArtifacts
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -32,11 +37,38 @@ if TYPE_CHECKING:
 
     from nagents.a2a.client import RemoteAgent
     from nagents.a2a.conversation import RemoteConversation
+    from nagents.artifacts import ImageArtifact
 
     from .runtime import Harness
     from .types import HarnessEvent
 
 logger = logging.getLogger(__name__)
+
+
+async def save_output(
+    harness: Harness,
+    response_id: str,
+    text: str,
+    images: tuple[ImageArtifact, ...],
+    status: Literal["completed", "cancelled", "failed"],
+) -> list[HarnessEvent]:
+    """Commit output once before publishing any authenticated image reference."""
+    content: str | list[ContentPart] = text
+    if images:
+        content = [TextContent(text)] if text else []
+        content.extend(image.content() for image in images)
+    history_id = await harness.agent.session.add_message(harness.session_id, Message(role="assistant", content=content))
+    identity = {"response_id": response_id, "response_session_id": harness.session_id}
+    events: list[HarnessEvent] = [TextDoneEvent(text=text, extra=identity)]
+    references = image_references(content, harness.tasks.root.harness.session_id, history_id)
+    if references:
+        events.append(RemoteArtifacts(response_id, harness.session_id, str(history_id), references))
+    events.append(
+        ResponseMetadataEvent(
+            response_id=response_id, response_session_id=harness.session_id, history_id=str(history_id), status=status
+        )
+    )
+    return events
 
 
 def failure_event(
@@ -199,6 +231,9 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
     phase = "credentials"
     dispatched = False
     accepted_update = False
+    images: tuple[ImageArtifact, ...] = ()
+    output_saved = False
+    conversation: RemoteConversation | None = None
     try:
         # Credential/TLS validation happens before dispatching to the remote host.
         if profile.issuer or profile.token_env:
@@ -252,6 +287,7 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
                     phase = "response"
                     accepted_update = True
                     state, context_id, task_id = update.state, update.context_id, update.task_id
+                    images = update.images
                     async with aiosqlite.connect(harness.agent.session.db_path) as db:
                         await db.execute(
                             "UPDATE ngn_remote_sessions SET context_id=?,task_id=?,state=? WHERE session_id=? AND message_id=?",
@@ -295,6 +331,17 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
                     TaskState.TASK_STATE_CANCELED: "A2A_TASK_CANCELLED",
                 }
                 code = state_codes.get(state, "A2A_TASK_FAILED")
+                if images:
+                    saved = await save_output(
+                        harness,
+                        response_id,
+                        text,
+                        images,
+                        "cancelled" if state == TaskState.TASK_STATE_CANCELED else "failed",
+                    )
+                    output_saved = True
+                    for event in saved:
+                        yield event
                 yield failure_event(
                     harness,
                     code,
@@ -306,11 +353,10 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
                 return
             if state == TaskState.TASK_STATE_INPUT_REQUIRED and not text:
                 text = conversation.status_text
-            history_id = await harness.agent.session.add_message(session_id, Message(role="assistant", content=text))
-            yield TextDoneEvent(text=text, extra=dict(identity))
-            yield ResponseMetadataEvent(
-                response_id=response_id, response_session_id=session_id, history_id=str(history_id), status="completed"
-            )
+            saved = await save_output(harness, response_id, text, images, "completed")
+            output_saved = True
+            for event in saved:
+                yield event
             for plugin in harness.agent.plugins:
                 if isinstance(plugin, ChildActivity):
                     await plugin.remote_finished()
@@ -331,6 +377,34 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
             else "A2A_RUNTIME"
         )
         outcome = "unknown" if dispatched else "not_sent"
+        if images and not output_saved:
+            try:
+                saved = await save_output(harness, response_id, text, images, "failed")
+                output_saved = True
+                for event in saved:
+                    yield event
+            except Exception as save_error:
+                logger.warning(
+                    "A2A partial image output was not saved: session=%s message=%s error_type=%s",
+                    session_id,
+                    message_id,
+                    type(save_error).__name__,
+                )
+        if code.startswith("A2A_ARTIFACT_") and conversation is not None and conversation.state in TERMINAL_STATES:
+            try:
+                async with aiosqlite.connect(harness.agent.session.db_path) as db:
+                    await db.execute(
+                        "UPDATE ngn_remote_sessions SET pending=0 WHERE session_id=? AND message_id=?",
+                        (session_id, message_id),
+                    )
+                    await db.commit()
+                outcome = "known"
+            except Exception as save_error:
+                logger.warning(
+                    "A2A artifact outcome was not saved: session=%s error_type=%s",
+                    session_id,
+                    type(save_error).__name__,
+                )
         if (
             dispatched
             and not accepted_update

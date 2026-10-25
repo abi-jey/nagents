@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextlib import aclosing
 from typing import TYPE_CHECKING
 
+from nagents.channels.dispatcher import ChannelDispatcher
 from nagents.events import Event
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.runtime import Harness
@@ -17,6 +18,7 @@ from nagents.harness.types import TaskStarted
 from .authorization import unavailable_credentials
 from .executor import PublicStatus
 from .executor import TaskExecutor
+from .output_channel import A2AOutputChannel
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
@@ -43,14 +45,16 @@ class HarnessRuntime:
     async def run(self, prompt: str) -> AsyncGenerator[Event | PublicStatus, None]:
         from a2a.types import TaskState
 
-        async with aclosing(self.harness.run(prompt)) as events:
-            async for event in events:
-                if isinstance(event, Event):
-                    yield event
-                elif isinstance(event, TaskStarted):
-                    yield PublicStatus(TaskState.TASK_STATE_WORKING, "Delegated work is running.")
-                elif isinstance(event, TaskCompleted):
-                    yield PublicStatus(TaskState.TASK_STATE_WORKING, "Delegated work returned.")
+        dispatcher = ChannelDispatcher((A2AOutputChannel(),), workspace=self.harness.workspace)
+        with dispatcher.register_tools(self.harness.agent.tool_registry):
+            async with aclosing(self.harness.run(prompt)) as events:
+                async for event in events:
+                    if isinstance(event, Event):
+                        yield event
+                    elif isinstance(event, TaskStarted):
+                        yield PublicStatus(TaskState.TASK_STATE_WORKING, "Delegated work is running.")
+                    elif isinstance(event, TaskCompleted):
+                        yield PublicStatus(TaskState.TASK_STATE_WORKING, "Delegated work returned.")
 
     async def close(self) -> None:
         await self.harness.close()

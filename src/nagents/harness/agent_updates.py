@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from collections.abc import Sequence
+
+_NO_IMAGE_INPUTS: Mapping[str, str] = MappingProxyType({})
 
 
 MAX_NOTIFICATION_BYTES = 8192
@@ -43,12 +48,20 @@ def _preview(value: str) -> tuple[str, bool]:
     return encoded[:MAX_ENTRY_TEXT_BYTES].decode("utf-8", errors="ignore"), True
 
 
-def _entry(event: TaskCompleted | TaskMessage) -> tuple[str, dict[str, object]]:
+def _entry(event: TaskCompleted | TaskMessage, image_inputs: Mapping[str, str]) -> tuple[str, dict[str, object]]:
     if isinstance(event, TaskCompleted):
         result, truncated = _preview(event.error or event.result)
         session_id, session_changed = _clean_utf8(event.session_id)
         entry: dict[str, object] = {"session_id": session_id, "status": event.status}
         entry["error" if event.error else "result"] = result
+        if event.artifacts:
+            entry["artifacts"] = [
+                {
+                    **{key: value for key, value in asdict(artifact).items() if key != "caption"},
+                    "model_input": image_inputs.get(artifact.path, "reference"),
+                }
+                for artifact in event.artifacts
+            ]
     elif isinstance(event, TaskMessage):
         result, truncated = _preview(event.prompt)
         session_id, session_changed = _clean_utf8(event.session_id)
@@ -74,7 +87,12 @@ def _render(
     return NOTIFICATION_PREFIX + json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
 
 
-def format_batch(events: Sequence[TaskCompleted | TaskMessage]) -> NotificationBatch:
+def format_batch(
+    events: Sequence[TaskCompleted | TaskMessage],
+    *,
+    image_inputs: Mapping[str, str] = _NO_IMAGE_INPUTS,
+    maximum: int = 0,
+) -> NotificationBatch:
     """Format the longest source-order prefix that fits the UTF-8 byte limit.
 
     The caller retains every unselected event and passes it to a later call.
@@ -84,9 +102,11 @@ def format_batch(events: Sequence[TaskCompleted | TaskMessage]) -> NotificationB
     if not events:
         return NotificationBatch(text="", count=0)
 
-    prepared = [_entry(event) for event in events]
+    prepared = [_entry(event, image_inputs) for event in events]
     selected: list[tuple[str, dict[str, object]]] = []
     for index, entry in enumerate(prepared):
+        if maximum and len(selected) >= maximum:
+            break
         candidate = [*selected, entry]
         rendered = _render(candidate, len(prepared) - index - 1)
         if len(rendered.encode("utf-8")) > MAX_NOTIFICATION_BYTES:
@@ -95,7 +115,7 @@ def format_batch(events: Sequence[TaskCompleted | TaskMessage]) -> NotificationB
 
     remaining = len(prepared) - len(selected)
     rendered = _render(selected, remaining)
-    if len(rendered.encode("utf-8")) > MAX_NOTIFICATION_BYTES:
+    if not selected or len(rendered.encode("utf-8")) > MAX_NOTIFICATION_BYTES:
         raise ValueError("Agent update metadata exceeds the notification byte limit")
     return NotificationBatch(text=rendered, count=len(selected))
 

@@ -181,7 +181,7 @@ class RemoteAgent:
                     httpx_client=self.http,
                     supported_protocol_bindings=["JSONRPC"],
                     streaming=True,
-                    accepted_output_modes=["text/plain"],
+                    accepted_output_modes=["text/plain", "image/png", "image/jpeg"],
                 )
             ).create(card)
             self._connected = True

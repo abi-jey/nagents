@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from nagents.harness.followups import RunTurn
     from nagents.harness.runtime import Harness
     from nagents.harness.types import HarnessEvent
+    from nagents.types import ContentPart
     from nagents.types import Message
     from tests.support.providers import FakeProvider
 
@@ -336,7 +337,7 @@ async def test_ordinary_root_completion_waits_for_an_owned_host_admission(
             await release_emission.wait()
         await original_emit(event)
 
-    async def notification(*, wait_for_tasks: bool = False) -> str | None:
+    async def notification(*, wait_for_tasks: bool = False) -> str | list[ContentPart] | None:
         if harness.tasks._start_admissions and finish_root.is_set():
             boundary.set()
         return await original_notification(wait_for_tasks=wait_for_tasks)

@@ -30,6 +30,7 @@ from nagents.extensions import AgentPlugin
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
 from .types import Notice
+from .types import RemoteArtifacts
 from .types import ToolOutput
 
 if TYPE_CHECKING:
@@ -66,6 +67,8 @@ def bounded(value: object) -> object:
 
 def public_payload(event: HarnessEvent) -> dict[str, object]:
     """An allowlist: bounded display summaries, never opaque reasoning or diagnostics."""
+    if isinstance(event, RemoteArtifacts):
+        return {"type": "remote_artifacts", **asdict(event)}
     if isinstance(event, ResponseMetadataEvent):
         return {
             "type": "response_metadata",

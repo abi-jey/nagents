@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections import deque
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 from typing import Literal
 from typing import TypeAlias
@@ -105,6 +106,7 @@ class AgentStatusRecord(TypedDict):
     last_output: str
     result: str
     error: str
+    artifacts: list[dict[str, object]]
     history: list[AgentHistoryRow]
     truncated: bool
 
@@ -413,6 +415,7 @@ def make_status(info: TaskInfo, evidence: SessionEvidence, history_limit: int = 
         "last_output": evidence.last_output,
         "result": result,
         "error": error,
+        "artifacts": [asdict(artifact) for artifact in info.artifacts],
         "history": history[-history_limit:] if history_limit else [],
         "truncated": evidence.truncated or shortened or result_clipped or error_clipped or len(history) > history_limit,
     }

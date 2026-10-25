@@ -27,7 +27,7 @@ export function ChannelHeader({ meta }: { meta: ChannelMeta }) {
 }
 
 export function ChannelAttachments({ parts }: { parts?: MessagePart[] }) {
-  const files = (parts ?? []).filter((part) => part.type !== "text");
+  const files = (parts ?? []).filter((part) => part.type !== "text" && part.type !== "artifact_image");
   if (!files.length) return null;
   return (
     <div className="channel-attachments">

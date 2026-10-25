@@ -3,6 +3,7 @@ import type { Position, SessionFrame } from "../../api/subscription.js";
 import type { QueuedMessage } from "../../api/messages.js";
 import { appendEvent, fromHistory, sameLiveCaption, sameTranscriptUser, type Entry } from "./transcript.js";
 import { latestResponseMetadata } from "./responseMetadata.js";
+import { artifactState } from "./artifactImages.js";
 
 export type LiveTranscript = {
   entries: Entry[];
@@ -33,6 +34,7 @@ function compatible(saved: Entry, previous: Entry): boolean {
   if (saved.callPosition !== undefined && previous.callPosition !== undefined && saved.callPosition !== previous.callPosition) return false;
   if (saved.kind !== previous.kind || previous.taskId || (previous.recorded && previous.kind !== "context")) return false;
   if (saved.responseId || previous.responseId) return saved.responseId === previous.responseId &&
+    (!saved.responseSessionId || !previous.responseSessionId || saved.responseSessionId === previous.responseSessionId) &&
     (!saved.responseMetadata || !previous.responseMetadata ||
       saved.responseMetadata.response_session_id === previous.responseMetadata.response_session_id);
   return saved.kind !== "tool" || saved.callId === previous.callId;
@@ -146,6 +148,9 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot & { root_
            channel: entry.channel, parts: entry.parts, uploads: entry.uploads }
       : { ...entry, ...old, historyId: entry.historyId, resultHistoryId: entry.resultHistoryId,
           responseId: entry.responseId || old.responseId,
+          responseSessionId: entry.responseSessionId || old.responseSessionId,
+          ...artifactState(entry.artifacts, old.artifacts),
+          artifactError: entry.artifactError || old.artifactError,
           responseMetadata: latestResponseMetadata(entry.responseMetadata, old.responseMetadata),
           callPosition: entry.callPosition,
           historyIndex: entry.historyIndex, historyTurn: entry.historyTurn,
@@ -223,6 +228,8 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
       const stableId = old?.id || (entry.kind === "live_caption" ? entry.id : `run:${run.id}:${index}`);
       replayIds.set(entry.id, stableId);
       return { ...entry, id: stableId,
+        ...artifactState(entry.artifacts, old?.artifacts), artifactError: entry.artifactError || old?.artifactError,
+        responseSessionId: entry.responseSessionId || old?.responseSessionId,
         responseMetadata: latestResponseMetadata(entry.responseMetadata, old?.responseMetadata),
         historyId: entry.historyId || old?.historyId, resultHistoryId: entry.resultHistoryId || old?.resultHistoryId,
         historyIndex: old?.historyIndex, historyTurn: old?.historyTurn,
@@ -251,7 +258,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
   // a full event log. Replace only those streams, retaining observed tool/task
   // evidence, provisional approvals and earlier activations in this connection.
   for (const record of run?.records || []) {
-    if (record.event === "response_metadata") {
+    if (["response_metadata", "remote_artifacts"].includes(record.event)) {
       entries = appendEvent(entries, { ...record, run_id: record.run_id || run?.id });
       continue;
     }
