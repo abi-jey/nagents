@@ -13,6 +13,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message as UIMessage
 from textual.screen import ModalScreen
 from textual.widgets import Button
@@ -270,7 +271,16 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
 
     @work(exclusive=True, group="task-history")
     async def load_history(self, session_id: str) -> None:
-        info = self.infos[session_id]
+        if not self.is_attached or self.selected_session_id != session_id:
+            return
+        info = self.infos.get(session_id)
+        if info is None:
+            return
+        try:
+            history = self.query_one("#task-history", Static)
+            scroll = self.query_one("#task-history-scroll", VerticalScroll)
+        except NoMatches:
+            return
         unavailable = False
         try:
             messages = await self.get_history(session_id)
@@ -299,7 +309,16 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
                 lines.append(f"ASSISTANT\n{bounded(info.result)}")
         if info.error:
             lines.append(f"STATUS\n{bounded(info.error)}")
-        if self.is_mounted and self.selected_session_id == session_id:
+        # A mounted screen may already be losing its children. Update only the
+        # original view, never a replacement mounted while history was awaited.
+        if (
+            self.is_attached
+            and self.selected_session_id == session_id
+            and history.is_attached
+            and scroll.is_attached
+            and self in history.ancestors
+            and self in scroll.ancestors
+        ):
             transcript = Text()
             if len(messages) > 40:
                 transcript.append("Showing the latest 40 messages.\n\n")
@@ -309,8 +328,8 @@ class TaskScreen(ModalScreen[tuple[str, str] | None]):
                 component = role if role in {"user", "assistant", "tool"} else "status"
                 transcript.append(label, style=self.get_component_rich_style(f"task-dialog--{component}"))
                 transcript.append(separator + content + "\n\n")
-            self.query_one("#task-history", Static).update(transcript)
-            self.query_one("#task-history-scroll", VerticalScroll).scroll_end(animate=False)
+            history.update(transcript)
+            scroll.scroll_end(animate=False)
 
     def action_send(self) -> None:
         info = self.infos.get(self.selected_session_id)

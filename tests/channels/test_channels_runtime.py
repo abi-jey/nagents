@@ -40,6 +40,7 @@ from nagents.channels.types import ChannelEventHandler
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import Event
+from nagents.events import ResponseMetadataEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
@@ -500,7 +501,7 @@ def test_public_listen_source_activity_is_scoped_and_always_stops(tmp_path: Path
 
         async def observe(event: ChannelEvent) -> None:
             assert source.activities == [ChannelActivity("origin-room", True, "origin-thread", "identity")]
-            if outcome == "observer-failed":
+            if outcome == "observer-failed" and not isinstance(event.event, ResponseMetadataEvent):
                 raise ValueError("Observer failed")
 
         listener = asyncio.create_task(agent.listen("identity", on_event=observe))
@@ -935,7 +936,7 @@ def test_execution_errors_are_terminal_failed_inbox_entries(tmp_path: Path, fail
 
         async def observe(event: ChannelEvent) -> None:
             observed.append(event.event)
-            if failure == "observer":
+            if failure == "observer" and not isinstance(event.event, ResponseMetadataEvent):
                 raise RuntimeError("observer failed")
 
         with pytest.raises((RuntimeError, ChannelError)):
@@ -944,7 +945,8 @@ def test_execution_errors_are_terminal_failed_inbox_entries(tmp_path: Path, fail
         assert audit.after == ["identity"] and source.closed == 1
         assert len(provider.requests) == (0 if failure == "plugin" else 1)
         if failure == "provider":
-            assert isinstance(observed[0], ErrorEvent)
+            assert isinstance(observed[0], ResponseMetadataEvent)
+            assert isinstance(observed[1], ErrorEvent)
             assert provider.retry_counts == [7]  # Request policy does not replay the failed turn.
         assert agent.plugins == [audit] and agent.tool_registry.names() == []
         assert_no_runtime_tasks()

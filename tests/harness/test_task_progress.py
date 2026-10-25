@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.events import DoneEvent
+from nagents.events import ResponseMetadataEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
@@ -20,6 +21,7 @@ from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
+from tests.support.providers import collect
 from tests.support.providers import notifications
 from tests.support.providers import setup_harness
 
@@ -152,6 +154,240 @@ async def test_completed_tasks_are_visible_at_next_core_event_without_early_mode
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_first_token", [False, True])
+async def test_child_completion_binds_only_the_current_parent_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, during_first_token: bool
+) -> None:
+    (
+        parent_start_observed,
+        parent_generation_started,
+        parent_chunk_seen,
+        release_child,
+        child_completed,
+        release_parent,
+    ) = (asyncio.Event() for _ in range(6))
+    completions: list[TaskCompleted] = []
+    observed: list[HarnessEvent] = []
+    original_publish = SubagentManager._publish
+
+    def record_publish(manager: SubagentManager, info: TaskInfo, event: TaskCompleted | TaskMessage) -> None:
+        original_publish(manager, info, event)
+        if isinstance(event, TaskCompleted):
+            completions.append(event)
+            child_completed.set()
+
+    monkeypatch.setattr(SubagentManager, "_publish", record_publish)
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if provider.index:
+            await parent_generation_started.wait()
+            await release_child.wait()
+            yield TextDoneEvent(text="Child finished during the parent generation")
+        elif len(provider.requests) == 1:
+            yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Independent review"})
+        elif len(provider.requests) == 2:
+            await parent_start_observed.wait()
+            parent_generation_started.set()
+            if during_first_token:
+                yield TextChunkEvent(chunk="Parent response has started")
+            await release_parent.wait()
+            yield TextDoneEvent(text="Parent generation finished")
+        else:
+            yield TextDoneEvent(text="Parent handled the child result")
+
+    harness, providers = setup_harness(tmp_path, monkeypatch, script)
+    parent_starts: list[ResponseMetadataEvent] = []
+
+    async def consume() -> None:
+        async for event in harness.run("Start independent work"):
+            observed.append(event)
+            if isinstance(event, ResponseMetadataEvent) and event.round_number == 1 and event.status == "thinking":
+                parent_starts.append(event)
+                parent_start_observed.set()
+            elif (
+                during_first_token
+                and isinstance(event, TextChunkEvent)
+                and event.extra.get("response_id") == (parent_starts[0].response_id if parent_starts else None)
+            ):
+                parent_chunk_seen.set()
+
+    run = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(parent_generation_started.wait(), HANG_GUARD)
+        assert len(parent_starts) == 1
+        parent_response_id = parent_starts[0].response_id
+        assert parent_response_id
+        assert harness.agent._active_generation_id(harness.session_id) == parent_response_id
+        if during_first_token:
+            await asyncio.wait_for(parent_chunk_seen.wait(), HANG_GUARD)
+            assert harness.agent._active_generation_id(harness.session_id) == parent_response_id
+
+        release_child.set()
+        await asyncio.wait_for(child_completed.wait(), HANG_GUARD)
+        assert len(completions) == 1
+        completion = completions[0]
+        assert completion.parent_session_id == ""
+        assert completion.parent_response_id == parent_response_id
+        assert completion.parent_response_session_id == harness.session_id
+        assert completion.completed_at > 0
+        assert harness.tasks.list()[0].parent_response_id == parent_response_id
+        assert harness.tasks.list()[0].completed_at == completion.completed_at
+        assert harness.agent._active_generation_id(harness.session_id) == parent_response_id
+
+        release_parent.set()
+        await asyncio.wait_for(run, HANG_GUARD)
+        assert harness.agent._active_generation_id(harness.session_id) == ""
+        assert providers[1].closed
+        assert any(isinstance(event, DoneEvent) for event in observed)
+
+        previous_response_id = completion.parent_response_id
+        resumed = [event async for event in harness.continue_task(completion.session_id, "Resume the child")]
+        resumed_completion = next(event for event in resumed if isinstance(event, TaskCompleted))
+        assert resumed_completion.activation == completion.activation + 1
+        assert resumed_completion.parent_response_id == ""
+        assert resumed_completion.parent_response_session_id == ""
+        assert resumed_completion.parent_response_id != previous_response_id
+        assert harness.tasks.list()[0].parent_response_id == ""
+    finally:
+        release_child.set()
+        release_parent.set()
+        if not run.done():
+            run.cancel()
+        await asyncio.gather(run, return_exceptions=True)
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_child_completion_during_parent_tool_execution_has_no_generation_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent_tool_entered, release_child, child_completed, release_parent_tool = (asyncio.Event() for _ in range(4))
+    completions: list[TaskCompleted] = []
+    original_publish = SubagentManager._publish
+
+    def record_publish(manager: SubagentManager, info: TaskInfo, event: TaskCompleted | TaskMessage) -> None:
+        original_publish(manager, info, event)
+        if isinstance(event, TaskCompleted):
+            completions.append(event)
+            child_completed.set()
+
+    monkeypatch.setattr(SubagentManager, "_publish", record_publish)
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if provider.index:
+            await parent_tool_entered.wait()
+            await release_child.wait()
+            yield TextDoneEvent(text="Child finished while the parent tool was running")
+        elif len(provider.requests) == 1:
+            yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Independent review"})
+            yield ToolCallEvent(id="hold", name="hold_parent_tool", arguments={})
+        else:
+            yield TextDoneEvent(text="Parent continues after its tool")
+
+    harness, providers = setup_harness(tmp_path, monkeypatch, script)
+
+    async def hold_parent_tool() -> str:
+        assert harness.agent._active_generation_id(harness.session_id) == ""
+        parent_tool_entered.set()
+        await release_parent_tool.wait()
+        return "Parent tool finished"
+
+    harness.agent.register_tool(hold_parent_tool)
+    harness.tools.builtins["hold_parent_tool"] = hold_parent_tool
+    run = asyncio.create_task(collect(harness))
+    try:
+        await asyncio.wait_for(parent_tool_entered.wait(), HANG_GUARD)
+        release_child.set()
+        await asyncio.wait_for(child_completed.wait(), HANG_GUARD)
+        assert len(completions) == 1
+        assert completions[0].parent_response_id == ""
+        assert completions[0].parent_response_session_id == ""
+        assert harness.tasks.list()[0].parent_response_id == ""
+        release_parent_tool.set()
+        await asyncio.wait_for(run, HANG_GUARD)
+        assert providers[1].closed
+    finally:
+        release_child.set()
+        release_parent_tool.set()
+        if not run.done():
+            run.cancel()
+        await asyncio.gather(run, return_exceptions=True)
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_nested_completion_uses_immediate_parent_generation_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child_generation_started, child_chunk_sent, release_grandchild, grandchild_completed, release_child = (
+        asyncio.Event() for _ in range(5)
+    )
+    completions: list[TaskCompleted] = []
+    original_publish = SubagentManager._publish
+
+    def record_publish(manager: SubagentManager, info: TaskInfo, event: TaskCompleted | TaskMessage) -> None:
+        original_publish(manager, info, event)
+        if isinstance(event, TaskCompleted):
+            completions.append(event)
+            if info.depth == 2:
+                grandchild_completed.set()
+
+    monkeypatch.setattr(SubagentManager, "_publish", record_publish)
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if provider.index == 0:
+            if len(provider.requests) == 1:
+                yield ToolCallEvent(id="child", name="to_agent", arguments={"prompt": "Build an independent branch"})
+            else:
+                yield TextDoneEvent(text="Root is ready")
+        elif provider.index == 1:
+            if len(provider.requests) == 1:
+                yield ToolCallEvent(id="grandchild", name="to_agent", arguments={"prompt": "Verify the branch"})
+            elif len(provider.requests) == 2:
+                child_generation_started.set()
+                yield TextChunkEvent(chunk="Child parent response started")
+                child_chunk_sent.set()
+                await release_child.wait()
+                yield TextDoneEvent(text="Child integrated grandchild result")
+            else:
+                yield TextDoneEvent(text="Child final")
+        else:
+            await child_generation_started.wait()
+            await child_chunk_sent.wait()
+            await release_grandchild.wait()
+            yield TextDoneEvent(text="Grandchild evidence")
+
+    harness, providers = setup_harness(tmp_path, monkeypatch, script)
+    run = asyncio.create_task(collect(harness))
+    try:
+        await asyncio.wait_for(child_generation_started.wait(), HANG_GUARD)
+        child_info = next(info for info in harness.tasks.list() if not info.parent_session_id)
+        immediate_parent = harness.tasks.child(child_info.session_id)
+        expected_response_id = immediate_parent.agent._active_generation_id(immediate_parent.session_id)
+        assert expected_response_id
+        assert harness.agent._active_generation_id(harness.session_id) != expected_response_id
+
+        release_grandchild.set()
+        await asyncio.wait_for(grandchild_completed.wait(), HANG_GUARD)
+        grandchild = next(event for event in completions if event.depth == 2)
+        assert grandchild.parent_session_id == child_info.session_id
+        assert grandchild.parent_response_id == expected_response_id
+        assert grandchild.parent_response_session_id == child_info.session_id
+
+        release_child.set()
+        await asyncio.wait_for(run, HANG_GUARD)
+        assert immediate_parent.agent._active_generation_id(immediate_parent.session_id) == ""
+        assert providers[1].closed and providers[2].closed
+    finally:
+        release_grandchild.set()
+        release_child.set()
+        if not run.done():
+            run.cancel()
+        await asyncio.gather(run, return_exceptions=True)
         await harness.close()
 
 

@@ -379,6 +379,7 @@ class Agent:
         # Last single generation's real usage per session, for context-stat comparison.
         self._last_usage: dict[str, TokenUsage] = {}
         self._context_drafts: dict[str, tuple[int, str]] = {}
+        self._active_generations: dict[str, tuple[str, RunContext]] = {}
         self._usage_origins: dict[str, _UsageOrigin] = {}
 
         # Flag to request compaction during run (set by trigger_compaction())
@@ -1462,6 +1463,9 @@ class Agent:
                         await text_run.aclose()
                 except BaseException as error:
                     errors.append(error)
+                generation = self._active_generations.get(session_id)
+                if generation is not None and generation[1] is context:
+                    self._active_generations.pop(session_id, None)
                 try:
                     # Re-read durable state, including commits that raced cancellation.
                     await self._repair_tool_calls(session_id)
@@ -1479,6 +1483,15 @@ class Agent:
                     raise BaseExceptionGroup("Agent run cleanup failed", errors)
 
             await self._finish_cleanup(cleanup())
+
+    def _active_generation_id(self, session_id: str) -> str:
+        generation = self._active_generations.get(session_id)
+        return generation[0] if generation is not None else ""
+
+    def _end_generation(self, session_id: str, response_id: str) -> None:
+        generation = self._active_generations.get(session_id)
+        if generation is not None and generation[0] == response_id:
+            self._active_generations.pop(session_id, None)
 
     async def _repair_tool_calls(self, session_id: str) -> None:
         """Close interrupted tool blocks without assuming whether side effects ran."""
@@ -1639,7 +1652,7 @@ class Agent:
                 deepcopy(config),
             )
             model_call_id = uuid.uuid4().hex
-            response = ResponseTrace(model_call_id, session_id, round_num)
+            response = ResponseTrace(model_call_id, session_id, round_num, status="thinking")
             generation_reasoning_seen = False
             total_generations, reported_generations = self._reasoning_coverage.get(session_id, (0, 0))
             self._reasoning_coverage[session_id] = (total_generations + 1, reported_generations)
@@ -1682,6 +1695,11 @@ class Agent:
             # A new generation without usage must not inherit an older round's count.
             self._discard_observed_usage(session_id)
             self._context_drafts[session_id] = (len(history), "")
+            # Expose the generation boundary before transport/first-token
+            # latency. Consumers can queue child results behind this response
+            # without inventing a reasoning summary or inspecting the request.
+            self._active_generations[session_id] = (model_call_id, context)
+            yield response.snapshot()
             async with self._closing_events(
                 self.provider.generate(
                     messages=request.messages,
@@ -1813,6 +1831,7 @@ class Agent:
                 await plugin.after_model(context)
 
             if fatal_error:
+                self._end_generation(session_id, model_call_id)
                 yield response.snapshot(terminal=True, failed=True)
                 yield DoneEvent(
                     final_text="",
@@ -1824,6 +1843,7 @@ class Agent:
 
             # If we hit an error, don't continue
             if has_error:
+                self._end_generation(session_id, model_call_id)
                 yield response.snapshot(terminal=True, failed=True)
                 if self._execution_bridge:
                     await self._execution_bridge.abandon(tuple(pending_tool_events))
@@ -1840,6 +1860,7 @@ class Agent:
                 ):
                     history_id = await self.session.add_message(session_id, assistant_block)
                 self._context_drafts.pop(session_id, None)
+                self._end_generation(session_id, model_call_id)
                 yield response.snapshot(terminal=True, history_id=history_id)
 
                 # Execute each tool
@@ -1917,6 +1938,7 @@ class Agent:
                         session_id, Message(role="assistant", content=full_text)
                     )
             self._context_drafts.pop(session_id, None)
+            self._end_generation(session_id, model_call_id)
             yield response.snapshot(terminal=True, history_id=history_id)
 
             yield DoneEvent(

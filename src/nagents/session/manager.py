@@ -13,6 +13,7 @@ from typing import Any
 import aiosqlite
 
 from .._async import finish_on_cancel
+from .._sqlite import write_database
 from ..extensions import _validate_context
 from ..migrations.manager import MigrationManager
 from ..migrations.sessions import migrations as session_migrations
@@ -147,9 +148,9 @@ class SessionManager:
             The session ID
         """
 
-        async def get_or_create() -> str:
-            await self.initialize()
+        await self.initialize()
 
+        async def get_or_create() -> str:
             async with aiosqlite.connect(self.db_path) as db:
                 cursor = await db.execute("SELECT id FROM v2_sessions WHERE id = ?", (session_id,))
                 if await cursor.fetchone() is None:
@@ -162,7 +163,7 @@ class SessionManager:
 
             return session_id
 
-        return await finish_on_cancel(get_or_create())
+        return await write_database(self.db_path, get_or_create)
 
     async def get_history(
         self,
@@ -248,45 +249,48 @@ class SessionManager:
         """
         await self.initialize()
 
-        phase, started = "connect", monotonic()
-        try:
-            async with aiosqlite.connect(self.db_path) as db:
-                phase = "insert"
-                cursor = await db.execute(
-                    """INSERT INTO v2_messages
-                       (session_id, role, content, tool_calls, tool_call_id, name)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    self._message_values(session_id, message),
-                )
-                message_id = cursor.lastrowid
-                assert message_id is not None
-                phase = "updated_at"
-                await db.execute(
-                    "UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (session_id,),
-                )
-                if message.role == "assistant":
-                    phase = "response_anchor"
-                    await anchor_response(db, session_id, message_id)
-                phase = "commit"
-                await db.commit()
-                phase = "close"
-        except sqlite3.Error as error:
+        async def write() -> int:
+            phase, started = "connect", monotonic()
             try:
-                code = getattr(error, "sqlite_errorcode", None)
-            except BaseException:
-                # Diagnostic accessors must not replace the database failure.
-                code = None
-            logger.warning(
-                "Session message write failed: phase=%s elapsed_ms=%.1f exception=%s sqlite_code=%s",
-                phase,
-                (monotonic() - started) * 1000,
-                type(error).__name__[:80],
-                code if type(code) is int and 0 <= code <= 2**31 - 1 else "unavailable",
-            )
-            raise
+                async with aiosqlite.connect(self.db_path) as db:
+                    phase = "insert"
+                    cursor = await db.execute(
+                        """INSERT INTO v2_messages
+                           (session_id, role, content, tool_calls, tool_call_id, name)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        self._message_values(session_id, message),
+                    )
+                    message_id = cursor.lastrowid
+                    assert message_id is not None
+                    phase = "updated_at"
+                    await db.execute(
+                        "UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (session_id,),
+                    )
+                    if message.role == "assistant":
+                        phase = "response_anchor"
+                        await anchor_response(db, session_id, message_id)
+                    phase = "commit"
+                    await db.commit()
+                    phase = "close"
+            except sqlite3.Error as error:
+                try:
+                    code = getattr(error, "sqlite_errorcode", None)
+                except BaseException:
+                    # Diagnostic accessors must not replace the database failure.
+                    code = None
+                logger.warning(
+                    "Session message write failed: phase=%s elapsed_ms=%.1f exception=%s sqlite_code=%s",
+                    phase,
+                    (monotonic() - started) * 1000,
+                    type(error).__name__[:80],
+                    code if type(code) is int and 0 <= code <= 2**31 - 1 else "unavailable",
+                )
+                raise
 
-        return message_id
+            return message_id
+
+        return await write_database(self.db_path, write)
 
     @staticmethod
     def _message_values(session_id: str, message: Message) -> tuple[str | None, ...]:
@@ -327,28 +331,32 @@ class SessionManager:
         _validate_context(messages)
         values = [self._message_values(session_id, message) for message in messages]
         await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("BEGIN IMMEDIATE")
-            cursor = await db.execute("SELECT 1 FROM v2_sessions WHERE id = ?", (session_id,))
-            if await cursor.fetchone() is None:
-                raise ValueError(f"Session '{session_id}' not found")
-            first_id: int | None = None
-            for row in values:
-                cursor = await db.execute(
-                    """INSERT INTO v2_messages
-                       (session_id, role, content, tool_calls, tool_call_id, name)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    row,
+
+        async def write() -> None:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("BEGIN IMMEDIATE")
+                cursor = await db.execute("SELECT 1 FROM v2_sessions WHERE id = ?", (session_id,))
+                if await cursor.fetchone() is None:
+                    raise ValueError(f"Session '{session_id}' not found")
+                first_id: int | None = None
+                for row in values:
+                    cursor = await db.execute(
+                        """INSERT INTO v2_messages
+                           (session_id, role, content, tool_calls, tool_call_id, name)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        row,
+                    )
+                    if first_id is None:
+                        first_id = cursor.lastrowid
+                assert first_id is not None
+                await db.execute(
+                    """UPDATE v2_sessions SET compacted_at_message_id = ?,
+                       updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                    (first_id, session_id),
                 )
-                if first_id is None:
-                    first_id = cursor.lastrowid
-            assert first_id is not None
-            await db.execute(
-                """UPDATE v2_sessions SET compacted_at_message_id = ?,
-                   updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
-                (first_id, session_id),
-            )
-            await db.commit()
+                await db.commit()
+
+        await write_database(self.db_path, write)
 
     async def set_compaction_boundary(self, session_id: str, message_id: int) -> None:
         """
@@ -364,13 +372,16 @@ class SessionManager:
         """
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE v2_sessions SET compacted_at_message_id = ? WHERE id = ?",
-                (message_id, session_id),
-            )
-            await db.commit()
-            logger.debug(f"Compaction boundary set: session={session_id}, message_id={message_id}")
+        async def write() -> None:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "UPDATE v2_sessions SET compacted_at_message_id = ? WHERE id = ?",
+                    (message_id, session_id),
+                )
+                await db.commit()
+                logger.debug(f"Compaction boundary set: session={session_id}, message_id={message_id}")
+
+        await write_database(self.db_path, write)
 
     async def clear_session(self, session_id: str) -> None:
         """
@@ -381,16 +392,19 @@ class SessionManager:
         """
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("BEGIN IMMEDIATE")
-            for sql, parameters in delivery_cleanup_statements(session_id):
-                await db.execute(sql, parameters)
-            await db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
-            await db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
-            await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
-            await db.execute("UPDATE v2_sessions SET compacted_at_message_id = NULL WHERE id = ?", (session_id,))
-            await db.commit()
-            logger.debug(f"Cleared session: {session_id}")
+        async def write() -> None:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("BEGIN IMMEDIATE")
+                for sql, parameters in delivery_cleanup_statements(session_id):
+                    await db.execute(sql, parameters)
+                await db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
+                await db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
+                await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
+                await db.execute("UPDATE v2_sessions SET compacted_at_message_id = NULL WHERE id = ?", (session_id,))
+                await db.commit()
+                logger.debug(f"Cleared session: {session_id}")
+
+        await write_database(self.db_path, write)
 
     async def delete_session(self, session_id: str) -> None:
         """
@@ -401,16 +415,19 @@ class SessionManager:
         """
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("BEGIN IMMEDIATE")
-            for sql, parameters in delivery_cleanup_statements(session_id):
-                await db.execute(sql, parameters)
-            await db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
-            await db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
-            await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
-            await db.execute("DELETE FROM v2_sessions WHERE id = ?", (session_id,))
-            await db.commit()
-            logger.debug(f"Deleted session: {session_id}")
+        async def write() -> None:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("BEGIN IMMEDIATE")
+                for sql, parameters in delivery_cleanup_statements(session_id):
+                    await db.execute(sql, parameters)
+                await db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
+                await db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
+                await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
+                await db.execute("DELETE FROM v2_sessions WHERE id = ?", (session_id,))
+                await db.commit()
+                logger.debug(f"Deleted session: {session_id}")
+
+        await write_database(self.db_path, write)
 
     async def list_sessions(self, user_id: str | None = None) -> list[dict[str, Any]]:
         """

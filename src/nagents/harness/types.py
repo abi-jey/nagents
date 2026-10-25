@@ -110,6 +110,9 @@ class TaskCompleted:
     provider_kind: str = ""
     model: str = ""
     reasoning_effort: str = ""
+    parent_response_id: str = ""
+    parent_response_session_id: str = ""
+    completed_at: float = 0.0
 
 
 @dataclass(kw_only=True)

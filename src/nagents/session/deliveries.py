@@ -22,6 +22,7 @@ from typing import Literal
 from uuid import uuid4
 
 from nagents._async import join_owned
+from nagents._sqlite import write_database
 from nagents.channels.capabilities import content_capabilities_catalog
 from nagents.channels.capabilities import validate_content_send
 from nagents.channels.delivery_types import DeliveryAsset
@@ -131,13 +132,16 @@ class PreparedDelivery:
         if self.outcome != "prepared":
             raise RuntimeError("Prepared delivery commit is single-use")
         self.outcome = "pending"
+        try:
+            await self._journal.initialize()
+        except asyncio.CancelledError:
+            self.outcome = "failed"
+            raise
+        except Exception:
+            self.outcome = "failed"
+            raise ChannelError("Local delivery storage initialization failed") from None
 
         async def owned() -> DeliveryReceipt:
-            try:
-                await self._journal.initialize()
-            except Exception:
-                self.outcome = "failed"
-                raise ChannelError("Local delivery storage initialization failed") from None
             try:
                 return await asyncio.to_thread(self._journal._commit, self)
             except Exception:
@@ -150,7 +154,12 @@ class PreparedDelivery:
                     ) from None
                 raise
 
-        return await join_owned(asyncio.create_task(owned()))
+        try:
+            return await write_database(self._journal.db_path, owned)
+        except asyncio.CancelledError:
+            if self.outcome == "pending":
+                self.outcome = "failed"
+            raise
 
 
 class DeliveryJournal:

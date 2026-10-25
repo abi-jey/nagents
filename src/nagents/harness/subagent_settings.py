@@ -15,6 +15,7 @@ from typing import Literal
 from typing import Protocol
 
 from nagents._async import finish_on_cancel
+from nagents._sqlite import write_database
 
 if TYPE_CHECKING:
     from .config import HarnessConfig
@@ -226,7 +227,7 @@ class LocalSubagentSettings:
                 rows[key] = limits, saved_revision
                 return self._snapshot(scope, rows, defaults)
 
-        return await finish_on_cancel(asyncio.to_thread(save))
+        return await write_database(self.path, lambda: asyncio.to_thread(save))
 
 
 def limit_scope(value: str) -> LimitScope:

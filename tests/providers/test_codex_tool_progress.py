@@ -15,6 +15,7 @@ from nagents import SessionManager
 from nagents.adapters._tool_progress import ARGUMENT_PREVIEW_LIMIT
 from nagents.adapters._tool_progress import ToolCallProgressTracker
 from nagents.events import ErrorEvent
+from nagents.events import ResponseMetadataEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolCallProgressEvent
@@ -99,6 +100,9 @@ async def test_codex_previews_arrive_before_completion_and_never_execute(
         )
         try:
             async with aclosing(agent.run("work", session_id="s")) as stream:
+                marker = await anext(stream)
+                assert isinstance(marker, ResponseMetadataEvent)
+                assert marker.status == "thinking" and marker.summary == "" and not marker.usage_reported
                 first = await anext(stream)
                 assert isinstance(first, ToolCallProgressEvent) and first.arguments_text == ""
                 second = await anext(stream)
