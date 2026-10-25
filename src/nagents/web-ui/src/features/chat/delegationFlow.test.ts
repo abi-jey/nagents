@@ -641,6 +641,96 @@ test("same-run native resumes fold their exact early completion notifications wi
   } finally { observer.disconnect(); await ui.close(); }
 });
 
+test("checkpointed native resumes fold exact completion notices before their saved call and parent boundary", async () => {
+  const ui = browserFixture();
+  const flow = new DelegationFlow();
+  let entries = taskCompleted(taskStarted(delegateResult(delegateCall([]))));
+  entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "first-notice", source_session_id: "child",
+    source_activation: 0, recipient_session_id: "", cause: "completion", text: "The focused checks passed." });
+  const first = flow.project(entries, options([agent("child")]));
+  assert.equal(first.some(entry => entry.kind === "notification"), false);
+  const parentMetadata = (status: "thinking" | "completed", revision: number): WireEvent => ({
+    event: "response_metadata", run_id: runId, response_id: "resume-parent", response_session_id: "root", history_id: "",
+    round_number: 1, revision, status, summary: "", summary_truncated: false, summary_expired: false, usage_reported: false,
+  });
+  entries = appendEvent(entries, { event: "tool_call", run_id: runId, history_id: "resume-history", call_position: 0,
+    id: "resume", name: "to_agent", arguments: { session_id: "child", prompt: "List the directory" } });
+  entries = delegateResult(entries, "child", "resume");
+  entries = appendEvent(entries, { event: "task_started", run_id: runId, session_id: "child", parent_session_id: "", activation: 1,
+    activation_history_id: "resume-history", activation_run_id: runId, activation_call_id: "resume", activation_call_position: 0 });
+  const resumeId = entries.find(entry => entry.callId === "resume")!.id;
+  entries = appendEvent(entries, parentMetadata("thinking", 1));
+  try {
+    await ui.render(entries);
+    const firstResult = ui.container.querySelector('article[data-record-key="delegation-result:child:0"]');
+    const resume = ui.container.querySelector(`article[data-record-key="${resumeId}"]`);
+    assert.ok(firstResult); assert.ok(resume);
+    entries = appendEvent(entries, { event: "task_completed", run_id: runId, session_id: "child", parent_session_id: "", root_session_id: "root",
+      activation: 1, status: "completed", result: "Directory listed", parent_response_id: "resume-parent", parent_response_session_id: "root" });
+    entries = appendEvent(entries, { event: "task_notification", run_id: runId, notification_id: "resume-notice", source_session_id: "child",
+      source_activation: 1, recipient_session_id: "", cause: "completion", text: "Directory listed" });
+    const notice = entries.at(-1)!;
+    // Real active checkpoints can retain a live notice before a later matched
+    // saved call and parent response. Raw array position is not its ownership.
+    entries = entries.filter(entry => entry !== notice);
+    entries.splice(entries.findIndex(entry => entry.id === resumeId), 0, notice);
+    const pending = flow.project(entries, options([agent("child")]));
+    assert.equal(pending.some(entry => entry.kind === "notification"), false);
+    assert.equal(pending.filter(entry => entry.delegation?.kind === "result").length, 1,
+      "the notice cannot release the result before terminal parent metadata");
+    assert.ok(pending.find(entry => entry.id === resumeId)?.delegation?.sources.some(source => source.notificationId === "resume-notice"));
+    await ui.render(entries);
+    assert.equal(ui.container.querySelector('[data-category="notices"]'), null);
+    entries = appendEvent(entries, { event: "text_done", run_id: runId, response_id: "resume-parent", text: "I checked both results." });
+    entries = appendEvent(entries, parentMetadata("completed", 2));
+    const complete = flow.project(entries, options([agent("child", "", "done")]));
+    assert.deepEqual(complete.filter(entry => entry.delegation?.kind === "result").map(entry => entry.delegation?.text),
+      ["The focused checks passed.", "Directory listed"]);
+    assert.equal(complete.some(entry => entry.kind === "notification"), false);
+    assert.equal(new DelegationFlow().project(entries, options([agent("child", "", "done")])).some(entry => entry.kind === "notification"), false);
+    await ui.render(entries, [agent("child", "", "done")]);
+    assert.equal(ui.container.querySelector('[data-category="notices"]'), null);
+    assert.equal(ui.container.querySelector('article[data-record-key="delegation-result:child:0"]'), firstResult);
+    assert.equal(ui.container.querySelector(`article[data-record-key="${resumeId}"]`), resume);
+  } finally { await ui.close(); }
+});
+
+test("checkpoint notice matching retains unscoped, unmatched, other-parent and noncompletion evidence", () => {
+  const completed = taskCompleted(taskStarted(delegateResult(delegateCall([]))));
+  for (const [label, values, agents] of [
+    ["legacy activation", {}, [agent("child", "", "done")]],
+    ["unmatched activation", { source_activation: 1 }, [agent("child", "", "done")]],
+    ["nested child", { source_activation: 0 }, [agent("child", "other", "done")]],
+    ["human follow-up", { source_activation: 0, cause: "additional_information" }, [agent("child", "", "done")]],
+    ["wakeup", { source_activation: 0, cause: "wakeup" }, [agent("child", "", "done")]],
+  ] as const) {
+    const entries = appendEvent(completed, { event: "task_notification", run_id: runId, notification_id: label,
+      source_session_id: "child", recipient_session_id: "", cause: "completion", text: "The focused checks passed.", ...values });
+    const notice = entries.at(-1)!;
+    const reordered = [notice, ...entries.slice(0, -1)];
+    const projected = new DelegationFlow().project(reordered, options([...agents]));
+    assert.equal(projected.find(entry => entry.id === notice.id)?.notificationId, label, label);
+  }
+  const otherRecipient = appendEvent(completed, { event: "task_notification", run_id: runId, notification_id: "other-recipient",
+    source_session_id: "child", source_activation: 0, recipient_session_id: "other", cause: "completion", text: "The focused checks passed." });
+  const rootProjection = new DelegationFlow().project(otherRecipient, options([agent("child", "", "done")]));
+  assert.equal(rootProjection.some(entry => entry.notificationId === "other-recipient"), false, "another conversation's notice stays outside Main");
+  assert.equal(delegationRows(rootProjection).some(entry => entry.delegation?.sources.some(source => source.notificationId === "other-recipient")), false,
+    "another recipient's delivery cannot become Main's delegation evidence");
+});
+
+test("a genuinely visible unknown completion stays inspectable when its native binding arrives later", () => {
+  const flow = new DelegationFlow();
+  let entries = appendEvent([], { event: "task_notification", run_id: runId, notification_id: "unknown-notice", source_session_id: "child",
+    source_activation: 0, recipient_session_id: "", cause: "completion", text: "The focused checks passed." });
+  const notice = entries[0];
+  assert.equal(flow.project(entries, options([]))[0], notice);
+  entries = taskCompleted(taskStarted(delegateResult(delegateCall(entries))));
+  const projected = flow.project(entries, options([agent("child", "", "done")]));
+  assert.equal(projected.find(entry => entry.id === notice.id), notice);
+  assert.equal(projected.filter(entry => entry.delegation?.kind === "result").length, 1);
+});
+
 test("host continuations without a matching native activation keep their own completion notification", () => {
   const flow = new DelegationFlow();
   let entries = taskCompleted(taskStarted(delegateResult(delegateCall([]))));
