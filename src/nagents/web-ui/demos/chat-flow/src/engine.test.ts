@@ -8,6 +8,8 @@ import { Conversation } from "../../../src/features/chat/Conversation.js";
 import { appearancePresets } from "../../../src/features/settings/appearance.js";
 import type { ChatAppearance } from "../../../src/features/settings/appearance.js";
 import { DURATION, frameAt, nextTime, reasoningParts, timeline } from "./engine.js";
+import { Reasoning } from "./Reasoning.js";
+import type { ResponseMetadata } from "../../../src/features/chat/responseMetadata.js";
 
 test("scrubbing backwards and replaying reconstructs the exact same event state", () => {
   const complete = frameAt(DURATION);
@@ -155,4 +157,24 @@ test("production Conversation renders the same replay frame at all five appearan
   assert.equal(everything.querySelector(".chat-activity-group"), null);
   assert.ok([...everything.querySelectorAll<HTMLDetailsElement>("details.execution-record")].every(details => details.open));
   assert.ok([...everything.querySelectorAll<HTMLDetailsElement>("details.response-reasoning")].every(details => details.open));
+});
+
+
+test("Thought treatments share production text visibility and keep real heading-only summaries", () => {
+  const metadata = (summary: string, status: ResponseMetadata["status"] = "thinking"): ResponseMetadata => ({
+    response_id: "thought", response_session_id: "root", revision: 1, round_number: 0, history_id: "", status,
+    summary, summary_truncated: false, summary_expired: false, usage_reported: false,
+  });
+  for (const summary of ["", " \n\t", "##", "** **", "```\n```", "\u200b"]) {
+    for (const status of ["thinking", "responding", "completed"] as const) {
+      const value = metadata(summary, status);
+      assert.equal(renderToStaticMarkup(createElement(Reasoning, { metadata: value, open: false, toggle() {} })), "");
+      assert.equal(value.summary, summary, "presentation must not rewrite provider metadata");
+    }
+  }
+  const actual = metadata("## Plan", "completed");
+  const html = renderToStaticMarkup(createElement(Reasoning, { metadata: actual, open: true, toggle() {} }));
+  assert.match(html, /thought-title[^>]*>Plan/);
+  assert.match(html, /Only a heading was supplied/);
+  assert.doesNotMatch(html, /Waiting for the first summary/);
 });

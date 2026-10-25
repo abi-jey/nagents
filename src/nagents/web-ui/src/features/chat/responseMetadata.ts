@@ -1,3 +1,5 @@
+import { hasReasoningText } from "./reasoningSummary.js";
+
 export type ResponseUsage = {
   prompt_tokens: number;
   completion_tokens: number;
@@ -99,7 +101,7 @@ export function latestResponseMetadata(saved?: ResponseMetadata, previous?: Resp
 }
 
 export function hasResponseDetails(value?: ResponseMetadata): boolean {
-  return !!value && (!!value.summary || value.status === "thinking" || value.summary_expired);
+  return !!value && !value.summary_expired && hasReasoningText(value.summary);
 }
 
 export function hasVisibleUsage(usage?: ResponseUsage): boolean {

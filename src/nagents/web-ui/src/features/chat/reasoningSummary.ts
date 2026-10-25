@@ -1,3 +1,8 @@
+/** A provider summary needs readable content, beyond empty Markdown markers. */
+export function hasReasoningText(value: string): boolean {
+  return /[^\s#*_`~>\-\p{Cf}\p{Cc}\p{M}]/u.test(value);
+}
+
 /** Separate a provider's opening Markdown heading from its summary body. */
 export function reasoningParts(value: string): { title: string; body: string } {
   const [first = "", ...rest] = value.trim().split("\n");

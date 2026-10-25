@@ -136,3 +136,42 @@ test("saved history uses the previous agent before the change and current agent 
   ]);
   assert.equal(entries.find(entry => entry.kind === "agent_change")?.text, "Agent: Reviewer");
 });
+
+
+test("non-displayed response metadata and whitespace messages cannot consume the answer's byline", () => {
+  for (const hiddenText of ["", " \n\t"]) for (const summary of ["", " \n\t", "##", "** **"]) {
+    const entries = [user("user", "Question"), assistant("metadata", hiddenText, { runId: "run", responseId: "response",
+      responseMetadata: { response_id: "response", response_session_id: "root", run_id: "run", revision: 1,
+        round_number: 0, history_id: "", status: "thinking", summary, summary_truncated: false,
+        summary_expired: false, usage_reported: true } }), assistant("answer", "The visible answer.", { runId: "run" })];
+    const document = render(entries, { agentName: "Configured Reviewer" });
+    assert.equal(document.querySelector('[data-record-key="metadata"]'), null);
+    assert.deepEqual(visibleBylines(document), [["answer", "Configured Reviewer"]]);
+    assert.equal(entries[1]!.text, hiddenText);
+  }
+});
+
+test("whitespace assistant text does not hide attachments live content or interruption outcomes", () => {
+  const upload = { upload_id: "upload", filename: "report.pdf", media_type: "application/pdf", byte_length: 1024 };
+  const entries: Entry[] = [
+    assistant("attachment", " \n", { runId: "attachment-run", uploads: [upload] }),
+    { id: "caption", kind: "live_caption", text: " \n", liveCaption: { sessionId: "voice", seq: 1, speaker: "assistant", start: 0, end: 100, anchorHistoryId: "" } },
+    ...(["cancelled", "failed"] as const).map(status => assistant(status, " \n", { runId: `${status}-run`,
+      responseMetadata: { response_id: status, response_session_id: "root", revision: 1, round_number: 0, history_id: "",
+        status, summary: "", summary_truncated: false, summary_expired: false, usage_reported: false } })),
+  ];
+  const document = render(entries);
+  const attachment = document.querySelector('[data-record-key="attachment"]')!;
+  assert.ok(attachment);
+  assert.match(attachment.textContent || "", /report\.pdf/);
+  assert.equal(attachment.querySelector(".entry-content"), null);
+  assert.equal(attachment.classList.contains("reasoning-only"), false);
+  assert.ok(document.querySelector('[data-record-key="caption"] .chat-live-badge'));
+  for (const [id, text] of [["cancelled", "Stopped"], ["failed", "Interrupted"]]) {
+    const article = document.querySelector(`[data-record-key="${id}"]`)!;
+    assert.ok(article);
+    assert.match(article.textContent || "", new RegExp(text!));
+    assert.equal(article.querySelector(".entry-content"), null);
+    assert.equal(article.classList.contains("reasoning-only"), true);
+  }
+});

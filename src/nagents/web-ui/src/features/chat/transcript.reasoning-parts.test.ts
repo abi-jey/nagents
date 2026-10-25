@@ -6,6 +6,8 @@ import { JSDOM } from "jsdom";
 import { appendEvent, groupTranscript, type Entry } from "./transcript.js";
 import { TranscriptItems } from "./Conversation.js";
 import type { ResponseMetadata } from "./responseMetadata.js";
+import { ResponseDetails } from "./ResponseDetails.js";
+import { hasReasoningText } from "./reasoningSummary.js";
 
 const metadata = (summary: string, extra: Partial<ResponseMetadata> = {}): ResponseMetadata => ({
   response_id: "summary-response", response_session_id: "root", run_id: "run", revision: 1, round_number: 0,
@@ -57,4 +59,28 @@ test("a heading-only summary is labeled honestly and usage-only metadata leaves 
   }) }));
   assert.equal(usageOnly.querySelector(".response-reasoning"), null);
   assert.equal(usageOnly.querySelector("article"), null);
+});
+
+
+test("read-first details require actual provider text and do not create empty standalone controls", () => {
+  for (const summary of ["", " \n\t", "##", "** **", "```\n```", "> ", "\u200b", "\u0301"]) {
+    assert.equal(hasReasoningText(summary), false);
+    for (const status of ["thinking", "responding", "completed"] as const) {
+      const html = renderToStaticMarkup(createElement(ResponseDetails, { metadata: metadata(summary, { status }), open: false, toggle() {} }));
+      assert.equal(html, "", `${status} without readable summary has no wrapper, spacing or marker`);
+    }
+  }
+  for (const summary of ["## Plan", "## Reasoning", "A provider sentence.", "检查输入。", "👩‍💻"]) {
+    assert.equal(hasReasoningText(summary), true);
+    const html = renderToStaticMarkup(createElement(ResponseDetails, { metadata: metadata(summary), open: false, toggle() {} }));
+    assert.match(html, /response-reasoning/);
+  }
+  const expired = renderToStaticMarkup(createElement(ResponseDetails, {
+    metadata: metadata("An expired summary", { summary_expired: true }), open: false, toggle() {},
+  }));
+  assert.equal(expired, "");
+  const hidden = renderToStaticMarkup(createElement(ResponseDetails, {
+    metadata: metadata("A real summary hidden by preference."), hideSummary: true, open: false, toggle() {},
+  }));
+  assert.equal(hidden, "");
 });

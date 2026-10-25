@@ -8,7 +8,7 @@ import { defaultAppearance, type ChatAppearance } from "../settings/appearance.j
 import { appendEvent, fromHistory, groupTranscript, type Entry } from "./transcript.js";
 import { applySnapshot, LiveSessions } from "./liveTranscript.js";
 import { TranscriptItems } from "./Conversation.js";
-import { responseMetadata, type ResponseMetadata } from "./responseMetadata.js";
+import { hasResponseDetails, responseMetadata, type ResponseMetadata } from "./responseMetadata.js";
 import { taskEntries } from "../team/TaskConversation.js";
 import type { TaskActivity, TaskDetail } from "../team/model.js";
 
@@ -135,30 +135,48 @@ test("provider output semantics remain in metadata without decorating the visibl
   }
 });
 
-test("reasoning phases retain their text and status while usage-only terminal frames leave no empty rows", () => {
-  for (const summary of ["A provider-supplied summary.", ""]) {
+test("reasoning phases show real summary text and preserve visible stopped or failed outcomes", () => {
+  for (const summary of ["A provider-supplied summary.", "", " \n\t", "** **"]) {
     for (const [status, label] of [["thinking", "Thinking"], ["cancelled", "Stopped"], ["failed", "Interrupted"]] as const) {
       const value = metadata({ status, summary, usage_reported: true,
         usage: { ...reportedCounters, prompt_tokens: 10, completion_tokens: 5, total_tokens: 15,
           reasoning_tokens: 1, reasoning_reported: true, reasoning_in_output: "included" } });
-      const doc = render(appendEvent([], update(value)));
-      if (summary || status === "thinking" || status === "cancelled" || status === "failed") {
+      const entries = appendEvent([], update(value));
+      const doc = render(entries);
+      const displayable = hasResponseDetails(value);
+      if (!displayable && status === "thinking") {
+        assert.equal(doc.querySelector("article, .response-details, .response-thinking"), null);
+      } else {
         assert.match(doc.querySelector(".response-details")?.textContent || "", new RegExp(label));
-      } else {
-        assert.equal(doc.querySelector("article"), null);
+        assert.equal(doc.querySelector(".response-details")?.getAttribute("data-phase"), status === "thinking" ? "thinking" : status);
       }
-      assert.equal(doc.querySelector(".response-details")?.getAttribute("data-phase"), status === "thinking" ? "thinking" : status);
-      if (status === "thinking") {
-        assert.equal(doc.querySelector('.response-details [role="status"]')?.textContent, "Thinking");
-        if (summary) assert.match(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label") || "",
-          /^Show reasoning: Reasoning\. A provider-supplied summary\.$/);
-      } else {
+      if (status !== "thinking") {
         assert.equal(doc.querySelector(".response-interrupted")?.getAttribute("role"), "status");
         assert.equal(doc.querySelector(".response-interrupted")?.textContent, label);
       }
-      assert.equal(doc.querySelector(".response-reasoning-count"), null);
-      assert.equal(doc.querySelector(".response-usage"), null);
-      assert.equal(!!doc.querySelector(".response-thinking"), status === "thinking");
+      assert.equal(!!doc.querySelector(".response-thinking"), status === "thinking" && displayable);
+      assert.equal(!!doc.querySelector("details.response-reasoning"), displayable);
+      assert.equal(doc.querySelector(".response-usage, .response-reasoning-count, .response-reasoning-settled"), null);
+      assert.equal(entries[0]!.responseMetadata?.usage?.reasoning_tokens, 1);
+      assert.equal(entries[0]!.responseId, value.response_id);
+    }
+  }
+});
+
+test("empty whitespace and formatting-only summaries never produce rows or placeholders in live or cold history", () => {
+  for (const status of ["thinking", "responding", "completed"] as const) {
+    for (const summary of ["", " \n\t", "##", "** **", "```\n```", "\u200b", "\u0301"]) {
+      const value = metadata({ status, summary, history_id: "42", usage_reported: true });
+      assert.equal(hasResponseDetails(value), false);
+      const live = appendEvent([], update(value));
+      const cold = fromHistory(snapshot([row(value, "")]));
+      for (const entries of [live, cold]) {
+        const doc = render(entries);
+        assert.equal(doc.querySelector("article, .response-details, .response-thinking, .response-reasoning-meta"), null);
+        assert.equal(entries[0]!.responseMetadata?.summary, summary);
+        assert.equal(entries[0]!.responseMetadata?.response_id, value.response_id);
+        assert.equal(entries[0]!.responseMetadata?.usage_reported, true);
+      }
     }
   }
 });
@@ -354,9 +372,13 @@ test("retained usage survives expired summary without bringing the old text back
   assert.equal(state.entries[0].responseMetadata?.summary, "");
   const doc = render(state.entries);
   assert.equal(doc.querySelector("details"), null);
-  assert.match(doc.querySelector(".response-reasoning-expired")?.getAttribute("title") || "", /latest 100 responses/);
-  assert.equal(doc.querySelector(".response-reasoning-meta")?.textContent, "Summary no longer retained");
-  assert.ok(doc.querySelector(".response-reasoning-expired"), "summary expiry remains visible without the old body");
+  assert.equal(doc.querySelector(".response-details, .response-reasoning-meta, .response-reasoning-expired"), null);
+  assert.equal(doc.querySelector(".entry-content")?.textContent, "Answer");
+  const metadataOnly = fromHistory(snapshot([row(expired, "")]));
+  assert.equal(render(metadataOnly).querySelector("article"), null);
+  assert.equal(metadataOnly[0]!.responseMetadata?.summary_expired, true);
+  assert.equal(metadataOnly[0]!.responseId, old.response_id);
+  assert.equal(metadataOnly[0]!.responseMetadata?.usage?.total_tokens, 2000);
   assert.equal(state.entries[0].responseMetadata?.usage?.reasoning_tokens, 600);
   assert.equal(doc.querySelector(".response-usage"), null);
 });
