@@ -34,6 +34,7 @@ from tests.web.test_web_subscription_lifecycle import until
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import AsyncGenerator
     from collections.abc import AsyncIterator
     from collections.abc import Callable
     from pathlib import Path
@@ -277,6 +278,52 @@ def test_active_producer_and_worker_stop_before_transport_closes(
             assert len(providers[0].requests) == 1
             assert [event.active for event in channel.activities] == [True, False]
             assert await statuses(state) == {"attach": "completed", "active": "interrupted", "later": "queued"}
+
+    asyncio.run(scenario())
+
+
+def test_fake_provider_joins_owned_script_generator_cleanup(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        cleanup_started = asyncio.Event()
+        release_cleanup = asyncio.Event()
+        cleanup_finished = asyncio.Event()
+        retained: list[AsyncGenerator[Event, None]] = []
+
+        async def events() -> AsyncGenerator[Event, None]:
+            try:
+                yield TextDoneEvent(text="first")
+            finally:
+                cleanup_started.set()
+                await release_cleanup.wait()
+                cleanup_finished.set()
+
+        def script(provider: FakeProvider, messages: list[Message]) -> AsyncGenerator[Event, None]:
+            del provider, messages
+            inner = events()
+            retained.append(inner)
+            return inner
+
+        config = HarnessConfig(
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            providers=connection(auth="api-key"),
+        )
+        provider = FakeProvider(config, 0, script)
+        stream = provider.generate([Message(role="user", content="go")])
+        assert isinstance(await anext(stream), TextDoneEvent)
+        closing = asyncio.create_task(stream.aclose())
+        try:
+            await asyncio.wait_for(cleanup_started.wait(), HANG_GUARD)
+            assert not closing.done()
+        finally:
+            release_cleanup.set()
+            try:
+                await asyncio.wait_for(closing, HANG_GUARD)
+                if not cleanup_finished.is_set():
+                    await retained[0].aclose()
+            finally:
+                await provider.close()
+        assert cleanup_finished.is_set()
 
     asyncio.run(scenario())
 

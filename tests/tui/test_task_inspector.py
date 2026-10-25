@@ -5,20 +5,26 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+import pytest
 from textual import on
 from textual.app import App
+from textual.containers import VerticalScroll
 from textual.widgets import Button
 from textual.widgets import Static
 from textual.widgets import TextArea
 
 from nagents.harness.subagents import TaskInfo
+from nagents.session import SessionManager
 from nagents.tui.tasks import AgentTree
 from nagents.tui.tasks import TaskScreen
 from nagents.tui.themes import configure_theme
 from nagents.types import Message
+from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
     from collections.abc import Callable
+    from pathlib import Path
 
     from textual.app import ComposeResult
 
@@ -41,6 +47,77 @@ class InspectorApp(App[None]):
 
     def finished(self, result: tuple[str, str] | None) -> None:
         self.result = result
+
+
+class HistoryInspectorApp(App[None]):
+    def __init__(self, tasks: Callable[[], list[TaskInfo]], history: Callable[[str], Awaitable[list[Message]]]) -> None:
+        super().__init__()
+        configure_theme(self, "ocean")
+        self.tasks = tasks
+        self.history = history
+
+    def on_mount(self) -> None:
+        self.push_screen(TaskScreen(self.tasks, self.history, parents=lambda: {}))
+
+
+@pytest.mark.parametrize("replace_target", [False, True])
+def test_pending_history_cannot_update_a_removed_or_replaced_view(tmp_path: Path, replace_target: bool) -> None:
+    async def scenario() -> None:
+        manager = SessionManager(tmp_path / "history.db")
+        for session_id in ("s1", "s2"):
+            await manager.get_or_create_session(session_id, "test")
+            await manager.add_message(session_id, Message(role="assistant", content=f"Saved answer for {session_id}"))
+        tasks = [TaskInfo("s1", "", status="completed"), TaskInfo("s2", "", status="completed")]
+        started, release = asyncio.Event(), asyncio.Event()
+        hold = False
+
+        async def history(session_id: str) -> list[Message]:
+            messages = await manager.get_history(session_id)
+            if hold and session_id == "s1":
+                started.set()
+                await release.wait()
+            return messages
+
+        app = HistoryInspectorApp(lambda: tasks, history)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, TaskScreen)
+            assert screen.get_history is history
+            # Selection can cancel an earlier exclusive history worker. Wait
+            # for this view's rendered data, rather than every global worker.
+            async with asyncio.timeout(HANG_GUARD):
+                while "Saved answer for s1" not in str(screen.query_one("#task-history", Static).render()):
+                    await pilot.pause()
+            hold = True
+            worker = screen.load_history("s1")
+            async with asyncio.timeout(HANG_GUARD):
+                await started.wait()
+            original = screen.query_one("#task-history", Static)
+            scroll = screen.query_one("#task-history-scroll", VerticalScroll)
+            await original.remove()
+            assert screen.is_mounted and screen.is_attached
+            replacement = Static("Replacement view has no history yet", id="task-history", markup=False)
+            if replace_target:
+                await scroll.mount(replacement)
+            release.set()
+            await worker.wait()
+            if replace_target:
+                assert str(replacement.render()) == "Replacement view has no history yet"
+                fresh = screen.load_history("s1")
+                await fresh.wait()
+                assert "Saved answer for s1" in str(replacement.render())
+            await app.pop_screen()
+            reopened = TaskScreen(lambda: tasks, manager.get_history, parents=lambda: {}, selected_session_id="s2")
+            await app.push_screen(reopened)
+            await pilot.pause()
+            async with asyncio.timeout(HANG_GUARD):
+                while "Saved answer for s2" not in str(reopened.query_one("#task-history", Static).render()):
+                    await pilot.pause()
+            text = str(reopened.query_one("#task-history", Static).render())
+            assert "Saved answer for s2" in text and "Saved answer for s1" not in text
+
+    asyncio.run(scenario())
 
 
 def test_inspector_arrows_show_history_and_send_explicit_followup() -> None:

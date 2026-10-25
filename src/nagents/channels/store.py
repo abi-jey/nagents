@@ -20,6 +20,7 @@ from typing import Literal
 from typing import TypeVar
 
 from nagents._async import finish_on_cancel as finish_on_cancel
+from nagents._sqlite import write_database
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -76,7 +77,7 @@ class InboxStore:
                 )
                 raise
 
-        return await finish_on_cancel(asyncio.to_thread(execute))
+        return await write_database(self.db_path, lambda: asyncio.to_thread(execute))
 
     async def initialize(self) -> None:
         def initialize(db: sqlite3.Connection) -> None:

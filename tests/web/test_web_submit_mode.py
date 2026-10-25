@@ -182,7 +182,10 @@ def test_other_session_input_never_cancels_active_work(tmp_path: Path, monkeypat
             ]
             assert other_history[0]["message_id"] == M3
             original_history = cast("list[dict[str, object]]", app.history(root)["history"])
-            assert [(row["role"], row["content"]) for row in original_history] == [("user", "first work")]
+            assert [
+                (row["role"], row["content"]) for row in original_history if row["role"] != "response_metadata"
+            ] == [("user", "first work")]
+            assert [row["role"] for row in original_history] == ["user", "response_metadata"]
         finally:
             stop_active(app, active)
 
