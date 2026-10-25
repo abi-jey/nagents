@@ -75,7 +75,7 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
   const rootName = agents.find(item => item.id === MAIN_AGENT)?.name || "Assistant";
   const parentName = agents.find(item => item.id === (agent?.parentId ?? MAIN_AGENT))?.name || rootName;
   const definition = agent?.profile || team.profile?.id || "";
-  const definitionName = profileLabel(team.profiles.find(profile => profile.id === definition), definition);
+  const definitionName = profileLabel(team.profiles?.find(profile => profile.id === definition), definition);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: true })); return () => cancelAnimationFrame(frame); }, [team.selected]);
   const transcript = useMemo(() => new TaskTranscript(), [sessionId, team.selected]);
