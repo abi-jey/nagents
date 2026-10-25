@@ -91,13 +91,14 @@ test("unused remote definitions remain visible with connection access without an
     selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
   }));
   assert.match(html, /data-profile-id="peer"/);
-  assert.match(html, /peer-alias/);
+  assert.match(html, /<strong>Advertised name<\/strong>/);
   assert.match(html, /Not started/);
   assert.match(html, /remote-connection-chip/);
-  assert.match(html, /Settings for peer-alias definition/);
+  assert.match(html, /title="Connection: peer/);
+  assert.match(html, /Settings for Advertised name definition/);
   assert.doesNotMatch(html, /team-definition-group/);
-  assert.match(html, /Local note/);
-  assert.doesNotMatch(html, /Advertised name|Advertised purpose/);
+  assert.match(html, /Advertised purpose/);
+  assert.doesNotMatch(html, /Local note/);
   assert.doesNotMatch(html, /team-start-agent|team-run-search|<select/);
 });
 

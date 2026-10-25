@@ -94,7 +94,7 @@ export function App() {
           conversation={{ appearance, agentName: root.name, token: client.sessions.config?.token || "", active: !client.team.selected,
             entries: client.chat.entries, sessionId: client.sessions.sessionId, demo: !!client.sessions.config?.demo,
             providerSetup: root.providerKind === "a2a" ? undefined : client.sessions.config?.provider_setup, canSubmit: client.available.submit, submit: value => void submit(value),
-            delegation: { agents, activity: client.chat.taskActivity, inspect: client.team.select } }}
+            delegation: { agents, profiles: client.team.profiles, activity: client.chat.taskActivity, inspect: client.team.select } }}
           composer={<WorkspaceComposer client={client} composer={composer} submit={() => void submit()} select={select}
             configureSettings={() => openAgentSettings(client.sessionAgent.selection?.agent || "assistant", "Voice")} audioChanged={setNavigatorAudio} />}
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />
@@ -103,7 +103,7 @@ export function App() {
         configureDefinition={client.team.profiles.some(profile => profile.id === configured.profile) ? () => { setConfiguredAgent(""); openAgentSettings(configured.profile); } : undefined} />}
       {client.sessions.config && <AgentNavigator key={client.sessions.config.token} request={navigatorRequest} token={client.sessions.config.token} audio={navigatorAudio}
         close={() => setNavigatorRequest(undefined)} changed={settingsChanged} acceptSettings={acceptSettings}
-        catalogRevision={JSON.stringify(client.team.profiles.map(profile => [profile.id, profile.name, profile.description, profile.provider, profile.model]))}
+        catalogRevision={JSON.stringify(client.team.profiles.map(profile => [profile.id, profile.name, profile.description, profile.remote_name, profile.remote_description, profile.metadata_status, profile.provider, profile.model]))}
         workspaceName={client.sessions.config.workspace.split(/[\\/]/).filter(Boolean).at(-1) || "Workspace"} />}
       <WorkspaceDialogs client={client} select={select} />
     </div>
