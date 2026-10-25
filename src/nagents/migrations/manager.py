@@ -1,15 +1,23 @@
 """Migration manager for handling database schema evolution."""
 
+from __future__ import annotations
+
 import logging
 import sqlite3
-from pathlib import Path
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 from typing import Any
 
 import aiosqlite
 
 from nagents._async import finish_on_cancel
+from nagents._sqlite import database_write
 
-from .base import Migration
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from .base import Migration
 
 logger = logging.getLogger(__name__)
 
@@ -74,23 +82,42 @@ class MigrationManager:
             logger.debug(f"{self.db_name} database already at latest version")
             return
 
-        async with aiosqlite.connect(self.db_path) as db:
-            if self.atomic:
-                # Reserve the writer before reading versions: another initializer
-                # must see our committed schema rather than apply the same upgrade.
-                await db.execute("BEGIN IMMEDIATE")
-            try:
-                await self._ensure_schema_migrations_table(db, atomic=self.atomic)
-                await self._run_pending_migrations(db, atomic=self.atomic)
+        async def write() -> None:
+            async with self._write_connection() as db:
                 if self.atomic:
-                    await db.commit()
-            except BaseException:
-                if self.atomic:
-                    await db.rollback()
-                raise
+                    # Reserve the writer before reading versions: another initializer
+                    # must see our committed schema rather than apply the same upgrade.
+                    await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await self._ensure_schema_migrations_table(db, atomic=self.atomic)
+                    await self._run_pending_migrations(db, atomic=self.atomic)
+                    if self.atomic:
+                        await db.commit()
+                except BaseException:
+                    if self.atomic:
+                        await finish_on_cancel(db.rollback())
+                    raise
 
-        self._initialized = True
-        logger.debug(f"{self.db_name} database initialized with migrations")
+            self._initialized = True
+            logger.debug(f"{self.db_name} database initialized with migrations")
+
+        async with database_write(self.db_path):
+            await write()
+
+    @asynccontextmanager
+    async def _write_connection(self) -> AsyncIterator[aiosqlite.Connection]:
+        # Custom migration bodies remain cancellable. Connection setup and
+        # teardown still finish before admission can pass to another writer.
+        connection = aiosqlite.connect(self.db_path)
+
+        async def connect() -> None:
+            await connection
+
+        try:
+            await finish_on_cancel(connect())
+            yield connection
+        finally:
+            await finish_on_cancel(connection.close())
 
     async def _schema_is_current(self) -> bool:
         """Read committed schema evidence, owning and closing both cursors.
@@ -208,18 +235,23 @@ class MigrationManager:
         Raises:
             ValueError: If no rollback SQL available or not enough migrations
         """
-        async with aiosqlite.connect(self.db_path) as db:
-            applied = await self._get_applied_migrations_ordered(db)
 
-            if not applied:
-                raise ValueError("No migrations to rollback")
+        async def write() -> None:
+            async with self._write_connection() as db:
+                applied = await self._get_applied_migrations_ordered(db)
 
-            if steps > len(applied):
-                raise ValueError(f"Cannot rollback {steps} migrations, only {len(applied)} applied")
+                if not applied:
+                    raise ValueError("No migrations to rollback")
 
-            for _ in range(steps):
-                migration_info = applied[-1]
-                await self._rollback_migration(db, migration_info)
+                if steps > len(applied):
+                    raise ValueError(f"Cannot rollback {steps} migrations, only {len(applied)} applied")
+
+                for _ in range(steps):
+                    migration_info = applied[-1]
+                    await self._rollback_migration(db, migration_info)
+
+        async with database_write(self.db_path):
+            await write()
 
     async def _get_applied_migrations_ordered(self, db: aiosqlite.Connection) -> list[dict[str, Any]]:
         """Get applied migrations in reverse order (newest first for rollback)."""
@@ -264,20 +296,24 @@ class MigrationManager:
         if target_version < 0:
             raise ValueError("Target version must be >= 0")
 
-        async with aiosqlite.connect(self.db_path) as db:
-            await self._ensure_schema_migrations_table(db)
-            current_version = await self._get_version(db)
+        async def write() -> None:
+            async with self._write_connection() as db:
+                await self._ensure_schema_migrations_table(db)
+                current_version = await self._get_version(db)
 
-            if target_version > current_version:
-                pending = [m for m in self.migrations if current_version < m.version <= target_version]
-                for migration in pending:
-                    await self._apply_migration(db, migration)
-                logger.info(f"{self.db_name} database: migrated to version {target_version}")
-            elif target_version < current_version:
-                applied = await self._get_applied_migrations_ordered(db)
-                to_rollback = [m for m in applied if target_version < m["version"] <= current_version]
-                for migration_info in to_rollback:
-                    await self._rollback_migration(db, migration_info)
-                logger.info(f"{self.db_name} database: rolled back to version {target_version}")
-            else:
-                logger.debug(f"{self.db_name} database: already at version {target_version}")
+                if target_version > current_version:
+                    pending = [m for m in self.migrations if current_version < m.version <= target_version]
+                    for migration in pending:
+                        await self._apply_migration(db, migration)
+                    logger.info(f"{self.db_name} database: migrated to version {target_version}")
+                elif target_version < current_version:
+                    applied = await self._get_applied_migrations_ordered(db)
+                    to_rollback = [m for m in applied if target_version < m["version"] <= current_version]
+                    for migration_info in to_rollback:
+                        await self._rollback_migration(db, migration_info)
+                    logger.info(f"{self.db_name} database: rolled back to version {target_version}")
+                else:
+                    logger.debug(f"{self.db_name} database: already at version {target_version}")
+
+        async with database_write(self.db_path):
+            await write()
