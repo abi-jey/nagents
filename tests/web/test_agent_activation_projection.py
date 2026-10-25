@@ -287,6 +287,55 @@ def test_projection_bounds_large_history_and_respects_compaction_and_actor_scope
 
 
 @pytest.mark.requires_posix
+def test_parent_response_identity_roundtrips_in_completed_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        async def idle_script(_provider: FakeProvider, _messages: list[HarnessMessage]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="unused")
+
+        async with scheduled_app(tmp_path, monkeypatch, idle_script) as (_, _, _, state, _, _):
+            root = state.selected_session_id
+            anchor = str(await state.history.add_message(root, Message(role="user", content="Start child")))
+            started = {
+                "event": "task_started",
+                "root_session_id": root,
+                "session_id": "s1",
+                "parent_session_id": "",
+                "activation": 0,
+                "title": "Child",
+                "status": "running",
+                "activation_history_id": anchor,
+                "timestamp": 1.0,
+            }
+            completed = {
+                "event": "task_completed",
+                "root_session_id": root,
+                "session_id": "s1",
+                "parent_session_id": "",
+                "activation": 0,
+                "title": "Child",
+                "status": "completed",
+                "parent_response_id": "active-parent-response",
+                "parent_response_session_id": root,
+                "completed_at": 2.0,
+                "timestamp": 2.0,
+            }
+            await state.tasks.store.record_activation(root, started)
+            await state.tasks.store.record_activation(root, completed)
+
+            rows, omitted = await state.tasks.store.activation_projection(
+                root, history_ids=frozenset({anchor}), parent_session_id=""
+            )
+            assert omitted == 0 and len(rows) == 1
+            assert rows[0]["parent_response_id"] == "active-parent-response"
+            assert rows[0]["parent_response_session_id"] == root
+            assert rows[0]["completed_at"] == 2.0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
 def test_projection_reports_exceptional_omissions_explicitly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         async def idle_script(_provider: FakeProvider, _messages: list[HarnessMessage]) -> AsyncIterator[Event]:

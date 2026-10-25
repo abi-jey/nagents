@@ -31,10 +31,20 @@ function commandOutcome(value: unknown): CommandOutcome | undefined {
   return exitCode === undefined ? undefined : { kind: "exited", exitCode };
 }
 
+export type ResponseReference = { responseId: string; sessionId: string };
+
+function parentGeneration(responseId: unknown, responseSession: unknown, parentSession: string): ResponseReference | undefined {
+  return parentSession && typeof responseId === "string" && responseId && responseSession === parentSession
+    ? { responseId, sessionId: parentSession } : undefined;
+}
+
 export type Entry = {
   delegation?: import("./delegationFlow.js").DelegationPresentation;
   activationOmission?: { sessionId: string; count: number };
   completionAfterId?: string;
+  completionGeneration?: ResponseReference;
+  completedAt?: number;
+  responseOwner?: ResponseReference;
   id: string;
   kind:
     | "user"
@@ -477,6 +487,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     const inputs = Array.from(raw).slice(0, 16384).join("");
     const status = event.status as "streaming" | "ready" | "abandoned";
     return save({ ...previous, kind: "tool", text: "", ...scope, generationId, toolIndex,
+      responseOwner: responseId && responseSessionId ? { responseId, sessionId: responseSessionId } : previous?.responseOwner,
       callId: text(event, "id") || previous?.callId,
       title: text(event, "name") || previous?.title,
       inputs, inputsTruncated: event.arguments_truncated === true || inputs.length < raw.length,
@@ -521,6 +532,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       text: "",
       ...previous,
       ...scope,
+      responseOwner: responseId && responseSessionId ? { responseId, sessionId: responseSessionId } : previous?.responseOwner,
       ...(generationId && toolIndex !== undefined ? { generationId, toolIndex } : {}),
       callId,
       title: text(event, "name") || text(event, "tool") || previous?.title,
@@ -691,7 +703,16 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     if (typeof event.depth === "number") entry.depth = event.depth;
     if (typeof event.trigger === "string") entry.trigger = event.trigger;
     if (event.event === "task_completed") {
-      entry.completionAfterId ||= entries.at(-1)?.id;
+      if (!entry.completionAfterId) {
+        entry.completionAfterId = entries.at(-1)?.id;
+      }
+      // Checkpoints may already contain a later parent revision when this
+      // queued completion arrives. Only the host can identify the generation
+      // active at the actual child completion; current UI state cannot.
+      entry.completionGeneration ??= parentGeneration(event.parent_response_id, event.parent_response_session_id,
+        text(event, "parent_session_id") || text(event, "root_session_id"));
+      if (typeof event.completed_at === "number" && Number.isFinite(event.completed_at) && event.completed_at > 0)
+        entry.completedAt = event.completed_at;
       entry.result = text(event, "result");
       entry.error = text(event, "error");
       entry.state =
@@ -1085,6 +1106,7 @@ export function fromHistory({
         name: call.name,
         arguments: call.arguments,
         call_position: position,
+        ...(metadata?.response_session_id === session_id ? { response_id: metadata.response_id, response_session_id: session_id } : {}),
         ...identity,
       });
       for (const delivery of message.deliveries || [])
@@ -1136,6 +1158,8 @@ export function fromHistory({
       activationRunId: task.activation_run_id,
       activationCallId: task.activation_call_id,
       activationCallPosition: task.activation_call_position,
+      completionGeneration: parentGeneration(task.parent_response_id, task.parent_response_session_id, task.parent_session_id || task.root_session_id),
+      completedAt: task.completed_at,
       depth: task.depth,
       activation: task.activation,
       followup: task.followups,
