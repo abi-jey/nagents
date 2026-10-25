@@ -14,6 +14,13 @@ export type ArrivalTimes = Readonly<Record<string, number>>;
 export function useArrivalStyle(at = 0): CSSProperties {
   return useMemo(() => at ? { "--arrival-delay": `${Math.min(0, at - Date.now())}ms` } as CSSProperties : {}, [at]);
 }
+function layoutPosition(element: HTMLElement): { top: number; left: number } {
+  let top = element.offsetTop, left = element.offsetLeft;
+  for (let parent = element.offsetParent; parent instanceof HTMLElement; parent = parent.offsetParent) {
+    top += parent.offsetTop; left += parent.offsetLeft;
+  }
+  return { top, left };
+}
 
 export function TeamIcon({ size = 18 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="10" cy="5.5" r="2.4" /><path d="M6 17v-1.8a4 4 0 0 1 8 0V17M4.2 5a2.2 2.2 0 0 0 0 4.4M15.8 5a2.2 2.2 0 0 1 0 4.4M2 16v-1.3a3 3 0 0 1 1.8-2.7M18 16v-1.3a3 3 0 0 0-1.8-2.7" /></svg>;
@@ -69,11 +76,20 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   const [expanded, setExpanded] = useState(new Map<string, boolean>());
   const [limits, setLimits] = useState(new Map<string, number>());
   const revealed = useRef(new Set<string>());
+  const opened = useRef(new Set<string>());
+  const nextOpened = new Set(opened.current);
   const selection = useRef({ id: "", resolved: false });
   const tree = useRef<HTMLDivElement>(null);
   const positions = useRef(new Map<string, { top: number; left: number }>());
+  const animations = useRef(new Map<HTMLElement, Animation>());
   const selectedScope = isProfileTarget(selected) ? profileSelection(selected) : { profile: "", parentId: selected };
   const focusedPath = new Set([selectedScope.parentId, ...agentAncestors(selectedScope.parentId, agents)]);
+  const activeElement = tree.current?.ownerDocument.activeElement;
+  const focusedRow = activeElement && tree.current?.contains(activeElement)
+    ? activeElement.closest<HTMLElement>("[data-agent-id]")?.dataset.agentId : undefined;
+  const focusedAgent = focusedRow === "main" ? "" : focusedRow || "";
+  const keyboardPath = new Set(focusedRow ? [focusedAgent, ...agentAncestors(focusedAgent, agents)] : []);
+  const focusReveals = new Set<string>();
   const definitionParent = known.get(selectedScope.parentId);
 
   function permission(parent: TeamAgent | undefined, profile: string): { allowed: boolean; reason: string } {
@@ -85,6 +101,22 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     return { allowed, reason: allowed ? "" : parent.task?.child_start_unavailable_reason || "This definition is unavailable under the parent's policy." };
   }
   function toggle(key: string, open: boolean) { setExpanded(current => new Map(current).set(key, !open)); }
+  function isOpen(key: string, fallback: boolean, focused = false): boolean {
+    if (focused && expanded.get(key) === false) focusReveals.add(key);
+    return focused || (expanded.get(key) ?? (nextOpened.has(key) || fallback));
+  }
+  useLayoutEffect(() => {
+    // Retain expansion that was actually committed, while explicit choices
+    // continue to take precedence over automatic defaults.
+    opened.current = nextOpened;
+    if (!focusReveals.size) return;
+    // A focus-driven destination reveal survives the next keyboard move.
+    setExpanded(current => {
+      const next = new Map(current);
+      for (const key of focusReveals) next.set(key, true);
+      return next;
+    });
+  });
 
   useEffect(() => {
     const target = isProfileTarget(selected) ? profileSelection(selected).parentId : selected;
@@ -117,39 +149,56 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   useLayoutEffect(() => {
     const region = tree.current, view = region?.ownerDocument.defaultView;
     if (!region || !view) return;
-    const rect = region.getBoundingClientRect();
+    // Layout offsets exclude both CSS arrivals and our in-flight transforms.
+    const origin = layoutPosition(region);
     const previous = positions.current, next = new Map<string, { top: number; left: number }>();
     const motion = typeof view.matchMedia === "function" && !view.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const visible = new Set<HTMLElement>();
     for (const row of region.querySelectorAll<HTMLElement>("[data-agent-id]")) {
-      const bounds = row.getBoundingClientRect();
-      if (!bounds.width || !bounds.height) continue;
-      const key = row.dataset.agentId!, point = { top: bounds.top - rect.top + region.scrollTop, left: bounds.left - rect.left };
+      if (!row.offsetWidth || !row.offsetHeight) continue;
+      visible.add(row);
+      const key = row.dataset.agentId!, bounds = layoutPosition(row);
+      const point = { top: bounds.top - origin.top, left: bounds.left - origin.left };
       next.set(key, point);
       const before = previous.get(key);
       if (motion && before && typeof row.animate === "function" && Math.abs(before.top - point.top) + Math.abs(before.left - point.left) > 1) {
-        row.animate([{ transform: `translate(${before.left - point.left}px, ${before.top - point.top}px)` }, { transform: "none" }], { duration: 240, easing: "cubic-bezier(.2,.7,.2,1)" });
+        animations.current.get(row)?.cancel();
+        const animation = row.animate([{ transform: `translate(${before.left - point.left}px, ${before.top - point.top}px)` }, { transform: "none" }], { duration: 240, easing: "cubic-bezier(.2,.7,.2,1)" });
+        animations.current.set(row, animation);
+        animation.onfinish = () => { if (animations.current.get(row) === animation) animations.current.delete(row); };
       }
+    }
+    for (const [row, animation] of animations.current) if (!motion || !visible.has(row)) {
+      animation.cancel(); animations.current.delete(row);
     }
     positions.current = next;
   }, [agents, expanded, limits]);
+  useLayoutEffect(() => () => {
+    for (const animation of animations.current.values()) animation.cancel();
+    animations.current.clear();
+  }, []);
 
   function branch(agent: TeamAgent, depth: number, hidden = false, bucket?: TeamBucket, sharedConnection = false): ReactNode {
     const direct = children.get(agent.id) || [];
-    const open = expanded.get(agent.id) ?? (!agent.id || depth < 2 && teamBucket(agent) === "running");
+    const open = isOpen(agent.id, !agent.id || depth < 2 && teamBucket(agent) === "running",
+      direct.some(child => keyboardPath.has(child.id)));
+    if (!hidden && open) nextOpened.add(agent.id);
     const showConnection = agent.providerKind === "a2a" && catalog.get(agent.profile)?.provider === "a2a";
     return <li key={`run:${agent.id || "main"}`} className="team-tree-branch" data-run-id={agent.id || "main"} data-bucket={bucket} hidden={hidden}>
       <div className="team-tree-row"><span className="team-tree-toggle-slot">{!!direct.length && <button type="button" className="team-tree-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${agent.name}'s agents`} aria-expanded={open}
         onClick={() => toggle(agent.id, open)}><Icon name="chevron" size={12} /></button>}</span>
         <AgentRow agent={agent} grouped={!!agent.id} connectionInGroup={sharedConnection} selected={selected === agent.id} inspect={() => inspect(agent.id)} settings={() => configure(agent.id)} connection={showConnection ? () => configure(profileTarget(agent.profile)) : undefined} arrivalAt={arrivals[agent.id]} />
       </div>
-      {!!direct.length && <ol className="team-tree-children team-grouped-children" aria-label={`${agent.name}'s child agents`} hidden={!open}>{(groups.get(agent.id) || []).flatMap(group => groupItems(agent, group, depth + 1, open))}</ol>}
+      {!!direct.length && <ol className="team-tree-children team-grouped-children" aria-label={`${agent.name}'s child agents`} hidden={!open}>{(groups.get(agent.id) || []).flatMap(group => groupItems(agent, group, depth + 1, open && !hidden))}</ol>}
     </li>;
   }
 
   function groupItems(parent: TeamAgent, group: DefinitionGroup, depth: number, parentOpen: boolean): ReactNode[] {
     const all = [...group.running, ...group.past], definition = catalog.get(group.profile);
     const name = profileLabel(definition, group.profile || "Definition unavailable");
-    const open = expanded.get(group.key) ?? (group.running.length > 0 || all.some(agent => focusedPath.has(agent.id)));
+    const open = isOpen(group.key, group.running.length > 0 || all.some(agent => focusedPath.has(agent.id)),
+      all.some(agent => keyboardPath.has(agent.id)));
+    if (parentOpen && open) nextOpened.add(group.key);
     const domId = `${treeId}-${encodeURIComponent(group.key)}`;
     const remote = definition?.provider === "a2a" || !definition && all.every(agent => agent.providerKind === "a2a");
     const connection = remote ? () => configure(definition ? profileTarget(group.profile) : all[0].id) : undefined;
@@ -166,15 +215,20 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     for (const bucket of ["running", "past"] as const) {
       const items = group[bucket];
       if (!items.length) continue;
-      const key = bucketKey(group.key, bucket), bucketOpen = expanded.get(key) ?? (bucket === "running" || items.some(agent => focusedPath.has(agent.id)));
+      const key = bucketKey(group.key, bucket), bucketOpen = isOpen(key,
+        bucket === "running" || items.some(agent => focusedPath.has(agent.id) || revealed.current.has(agent.id)),
+        items.some(agent => keyboardPath.has(agent.id)));
       const limit = limits.get(key) ?? (bucket === "running" ? 6 : 2);
-      if (parentOpen && open && bucketOpen) items.slice(0, limit).forEach(agent => revealed.current.add(agent.id));
+      if (parentOpen && open && bucketOpen) {
+        nextOpened.add(key);
+        items.slice(0, limit).forEach(agent => revealed.current.add(agent.id));
+      }
       const visible = items.filter(agent => revealed.current.has(agent.id));
       const remaining = items.length - visible.length;
       result.push(<li key={`bucket:${key}`} className="team-run-bucket" hidden={!open} id={`${domId}-${bucket}`} data-parent-id={parent.id} data-profile={group.profile} data-bucket-heading={bucket}>
         <button type="button" aria-expanded={bucketOpen} onClick={() => toggle(key, bucketOpen)}><Icon name="chevron" size={9} /><span>{bucket === "running" ? "Running" : "Past runs"}</span><span>{items.length}</span></button>
       </li>);
-      for (const agent of visible) result.push(branch(agent, depth, !open || !bucketOpen, bucket, remote));
+      for (const agent of visible) result.push(branch(agent, depth, !parentOpen || !open || !bucketOpen, bucket, remote));
       if (remaining) result.push(<li key={`more:${key}`} className="team-group-more" hidden={!open || !bucketOpen}><button type="button" onClick={() => setLimits(current => new Map(current).set(key, Math.max(limit, visible.length) + 3))}>Show {remaining} more<Icon name="chevron" size={10} /></button></li>);
     }
     return result;
