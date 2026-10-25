@@ -35,6 +35,14 @@ export type TaskDetail = {
   before?: string;
 };
 export type TeamProfile = { id: string; name: string; description: string; remote_name?: string; remote_description?: string; metadata_status?: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string; authentication?: RemoteAuthentication; trust_remote_tools?: boolean };
+
+/** Card labels are presentation metadata; the local id still routes every action. */
+export function profileLabel(profile: TeamProfile | undefined, fallback = ""): string {
+  return (profile?.provider === "a2a" ? profile.remote_name?.trim() : "") || profile?.name || profile?.id || fallback;
+}
+export function profileDescription(profile: TeamProfile | undefined): string {
+  return (profile?.provider === "a2a" ? profile.remote_description?.trim() : "") || profile?.description || "";
+}
 export type TeamSubagentUsage = {
   limits: { max_concurrent_subagents: number; max_subagent_executions: number; max_subagent_depth: number };
   used_executions: number;

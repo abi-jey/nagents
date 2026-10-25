@@ -5,6 +5,7 @@ import { UploadPreviews } from "../features/chat/UploadPreviews";
 import { DraftRecoveryNotice } from "../features/chat/DraftRecoveryNotice.js";
 import { LiveDialog } from "../features/live/LiveDialog.js";
 import { isProfileTarget, profileSelection } from "../features/team/useTeam.js";
+import { profileLabel } from "../features/team/model.js";
 import type { LiveComposerTargets } from "../features/live/LiveComposer.js";
 import "../features/live/live.css";
 import "../features/live/composer.css";
@@ -33,7 +34,7 @@ export function WorkspaceComposer({ client, composer, submit, select, configureS
     return { presence: bind("presence"), caption: bind("caption"), controls: bind("controls"), details: bind("details") };
   }, []);
   const child = !!team.selected;
-  const recipient = (team.task?.title || team.task?.session_id) || team.profile?.name || (isProfileTarget(team.selected) ? profileSelection(team.selected).profile : "agent");
+  const recipient = (team.task?.title || team.task?.session_id) || profileLabel(team.profile) || (isProfileTarget(team.selected) ? profileSelection(team.selected).profile : "agent");
   const activeTitle = sessions.sessions.find((session) => session.id === sessions.activeSessionId)?.title || "another session";
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");

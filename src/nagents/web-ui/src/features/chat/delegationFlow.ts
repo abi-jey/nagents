@@ -1,13 +1,15 @@
 import { agentUpdates } from "./backgroundUpdates.js";
 import { appendEvent, type Entry } from "./transcript.js";
-import type { AgentPhase, TaskActivity, TeamAgent } from "../team/model.js";
+import { profileDescription, profileLabel, type AgentPhase, type TaskActivity, type TeamAgent, type TeamProfile } from "../team/model.js";
 
 export type DelegationPresentation = {
   kind: "start" | "result"; detailsTruncated?: boolean; taskId: string; name: string; profile: string;
   phase: AgentPhase; provider?: string; model?: string; activation?: number; accepted?: boolean; prompt: string; text: string; latest?: Entry; lastTool?: Entry; sources: Entry[];
+  profileName?: string; profileDescription?: string;
 };
 export type DelegationOptions = {
   agents: readonly TeamAgent[]; activity: readonly TaskActivity[]; parentId?: string;
+  profiles?: readonly TeamProfile[];
   inspect: (id: string) => void;
 };
 
@@ -160,6 +162,33 @@ export class DelegationFlow {
     const completed = items.filter(item => item.finished).sort((a, b) =>
       (positions.get(a.finished!.anchor) ?? entries.length) - (positions.get(b.finished!.anchor) ?? entries.length));
     const folded = new Set<string>();
+    for (const entry of entries) {
+      if (entry.kind !== "tool" || entry.title !== "agent_status" || entry.remoteReview || entry.error ||
+        ["Error", "Cancelled", "Approval denied", "Approval required", "Waiting for approval", "Interrupted", "Not run"].includes(entry.state || "") ||
+        (!!entry.taskId && entry.taskId !== parentId)) continue;
+      const args = argumentsOf(entry);
+      if ("remote_operation" in args) continue;
+      // An incomplete status request has no independent progress to display.
+      // Wait for its target before deciding whether it belongs to a run or is
+      // a standalone list/inspection. Errors remain ordinary visible records.
+      if (entry.toolProgress === "streaming" && entry.result === undefined &&
+        typeof args.session_id !== "string" && items.some(item => item.binding && item.direct && item.lifecycle)) {
+        folded.add(entry.id); continue;
+      }
+      if (typeof args.session_id !== "string" || !args.session_id) continue;
+      const owner = items.findLast(item => item.target === args.session_id && positions.get(item.call.id)! < positions.get(entry.id)!);
+      if (!owner?.binding || !owner.direct || !owner.lifecycle) continue;
+      if (entry.result !== undefined) {
+        try {
+          const result: unknown = JSON.parse(entry.result);
+          if (!result || typeof result !== "object" || Array.isArray(result) ||
+            !("session_id" in result) || result.session_id !== owner.target || "sessions" in result) continue;
+        } catch { continue; }
+      }
+      // Poll output is inspectable evidence, never lifecycle authority. In
+      // particular it cannot complete, resume, or rename a child activation.
+      owner.sources.push(entry); folded.add(entry.id);
+    }
     const noticesUsed = new Set<string>(), contextsUsed = new Set<string>();
     for (const entry of entries) {
       const notice = entry.kind === "notification" && entry.cause === "completion" && entry.sourceTaskId &&
@@ -199,6 +228,11 @@ export class DelegationFlow {
         accepted: !!binding, detailsTruncated: finished?.detailsTruncated ?? lifecycle?.detailsTruncated, name: finished?.name || item.name, profile: finished?.profile || item.profile,
         phase: finished?.phase || item.phase, provider: finished?.provider ?? item.provider, model: finished?.model ?? item.model, prompt: finished?.prompt || item.prompt,
         text: call.error || finished?.text || "", latest: finished?.latest || item.latest, lastTool: finished?.lastTool || item.lastTool, sources };
+      const definition = options.profiles?.find(profile => profile.id === presentation.profile);
+      if (definition?.provider === "a2a") {
+        presentation.profileName = profileLabel(definition);
+        presentation.profileDescription = profileDescription(definition);
+      }
       rows.push({ entry: { ...call, kind: "status", delegation: presentation, taskId: undefined,
         activity: Math.max(call.activity || 0, lifecycle?.activity || 0), title: presentation.name || presentation.profile }, position: positions.get(call.id)! });
       if (finished) rows.push({ entry: { id: `delegation-result:${key}`, kind: "status", text: finished.text,

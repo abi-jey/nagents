@@ -5,7 +5,7 @@ import { reconcileHistory } from "../chat/liveTranscript.js";
 import { Icon } from "../../components/Icon.js";
 import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { AgentState, type ArrivalTimes } from "./TeamTree.js";
-import { MAIN_AGENT, mergeTaskActivity, providerLabel, type TaskActivity, type TaskDetail, type TeamAgent } from "./model.js";
+import { MAIN_AGENT, mergeTaskActivity, profileDescription, profileLabel, providerLabel, type TaskActivity, type TaskDetail, type TeamAgent } from "./model.js";
 import { isProfileTarget, profileSelection, type TeamController } from "./useTeam.js";
 import type { Snapshot, WireEvent } from "../../types.js";
 import type { ChatAppearance } from "../settings/appearance.js";
@@ -71,10 +71,11 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
 }) {
   const agent = agents.find(item => item.id === team.selected);
   const removedProfile = team.loaded && isProfileTarget(team.selected) && !team.profile;
-  const name = agent?.name || team.profile?.name || (isProfileTarget(team.selected) ? profileSelection(team.selected).profile : "Agent");
+  const name = agent?.name || profileLabel(team.profile) || (isProfileTarget(team.selected) ? profileSelection(team.selected).profile : "Agent");
   const rootName = agents.find(item => item.id === MAIN_AGENT)?.name || "Assistant";
   const parentName = agents.find(item => item.id === (agent?.parentId ?? MAIN_AGENT))?.name || rootName;
   const definition = agent?.profile || team.profile?.id || "";
+  const definitionName = profileLabel(team.profiles.find(profile => profile.id === definition), definition);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: true })); return () => cancelAnimationFrame(frame); }, [team.selected]);
   const transcript = useMemo(() => new TaskTranscript(), [sessionId, team.selected]);
@@ -84,14 +85,14 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
   const remote = agent?.providerKind === "a2a" || team.profile?.provider === "a2a";
   return <section className="focused-task-conversation" aria-label={`${name} conversation`}>
     <header className="focused-task-header"><button type="button" className="task-back" onClick={back}><Icon name="chevron" size={14} />{rootName}</button>
-      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{agent?.id && <><code>{agent.id}</code><span aria-hidden="true"> · </span></>}{definition && <span className="focused-task-definition">Definition <b>{definition}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
+      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{agent?.id && <><code>{agent.id}</code><span aria-hidden="true"> · </span></>}{definition && <span className="focused-task-definition" title={definitionName !== definition ? `Connection: ${definition}` : undefined}>Definition <b>{definitionName}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
       {agent && <AgentState agent={agent} />}
     </header>
     {remote && <div className="task-remote-connection"><RemoteStatus authentication={authentication} /><span>{agent?.trustRemoteTools || team.profile?.trust_remote_tools ? "Remote tools trusted" : "Remote tools reviewed"}</span>
       {configureConnection && definition && <button type="button" onClick={() => configureConnection(definition)}>Connection settings</button>}
     </div>}
     {removedProfile ? <p className="task-history-notice" role="status">This agent profile was removed or renamed. Choose an agent in Team or return to {rootName}. Your draft is kept.</p>
-      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || (team.startParentId ? `Send a message below to start this child under ${(team.startParent?.title || team.startParent?.session_id) || "the selected parent"}.` : "Send a message below to start a new conversation using this definition.")}</p>
+      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{profileDescription(team.profile) || `Start a conversation with ${profileLabel(team.profile)}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || (team.startParentId ? `Send a message below to start this child under ${(team.startParent?.title || team.startParent?.session_id) || "the selected parent"}.` : "Send a message below to start a new conversation using this definition.")}</p>
         {team.profile.source && <dl className="team-profile-source"><dt>Definition file</dt><dd><code>{team.profile.source}</code></dd></dl>}
       </div> : <>
       {team.loading && !team.detail && <p className="task-loading" role="status">Loading conversation…</p>}
@@ -101,7 +102,7 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
       {agent?.prompt && <details className="task-assignment"><summary>Assigned task</summary><p>{agent.prompt}</p></details>}
       {failure && !entries.some(entry => entry.kind === "error") && <div className="task-failure" role="alert"><strong>Request failed</strong><p>{failure}</p></div>}
       <Conversation appearance={appearance} agentName={name} parentAgentName={parentName} key={`${team.selected}:${transcript.generation}`} entries={entries} token={token} sessionId={sessionId} demo={false} canSubmit={false} submit={() => {}}
-        delegation={{ agents, activity, parentId: team.selected, inspect: team.select }} />
+        delegation={{ agents, profiles: team.profiles, activity, parentId: team.selected, inspect: team.select }} />
       {!!team.detail?.receipts?.length && <div className="task-message-receipts" aria-label="Message delivery">
         {team.detail.receipts.filter(receipt => receipt.status !== "picked_up").slice(-6).map(receipt => <div key={receipt.message_id} className={`task-message-receipt receipt-${receipt.status}`}>
           <span>{receipt.status === "queued" ? "Queued for the next response" : receipt.status === "error" ? "Not delivered" : "Cancelled"}</span>
