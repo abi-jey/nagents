@@ -1009,7 +1009,7 @@ def test_provider_error_still_notifies_and_cleans_up(tmp_path: Path) -> None:
             compaction_strategy=None,
         )
         await collect(agent)
-        assert observed == [ErrorEvent, ResponseMetadataEvent, DoneEvent]
+        assert observed == [ResponseMetadataEvent, ErrorEvent, ResponseMetadataEvent, DoneEvent]
         assert cleaned == [True]
         await agent.close()
 

@@ -8,6 +8,7 @@ nagents uses an event-based streaming architecture. Events are emitted during ag
 |-------|-------------|--------------|
 | `TextChunkEvent` | Streaming text chunk | During streaming response |
 | `TextDoneEvent` | Complete text | Non-streaming mode |
+| `ResponseMetadataEvent` | One model generation's identity and display metadata | Before generation transport, on metadata updates, and at the generation's end |
 | `ToolCallEvent` | Model is calling a tool | Before tool execution |
 | `ToolResultEvent` | Tool execution completed | After tool execution |
 | `ErrorEvent` | Error occurred | On errors |
@@ -62,6 +63,18 @@ async for event in agent.run("Hello"):
 
 ---
 
+## ResponseMetadataEvent
+
+`Agent.run()` emits an initial `ResponseMetadataEvent` immediately before each
+provider generation starts. Its status is `thinking`, its summary is empty and
+`usage_reported` is false. This is a lifecycle boundary; it does not claim that
+the provider supplied reasoning text or token usage.
+
+Updates keep the same `response_id` and `response_session_id`, with increasing
+revisions. Terminal metadata marks the generation `completed` or `failed`.
+Consumers can use these identities to place queued child results after an
+already-started parent generation, including when the first token arrives late.
+
 ## TextChunkEvent
 
 Emitted for each streaming text chunk:
@@ -85,6 +98,10 @@ async for event in agent.run("Tell me a story"):
 ## TextDoneEvent
 
 Emitted when complete text is available (non-streaming mode):
+
+This text event does not close a model generation. Use terminal
+`ResponseMetadataEvent` for that boundary; a generation may also produce tool
+calls after its text.
 
 ```python
 @dataclass
