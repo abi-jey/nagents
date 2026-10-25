@@ -7,9 +7,8 @@ import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ResponseDetails, type ResponseDetailsProps } from "./ResponseDetails.js";
 import { agentLabels, hasAssistantContent, transcriptEntries } from "./agentLabels.js";
-import { ActivityLayout, activityCategory, activityLabels, activityState, importantActivity } from "./activityLayout.js";
+import { ActivityLayout, activityCategory, activityLabels, activityState, hasDisplayableReasoning, importantActivity } from "./activityLayout.js";
 import type { ChatAppearance } from "../settings/appearance.js";
-import { hasResponseDetails } from "./responseMetadata.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
@@ -185,8 +184,7 @@ export function TranscriptItems({
     }
     const entry = item.entry;
     const reasoning = appearance?.activity.reasoning;
-    const hasReasoning = reasoning?.placement !== "hidden" && hasResponseDetails(entry.responseMetadata) ||
-      !!entry.responseMetadata && ["failed", "cancelled"].includes(entry.responseMetadata.status);
+    const hasReasoning = hasDisplayableReasoning(entry, appearance);
     const hasText = entry.kind === "assistant" ? !!entry.text.trim() : !!entry.text;
     const hasContent = hasAssistantContent(entry);
     if (entry.kind === "assistant" && !hasContent && !hasReasoning) return null;
