@@ -168,7 +168,8 @@ def test_ws_server_owned_disconnect_draft_cancel_and_guards(tmp_path: Path, monk
             socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0, "epoch": "old-process"})
             snapshot = socket.receive_json()["snapshot"]
             assert snapshot["active_run"]["message_id"] == ack["message_id"]
-            assert snapshot["active_run"]["records"][0]["chunk"] == "unfinished draft"
+            drafts = [record for record in snapshot["active_run"]["records"] if record["event"] == "text_chunk"]
+            assert [record["chunk"] for record in drafts] == ["unfinished draft"]
             settings = app.client.get("/api/settings", headers=app.headers).json()
             assert (
                 app.client.post(

@@ -27,14 +27,22 @@ for message delivery, settings, and restart behavior.
 In the conversation, each delegation has one compact line. The delegate call and
 the child's progress share that line: it shows the child's latest tool and
 arguments, or the trailing text of its reasoning summary or output. Motion and
-colour convey activity without extra state labels. When the child finishes, a
-separate result line appears at the completion's place in the conversation.
+colour convey activity without extra state labels. A separate result line marks
+the completion. If the parent has already started a model generation, the result
+waits until that generation finishes and follows its reasoning, text and tool
+calls. A later generation does not postpone it. With no generation in progress,
+the result appears immediately. Parallel results retain their completion order.
 Expand either line to inspect the assignment, output and original records, or
 open the child's conversation. Only direct children appear here; nested agents
 appear in their own parent's conversation. Initial completion delivery and its
 saved context are evidence inside these rows. Later wake-ups and additional
 messages remain separate notices. Appearance visibility controls still apply,
 and failures remain visible even when ordinary activity is hidden.
+
+Single-session `agent_status` checks for that verified child are inspection
+records inside its existing delegation rows. Errors, approvals, list results and
+unmatched status checks remain visible independently. A status result never
+establishes a child's execution state or activation.
 
 The activity mark is a four-node Relay network. A new delegation briefly gathers
 its nodes before the starting animation, then changes shape for reasoning, tools,
@@ -51,6 +59,11 @@ or select the chip to open that agent's connection settings and sign-in controls
 Authentication and task state are separate: completed work stays **Done** when
 its connection needs sign-in. Expiry and automatic-refresh details remain in
 connection settings. The lock and activity animations respect reduced motion.
+
+A2A headings and descriptions use the latest advertised AgentCard metadata.
+The configured alias remains the connection and routing key, visible in expanded
+details and tooltips. Renaming the remote card updates its display without
+renaming the local definition, changing a run's title, or replacing its rows.
 
 Generated conversation names are separate from their definitions. A named child
 shows its recorded definition (such as `assistant` or `mini`) in its group heading,

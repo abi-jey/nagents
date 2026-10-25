@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import aiosqlite
 
+from nagents._sqlite import database_writes
 from nagents.harness.subagent_settings import LIMIT_FIELDS
 from nagents.harness.subagent_settings import LimitScope
 from nagents.harness.subagent_settings import SubagentLimits
@@ -86,7 +87,8 @@ class WebSubagentSettings:
         next_revision = secrets.token_hex(32)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(mode=0o600, exist_ok=True)
-        async with aiosqlite.connect(path, timeout=5) as db:
+        paths = (path,) if global_scope else (path, settings.global_path)
+        async with database_writes(paths), aiosqlite.connect(path, timeout=5) as db:
             if global_scope:
                 await db.execute(_GLOBAL_SETTINGS_TABLE)
                 await db.commit()

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import aiosqlite
 
 from nagents._async import join_owned as _await_cleanup
+from nagents._sqlite import write_database
 from nagents.agent import Agent
 from nagents.compaction import ModelCompaction
 from nagents.events import DoneEvent
@@ -126,7 +127,7 @@ class _HarnessSession(SessionManager):
     """
 
     async def get_or_create_session(self, session_id: str, user_id: str) -> str:
-        return await _await_cleanup(asyncio.create_task(super().get_or_create_session(session_id, user_id)))
+        return await super().get_or_create_session(session_id, user_id)
 
     async def get_history(self, session_id: str, limit: int | None = None) -> list["Message"]:
         return await _await_cleanup(asyncio.create_task(super().get_history(session_id, limit)))
@@ -142,14 +143,14 @@ class _HarnessSession(SessionManager):
 
     async def add_message(self, session_id: str, message: "Message") -> int:
         reservation = capture_write(self, session_id, message)
-        row_id = await _await_cleanup(asyncio.create_task(super().add_message(session_id, message)))
+        row_id = await super().add_message(session_id, message)
         if reservation is not None and type(row_id) is int and row_id > 0:
             reservation.row_id = row_id
             await publish_anchor(self, session_id, reservation)
         return row_id
 
     async def replace_context(self, session_id: str, messages: list["Message"]) -> None:
-        await _await_cleanup(asyncio.create_task(super().replace_context(session_id, messages)))
+        await super().replace_context(session_id, messages)
 
 
 _register_owned_adapter_type(_HarnessSession)
@@ -745,11 +746,9 @@ class Harness:
                     self.agent.session.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                     await self.agent.session.initialize()
                     self.agent.session.db_path.chmod(0o600)
-                    async with aiosqlite.connect(self.agent.session.db_path) as db:
-                        await db.execute(
-                            "CREATE TABLE IF NOT EXISTS harness_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
-                        )
-                        await db.commit()
+                    await self._write_session_metadata(
+                        "CREATE TABLE IF NOT EXISTS harness_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
+                    )
                     self.load_project_instructions()
                     await self.agent.refresh_skills()
                     self.refresh_instructions()
@@ -796,13 +795,21 @@ class Harness:
             self.config.plugins, self.config.cli_plugins = previous
             raise
 
+    async def _write_session_metadata(self, sql: str, parameters: tuple[str, ...] = ()) -> None:
+        async def write() -> None:
+            async with aiosqlite.connect(self.agent.session.db_path) as db:
+                await db.execute(sql, parameters)
+                await db.commit()
+
+        await write_database(self.agent.session.db_path, write)
+
     async def create_session(self, session_id: str) -> None:
         await self.agent.session.get_or_create_session(session_id, "harness")
         if self._is_subagent:
             return  # Raw child history is retained, without a parent session-picker entry.
-        async with aiosqlite.connect(self.agent.session.db_path) as db:
-            await db.execute("INSERT OR IGNORE INTO harness_sessions (id, title) VALUES (?, '')", (session_id,))
-            await db.commit()
+        await self._write_session_metadata(
+            "INSERT OR IGNORE INTO harness_sessions (id, title) VALUES (?, '')", (session_id,)
+        )
 
     async def approve(
         self,
@@ -1044,12 +1051,10 @@ class Harness:
             if self.agent.system_prompt == self._generated_system_prompt:
                 self.refresh_instructions()
             if not self._is_subagent:
-                async with aiosqlite.connect(self.agent.session.db_path) as db:
-                    await db.execute(
-                        "UPDATE harness_sessions SET title = ? WHERE id = ? AND title = ''",
-                        (" ".join(prompt_text.split())[:80], self.session_id),
-                    )
-                    await db.commit()
+                await self._write_session_metadata(
+                    "UPDATE harness_sessions SET title = ? WHERE id = ? AND title = ''",
+                    (" ".join(prompt_text.split())[:80], self.session_id),
+                )
             if self._closed:
                 raise RuntimeError("Harness was closed before the run started")
             queue: asyncio.Queue[HarnessEvent | RunTurn] = asyncio.Queue(maxsize=64)

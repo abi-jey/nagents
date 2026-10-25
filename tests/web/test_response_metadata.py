@@ -563,7 +563,11 @@ def test_child_cancel_keeps_scope_and_monotonic_sequence(
                 if record.get("event") == "task_activity":
                     observed.append(dict(record))
                     payload = object_record(record["payload"])
-                    if payload.get("type") == "response_metadata" and payload.get("status") == "thinking":
+                    if (
+                        payload.get("type") == "response_metadata"
+                        and payload.get("status") == "thinking"
+                        and payload.get("summary") == "Stopped child summary"
+                    ):
                         published.set()
 
             state.run_observers.add(observe)
@@ -582,7 +586,10 @@ def test_child_cancel_keeps_scope_and_monotonic_sequence(
             assert run is not None and run.harness is not None
             if published_before_cancel:
                 thinking = next(
-                    record for record in observed if object_record(record["payload"]).get("status") == "thinking"
+                    record
+                    for record in reversed(observed)
+                    if object_record(record["payload"]).get("status") == "thinking"
+                    and object_record(record["payload"]).get("summary") == "Stopped child summary"
                 )
                 response = str(object_record(thinking["payload"])["response_id"])
                 pending = object_record(state.responses.pending[run.id][response]["payload"])

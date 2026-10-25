@@ -19,6 +19,7 @@ from nagents import Message
 from nagents import SessionManager
 from nagents.channels import plugins
 from nagents.events import Event
+from nagents.events import ResponseMetadataEvent
 from nagents.events import TextDoneEvent
 from nagents.extensions import AgentPlugin
 from nagents.extensions import RunContext
@@ -457,6 +458,10 @@ def test_early_close_waits_for_retained_provider_generator_before_handoff(tmp_pa
             plugins=[] if simple else [Cleanup()],
         ).add_channel(channel)
         events = agent.run_simple([Message(role="user", content="go")]) if simple else agent.run("go")
+        if not simple:
+            marker = await anext(events)
+            assert isinstance(marker, ResponseMetadataEvent)
+            assert marker.status == "thinking" and marker.summary == "" and not marker.usage_reported
         await anext(events)
         closing = asyncio.create_task(events.aclose())
         try:
@@ -512,6 +517,10 @@ def test_provider_iterator_without_aclose_remains_supported(tmp_path: Path, simp
         try:
             stream = agent.run_simple([Message(role="user", content="go")]) if simple else agent.run("go")
             events = [event async for event in stream]
+            if not simple:
+                assert isinstance(events[0], ResponseMetadataEvent)
+                assert events[0].status == "thinking" and events[0].summary == "" and not events[0].usage_reported
+                events = [event for event in events[1:] if not isinstance(event, ResponseMetadataEvent)]
             assert isinstance(events[0], TextDoneEvent) and events[0].text == "plain iterator"
             assert agent._active_runs == 0
         finally:

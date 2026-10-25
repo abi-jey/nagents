@@ -12,8 +12,6 @@ from nagents.harness.execution import _is_owned_adapter
 from nagents.session import SessionManager
 from nagents.session import response_metadata as storage
 
-from ._async import finish_on_cancel
-
 if TYPE_CHECKING:
     import sqlite3
 
@@ -135,8 +133,8 @@ class Responses:
             or now - self.checkpoints.get(checkpoint_key, 0) >= 0.1
         )
         if checkpoint:
-            saved = await finish_on_cancel(
-                self.state.history.store._transaction(partial(_save, record=self.storage_record(run, canonical)))
+            saved = await self.state.history.store._transaction(
+                partial(_save, record=self.storage_record(run, canonical))
             )
             self.checkpoints[checkpoint_key] = now
             aggregate = saved.get("run_usage")
