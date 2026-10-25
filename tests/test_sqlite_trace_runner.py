@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -25,7 +27,7 @@ def test_diagnostic_command_is_fixed_and_trace_targets_are_registered() -> None:
             "-m",
             "pytest",
             "--no-header",
-            "--tb=no",
+            "--tb=short",
             "-q",
             "-n",
             "0",
@@ -46,34 +48,37 @@ def test_diagnostic_command_is_fixed_and_trace_targets_are_registered() -> None:
     assert "tests/web/test_response_metadata.py" in shard_files
     assert "tests/channels/test_channels_runtime.py" in shard_files
     files = ["tests/example_test.py"]
-    assert sqlite_trace_runner.parallel_shard_pytest_command(files) == [
+    report_path = Path("private-runner-directory/round-1.xml")
+    assert sqlite_trace_runner.parallel_shard_pytest_command(files, junit_xml=report_path) == [
         sys.executable,
         "-m",
         "pytest",
         "--no-header",
-        "--tb=no",
+        "--tb=short",
         "-q",
         "-n",
         "4",
         "-p",
         "tests.support.sqlite_trace",
+        f"--junitxml={report_path}",
         "tests/example_test.py",
     ]
-    assert sqlite_trace_runner.parallel_shard_pytest_command(files, busy_snapshot=True) == [
+    assert sqlite_trace_runner.parallel_shard_pytest_command(files, busy_snapshot=True, junit_xml=report_path) == [
         sys.executable,
         "-m",
         "pytest",
         "--no-header",
-        "--tb=no",
+        "--tb=short",
         "-q",
         "-n",
         "4",
         "-p",
         "tests.support.sqlite_busy_snapshot",
+        f"--junitxml={report_path}",
         "tests/example_test.py",
     ]
     with pytest.raises(ValueError, match="fixed tests shard"):
-        sqlite_trace_runner.parallel_shard_pytest_command(["../arbitrary.py"])
+        sqlite_trace_runner.parallel_shard_pytest_command(["../arbitrary.py"], junit_xml=report_path)
 
 
 def test_failure_output_keeps_only_allowlisted_trace_payloads() -> None:
@@ -115,3 +120,42 @@ unsafe traceback content
     outside_shard = {**shard_snapshot, "test": "tests/test_sqlite_trace_runner.py::test_not_selected"}
     outside_output = "========== NGN_SQLITE_TRACE busy_snapshot ==========\n" + json.dumps(outside_shard)
     assert sqlite_trace_runner.safe_trace_sections(outside_output) == []
+
+
+def test_junit_failure_summary_keeps_only_safe_identifiers_and_type(tmp_path: Path) -> None:
+    report = tmp_path / "private-runner.xml"
+    report.write_text(
+        """<testsuite>
+<testcase classname="tests.web.test_response_metadata" name="test_child_cancel[False]">
+<failure message="PRIVATE_SQL_MESSAGE" type="sqlite3.OperationalError">PRIVATE_DB_PATH and SQL</failure>
+</testcase>
+<testcase classname="tests.web.test_web" name="test_unrelated[PRIVATE_PARAM]">
+<failure message="PRIVATE_MESSAGE" type="RuntimeError">PRIVATE_PATH</failure>
+</testcase>
+<testcase classname="tests.web.test_web" name="test_bare_private_type">
+<failure message="PRIVATE_FAILURE_BODY">PRIVATE_PATH</failure>
+</testcase>
+</testsuite>""",
+        encoding="utf-8",
+    )
+    summaries = sqlite_trace_runner.safe_junit_failures(report)
+    assert len(summaries) == 3
+    assert summaries[0] == {
+        "module": "test_response_metadata",
+        "test": "test_child_cancel",
+        "params": "False",
+        "failure_type": "sqlite3.OperationalError",
+    }
+    assert summaries[1] == {
+        "module": "test_web",
+        "test": "test_unrelated",
+        "params": hashlib.sha256(b"PRIVATE_PARAM").hexdigest()[:10],
+        "failure_type": "RuntimeError",
+    }
+    assert summaries[2] == {
+        "module": "test_web",
+        "test": "test_bare_private_type",
+        "params": "",
+        "failure_type": "OtherFailure",
+    }
+    assert "PRIVATE" not in json.dumps(summaries)

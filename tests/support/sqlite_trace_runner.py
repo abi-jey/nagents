@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +25,31 @@ TIMEOUT_SECONDS = 3 * HANG_GUARD + 30
 PARALLEL_SHARD_ROUNDS = 3
 PARALLEL_SHARD_TIMEOUT_SECONDS = 900
 SHARD_FILES = Path("tests/support/sqlite_failed_shard1.txt")
+_TEST_NAME = re.compile(r"^(test_[A-Za-z0-9_]+)(?:\[(.*)\])?$")
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_FAILURE_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+_BOOLEAN_PARAMS = re.compile(r"^(?:True|False)(?:-(?:True|False))*$")
+_KNOWN_FAILURE_TYPES = frozenset(
+    {
+        "AssertionError",
+        "AttributeError",
+        "CancelledError",
+        "Exception",
+        "Failed",
+        "ImportError",
+        "IndexError",
+        "KeyError",
+        "NotImplementedError",
+        "OSError",
+        "RuntimeError",
+        "StopAsyncIteration",
+        "TimeoutError",
+        "TypeError",
+        "ValueError",
+        "asyncio.CancelledError",
+        "sqlite3.OperationalError",
+    }
+)
 NODES = (
     "tests/web/test_response_metadata.py::test_child_cancel_keeps_scope_and_monotonic_sequence[False]",
     "tests/web/test_web_child_failure_scope.py::test_stop_still_cancels_chat_and_voice_trees[True]",
@@ -37,7 +66,7 @@ def pytest_command(nodeid: str) -> list[str]:
         "-m",
         "pytest",
         "--no-header",
-        "--tb=no",
+        "--tb=short",
         "-q",
         "-n",
         "0",
@@ -47,7 +76,7 @@ def pytest_command(nodeid: str) -> list[str]:
     ]
 
 
-def parallel_shard_pytest_command(files: Sequence[str], *, busy_snapshot: bool = False) -> list[str]:
+def parallel_shard_pytest_command(files: Sequence[str], *, busy_snapshot: bool = False, junit_xml: Path) -> list[str]:
     """Build the fixed four-worker pytest command for shard one of three."""
     if not files or len(set(files)) != len(files) or any(not _valid_shard_file(name) for name in files):
         raise ValueError("SQLite diagnostics require the fixed tests shard file list")
@@ -57,12 +86,13 @@ def parallel_shard_pytest_command(files: Sequence[str], *, busy_snapshot: bool =
         "-m",
         "pytest",
         "--no-header",
-        "--tb=no",
+        "--tb=short",
         "-q",
         "-n",
         "4",
         "-p",
         plugin,
+        f"--junitxml={junit_xml}",
         *files,
     ]
 
@@ -116,6 +146,57 @@ def safe_trace_sections(output: str | bytes | None, error_output: str | bytes | 
     return payloads
 
 
+def safe_junit_failures(report_path: Path) -> list[dict[str, str]]:
+    """Read failure identifiers and exception types, never report messages."""
+    try:
+        root = ElementTree.parse(report_path).getroot()
+    except (ElementTree.ParseError, OSError):
+        return []
+    failures: list[dict[str, str]] = []
+    for testcase in root.iter("testcase"):
+        failure = testcase.find("failure")
+        if failure is None:
+            failure = testcase.find("error")
+        if failure is None:
+            continue
+        raw_classname = testcase.attrib.get("classname", "")
+        module = next(
+            (part for part in raw_classname.split(".") if part.startswith("test_") and _IDENTIFIER.fullmatch(part)),
+            "test_unknown",
+        )
+        raw_name = testcase.attrib.get("name", "")
+        matched = _TEST_NAME.fullmatch(raw_name)
+        test_name = matched.group(1) if matched is not None else "test_unknown"
+        params = matched.group(2) if matched is not None else None
+        if params is not None:
+            safe_params = (
+                params if _BOOLEAN_PARAMS.fullmatch(params) else hashlib.sha256(params.encode()).hexdigest()[:10]
+            )
+        else:
+            safe_params = ""
+        raw_type = failure.attrib.get("type", "").split(":", 1)[0]
+        if raw_type:
+            failure_type = raw_type if _FAILURE_TYPE.fullmatch(raw_type) else "OtherFailure"
+        else:
+            message_prefix, separator, _message_body = failure.attrib.get("message", "").partition(":")
+            failure_type = (
+                message_prefix.strip()
+                if separator and message_prefix.strip() in _KNOWN_FAILURE_TYPES
+                else "OtherFailure"
+            )
+        failures.append(
+            {
+                "module": module,
+                "test": test_name,
+                "params": safe_params,
+                "failure_type": failure_type,
+            }
+        )
+        if len(failures) >= 50:
+            break
+    return failures
+
+
 def _run() -> int:
     environment = os.environ.copy()
     environment["NGN_SQLITE_TRACE"] = "1"
@@ -159,32 +240,47 @@ def _run_parallel_shard(*, busy_snapshot: bool = False) -> int:
     environment["NGN_SQLITE_BUSY_SNAPSHOT"] = "1" if busy_snapshot else "0"
     try:
         files = _shard_files()
-        command = parallel_shard_pytest_command(files, busy_snapshot=busy_snapshot)
     except (OSError, RuntimeError, ValueError):
         print("FAIL fixed shard-one selection")
         return 1
-    for run in range(1, PARALLEL_SHARD_ROUNDS + 1):
-        try:
-            result = subprocess.run(
-                command,
-                cwd=ROOT,
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=PARALLEL_SHARD_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            print(f"TIMEOUT shard-round={run}/{PARALLEL_SHARD_ROUNDS}")
-            for payload in safe_trace_sections(error.stdout, error.stderr):
-                print(payload)
-            return 1
-        if result.returncode != 0:
-            print(f"FAIL shard-round={run}/{PARALLEL_SHARD_ROUNDS} exit={result.returncode}")
-            for payload in safe_trace_sections(result.stdout, result.stderr):
-                print(payload)
-            return 1
-        print(f"PASS shard-round={run}/{PARALLEL_SHARD_ROUNDS} files={len(files)}")
+    with tempfile.TemporaryDirectory(prefix="ngn-sqlite-busy-") as report_directory:
+        report_root = Path(report_directory)
+        for run in range(1, PARALLEL_SHARD_ROUNDS + 1):
+            junit_xml = report_root / f"round-{run}.xml"
+            try:
+                command = parallel_shard_pytest_command(files, busy_snapshot=busy_snapshot, junit_xml=junit_xml)
+                result = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=PARALLEL_SHARD_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                print(f"TIMEOUT shard-round={run}/{PARALLEL_SHARD_ROUNDS}")
+                for failure in safe_junit_failures(junit_xml):
+                    print(
+                        "CASE "
+                        f"module={failure['module']} test={failure['test']} "
+                        f"params={failure['params'] or '-'} failure_type={failure['failure_type']}"
+                    )
+                for payload in safe_trace_sections(error.stdout, error.stderr):
+                    print(payload)
+                return 1
+            if result.returncode != 0:
+                print(f"FAIL shard-round={run}/{PARALLEL_SHARD_ROUNDS} exit={result.returncode}")
+                for failure in safe_junit_failures(junit_xml):
+                    print(
+                        "CASE "
+                        f"module={failure['module']} test={failure['test']} "
+                        f"params={failure['params'] or '-'} failure_type={failure['failure_type']}"
+                    )
+                for payload in safe_trace_sections(result.stdout, result.stderr):
+                    print(payload)
+                return 1
+            print(f"PASS shard-round={run}/{PARALLEL_SHARD_ROUNDS} files={len(files)}")
     return 0
 
 

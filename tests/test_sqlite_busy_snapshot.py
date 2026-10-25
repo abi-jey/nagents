@@ -7,18 +7,23 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sqlite3
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import cast
+from uuid import uuid4
 
 import aiosqlite
 
 from nagents.channels.store import InboxStore
 from nagents.session.manager import SessionManager
 from tests.support import sqlite_busy_snapshot as snapshot
+from tests.support import sqlite_trace_runner
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
@@ -197,7 +202,14 @@ def test_snapshot_failure_never_replaces_warning(monkeypatch: pytest.MonkeyPatch
     )
 
     assert warning_filter.filter(record)
-    assert capture.events == []
+    assert capture.events == [
+        {
+            "logger": snapshot._STORE_LOGGER,
+            "phase": "begin",
+            "sqlite_code": 5,
+            "snapshot_error": "RuntimeError",
+        }
+    ]
 
 
 def test_busy_snapshot_report_section_is_failure_only() -> None:
@@ -218,3 +230,94 @@ def test_busy_snapshot_report_section_is_failure_only() -> None:
     snapshot._append_report(failed_report, item, capture)
     assert failed_report.sections[0][0] == "NGN_SQLITE_TRACE busy_snapshot"
     assert json.loads(failed_report.sections[0][1])["mode"] == "busy_snapshot"
+
+
+def test_real_pytest_report_sections_survive_short_tracebacks_and_are_filtered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    relative_directory = Path("tests") / f"_busy_snapshot_probe_{uuid4().hex}"
+    probe_directory = sqlite_trace_runner.ROOT / relative_directory
+    relative_test = (relative_directory / "test_busy_snapshot_probe.py").as_posix()
+    test_file = probe_directory / "test_busy_snapshot_probe.py"
+    probe_directory.mkdir()
+    conftest = probe_directory / "conftest.py"
+    conftest.write_text(
+        "from tests.support import sqlite_busy_snapshot as plugin\n"
+        f'plugin._SHARD_TEST_FILES = frozenset({{"{relative_test}"}})\n',
+        encoding="utf-8",
+    )
+    test_file.write_text(
+        "import logging\n"
+        "def test_busy_snapshot_failure():\n"
+        "    logging.getLogger('nagents.channels.store').warning(\n"
+        "        'SQLite transaction failed: phase=%s exception=%s sqlite_code=%s',\n"
+        "        'begin', 'PRIVATE_SQL_SECRET', 5\n"
+        "    )\n"
+        "    raise RuntimeError('PRIVATE_FAILURE_BODY')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sqlite_trace_runner, "_shard_files", lambda: [relative_test])
+    environment = os.environ.copy()
+    environment["NGN_SQLITE_BUSY_SNAPSHOT"] = "1"
+    environment["NGN_SQLITE_TRACE"] = "0"
+    command_prefix = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--no-header",
+        "-q",
+        "-n",
+        "0",
+        "-p",
+        "tests.support.sqlite_busy_snapshot",
+    ]
+    try:
+        old_report = tmp_path / "old-style.xml"
+        old_result = subprocess.run(
+            [*command_prefix, "--tb=no", f"--junitxml={old_report}", relative_test],
+            cwd=sqlite_trace_runner.ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=HANG_GUARD,
+            check=False,
+        )
+        old_output = f"{old_result.stdout}\n{old_result.stderr}"
+        old_sections = sqlite_trace_runner.safe_trace_sections(old_result.stdout, old_result.stderr)
+
+        new_report = tmp_path / "short-style.xml"
+        new_result = subprocess.run(
+            [*command_prefix, "--tb=short", f"--junitxml={new_report}", relative_test],
+            cwd=sqlite_trace_runner.ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=HANG_GUARD,
+            check=False,
+        )
+        new_output = f"{new_result.stdout}\n{new_result.stderr}"
+        new_sections = sqlite_trace_runner.safe_trace_sections(new_result.stdout, new_result.stderr)
+        assert old_result.returncode != 0 and new_result.returncode != 0
+        assert "NGN_SQLITE_TRACE busy_snapshot" not in old_output
+        assert old_sections == []
+        assert "NGN_SQLITE_TRACE busy_snapshot" in new_output
+        assert len(new_sections) == 1
+        serialized_section = json.dumps(new_sections)
+        assert "PRIVATE_SQL_SECRET" not in serialized_section
+        assert "PRIVATE_FAILURE_BODY" not in serialized_section
+        assert str(probe_directory) not in serialized_section
+        payload = json.loads(new_sections[0])
+        assert payload["test"] == relative_test + "::test_busy_snapshot_failure"
+        summaries = sqlite_trace_runner.safe_junit_failures(new_report)
+        assert summaries == [
+            {
+                "module": "test_busy_snapshot_probe",
+                "test": "test_busy_snapshot_failure",
+                "params": "",
+                "failure_type": "RuntimeError",
+            }
+        ]
+        assert "PRIVATE_FAILURE_BODY" not in json.dumps(summaries)
+        assert "PRIVATE_SQL_SECRET" not in json.dumps(summaries)
+    finally:
+        shutil.rmtree(probe_directory, ignore_errors=True)

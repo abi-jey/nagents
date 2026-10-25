@@ -190,21 +190,24 @@ class _BusyWarningFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             warning = _busy_warning(record)
-            if warning is not None:
-                phase, code = warning
-                threads, loops = _thread_stacks()
-                self.capture.add(
-                    {
-                        "logger": record.name,
-                        "phase": phase,
-                        "sqlite_code": code,
-                        "threads": threads,
-                        "tasks": _task_stacks(loops),
-                    }
-                )
         except Exception:
-            # Diagnostics must never replace the SQLite error being reported.
-            pass
+            return True
+        if warning is None:
+            return True
+        phase, code = warning
+        event: dict[str, object] = {
+            "logger": record.name,
+            "phase": phase,
+            "sqlite_code": code,
+        }
+        try:
+            threads, loops = _thread_stacks()
+            event["threads"] = threads
+            event["tasks"] = _task_stacks(loops)
+        except Exception as error:
+            event["snapshot_error"] = type(error).__name__[:80]
+        with suppress(Exception):
+            self.capture.add(event)
         return True
 
 
