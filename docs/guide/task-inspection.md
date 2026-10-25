@@ -41,9 +41,12 @@ allowed. A blank title on a new child falls back to its short session ID; a
 blank title on an existing child preserves its current title. The legacy
 `task_id`, `parent_task_id`, and `name` body fields are rejected. Responses use
 `session_id`, `title`, `root_session_id`, and `parent_session_id`; private child
-storage IDs are not exposed. Short IDs come from one monotonic base-36 workspace
-counter shared across root conversations, so an alias is not reused while that
-workspace database is retained.
+storage IDs are not exposed. New short IDs have the form `s-a7f2c9d1`: `s-` and
+an eight-character lowercase UUID prefix. Allocation reserves them atomically
+across the workspace and retries collisions up to five times. Opaque ID
+reservations survive content deletion and restart, preventing reuse. Existing
+base-36 IDs keep their original mappings; ID persistence does not restore
+running workers.
 
 Messages require a UUID and 1–16,000 characters of nonblank text. Identical
 retries return the same receipt without another quota debit or execution.

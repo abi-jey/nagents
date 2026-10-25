@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import asdict
 from dataclasses import replace
 from typing import TYPE_CHECKING
@@ -67,12 +68,14 @@ def test_activation_history_survives_restart_and_stays_root_scoped(
                 )
             elif notifications(messages) and not did_agent_continue:
                 did_agent_continue = True
+                acknowledgment = next(message for message in messages if message.tool_call_id == "activation-one")
+                session_id = json.loads(str(acknowledgment.content))["session_id"]
                 yield ToolCallEvent(
                     id="activation-two",
                     name="to_agent",
                     arguments={
                         "prompt": "Continue the same child",
-                        "session_id": "s1",
+                        "session_id": session_id,
                         "title": "Updated title",
                         "model": "updated-model",
                     },
@@ -91,7 +94,8 @@ def test_activation_history_survives_restart_and_stays_root_scoped(
             assert len(activations) == 2
             first, second = activations
             alias = str(first["session_id"])
-            assert alias == second["session_id"] == "s1"
+            assert alias == second["session_id"]
+            assert re.fullmatch(r"s-[0-9a-f]{8}", alias)
             assert [first["activation"], second["activation"]] == [0, 1]
             assert first["title"] == "Original title" and second["title"] == "Updated title"
             assert first["mode"] == second["mode"] == "reviewer"

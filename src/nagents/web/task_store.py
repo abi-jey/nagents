@@ -22,7 +22,8 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException
 
 from nagents.channels.store import InboxStore
-from nagents.harness.session_identity import session_sequence
+from nagents.harness.session_identity import initialize_identity_schema
+from nagents.harness.session_identity import validate_session_id
 from nagents.harness.subagents import TaskInfo
 
 from .routing import RoutingStore
@@ -87,6 +88,7 @@ class TaskStore:
                 return
 
             def create(db: sqlite3.Connection) -> None:
+                initialize_identity_schema(db)
                 db.execute(
                     "CREATE TABLE IF NOT EXISTS ngn_web_agent_sessions ("
                     "root TEXT NOT NULL, session_id TEXT NOT NULL, storage_id TEXT NOT NULL, "
@@ -302,7 +304,7 @@ class TaskStore:
         await self.initialize()
         if data.get("root_session_id") != root or not storage_id:
             raise ValueError("Child evidence must belong to its root and private storage conversation")
-        session_sequence(str(data["session_id"]))
+        validate_session_id(str(data["session_id"]))
         public = {key: value for key, value in data.items() if not key.startswith("_")}
 
         def save(db: sqlite3.Connection) -> None:
@@ -348,7 +350,7 @@ class TaskStore:
         session_id, activation = record.get("session_id"), record.get("activation")
         if not isinstance(session_id, str) or type(activation) is not int or activation < 0:
             raise ValueError("Activation evidence needs its short session ID and activation")
-        session_sequence(session_id)
+        validate_session_id(session_id)
         await self.initialize()
         fields = set(TaskInfo.__dataclass_fields__) - {
             name for name in TaskInfo.__dataclass_fields__ if name.startswith("_")
@@ -463,7 +465,7 @@ class TaskStore:
     async def storage_id(self, root: str, session_id: str) -> str:
         """Resolve a private conversation only within an authenticated root."""
         await self.initialize()
-        sequence = session_sequence(session_id)
+        validate_session_id(session_id)
 
         def read(db: sqlite3.Connection) -> str:
             self.root(db, root)
@@ -479,8 +481,8 @@ class TaskStore:
             if (
                 allocator is None
                 or db.execute(
-                    "SELECT 1 FROM nagents_agent_sessions WHERE sequence = ? AND root_session_id = ? AND storage_id = ?",
-                    (sequence, root, row[0]),
+                    "SELECT 1 FROM nagents_agent_sessions WHERE public_id = ? AND root_session_id = ? AND storage_id = ?",
+                    (session_id, root, row[0]),
                 ).fetchone()
                 is None
             ):

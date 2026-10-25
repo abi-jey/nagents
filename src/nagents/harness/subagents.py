@@ -46,7 +46,7 @@ from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
 from .reasoning import validate_effort
 from .session_identity import SessionIdentityStore
-from .session_identity import session_sequence
+from .session_identity import validate_session_id
 from .session_identity import validate_title
 from .subagent_settings import LocalSubagentSettings
 from .subagent_settings import SubagentLimits
@@ -584,7 +584,7 @@ class SubagentManager:
         Args:
             prompt: A self-contained task; the child does not receive parent conversation history.
             agent: Omission selects assistant for a new session or preserves an existing target's profile.
-            session_id: Short existing child ID, such as s1. Omission starts a new conversation.
+            session_id: Exact existing child ID, such as s-a7f2c9d1. Omission starts a new conversation.
             title: Optional one-line display title, at most 120 characters; blank preserves an existing title.
             model: Optional model identifier; omission inherits the agent, workspace, then global model selection.
             provider: Optional connection for this invocation; omission uses the resolved model's provider.
@@ -600,7 +600,7 @@ class SubagentManager:
         title = validate_title(title)
         options = TaskOptions(provider, model, compact_trigger, compact_tokens, compact_messages, reasoning_effort)
         if session_id:
-            session_sequence(session_id)
+            validate_session_id(session_id)
             info = self._lookup(session_id)
             if agent and agent != info.profile:
                 raise ValueError("An existing session's agent profile cannot be changed")
@@ -774,7 +774,7 @@ class SubagentManager:
         raise RuntimeError("Input context does not belong to an active child producer")
 
     def _lookup(self, task_id: str) -> TaskInfo:
-        session_sequence(task_id)
+        validate_session_id(task_id)
         info = self._infos.get(task_id)
         if info is None or info.root_session_id != self.root.harness.session_id or not self._belongs(info):
             raise ValueError("Unknown or unavailable child session in the current root tree; workers are not restored")

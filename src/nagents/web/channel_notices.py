@@ -21,7 +21,7 @@ from nagents.channels import sanitize_channel_tool_arguments
 from nagents.events import Event
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
-from nagents.harness.session_identity import session_sequence
+from nagents.harness.session_identity import validate_session_id
 
 from ._async import finish_on_cancel
 from .channel_privacy import CredentialProtectionError
@@ -97,7 +97,7 @@ def _tool(record: Mapping[str, object], *, allow_transport: bool = False) -> _To
         return None
     if task:
         try:
-            session_sequence(task)
+            validate_session_id(task)
         except ValueError:
             return None
     error = record.get("error")
