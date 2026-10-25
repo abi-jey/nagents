@@ -40,6 +40,7 @@ export type RetainedTask = {
   title: string;
   status: "running" | "completed" | "failed" | "cancelled";
   result: string;
+  artifacts?: ArtifactImageRef[];
   error: string;
   root_session_id: string;
   prompt: string;
@@ -82,9 +83,20 @@ export type RetainedTask = {
   compact_messages?: number;
   context?: ContextStats;
 };
+export type ArtifactImageRef = {
+  type: "artifact_image";
+  artifact_id: string;
+  artifact_part?: number;
+  filename: string;
+  media_type: "image/png" | "image/jpeg";
+  byte_length: number;
+  path: string;
+  caption: string;
+};
 // Native parts returned by the backend for a saved multimodal message.
 export type MessagePart =
   | { type: "text"; text: string }
+  | ArtifactImageRef
   | { type: "image"; media_type: string; data_base64: string }
   | { type: "document"; media_type: string; title: string; data_base64: string }
   | { type: "audio"; format: string; data_base64: string };

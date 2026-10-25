@@ -140,10 +140,9 @@ class OwnedRequestHandler(DefaultRequestHandlerV2):
         validate_proto_required_fields(params)
         validate_history_length(params.configuration)
         validate_input_modes(params.message, self.exported_card)
-        if (
+        if params.configuration.accepted_output_modes and not set(
             params.configuration.accepted_output_modes
-            and "text/plain" not in params.configuration.accepted_output_modes
-        ):
+        ).intersection(self.exported_card.default_output_modes):
             raise ContentTypeNotSupportedError()
         if len(params.message.reference_task_ids) > 8:
             raise InvalidParamsError("At most eight owned task references are supported")

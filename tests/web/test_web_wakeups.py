@@ -304,6 +304,7 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             expected = [
                 {
                     **{key: value for key, value in asdict(info).items() if not key.startswith("_")},
+                    "artifacts": [],
                     "can_message": True,
                     "unavailable_reason": "",
                     "can_start_children": False,
@@ -394,6 +395,7 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             expected = [
                 {
                     **{key: value for key, value in asdict(info).items() if not key.startswith("_")},
+                    "artifacts": [],
                     "can_message": True,
                     "unavailable_reason": "",
                     "can_start_children": False,

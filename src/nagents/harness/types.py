@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
 
+from nagents.artifacts import ImageArtifactReference
 from nagents.events import ErrorEvent
 from nagents.events import Event
 from nagents.events import ToolCallEvent
@@ -113,6 +114,17 @@ class TaskCompleted:
     parent_response_id: str = ""
     parent_response_session_id: str = ""
     completed_at: float = 0.0
+    artifacts: tuple[ImageArtifactReference, ...] = ()
+
+
+@dataclass
+class RemoteArtifacts:
+    """Committed image outputs, with metadata-only authenticated asset paths."""
+
+    response_id: str
+    response_session_id: str
+    history_id: str
+    artifacts: tuple[ImageArtifactReference, ...]
 
 
 @dataclass(kw_only=True)
@@ -198,6 +210,7 @@ HarnessEvent = (
     | TaskMessage
     | TaskNotification
     | TaskActivity
+    | RemoteArtifacts
     | TranscriptAnchor
     | TranscriptAbandoned
 )

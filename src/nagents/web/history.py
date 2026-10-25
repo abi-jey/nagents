@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from contextlib import closing
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import asdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,7 @@ from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
 from nagents.extensions import AgentPlugin
 from nagents.harness.execution import _register_owned_adapter_type
+from nagents.harness.remote_artifacts import image_references
 from nagents.harness.runtime import _HarnessSession
 from nagents.session import response_metadata
 from nagents.session.deliveries import DeliveryJournal
@@ -316,13 +318,15 @@ class WebHistory(_HarnessSession):
         record: dict[str, object] = {
             "history_id": str(row["id"]),
             "role": message.role,
-            "content": message.content if isinstance(message.content, str) else "",
+            "content": message.content
+            if isinstance(message.content, str)
+            else "\n".join(part.text for part in message.content or [] if isinstance(part, TextContent)),
             "name": message.name or "",
             "tool_call_id": message.tool_call_id or "",
             "tool_calls": [
                 {"id": call.id, "name": call.name, "arguments": call.arguments} for call in message.tool_calls
             ],
-            "parts": self._project_parts(message.content),
+            "parts": self._project_parts(message.content, str(row["session_id"]), int(row["id"])),
             "message_id": "",
             "ingress_id": "",
             "source_verified": False,
@@ -390,16 +394,32 @@ class WebHistory(_HarnessSession):
         return record
 
     @staticmethod
-    def _project_parts(content: object) -> list[dict[str, object]]:
+    def _project_parts(content: object, root: str = "", history_id: int = 0) -> list[dict[str, object]]:
         """JSON-safe multimodal parts for the browser; text parts keep the raw text."""
         if not isinstance(content, list):
             return []
         parts: list[dict[str, object]] = []
-        for part in content:
+        artifact_message = any(isinstance(part, ImageContent) and part.artifact_id for part in content)
+        try:
+            references = {
+                int(reference.path.rsplit("/", 1)[-1]): asdict(reference)
+                for reference in image_references(content, root, history_id)
+            }
+        except ValueError:
+            references = {}
+            parts.append(
+                {"type": "artifact_image", "error": "Stored image artifact metadata is invalid or unavailable"}
+            )
+        for index, part in enumerate(content):
             if isinstance(part, TextContent):
-                parts.append({"type": "text", "text": part.text})
+                if not artifact_message:
+                    parts.append({"type": "text", "text": part.text})
             elif isinstance(part, ImageContent):
-                parts.append({"type": "image", "media_type": part.media_type, "data_base64": part.base64_data})
+                if part.artifact_id:
+                    if index in references:
+                        parts.append(references[index])
+                else:
+                    parts.append({"type": "image", "media_type": part.media_type, "data_base64": part.base64_data})
             elif isinstance(part, DocumentContent):
                 parts.append(
                     {

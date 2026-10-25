@@ -416,6 +416,9 @@ def create_app(
     from .local_delivery import register_assets
 
     register_assets(app, lambda: state)
+    from .artifacts import register_artifacts
+
+    register_artifacts(app, lambda: state)
     from .uploads import register_uploads
 
     register_uploads(app, lambda: state)

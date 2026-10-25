@@ -1,11 +1,12 @@
 import { agentUpdates, savedWakeup } from "./backgroundUpdates.js";
 import { preview, text } from "../../api/events.js";
-import type { ActivityReply, MessagePart, Snapshot, WireEvent } from "../../types.js";
+import type { ActivityReply, ArtifactImageRef, MessagePart, Snapshot, WireEvent } from "../../types.js";
 import type { ChannelMeta } from "./channelMessage.js";
 import type { LocalDelivery } from "./deliveries.js";
 import { uploadedAttachments } from "./uploads.js";
 import { channelMessage, sameUserMessage } from "./channelMessage.js";
 import { responseMetadata, sameResponse, type ResponseMetadata } from "./responseMetadata.js";
+import { artifactImages, artifactParts, artifactState } from "./artifactImages.js";
 
 export type LiveCaption = {
   sessionId: string;
@@ -68,7 +69,10 @@ export type Entry = {
   callId?: string;
   generationId?: string;
   responseId?: string;
+  responseSessionId?: string;
   responseMetadata?: ResponseMetadata;
+  artifacts?: ArtifactImageRef[];
+  artifactError?: string;
   toolIndex?: number;
   toolProgress?: "streaming" | "ready" | "abandoned";
   inputsTruncated?: boolean;
@@ -195,6 +199,9 @@ export function messageParts(event: WireEvent): MessagePart[] | undefined {
   const parts = event.parts.flatMap((part): MessagePart[] => {
     if (!part || typeof part !== "object" || Array.isArray(part)) return [];
     const value = part as Record<string, unknown>;
+    if (value.type === "artifact_image") {
+      try { return artifactImages([value]); } catch { return []; }
+    }
     if (value.type === "text" && typeof value.text === "string") return [{ type: "text", text: value.text }];
     if (value.type === "image" && typeof value.media_type === "string" && typeof value.data_base64 === "string")
       return [{ type: "image", media_type: value.media_type, data_base64: value.data_base64 }];
@@ -351,6 +358,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     const metadata = responseMetadata(event);
     if (!metadata) return entries;
     const index = entries.findIndex(entry => entry.kind === "assistant" &&
+      (!entry.responseSessionId || entry.responseSessionId === metadata.response_session_id) &&
       (entry.responseMetadata ? sameResponse(entry.responseMetadata, metadata)
         : entry.responseId === metadata.response_id && execution(entry) ||
           !entry.responseId && !!metadata.history_id && entry.historyId === metadata.history_id && (entry.taskId || "") === taskId));
@@ -358,9 +366,22 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     if (previous?.responseMetadata && previous.responseMetadata.revision >= metadata.revision) return entries;
     return save({ ...previous, kind: "assistant", text: previous?.text || "", ...scope,
       responseId: metadata.response_id, responseMetadata: metadata,
+      responseSessionId: metadata.response_session_id,
       historyId: metadata.history_id || previous?.historyId,
       streaming: ["thinking", "responding"].includes(metadata.status),
     }, index);
+  }
+  if (event.event === "remote_artifacts") {
+    if (!responseId || !responseSessionId || !historyId || !/^[1-9]\d*$/.test(historyId)) return entries;
+    const index = entries.findLastIndex(entry => entry.kind === "assistant" &&
+      (!entry.responseId || entry.responseId === responseId) &&
+      (!(entry.responseSessionId || entry.responseMetadata?.response_session_id) ||
+        (entry.responseSessionId || entry.responseMetadata?.response_session_id) === responseSessionId) &&
+      (entry.responseId === responseId && execution(entry) || entry.historyId === historyId && (entry.taskId || "") === taskId));
+    const previous = entries[index];
+    return save({ ...previous, kind: "assistant", text: previous?.text || "", ...scope,
+      responseId, responseSessionId, historyId,
+      ...artifactState(event.artifacts, previous?.artifacts), streaming: previous?.streaming ?? false }, index, true);
   }
 
   if (["run_finished", "client_disconnected", "done"].includes(event.event)) {
@@ -436,10 +457,11 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         provenance: message.provenance, channelContext: message.channelContext,
         // A stable row keeps the same metadata object so identical replays stay value-equal.
          channel: previous.channel ?? message.channel, parts: previous.parts ?? messageParts(event), uploads: uploads ?? previous.uploads,
+         ...(artifactParts(event.parts).length ? artifactState(artifactParts(event.parts), previous.artifacts) : {}),
         runId: previous.runId || runId }, index);
     }
     return save({ ...entries[index], kind: "user", ...message, ...scope, historyId, ingressId,
-       sourceVerified, parts: messageParts(event), uploads,
+       sourceVerified, parts: messageParts(event), uploads, ...artifactState(artifactParts(event.parts)),
        ...(voice || entries[index]?.voice ? { voice: voice || undefined, voiceSessionId } : {}),
       messageId: messageId || entries[index]?.messageId,
       queued: event.queued === true }, index, !!message.origin && index < 0 && !event.saved);
@@ -451,20 +473,24 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     if (compaction?.compacting) return entries;
     const index = entries.findLastIndex(
       (entry) => entry.kind === "assistant" && (responseId
-        ? entry.responseId === responseId && (execution(entry) ||
+        ? entry.responseId === responseId && (!responseSessionId || !(entry.responseSessionId || entry.responseMetadata?.response_session_id) ||
+          (entry.responseSessionId || entry.responseMetadata?.response_session_id) === responseSessionId) && (execution(entry) ||
           !!responseSessionId && entry.responseMetadata?.response_session_id === responseSessionId || !!historyId && entry.historyId === historyId)
         : entry.streaming && !entry.responseId && execution(entry)),
     );
     const previous = index >= 0 ? entries[index] : undefined;
     if (previous && responseId && event.event === "text_chunk" && previous.responseMetadata &&
       ["completed", "cancelled", "failed"].includes(previous.responseMetadata.status)) return entries;
-    if (event.event === "text_done" && !text(event, "text") && !previous) return entries;
+    const imageParts = event.artifacts ?? (artifactParts(event.parts).length ? artifactParts(event.parts) : undefined);
+    if (event.event === "text_done" && !text(event, "text") && !previous && imageParts === undefined) return entries;
     return save(
       {
         ...previous,
         kind: "assistant",
         ...scope,
         ...(responseId ? { responseId } : {}),
+        ...(responseSessionId ? { responseSessionId } : {}),
+        ...(imageParts !== undefined ? artifactState(imageParts, previous?.artifacts) : {}),
         historyId: historyId || previous?.historyId,
         text:
           event.event === "text_chunk"
@@ -715,6 +741,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         entry.completedAt = event.completed_at;
       entry.result = text(event, "result");
       entry.error = text(event, "error");
+      if (event.artifacts !== undefined) Object.assign(entry, artifactState(event.artifacts, previous?.artifacts));
       entry.state =
         event.status === "cancelled"
           ? "Cancelled"
@@ -766,6 +793,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
           text(event, "recipient_title") || (recipient ? recipient : "Main"),
         cause: text(event, "cause"),
         text: text(event, "text"),
+        ...(event.artifacts !== undefined ? artifactState(event.artifacts) : {}),
         state: "Delivered",
       },
       -1,
@@ -1046,6 +1074,8 @@ export function fromHistory({
     if (message.role === "user") historyTurn = historyIndex;
     const identity = { history_id: message.history_id, history_index: historyIndex, history_turn: historyTurn };
     const responseIdentity = { ...identity,
+      ...(["assistant", "response_metadata"].includes(message.role) && message.response_id
+        ? { response_id: message.response_id, response_session_id: session_id } : {}),
       ...(metadata?.response_session_id === session_id ? { response_id: metadata.response_id,
         response_session_id: metadata.response_session_id, run_id: metadata.run_id || "" } : {}) };
     if (message.role === "tool") {
@@ -1059,7 +1089,7 @@ export function fromHistory({
       });
       continue;
     }
-    if (message.content || message.uploads?.length) {
+    if (message.content || message.uploads?.length || artifactParts(message.parts).length) {
       const context = message.role === "user" && (agentUpdates(message.content) || savedWakeup(message.content));
       if (context)
         entries.push({
@@ -1069,6 +1099,7 @@ export function fromHistory({
           text: message.content,
           state: "Saved context",
           recorded: true,
+          ...artifactState(artifactParts(message.parts)),
           historyId: message.history_id, historyIndex, historyTurn,
         });
       else {
@@ -1082,7 +1113,7 @@ export function fromHistory({
           voice_verified: message.role === "user" ? message.voice_verified : undefined,
           voice_session_id: message.role === "user" ? message.voice_session_id : undefined,
           source: message.role === "user" ? message.source : undefined,
-          parts: message.role === "user" ? message.parts : undefined,
+          parts: message.parts,
           uploads: message.role === "user" ? message.uploads : undefined,
           saved: true,
           ...responseIdentity,
@@ -1166,6 +1197,7 @@ export function fromHistory({
       trigger: task.trigger,
       inputs: task.prompt,
       result,
+      ...artifactState(task.artifacts),
       error: task.error,
       state: result !== undefined ? "Recorded result" : "Recorded task state",
       recorded: true,

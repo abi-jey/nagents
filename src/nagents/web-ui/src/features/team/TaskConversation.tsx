@@ -22,8 +22,8 @@ function appendTaskRecord(entries: Entry[], event: TaskActivity, childSession: s
   if (payload.event === "status" && payload.phase === "failed" && typeof payload.detail === "string") {
     payload.event = "error"; payload.message = payload.detail;
   }
-  if (!["response_metadata", "text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "status", "error", "approval", "approval_closed"].includes(payload.event)) return entries;
-  if (payload.event === "response_metadata" && payload.response_session_id !== childSession) return entries;
+  if (!["response_metadata", "remote_artifacts", "text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "status", "error", "approval", "approval_closed"].includes(payload.event)) return entries;
+  if (["response_metadata", "remote_artifacts"].includes(payload.event) && payload.response_session_id !== childSession) return entries;
   // The envelope activation scopes this selected conversation. Enriched
   // metadata can also carry a root followup counter that text chunks omit;
   // mixing those scopes would split one answer into two visible entries.

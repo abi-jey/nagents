@@ -20,6 +20,7 @@
 .chat-media-file { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .chat-media-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--text-reading); }
 .chat-media-meta { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.chat-media-description { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-media-download { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 6px 10px; box-sizing: border-box; border: 1px solid var(--border-group); border-radius: 10px; background: #ffffff03; color: var(--text-reading); text-decoration: none; font-size: 12px; line-height: 1.3; }
 .chat-media-download:hover { background: #ffffff0b; border-color: var(--accent-teal); color: var(--text-reading); }
 .chat-media-download:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }

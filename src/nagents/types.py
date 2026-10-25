@@ -95,6 +95,10 @@ class ImageContent:
     media_type: str  # e.g., "image/jpeg", "image/png", "image/gif", "image/webp"
     type: Literal["image"] = "image"
     detail: str | None = None  # OpenAI-specific: "auto", "low", "high"
+    filename: str = ""
+    artifact_id: str = ""
+    artifact_part: int = 0
+    caption: str = ""
 
 
 @dataclass

@@ -568,7 +568,16 @@ class SessionManager:
         part_type = data.get("type")
         fields = {
             "text": {"type", "text"},
-            "image": {"type", "base64_data", "media_type", "detail"},
+            "image": {
+                "type",
+                "base64_data",
+                "media_type",
+                "detail",
+                "filename",
+                "artifact_id",
+                "artifact_part",
+                "caption",
+            },
             "audio": {"type", "base64_data", "format"},
             "document": {"type", "base64_data", "media_type", "title"},
         }
@@ -590,10 +599,17 @@ class SessionManager:
         if part_type == "text":
             return TextContent(text=text("text"))
         elif part_type == "image":
+            artifact_part = data.get("artifact_part", 0)
+            if type(artifact_part) is not int or not 0 <= artifact_part < 256:
+                raise ValueError("Invalid image artifact part index")
             return ImageContent(
                 base64_data=text("base64_data"),
                 media_type=text("media_type", "image/jpeg"),
                 detail=optional_text("detail"),
+                filename=text("filename", ""),
+                artifact_id=text("artifact_id", ""),
+                artifact_part=artifact_part,
+                caption=text("caption", ""),
             )
         elif part_type == "audio":
             return AudioContent(

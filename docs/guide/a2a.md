@@ -18,9 +18,67 @@ pip install 'nagents[a2a]'
 The integration uses official `a2a-sdk>=1.2.3` (locked to 1.2.3), protocol **1.0**, JSON-RPC at
 `/rpc`, and SSE streaming. Its public minimal Agent Card is at
 `/.well-known/agent-card.json`. The card declares one configured profile,
-`text/plain` input/output and streaming. Push callbacks, gRPC, REST bindings,
+`text/plain` input, `text/plain`/PNG/JPEG output and streaming. Push callbacks, gRPC, REST bindings,
 extended cards, file fetching and protocol 0.3 compatibility are not supported.
 Their capabilities are not advertised. Unsupported operations use SDK errors.
+
+## Image artifacts
+
+Native framework agents can publish complete image bytes from a host tool using
+`await nagents.a2a.publish_image(data, media_type="image/png", filename="thumbnail.png", caption="...")`.
+The publisher belongs to the current authenticated A2A execution. It returns an
+artifact ID; keep that small receipt in the tool result. Image bytes travel in
+protocol `Part.raw`, without copying Base64 into a model answer.
+
+For a file that the host has already produced and authorized:
+
+```python
+from pathlib import Path
+from nagents.a2a import publish_image_file
+
+
+async def share_prepared_thumbnail() -> dict[str, str]:
+    """Publish the prepared thumbnail under the host's normal tool permissions."""
+    artifact_id = await publish_image_file(
+        Path("/srv/approved-output/thumbnail.jpg"),
+        media_type="image/jpeg",
+        caption="Prepared thumbnail",
+    )
+    return {"artifact_id": artifact_id}
+```
+
+Register this function on the native `Agent` with its usual tool executor.
+Neither publication helper grants file access or bypasses approval. The file
+helper uses a bounded read. Calls outside an active execution fail explicitly.
+PNG and JPEG containers are checked; the receiving browser performs final pixel
+decoding and reports decoding failures with a download action.
+
+An exported ngn profile also discovers `builtin.a2a` through `channel_list`.
+Use its existing `channel_send` with destination `current`, empty text, and
+workspace-relative image attachments. This uses the existing file boundaries,
+tool policy and approval flow. Ordinary assistant text supplies the caption.
+
+Each remote response supports at most three images and 8 MiB of image bytes in
+total. A server's configured `max_output_bytes` budget also applies to text and
+image bytes together; its default is smaller than this image ceiling. A batch
+that fails validation or budget checks publishes no image from that batch.
+URL-backed parts are rejected with an explicit error: neither host nor browser
+automatically downloads them or forwards credentials to a file URL.
+
+`RemoteConversation` exposes complete images through `RemoteUpdate.images`,
+preserving task-scoped artifact ID, part position, MIME type, filename, caption
+and bytes. Artifact updates append protocol parts; final snapshots replace the
+same artifact instead of duplicating it. A raw image part must contain a complete
+file, rather than byte fragments distributed across unrelated parts.
+
+The harness stores image content in the owning conversation's SQLite history.
+The Web UI receives small authenticated asset references and renders the existing
+image card, viewer and download action in the chat and remote child conversation.
+Parent notifications attach owned child images when the selected provider accepts
+the format and image budget; otherwise the notification retains the reference
+with an explicit model-input status. Results still reach only the immediate
+parent. Reloads preserve the original bytes and asset identity, and root deletion
+removes their history. Every browser image request goes through ngn.
 
 ## Native framework application
 

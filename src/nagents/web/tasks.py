@@ -33,8 +33,10 @@ from nagents.harness.session_identity import SESSION_ID_PATTERN
 from nagents.harness.session_identity import validate_title
 from nagents.harness.task_activity import TaskOptions
 from nagents.session import response_metadata
+from nagents.types import TextContent
 
 from ._async import finish_on_cancel
+from .history import WebHistory
 from .task_history import TaskHistory
 from .task_store import TaskStore
 
@@ -383,6 +385,7 @@ class Tasks:
                 "text_chunk",
                 "text_done",
                 "response_metadata",
+                "remote_artifacts",
                 "tool_call_progress",
                 "tool_call",
                 "tool_execution_started",
@@ -823,7 +826,12 @@ class Tasks:
                 rows = rows[:limit]
                 records: list[dict[str, object]] = []
                 for row in reversed(rows):
-                    content = row["content"] or ""
+                    message = self.state.history._row_to_message(row)
+                    content = (
+                        message.content
+                        if isinstance(message.content, str)
+                        else "\n".join(part.text for part in message.content or [] if isinstance(part, TextContent))
+                    )
                     try:
                         raw_calls = json.loads(row["tool_calls"] or "[]")
                     except (ValueError, TypeError):
@@ -842,7 +850,11 @@ class Tasks:
                         "tool_calls": calls,
                         "tool_call_id": row["tool_call_id"] or "",
                         "name": row["name"] or "",
-                        "parts": [],
+                        "parts": [
+                            part
+                            for part in WebHistory._project_parts(message.content, root, int(row["id"]))
+                            if part.get("type") == "artifact_image"
+                        ],
                         "source_verified": False,
                     }
                     if len(json.dumps(record)) > 65536:

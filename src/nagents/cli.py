@@ -41,6 +41,7 @@ from .harness.providers import API_NAMES
 from .harness.types import ApprovalRequest
 from .harness.types import HarnessEvent
 from .harness.types import Notice
+from .harness.types import RemoteArtifacts
 from .harness.types import TaskActivity
 from .harness.types import TaskCompleted
 from .harness.types import TaskDeliveryWarning
@@ -220,6 +221,7 @@ def _event_record(event: HarnessEvent) -> dict[str, object]:
         record["event"] = {
             ToolOutput: "tool_output",
             Notice: "notice",
+            RemoteArtifacts: "remote_artifacts",
             TaskActivity: "task_activity",
             TaskStarted: "task_started",
             TaskCompleted: "task_completed",

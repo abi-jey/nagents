@@ -9,7 +9,7 @@ export function transcriptEntries(items: TranscriptItem[]): Entry[] {
 
 /** Whitespace alone is not a message; attachments and live surfaces still are. */
 export function hasAssistantContent(entry: Entry): boolean {
-  return !!entry.text.trim() || !!entry.uploads?.length || !!entry.channel || !!entry.provenance ||
+  return !!entry.text.trim() || !!entry.artifacts?.length || !!entry.artifactError || !!entry.uploads?.length || !!entry.channel || !!entry.provenance ||
     !!entry.delivery || !!entry.liveCaption;
 }
 

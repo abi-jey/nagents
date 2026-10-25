@@ -23,15 +23,21 @@ from typing import TYPE_CHECKING
 from typing import Literal
 
 from nagents._async import join_owned as _await_cleanup
+from nagents.artifacts import MAX_ARTIFACT_IMAGES
+from nagents.artifacts import MAX_ARTIFACT_IMAGE_BYTES
+from nagents.artifacts import ImageArtifactReference
 from nagents.error_presentation import remote_error_message
 from nagents.error_presentation import safe_error_code
 from nagents.error_presentation import subagent_error_message
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
+from nagents.media import MediaCapabilities
 from nagents.provider._diagnostics import transport_diagnostic
 from nagents.provider.openai import OpenAIProvider
 from nagents.provider.reasoning import validate_reasoning_choice
+from nagents.types import ImageContent
+from nagents.types import TextContent
 
 from .agent_status import AgentStatusResult
 from .agent_status import SessionEvidence
@@ -45,6 +51,7 @@ from .provider import HarnessProvider
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
 from .reasoning import validate_effort
+from .remote_artifacts import referenced_images
 from .session_identity import SessionIdentityStore
 from .session_identity import validate_session_id
 from .session_identity import validate_title
@@ -58,6 +65,7 @@ from .task_activity import compaction_snapshot
 from .task_activity import public_payload
 from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
 from .types import Notice
+from .types import RemoteArtifacts
 from .types import TaskActivity
 from .types import TaskCompleted
 from .types import TaskDeliveryWarning
@@ -68,6 +76,7 @@ from .types import TaskStarted
 if TYPE_CHECKING:
     import builtins
 
+    from nagents.types import ContentPart
     from nagents.types import Message
     from nagents.types import ReasoningEffort
     from nagents.types import ToolArguments
@@ -121,6 +130,7 @@ class TaskInfo:
     activation_run_id: str = ""
     activation_call_id: str = ""
     activation_call_position: int = -1
+    artifacts: tuple[ImageArtifactReference, ...] = ()
     parent_response_id: str = ""
     parent_response_session_id: str = ""
 
@@ -1217,6 +1227,7 @@ class SubagentManager:
         if trigger in {"human", "agent"}:
             info.followups += 1
         info.status, info.result, info.error = "running", "", ""
+        info.artifacts = ()
         info.phase, info.completed_at = "starting", 0.0
         info.parent_response_id = info.parent_response_session_id = ""
         self._evidence[info.session_id] = SessionEvidence()
@@ -1441,6 +1452,10 @@ class SubagentManager:
                     child._run(prompt, trigger=info.trigger, notifications=notifications, initial_input=message)
                 ) as events:
                     async for event in events:
+                        if isinstance(event, RemoteArtifacts):
+                            if not child._remote_profile.configured or event.response_session_id != info._storage_id:
+                                raise RuntimeError("Image output does not belong to this remote child")
+                            info.artifacts = event.artifacts
                         await self._emit_activity(info, public_payload(event), turn_id=consumed_turn)
                         if isinstance(event, TextDoneEvent) and child.tasks._running():
                             await self._emit_activity(
@@ -1582,6 +1597,7 @@ class SubagentManager:
                         parent_response_id=info.parent_response_id,
                         parent_response_session_id=info.parent_response_session_id,
                         completed_at=info.completed_at,
+                        artifacts=info.artifacts,
                     ),
                 )
 
@@ -1666,7 +1682,7 @@ class SubagentManager:
             while self._observed:
                 await self.harness.emit(replace(self._observed.popleft()))
 
-    async def notification(self, *, wait_for_tasks: bool = False) -> str | None:
+    async def notification(self, *, wait_for_tasks: bool = False) -> str | builtins.list[ContentPart] | None:
         """Drain outcomes only at an outer Agent.run boundary, batching ready jobs."""
         if self.harness.session_id != self._session_id:
             raise RuntimeError("Subagent results cannot be delivered to another session")
@@ -1707,10 +1723,52 @@ class SubagentManager:
             self._changed.clear()
             await self._changed.wait()
         batch = format_batch(tuple(self._ready))
+        candidates = tuple(self._ready)[: batch.count]
+        prepared: dict[str, ImageContent] = {}
+        image_inputs: dict[str, str] = {}
+        byte_length = 0
+        capabilities = (
+            MediaCapabilities()
+            if self.harness._remote_profile.configured
+            else getattr(self.harness.agent.provider, "supported_media_formats", MediaCapabilities())
+        )
+        for event in candidates:
+            if not isinstance(event, TaskCompleted) or not event.artifacts:
+                continue
+            info = self._lookup(event.session_id)
+            if info.parent_session_id != self.harness._agent_session_id:
+                raise RuntimeError("Image output cannot bypass its immediate parent")
+            try:
+                images = await referenced_images(
+                    self.harness.agent.session.db_path, self.root._session_id, info._storage_id, event.artifacts
+                )
+            except ValueError:
+                image_inputs.update({reference.path: "unavailable" for reference in event.artifacts})
+                continue
+            for image, reference in zip(images, event.artifacts, strict=True):
+                if not isinstance(capabilities, MediaCapabilities) or not capabilities.supports_image(
+                    image.media_type.split("/", 1)[-1]
+                ):
+                    image_inputs[reference.path] = "unsupported"
+                elif (
+                    len(prepared) >= MAX_ARTIFACT_IMAGES
+                    or byte_length + reference.byte_length > MAX_ARTIFACT_IMAGE_BYTES
+                ):
+                    image_inputs[reference.path] = "budget"
+                else:
+                    image_inputs[reference.path] = "attached"
+                    prepared[reference.path] = image
+                    byte_length += reference.byte_length
+        # Human follow-ups arriving during image loading still take priority.
+        if self.harness.followups.pending:
+            return None
+        batch = format_batch(tuple(self._ready), image_inputs=image_inputs, maximum=batch.count)
         ready = [self._ready.popleft() for _ in range(batch.count)]
         self.notification_sources = tuple(event.session_id for event in ready)
+        parts: builtins.list[ContentPart] = [TextContent(batch.text)]
         for event in ready:
             if isinstance(event, TaskCompleted):
+                parts.extend(prepared[reference.path] for reference in event.artifacts if reference.path in prepared)
                 await self.root.harness.emit(
                     TaskNotification(
                         uuid.uuid4().hex,
@@ -1724,7 +1782,7 @@ class SubagentManager:
                         source_activation=event.activation,
                     )
                 )
-        return batch.text
+        return parts if len(parts) > 1 else batch.text
 
     async def end(self) -> None:
         """Cancel and await this entire subtree, without UI backpressure waits."""

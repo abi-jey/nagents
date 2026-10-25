@@ -106,7 +106,7 @@ def agent_card(config: A2AConfig) -> AgentCard:
             streaming=True, push_notifications=False, extended_agent_card=False, extensions=extensions
         ),
         default_input_modes=["text/plain"],
-        default_output_modes=["text/plain"],
+        default_output_modes=["text/plain", "image/png", "image/jpeg"],
         skills=[AgentSkill(id=config.agent, name=config.agent, description=config.description, tags=["nagents"])],
         security_schemes={
             "oidc": SecurityScheme(

@@ -232,6 +232,40 @@ async def test_exchange_recovers_transient_stream_with_one_read_and_no_resend() 
 
 
 @pytest.mark.asyncio
+async def test_exchange_does_not_resume_after_remote_identity_changes() -> None:
+    class ChangedIdentityRemote(RemoteStub):
+        def __init__(self) -> None:
+            super().__init__(task=task_snapshot())
+            self.reads = 0
+
+        async def send(self, request: object) -> AsyncGenerator[StreamResponse, None]:
+            self.sent.append(request)
+            yield StreamResponse(task=task_snapshot())
+            yield StreamResponse(
+                status_update=TaskStatusUpdateEvent(
+                    task_id="foreign-task",
+                    context_id="remote-context-1",
+                    status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+                )
+            )
+
+        async def get_task(self, task_id: str) -> Task:
+            self.reads += 1
+            return await super().get_task(task_id)
+
+    remote = ChangedIdentityRemote()
+    conversation = RemoteConversation(remote)  # type: ignore[arg-type]
+
+    with pytest.raises(RemoteAgentError) as raised:
+        _ = [update async for update in conversation.exchange("work once", message_id="stable-identity")]
+
+    assert raised.value.code == "A2A_PROTOCOL_INVALID"
+    assert len(remote.sent) == 1
+    assert remote.reads == 0
+    assert remote.subscriptions == []
+
+
+@pytest.mark.asyncio
 async def test_exchange_stops_at_input_required_and_continues_same_task_on_next_message() -> None:
     remote = RemoteStub(
         task=task_snapshot(),
