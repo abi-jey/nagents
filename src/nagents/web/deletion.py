@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 import anyio
 from fastapi import HTTPException
 
-from nagents.harness.session_identity import session_sequence
+from nagents.harness.session_identity import initialize_identity_schema
+from nagents.harness.session_identity import validate_session_id
 from nagents.session.deliveries import cleanup_deliveries
 
 from ._async import finish_on_cancel
@@ -50,19 +51,21 @@ def _guard_rows(db: sqlite3.Connection, session_id: str) -> set[str]:
             raise HTTPException(
                 409, "Session has inconsistent cross-session history metadata. Deletion was not performed."
             )
+    if "nagents_agent_sessions" in tables:
+        initialize_identity_schema(db)
     if "ngn_web_agent_sessions" in tables:
         for alias, storage_id in db.execute(
             "SELECT session_id, storage_id FROM ngn_web_agent_sessions WHERE root = ?", (session_id,)
         ).fetchall():
             try:
-                sequence = session_sequence(str(alias))
+                validate_session_id(str(alias))
             except ValueError:
                 raise HTTPException(409, "Child identity is inconsistent. Deletion was not performed.") from None
             if (
                 "nagents_agent_sessions" not in tables
                 or db.execute(
-                    "SELECT 1 FROM nagents_agent_sessions WHERE sequence = ? AND root_session_id = ? AND storage_id = ?",
-                    (sequence, session_id, storage_id),
+                    "SELECT 1 FROM nagents_agent_sessions WHERE public_id = ? AND root_session_id = ? AND storage_id = ?",
+                    (alias, session_id, storage_id),
                 ).fetchone()
                 is None
             ):
@@ -183,7 +186,7 @@ def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -
             (session_id,),
         )
     if "nagents_agent_sessions" in tables:
-        # AUTOINCREMENT's sqlite_sequence high-water mark deliberately survives this cleanup.
+        # Opaque public-ID reservations deliberately survive this content cleanup.
         db.execute("DELETE FROM nagents_agent_sessions WHERE root_session_id = ?", (session_id,))
     if "ngn_web_group_members" in tables:
         db.execute("DELETE FROM ngn_web_group_members WHERE session_id = ?", (session_id,))

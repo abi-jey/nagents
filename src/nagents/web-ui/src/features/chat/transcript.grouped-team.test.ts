@@ -23,6 +23,22 @@ const renderMarkup = (items: TeamAgent[], profiles: TeamProfile[], selected = ""
   agents: items, profiles, selected, inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
 }));
 
+test("UUID-prefix and saved base-36 sessions remain distinct when their display titles match", () => {
+  const ids = ["s-a7f2c9d1", "s8"];
+  const items = agents(...ids.map(id => ({ ...task(id), title: "Review authentication" })));
+  for (const selected of ids) {
+    const dom = new JSDOM(renderMarkup(items, [profile("assistant")], selected));
+    for (const id of ids) {
+      const row = dom.window.document.querySelector(`[data-agent-id="${id}"]`);
+      assert.ok(row);
+      assert.equal(row.querySelector(".team-agent-session-id")?.textContent, id);
+      assert.match(row.textContent || "", /Review authentication/);
+      assert.equal(row.querySelector(".team-agent-open")?.getAttribute("aria-current"), id === selected ? "page" : null);
+    }
+    dom.window.close();
+  }
+});
+
 test("definition groups are scoped to each parent and unused profiles stay in the visible definition list", () => {
   const items = agents(
     { ...task("parent-a", "", 10), title: "Parent A", profile: "assistant" },

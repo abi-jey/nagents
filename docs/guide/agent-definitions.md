@@ -6,7 +6,7 @@ execution limits, guarded approvals, child history, and result delivery with the
 built-in assistant profile. The acknowledgment returns the child's short
 `session_id` and status; completion arrives later as untrusted data. A caller may
 supply a separate display `title`. Use read-only `agent_status()` to list
-accessible child sessions or `agent_status(session_id="s1")` to inspect one.
+accessible child sessions or `agent_status(session_id="s-a7f2c9d1")` to inspect one.
 
 Create `.ngn/agents/research.md`:
 

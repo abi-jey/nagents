@@ -251,7 +251,7 @@ def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_pare
                 assert isinstance(ack.result, dict)
                 assert set(ack.result) == {"session_id", "status"}
                 assert ack.result["status"] == "running"
-                assert re.fullmatch(r"s[0-9a-z]+", ack.result["session_id"])
+                assert re.fullmatch(r"s-[0-9a-f]{8}", ack.result["session_id"])
                 names.add(ack.result["session_id"])
             assert len(names) == count
             assert all(not provider.closed for provider in providers)
