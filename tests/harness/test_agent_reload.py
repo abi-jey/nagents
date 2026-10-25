@@ -682,6 +682,41 @@ async def test_new_workspace_agent_sees_saved_provider_on_the_next_model_generat
         assert harness.config.provider_profile() == main
         assert harness.agent.provider is parent_provider
         assert harness.agent.provider.model == "parent-model"
+
+        replacement = ProviderProfile(kind="anthropic", auth="api-key")
+        registry = ProviderRegistry(active="replacement", providers={"replacement": replacement})
+        store.workspace_store.save(registry, expected=store.workspace_store.load().revision)
+        assert "openrouter" in harness.providers.providers
+        assert harness.config.provider_profile() == main
+
+        await harness.resources.before_generation(context)
+
+        assert "openrouter" not in harness.providers.providers
+        assert harness.providers.providers["replacement"] == replacement
+        with pytest.raises(ValueError, match="Model references unavailable provider connection 'openrouter'"):
+            harness.delegation_model_binding("smart-mini")
+        assert harness.config.provider == "main"
+        assert harness.config.providers["main"] == main
+        assert harness.config.provider_profile() == main
+        assert harness.agent.provider is parent_provider
+        assert harness.agent.provider.model == "parent-model"
+
+        fresh_config = HarnessConfig(
+            workspace=workspace,
+            data_dir=tmp_path / "fresh-state",
+            provider="replacement",
+            model="fresh-model",
+            providers={"replacement": replacement},
+            trust_project=True,
+        )
+        fresh = Harness(fresh_config)
+        try:
+            assert fresh.providers.active == "replacement"
+            assert fresh.config.provider == "replacement"
+            assert fresh.config.provider_profile() == replacement
+            assert fresh.agent.provider.model == "fresh-model"
+        finally:
+            await fresh.close()
     finally:
         await harness.close()
 
