@@ -25,6 +25,7 @@ from pydantic import Field
 from pydantic import field_validator
 from pydantic import model_validator
 
+from nagents._sqlite import database_write
 from nagents.compaction import ModelCompaction
 from nagents.harness.agent_documents import agent_document_store
 from nagents.harness.model_bindings import AgentModelStore
@@ -729,7 +730,10 @@ class WebSettings:
                 "Cannot load global web defaults. Check web-defaults.db in the configured data directory."
             ) from None
         try:
-            async with aiosqlite.connect(self.harness.agent.session.db_path, timeout=5) as db:
+            async with (
+                database_write(self.harness.agent.session.db_path),
+                aiosqlite.connect(self.harness.agent.session.db_path, timeout=5) as db,
+            ):
                 await db.execute(
                     "CREATE TABLE IF NOT EXISTS ngn_web_settings ("
                     "id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, "
@@ -1008,7 +1012,7 @@ class WebSettings:
         self.global_path.touch(mode=0o600, exist_ok=True)
         written_revision = ""
         try:
-            async with aiosqlite.connect(self.global_path, timeout=5) as db:
+            async with database_write(self.global_path), aiosqlite.connect(self.global_path, timeout=5) as db:
                 await db.execute(_GLOBAL_SETTINGS_TABLE)
                 await db.commit()
                 await db.execute("BEGIN IMMEDIATE")
@@ -1152,7 +1156,10 @@ class WebSettings:
         committed = False
         committed_snapshots = {"workspace": self.snapshot(), "global": self.global_snapshot()}
         try:
-            async with aiosqlite.connect(harness.agent.session.db_path, timeout=5) as db:
+            async with (
+                database_write(harness.agent.session.db_path),
+                aiosqlite.connect(harness.agent.session.db_path, timeout=5) as db,
+            ):
                 await db.execute("BEGIN IMMEDIATE")
                 async with db.execute("SELECT revision FROM ngn_web_settings WHERE id = 1") as cursor:
                     row = await cursor.fetchone()
