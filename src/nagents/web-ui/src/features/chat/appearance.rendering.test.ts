@@ -138,6 +138,99 @@ test("Compact keeps messages and preserves grouped tool rows, open details, and 
   } finally { await ui.close(); }
 });
 
+test("undisplayed response metadata does not split same-scope shell activity, while visible reasoning remains a boundary", async () => {
+  const ui = browser();
+  const first = tool("round-one-tool", { state: "Completed", streaming: false });
+  const hiddenResponse = entry("round-two-response", "assistant", "", {
+    runId: "run",
+    responseId: "round-two",
+    responseMetadata: {
+      response_id: "round-two", response_session_id: "root", run_id: "run", revision: 1, round_number: 1,
+      history_id: "", status: "completed", summary: "", summary_truncated: false, summary_expired: false,
+      usage_reported: true,
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16, reasoning_tokens: 0,
+        prompt_reported: true, completion_reported: true, total_reported: true, reasoning_reported: false,
+        reasoning_in_output: "unknown" },
+    },
+  });
+  const second = tool("round-two-tool");
+  try {
+    await ui.render([first]);
+    let groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    assert.equal(groups.length, 1);
+    const group = groups[0];
+    const firstArticle = ui.container.querySelector<HTMLElement>('[data-record-key="round-one-tool"]')!;
+    const firstDetails = firstArticle.querySelector<HTMLDetailsElement>("details.execution-record")!;
+    const firstSummary = firstDetails.querySelector("summary")!;
+    await act(async () => { group.open = true; group.dispatchEvent(new ui.dom.window.Event("toggle")); });
+    await act(async () => { firstDetails.open = true; firstDetails.dispatchEvent(new ui.dom.window.Event("toggle")); });
+    firstSummary.focus();
+
+    const feed = ui.container.querySelector<HTMLElement>(".conversation")!;
+    Object.defineProperty(feed, "clientHeight", { configurable: true, value: 100 });
+    Object.defineProperty(feed, "scrollHeight", { configurable: true, value: 500 });
+    feed.scrollTop = 150;
+    feed.dispatchEvent(new ui.dom.window.Event("scroll"));
+
+    await ui.render([first, hiddenResponse]);
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(ui.container.querySelector('[data-record-key="round-two-response"]'), null);
+
+    await ui.render([first, hiddenResponse, second]);
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0], group);
+    assert.equal(group.querySelector(".chat-activity-count")?.textContent, "2");
+    assert.equal(group.dataset.state, "Running");
+    assert.deepEqual([...group.querySelectorAll<HTMLElement>("article.entry.tool")].map(row => row.dataset.recordKey),
+      ["round-one-tool", "round-two-tool"]);
+    assert.equal(group.querySelectorAll("details.execution-record").length, 2, "each tool keeps its inspection controls");
+    assert.equal(group.open, true);
+    assert.equal(firstDetails.open, true);
+    assert.equal(ui.dom.window.document.activeElement, firstSummary);
+    assert.equal(feed.scrollTop, 150);
+
+    const completedSecond = { ...second, state: "Completed", streaming: false, text: "round two output\n", result: "round two output\n" };
+    await ui.render([first, hiddenResponse, completedSecond]);
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(group.dataset.state, "Done");
+    assert.equal(firstDetails.open, true);
+    assert.equal(ui.dom.window.document.activeElement, firstSummary);
+    assert.equal(feed.scrollTop, 150);
+
+    const visibleResponse = { ...hiddenResponse, responseMetadata: {
+      ...hiddenResponse.responseMetadata!, revision: 2, summary: "The provider supplied a plan.",
+    } };
+    await ui.render([first, visibleResponse, completedSecond]);
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    assert.equal(groups.length, 2, "a displayable reasoning row separates the tool groups");
+    assert.equal(groups[0], group, "the first group retains its mounted identity when the visible boundary appears");
+    assert.ok(ui.container.querySelector('[data-record-key="round-two-response"]'));
+
+    const hiddenReasoning = { ...defaultAppearance, activity: {
+      ...defaultAppearance.activity, reasoning: { ...defaultAppearance.activity.reasoning, placement: "hidden" as const },
+    } };
+    await ui.render([first, visibleResponse, completedSecond], hiddenReasoning);
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    assert.equal(groups.length, 1, "changing reasoning visibility removes its layout boundary");
+    assert.equal(groups[0], group);
+    assert.equal(groups[0].querySelector(".chat-activity-count")?.textContent, "2");
+
+    await ui.render([
+      { ...first, recorded: true, historyId: "saved-first" },
+      hiddenResponse,
+      { ...completedSecond, recorded: true, historyId: "saved-second" },
+    ]);
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    assert.equal(groups.length, 1, "saved history preserves the same visible grouping");
+    assert.equal(groups[0], group);
+    assert.equal(groups[0].querySelector(".chat-activity-count")?.textContent, "2");
+    assert.equal(firstDetails.open, true);
+    assert.equal(ui.dom.window.document.activeElement, firstSummary);
+    assert.equal(feed.scrollTop, 150);
+  } finally { await ui.close(); }
+});
+
 test("a later failure changes the collapsed activity group to Needs attention and opens it", async () => {
   const ui = browser();
   const prompt = user("question", "Check this command");
