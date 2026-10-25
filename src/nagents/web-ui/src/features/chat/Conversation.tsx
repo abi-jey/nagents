@@ -86,23 +86,23 @@ export function TranscriptItems({
   const records = useRef(new Map<string, HTMLDivElement>());
   const headers = useRef(new Map<string, HTMLDetailsElement>());
   const previousGroups = useRef(new Map<string, string[]>());
-  const headerFocus = useRef("");
   const revealedRecords = useRef(new Set<string>());
   const inheritedDisclosures = useRef(new Map<string, boolean>());
   if (resetAppearance) { revealedRecords.current.clear(); inheritedDisclosures.current.clear(); }
   const presentation = layout.current.render(visibleItems, appearance, insideGroup);
   const groups = presentation.filter((item): item is ActivityGroup => item.kind === "activity_group");
+  const renderedGroups = new Map(groups.map(group => [group.id, group.items.map(itemKey)]));
+  let headerFocus = "";
   // A coalesced header transfers keyboard focus to its surviving group.
   for (const [key, header] of headers.current) {
     if (!header.contains(header.ownerDocument.activeElement) || groups.some(group => group.id === key)) continue;
     const members = previousGroups.current.get(key) || [];
-    headerFocus.current = groups.find(group => group.items.some(child => members.includes(itemKey(child))))?.id || "";
+    headerFocus = groups.find(group => group.items.some(child => members.includes(itemKey(child))))?.id || "";
   }
-  previousGroups.current = new Map(groups.map(group => [group.id, group.items.map(itemKey)]));
   useLayoutEffect(() => {
-    if (!headerFocus.current) return;
-    headers.current.get(headerFocus.current)?.querySelector("summary")?.focus({ preventScroll: true });
-    headerFocus.current = "";
+    if (headerFocus) headers.current.get(headerFocus)?.querySelector("summary")?.focus({ preventScroll: true });
+    // Only committed groups may replace the snapshot used by a later render.
+    previousGroups.current = renderedGroups;
   });
   const recordId = (item: TranscriptItem) => `${id}-record-${encodeURIComponent(itemKey(item))}`;
   function renderItem(item: TranscriptItem): ReactNode {

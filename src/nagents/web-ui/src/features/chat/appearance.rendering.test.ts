@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { act, createElement, type ReactNode } from "react";
+import { act, createElement, StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
@@ -19,16 +19,19 @@ const tool = (id: string, values: Partial<Entry> = {}) => entry(id, "tool", "", 
 });
 const preset = (id: string) => appearancePresets.find(value => value.id === id)!.value;
 
-function browser() {
+function browser(strict = false) {
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
     IS_REACT_ACT_ENVIRONMENT: true });
   const container = dom.window.document.getElementById("root")!;
   const root = createRoot(container);
-  const render = (entries: Entry[], appearance = defaultAppearance, renderTask?: (thread: TaskThread) => ReactNode) => act(async () => root.render(createElement(Conversation, {
-    entries, appearance, renderTask, sessionId: "root", demo: false, canSubmit: false, submit() {},
-  })));
+  const render = (entries: Entry[], appearance = defaultAppearance, renderTask?: (thread: TaskThread) => ReactNode) => act(async () => {
+    const conversation = createElement(Conversation, {
+      entries, appearance, renderTask, sessionId: "root", demo: false, canSubmit: false, submit() {},
+    });
+    root.render(strict ? createElement(StrictMode, null, conversation) : conversation);
+  });
   return {
     dom, container, render,
     async close() {
@@ -448,8 +451,8 @@ test("late reasoning preserves the second tool across visible and hidden boundar
   } finally { await ui.close(); }
 });
 
-test("coalescing a focused activity header transfers focus to the surviving group", async () => {
-  const ui = browser();
+for (const strict of [false, true]) test(`coalescing a focused activity header transfers focus to the surviving group${strict ? " in StrictMode" : ""}`, async () => {
+  const ui = browser(strict);
   const first = tool("first", { state: "Completed", streaming: false });
   const pending = tool("second", { title: "lookup", toolProgress: "streaming" });
   try {
