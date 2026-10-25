@@ -332,6 +332,9 @@ def create_app(
                 await empty_sessions.continue_session(state)
             state.selected_session_id = harness.session_id
             await state.channels.start()
+            # Finish task schema and prior-epoch input recovery before accepting
+            # clients, rather than inside their bounded first snapshot.
+            await state.tasks.store.initialize()
             state.wakeups.start()
             await state.trash.start()
             # Startup inbox recovery may already own a mutation. Draft cleanup
