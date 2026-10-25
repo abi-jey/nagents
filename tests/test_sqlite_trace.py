@@ -63,6 +63,54 @@ def test_busy_trace_identifies_active_writer_without_recording_sqlite_payloads(t
     assert sqlite3.connect is original_connect
 
 
+def test_busy_begin_snapshot_identifies_live_writer_at_failure_point(tmp_path: Path) -> None:
+    database = tmp_path / "private-busy-begin.sqlite"
+    with TraceCapture() as trace:
+        writer = sqlite3.connect(database, timeout=0.01)
+        blocked = sqlite3.connect(database, timeout=0.01)
+        writer.execute("CREATE TABLE private_table (value TEXT)")
+        writer.commit()
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("INSERT INTO private_table VALUES (?)", ("SECRET_PARAMETER",))
+
+        with pytest.raises(sqlite3.OperationalError):
+            blocked.execute("BEGIN IMMEDIATE")
+
+        events = list(trace.events)
+        busy = next(event for event in events if event["event"] == "operation_error")
+        point = next(event for event in events if event["event"] == "busy_point_snapshot")
+        assert busy["verb"] == "BEGIN"
+        assert busy["sqlite_code"] in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+        transactions = point["transactions"]
+        assert isinstance(transactions, list)
+        writer_transaction = next(
+            transaction for transaction in transactions if transaction["connection"] != busy["connection"]
+        )
+        assert isinstance(writer_transaction["thread"], int)
+        assert writer_transaction["source"]
+        assert writer_transaction["duration_ms"] >= 0
+        assert all(transaction["connection"] != busy["connection"] for transaction in transactions)
+        connections = point["connections"]
+        assert isinstance(connections, list)
+        assert any(connection["connection"] == busy["connection"] for connection in connections)
+        assert all(connection["last_operation"] is not None for connection in connections)
+        assert point["threads"]
+
+        serialized = json.dumps(point)
+        for secret in (
+            "SECRET_PARAMETER",
+            "private_table",
+            "private-busy-begin.sqlite",
+            str(database),
+            "database is locked",
+        ):
+            assert secret not in serialized
+
+        blocked.close()
+        writer.rollback()
+        writer.close()
+
+
 def test_trace_records_successful_commit_and_connection_close(tmp_path: Path) -> None:
     with TraceCapture() as trace:
         connection = sqlite3.connect(tmp_path / "success.sqlite")
