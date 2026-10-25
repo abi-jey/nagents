@@ -76,6 +76,8 @@ export type RetainedTask = {
   activation_run_id?: string;
   activation_call_id?: string;
   activation_call_position?: number;
+  parent_response_id?: string;
+  parent_response_session_id?: string;
   compact_trigger?: string;
   compact_tokens?: number;
   compact_messages?: number;

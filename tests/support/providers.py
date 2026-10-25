@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from typing import TYPE_CHECKING
 
 from nagents.harness import runtime
@@ -48,12 +50,18 @@ class FakeProvider(HarnessProvider):
         config: GenerationConfig | None = None,
         stream: bool = True,
         verify_model: bool = False,
-    ) -> AsyncIterator[Event]:
+    ) -> AsyncGenerator[Event, None]:
         assert_balanced(messages)
         self.requests.append(copy.deepcopy(messages))
         self.schemas.append([tool.name for tool in tools or []])
-        async for event in self.script(self, messages):
-            yield event
+        script = self.script(self, messages)
+        if isinstance(script, AsyncGenerator):
+            async with aclosing(script):
+                async for event in script:
+                    yield event
+        else:
+            async for event in script:
+                yield event
 
     async def close(self) -> None:
         self.closed = True

@@ -1,5 +1,5 @@
 import { agentUpdates } from "./backgroundUpdates.js";
-import { appendEvent, type Entry } from "./transcript.js";
+import { appendEvent, type Entry, type ResponseReference } from "./transcript.js";
 import type { ArtifactImageRef } from "../../types.js";
 import { artifactState } from "./artifactImages.js";
 import { profileDescription, profileLabel, type AgentPhase, type TaskActivity, type TeamAgent, type TeamProfile } from "../team/model.js";
@@ -51,7 +51,26 @@ type Finished = {
   anchor: string; offset: number; phase: AgentPhase; text: string; name: string; profile: string; prompt: string;
   latest?: Entry; lastTool?: Entry; provider?: string; model?: string; detailsTruncated?: boolean; observed: boolean;
   artifacts?: ArtifactImageRef[]; artifactError?: string;
+  generation?: ResponseReference; generationSettled: boolean; order: number;
 };
+type PositionedEntry = { entry: Entry; position: number; order?: number };
+
+function generationBoundary(entries: readonly Entry[], generation: ResponseReference): { pending: boolean; anchor?: string } {
+  const responses = entries.filter(entry => entry.kind === "assistant" && entry.responseId === generation.responseId &&
+    entry.responseMetadata?.response_session_id === generation.sessionId);
+  const current = responses.reduce<Entry | undefined>((latest, entry) =>
+    (entry.responseMetadata?.revision || 0) >= (latest?.responseMetadata?.revision || 0) ? entry : latest, undefined);
+  const metadata = current?.responseMetadata;
+  if (!metadata || !["completed", "failed", "cancelled"].includes(metadata.status)) return { pending: true };
+  // A generation can produce both prose and tool calls. Their committed
+  // assistant history ID (or live response owner) identifies the same boundary
+  // even when a checkpoint replaces the original metadata placeholder's ID.
+  const slots = entries.filter(entry => entry.kind === "assistant" && entry.responseId === generation.responseId &&
+      (entry.taskId || "") === (current?.taskId || "") || entry.kind === "tool" &&
+      (entry.responseOwner?.responseId === generation.responseId && entry.responseOwner.sessionId === generation.sessionId ||
+        !!metadata.history_id && entry.historyId === metadata.history_id && (entry.taskId || "") === (current?.taskId || "")));
+  return { pending: false, anchor: slots.at(-1)?.id || current?.id };
+}
 
 function matchesActivation(call: Entry, lifecycle: Entry): boolean {
   return !!lifecycle.activationHistoryId && !!lifecycle.activationCallId &&
@@ -149,15 +168,23 @@ export class DelegationFlow {
           !!lifecycle?.detailsTruncated && (slot.update.error ?? slot.update.result ?? "").startsWith(result))) : undefined;
       if (context) anchoredContexts.add(context.key);
       if (binding && direct && terminal(lifecycle) && ["done", "failed", "cancelled"].includes(phase) && !this.finished.has(key)) {
+        const generation = lifecycle?.completionGeneration;
         this.finished.set(key, { anchor: lifecycle?.completionAfterId || context?.entry.id || entries.at(-1)?.id || call.id,
           offset: .25, phase, text: result, name, profile, prompt, latest, lastTool, provider, model,
           artifacts: lifecycle?.artifacts, artifactError: lifecycle?.artifactError,
-          detailsTruncated: lifecycle?.detailsTruncated, observed: !!lifecycle && !lifecycle.recorded });
+          detailsTruncated: lifecycle?.detailsTruncated, observed: !!lifecycle && !lifecycle.recorded,
+          generation, generationSettled: !generation, order: lifecycle?.completedAt || lifecycle?.activity || 0 });
       }
       const finished = this.finished.get(key);
       if (finished && terminal(lifecycle) && lifecycle?.artifacts)
         Object.assign(finished, artifactState(lifecycle.artifacts, finished.artifacts));
-      if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId)) {
+      if (finished?.generation) {
+        const boundary = generationBoundary(entries, finished.generation);
+        if (!boundary.pending) {
+          finished.generationSettled = true;
+          if (boundary.anchor) { finished.anchor = boundary.anchor; finished.offset = .25; }
+        }
+      } else if (finished && lifecycle?.completionAfterId && positions.has(lifecycle.completionAfterId)) {
         finished.anchor = lifecycle.completionAfterId; finished.offset = .25;
       } else if (finished && !finished.observed && context) {
         // A cold completion batch retains its saved delivery order, even when
@@ -192,6 +219,16 @@ export class DelegationFlow {
           const result: unknown = JSON.parse(entry.result);
           if (!result || typeof result !== "object" || Array.isArray(result) ||
             !("session_id" in result) || result.session_id !== owner.target || "sessions" in result) continue;
+          // On reload, an explicit status inspection may have delivered the
+          // verified result before the later background notification. Preserve
+          // that earlier parent-generation boundary, without trusting a poll
+          // to establish the child's state or activation.
+          const finished = owner.finished;
+          if (finished && !finished.observed && !finished.generation && "status" in result &&
+            result.status === (finished.phase === "done" ? "completed" : finished.phase) &&
+            positions.get(entry.id)! < (positions.get(finished.anchor) ?? entries.length)) {
+            finished.anchor = entry.id; finished.offset = .25;
+          }
         } catch { continue; }
       }
       // Poll output is inspectable evidence, never lifecycle authority. In
@@ -230,7 +267,7 @@ export class DelegationFlow {
       for (const item of matches) { item!.sources.push(entry); used.add(item!.key); }
       if (!this.visibleEvidence.has(entry.id)) folded.add(entry.id);
     }
-    const rows: { entry: Entry; position: number }[] = [];
+    const rows: PositionedEntry[] = [];
     for (const item of items) {
       const { call, binding, target, lifecycle, key, finished, sources } = item;
       const presentation: DelegationPresentation = { kind: "start", taskId: target, activation: binding?.activation,
@@ -244,20 +281,20 @@ export class DelegationFlow {
       }
       rows.push({ entry: { ...call, kind: "status", delegation: presentation, taskId: undefined,
         activity: Math.max(call.activity || 0, lifecycle?.activity || 0), title: presentation.name || presentation.profile }, position: positions.get(call.id)! });
-      if (finished) rows.push({ entry: { id: `delegation-result:${key}`, kind: "status", text: finished.text,
+      if (finished?.generationSettled) rows.push({ entry: { id: `delegation-result:${key}`, kind: "status", text: finished.text,
         title: finished.name || finished.profile, state: finished.phase === "failed" ? "Failed" : finished.phase,
         error: finished.phase === "failed" ? finished.text || "The subagent failed." : undefined,
         runId: call.runId, activity: lifecycle?.activity,
         delegation: { ...presentation, kind: "result", text: finished.text, artifacts: finished.artifacts, artifactError: finished.artifactError } },
-        position: Math.max((positions.get(finished.anchor) ?? entries.length - 1) + finished.offset, positions.get(call.id)! + .25) });
+        position: Math.max((positions.get(finished.anchor) ?? entries.length - 1) + finished.offset, positions.get(call.id)! + .25), order: finished.order });
     }
-    const originals = entries.flatMap((entry, index) => {
+    const originals: PositionedEntry[] = entries.flatMap((entry, index) => {
       if (calls.includes(entry) || entry.kind === "retained_tasks" || entry.taskId || folded.has(entry.id)) return [];
       if (entry.kind === "context" || entry.kind === "notification" || entry.kind === "tool" && entry.title === "agent_status")
         this.visibleEvidence.add(entry.id);
       return [{ entry, position: index }];
     });
-    return [...originals, ...rows].sort((a, b) => a.position - b.position).map(item => item.entry);
+    return [...originals, ...rows].sort((a, b) => a.position - b.position || (a.order || 0) - (b.order || 0)).map(item => item.entry);
   }
 }
 

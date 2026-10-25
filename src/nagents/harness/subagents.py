@@ -131,6 +131,8 @@ class TaskInfo:
     activation_call_id: str = ""
     activation_call_position: int = -1
     artifacts: tuple[ImageArtifactReference, ...] = ()
+    parent_response_id: str = ""
+    parent_response_session_id: str = ""
 
     @property
     def label(self) -> str:
@@ -1227,6 +1229,7 @@ class SubagentManager:
         info.status, info.result, info.error = "running", "", ""
         info.artifacts = ()
         info.phase, info.completed_at = "starting", 0.0
+        info.parent_response_id = info.parent_response_session_id = ""
         self._evidence[info.session_id] = SessionEvidence()
         info.updated_at = time.time()
         accepted = message or RunInput(prompt)
@@ -1563,6 +1566,15 @@ class SubagentManager:
                 )
                 self._inputs.pop(info.session_id, None)
                 self._admitted.pop(info.session_id, None)
+                parent = self._children.get(info.parent_session_id) if info.parent_session_id else self.root.harness
+                info.parent_response_id = (
+                    parent.agent._active_generation_id(parent.session_id)
+                    if parent is not None and not parent._closed
+                    else ""
+                )
+                info.parent_response_session_id = (
+                    (info.parent_session_id or info.root_session_id) if info.parent_response_id else ""
+                )
                 self._publish(
                     info,
                     TaskCompleted(
@@ -1582,7 +1594,10 @@ class SubagentManager:
                         info.provider_kind,
                         info.model,
                         info.reasoning_effort,
-                        info.artifacts,
+                        parent_response_id=info.parent_response_id,
+                        parent_response_session_id=info.parent_response_session_id,
+                        completed_at=info.completed_at,
+                        artifacts=info.artifacts,
                     ),
                 )
 
