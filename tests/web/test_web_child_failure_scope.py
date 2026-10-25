@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from contextlib import AsyncExitStack
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -110,8 +111,12 @@ async def voice_progress(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("voice", [False, True])
 @pytest.mark.parametrize("wrong_parent", [False, True])
+@pytest.mark.parametrize(
+    "_sqlite_probe",
+    range(20) if os.environ.get("NGN_SQLITE_TRACE") == "1" else [0],
+)
 async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_voice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, voice: bool, wrong_parent: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, voice: bool, wrong_parent: bool, _sqlite_probe: int
 ) -> None:
     scenario = ChildFailureScenario(monkeypatch, wrong_parent=wrong_parent)
     records: list[dict[str, object]] = []
