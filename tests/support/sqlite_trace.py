@@ -70,6 +70,7 @@ _TARGETS = (
     "tests/web/test_web_child_failure_scope.py::test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_voice",
     "tests/web/test_agent_models.py::test_next_real_response_uses_the_saved_provider_and_model_together",
     "tests/web/test_web_settings.py::test_settings_cancellation_joins_transaction_and_keeps_get_consistent",
+    "tests/web/test_web_settings.py::test_settings_save_and_reset_while_run_or_approval_continues",
     "tests/web/test_web_trash.py::test_policy_is_separate_revisioned_persistent_and_affects_only_future_deletions",
     "tests/web/test_subagent_limits.py::test_approved_limits_are_read_on_next_model_turn_without_resetting_usage",
     "tests/test_web_live_update_edges.py::test_attention_cue_rechecks_quiet_state_and_never_speaks_native_instruction_text",
@@ -158,6 +159,8 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
         self._database_ids: dict[int, str] = {}
         self._cursor_ids: weakref.WeakKeyDictionary[sqlite3.Cursor, int] = weakref.WeakKeyDictionary()
         self._transactions: dict[int, float] = {}
+        self._transaction_owners: dict[int, dict[str, object]] = {}
+        self._connection_metadata: dict[int, dict[str, object]] = {}
         self._cursors: dict[int, dict[str, object]] = {}
         self._open_connections: set[int] = set()
 
@@ -176,6 +179,7 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
             self._cursors[cursor_id] = {
                 "connection": self._connection_ids.get(id(connection)),
                 "source": _source(),
+                "thread": threading.get_ident(),
                 "opened_ms": round((time.monotonic() - self._start) * 1000, 3),
                 "potentially_unfinished": True,
             }
@@ -216,6 +220,12 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
             if database_hash is not None:
                 self._database_ids[object_id] = database_hash
             self._open_connections.add(connection_id)
+            self._connection_metadata[object_id] = {
+                "owner_thread": threading.get_ident(),
+                "source": _source(),
+                "opened_ms": round((time.monotonic() - self._start) * 1000, 3),
+                "last_operation": None,
+            }
         weakref.finalize(connection, self._connection_collected, object_id, connection_id)
         self._record("connection_open", connection=connection_id, database=database_hash, source=_source())
         return connection_id
@@ -226,6 +236,8 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
                 self._connection_ids.pop(object_id, None)
                 self._database_ids.pop(object_id, None)
                 self._transactions.pop(object_id, None)
+                self._transaction_owners.pop(object_id, None)
+                self._connection_metadata.pop(object_id, None)
                 self._open_connections.discard(connection_id)
         except BaseException:
             pass
@@ -233,6 +245,8 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
     def _connection_closed(self, connection: sqlite3.Connection, connection_id: int | None) -> None:
         with self._lock:
             self._transactions.pop(id(connection), None)
+            self._transaction_owners.pop(id(connection), None)
+            self._connection_metadata.pop(id(connection), None)
             self._connection_ids.pop(id(connection), None)
             self._database_ids.pop(id(connection), None)
             if connection_id is not None:
@@ -249,7 +263,13 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
                 }
             )
 
-    def _track_transaction(self, connection: sqlite3.Connection, cursor: int | None = None) -> None:
+    def _track_transaction(
+        self,
+        connection: sqlite3.Connection,
+        cursor: int | None,
+        source: list[dict[str, str | int]],
+        thread: int,
+    ) -> None:
         try:
             active = connection.in_transaction
         except sqlite3.Error:
@@ -260,8 +280,10 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
             if active and started is None:
                 started = time.monotonic()
                 self._transactions[connection_key] = started
+                self._transaction_owners[connection_key] = {"thread": thread, "source": source}
             elif not active and started is not None:
                 self._transactions.pop(connection_key, None)
+                self._transaction_owners.pop(connection_key, None)
             else:
                 return
         if active:
@@ -292,6 +314,18 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
         connection_id = self._connection_id(connection)
         started = time.monotonic()
         database_id = self._database_id(connection)
+        source = _source()
+        thread_id = threading.get_ident()
+        with self._lock:
+            metadata = self._connection_metadata.get(id(connection))
+            if metadata is not None:
+                metadata["last_operation"] = {
+                    "operation": operation,
+                    "verb": verb,
+                    "thread": thread_id,
+                    "source": source,
+                    "ms": round((time.monotonic() - self._start) * 1000, 3),
+                }
         self._record(
             "operation_start",
             connection=connection_id,
@@ -299,13 +333,13 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
             cursor=cursor,
             operation=operation,
             verb=verb,
-            source=_source(),
+            source=source,
         )
         try:
             result = callback()
         except sqlite3.Error as error:
             try:
-                self._track_transaction(connection, cursor)
+                self._track_transaction(connection, cursor, source, thread_id)
                 code = getattr(error, "sqlite_errorcode", None)
                 self._record(
                     "operation_error",
@@ -318,12 +352,12 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
                     duration_ms=round((time.monotonic() - started) * 1000, 3),
                 )
                 if type(code) is int and code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
-                    self._record("busy_thread_stacks", threads=_thread_stacks())
+                    self._record("busy_point_snapshot", **self._live_snapshot(), threads=_thread_stacks())
             except BaseException:
                 # Diagnostics must never replace the database failure.
                 pass
             raise
-        self._track_transaction(connection, cursor)
+        self._track_transaction(connection, cursor, source, thread_id)
         self._record(
             "operation_end",
             connection=connection_id,
@@ -549,14 +583,18 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
 
     def safe_snapshot(self) -> dict[str, object]:
         with self._lock:
+            return {"events": list(self.events), **self._live_snapshot()}
+
+    def _live_snapshot(self) -> dict[str, object]:
+        with self._lock:
             now = time.monotonic()
             return {
-                "events": list(self.events),
                 "open_connections": len(self._open_connections),
                 "connections": [
                     {
                         "connection": connection_id,
                         "database": self._database_ids.get(object_id),
+                        **self._connection_metadata.get(object_id, {}),
                     }
                     for object_id, connection_id in self._connection_ids.items()
                 ],
@@ -565,6 +603,7 @@ class TraceCapture(AbstractContextManager["TraceCapture"]):
                         "connection": self._connection_ids.get(object_id),
                         "database": self._database_ids.get(object_id),
                         "duration_ms": round((now - started) * 1000, 3),
+                        **self._transaction_owners.get(object_id, {}),
                     }
                     for object_id, started in self._transactions.items()
                 ],
