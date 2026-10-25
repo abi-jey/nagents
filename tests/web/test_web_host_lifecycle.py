@@ -13,6 +13,7 @@ import aiosqlite
 import pytest
 from fastapi import HTTPException
 
+from nagents._async import join_owned
 from nagents.channels.runtime import _envelope
 from nagents.channels.types import ChannelCommand
 from nagents.channels.types import ChannelMessage
@@ -278,6 +279,73 @@ def test_active_producer_and_worker_stop_before_transport_closes(
             assert len(providers[0].requests) == 1
             assert [event.active for event in channel.activities] == [True, False]
             assert await statuses(state) == {"attach": "completed", "active": "interrupted", "later": "queued"}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("close_entry", ["host", "harness"])
+def test_shutdown_joins_provider_cleanup_already_started_by_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_entry: str
+) -> None:
+    async def scenario() -> None:
+        started, cleanup_started, release_cleanup, cleanup_interrupted, stopped, joined_worker = (
+            asyncio.Event() for _ in range(6)
+        )
+        close_observations: list[bool] = []
+
+        async def holding(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            del provider, messages
+            try:
+                started.set()
+                yield TextChunkEvent(chunk="in progress")
+                await asyncio.Event().wait()
+            finally:
+                cleanup_started.set()
+                try:
+                    await release_cleanup.wait()
+                except asyncio.CancelledError:
+                    cleanup_interrupted.set()
+                    raise
+                stopped.set()
+
+        async with application(tmp_path, monkeypatch, holding) as (state, providers):
+
+            class ObservedChannel(FakeChannel):
+                async def close(self) -> None:
+                    close_observations.append(stopped.is_set())
+                    await super().close()
+
+            await state.channels.open("fixture", ObservedChannel("fixture"))
+            await state.channels.store.web(state.selected_session_id, "active", "hold")
+            state.channels.changed.set()
+            await asyncio.wait_for(started.wait(), HANG_GUARD)
+            run = state.active
+            assert run is not None and run.harness is not None
+            worker = run.harness._worker
+            assert worker is not None
+            # Stop requests producer cancellation before cancelling the event
+            # consumer. Park cleanup at that exact boundary, without a sleep.
+            worker.cancel()
+            await asyncio.wait_for(cleanup_started.wait(), HANG_GUARD)
+
+            async def observe_join(task: asyncio.Task[T]) -> T:
+                if task is worker:
+                    joined_worker.set()
+                return await join_owned(task)
+
+            monkeypatch.setattr(runtime, "_await_cleanup", observe_join)
+            closing = asyncio.create_task(state.channels.close() if close_entry == "host" else run.harness.close())
+            try:
+                await asyncio.wait_for(joined_worker.wait(), HANG_GUARD)
+                assert not cleanup_interrupted.is_set(), "Consumer shutdown must not cancel provider cleanup again"
+                assert not closing.done() and not close_observations
+            finally:
+                release_cleanup.set()
+                await joined(closing, state)
+            if close_entry == "harness":
+                await state.channels.close()
+            assert stopped.is_set() and close_observations == [True]
+            assert len(providers[0].requests) == 1
 
     asyncio.run(scenario())
 

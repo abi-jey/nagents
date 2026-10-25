@@ -247,6 +247,11 @@ export class DelegationFlow {
       const matches = ids.map((id, index) => {
         const activationMatches = (item: typeof items[number]) => !notice || entry.sourceActivation === undefined ||
           item.binding?.activation === entry.sourceActivation;
+        // Checkpoints can retain a live notice before its matched saved call
+        // and parent response. Exact host activation provenance still belongs
+        // to that native request, independently of the hybrid array order.
+        const exactNotice = notice && entry.sourceActivation !== undefined
+          ? items.find(item => item.binding && item.direct && item.target === id && activationMatches(item)) : undefined;
         const candidates = completed.filter(item => item.target === id && activationMatches(item) && !chosen.has(item.key) &&
           (positions.get(item.finished!.anchor) ?? 0) <= positions.get(entry.id)!);
         const update = updates?.sessions[index];
@@ -259,7 +264,7 @@ export class DelegationFlow {
         const accepted = canFoldEarly
           ? items.findLast(item => item.binding && item.direct && item.target === id && activationMatches(item) &&
             !chosen.has(item.key) && positions.get(item.call.id)! < positions.get(entry.id)!) : undefined;
-        const match = candidates.find(item => item.finished!.text === text || !!update?.truncated && !!text && item.finished!.text.startsWith(text)) || accepted || candidates.at(-1);
+        const match = exactNotice || candidates.find(item => item.finished!.text === text || !!update?.truncated && !!text && item.finished!.text.startsWith(text)) || accepted || candidates.at(-1);
         if (match) chosen.add(match.key);
         return match;
       });
