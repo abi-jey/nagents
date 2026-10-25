@@ -32,6 +32,7 @@ from nagents.web.live_login import ChatGPTLiveConnection
 from nagents.web.service import Run
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
+from tests.support.voice_approval_trace import VoiceApprovalTrace
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
@@ -45,8 +46,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
+    from nagents.harness.types import ApprovalRequest
     from nagents.types import GenerationConfig
     from nagents.types import ToolDefinition
+    from nagents.web.service import WebState
 
 
 def speech(text: str) -> str:
@@ -198,10 +201,13 @@ def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_
 
 
 @pytest.mark.parametrize("tool", ["custom", "shell"])
-def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp_path: Path, tool: str) -> None:
+def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(
+    tmp_path: Path, tool: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     if tool == "shell" and os.name != "posix":
         pytest.skip("Shell process-group cleanup requires POSIX")
     executed: list[str] = []
+    diagnostic = VoiceApprovalTrace()
 
     async def custom_action() -> str:
         """An action that must wait for the ordinary Harness approval."""
@@ -216,9 +222,11 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
         stream: bool = True,
         verify_model: bool = False,
     ) -> AsyncIterator[Event]:
+        diagnostic.mark("scripted_generate")
         if messages[-1].role == "tool":
             yield TextDoneEvent(text="The tool request was denied")
         else:
+            diagnostic.mark("tool_call")
             yield ToolCallEvent(
                 id="voice-tool-1",
                 name="shell" if tool == "shell" else "custom_action",
@@ -227,12 +235,33 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
 
     async def scenario() -> None:
         async with client_app(tmp_path, config=_config(tmp_path)) as (app, client, headers, _):
-            state = app.state.web
+            state: WebState = app.state.web
+            state.run_observers.add(diagnostic.observe)
             if tool == "custom":
                 state.harness.agent.register_tool(custom_action)
-            with patch.object(state.bus, "listening", return_value=True):
+            original_approve = state.harness.approval_handler
+
+            async def observed_approve(request: ApprovalRequest) -> bool:
+                diagnostic.mark("approve")
+                return await original_approve(request)
+
+            with (
+                patch.object(state.bus, "listening", return_value=True),
+                patch.object(state.harness, "approval_handler", observed_approve),
+            ):
                 root = state.selected_session_id
                 bridge = MainAgentBridge(state, root)
+                original_report = bridge._report
+
+                def observed_report(
+                    identifier: str, phase: str, text: str, run_id: str = "", **details: object
+                ) -> None:
+                    diagnostic.report({"status": phase})
+                    original_report(identifier, phase, text, run_id, **details)
+
+                # Observe the existing no-sink path without enabling additional
+                # target/provider metadata reads merely for diagnostics.
+                monkeypatch.setattr(bridge, "_report", observed_report)
 
                 async def append(kind: str, content: str, identifier: str) -> str:
                     return f"session.{kind}.append"
@@ -240,9 +269,13 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
                 bridge.attach(append)
                 task = asyncio.create_task(bridge.handle_request(spoken("approval", "Use a tool requiring approval")))
                 try:
-                    async with asyncio.timeout(5):
-                        while state.active is None or state.active.pending is None:
-                            await asyncio.sleep(0.001)
+                    try:
+                        async with asyncio.timeout(5):
+                            while state.active is None or state.active.pending is None:
+                                await asyncio.sleep(0.001)
+                    except TimeoutError as error:
+                        diagnostic.note(error, state, task)
+                        raise
                     pending = state.active.pending
                     assert pending is not None
                     assert pending.record["tool"] == ("shell" if tool == "shell" else "custom_action")
@@ -267,6 +300,7 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
                         for message in await state.harness.history()
                     )
                 finally:
+                    state.run_observers.discard(diagnostic.observe)
                     if not task.done():
                         task.cancel()
                         await asyncio.gather(task, return_exceptions=True)

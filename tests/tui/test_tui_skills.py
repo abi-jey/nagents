@@ -48,6 +48,7 @@ def test_skills_picker_refreshes_filters_and_prefills_without_running(tmp_path: 
             install_skill(tmp_path, "help", "Explain the project")
             await send(app, pilot, "/skills evidence")
             await idle(app, pilot)
+            await pilot.pause()
             assert isinstance(app.screen, ChoiceModal)
             assert app.screen.heading == "SKILLS"
             assert app.screen.query_one(Input).value == "evidence"
