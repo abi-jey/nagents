@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export const activityCategories = ["shell", "files", "reasoning", "agents", "notices", "tools"] as const;
+export const activityCategories = ["files", "reasoning", "agents", "notices", "tools"] as const;
 export type ActivityCategory = typeof activityCategories[number];
 export type ActivityPlacement = "hidden" | "grouped" | "separate";
 export type DetailExpansion = "collapsed" | "expanded";
@@ -18,7 +18,7 @@ export const appearancePresets = [
   { id: "messages", label: "Messages only", description: "Keep the conversation to messages and delivered files.", value: preset("hidden", "collapsed") },
   { id: "quiet", label: "Quiet", description: "Keep file changes and your team in small groups. Tuck other activity away.", value: { ...preset("hidden", "collapsed"), activity: { ...preset("hidden", "collapsed").activity, files: rule("grouped"), agents: rule("grouped") } } },
   { id: "compact", label: "Compact", description: "Group activity into small rows. Open reasoning and details when you need them.", value: compact },
-  { id: "detailed", label: "Detailed", description: "Give commands and file changes their own space, with their details open.", value: { ...compact, activity: { ...compact.activity, shell: rule("separate", "expanded"), files: rule("separate", "expanded"), agents: rule("separate") } } },
+  { id: "detailed", label: "Detailed", description: "Give tools and file changes their own space, with their details open.", value: { ...compact, activity: { ...compact.activity, tools: rule("separate", "expanded"), files: rule("separate", "expanded"), agents: rule("separate") } } },
   { id: "everything", label: "Everything", description: "Show activity separately, with reasoning and results open.", value: preset("separate", "expanded") },
 ] satisfies { id: string; label: string; description: string; value: ChatAppearance }[];
 export const defaultAppearance: ChatAppearance = compact;
@@ -36,12 +36,18 @@ export function parseAppearance(raw: string | null): ChatAppearance {
     if (!value || typeof value !== "object" || !("version" in value) || value.version !== 1 || !("activity" in value) ||
       !value.activity || typeof value.activity !== "object") return defaultAppearance;
     const activity = { ...defaultAppearance.activity };
-    for (const category of activityCategories) {
-      const item: unknown = (value.activity as Record<string, unknown>)[category];
-      if (!item || typeof item !== "object" || !("placement" in item) || !("details" in item)) continue;
+    const stored = value.activity as Record<string, unknown>;
+    const parseRule = (item: unknown): ActivityAppearance | undefined => {
+      if (!item || typeof item !== "object" || !("placement" in item) || !("details" in item)) return undefined;
       if (typeof item.placement !== "string" || !["hidden", "grouped", "separate"].includes(item.placement) ||
-        typeof item.details !== "string" || !["collapsed", "expanded"].includes(item.details)) continue;
-      activity[category] = { placement: item.placement as ActivityPlacement, details: item.details as DetailExpansion };
+        typeof item.details !== "string" || !["collapsed", "expanded"].includes(item.details)) return undefined;
+      return { placement: item.placement as ActivityPlacement, details: item.details as DetailExpansion };
+    };
+    for (const category of activityCategories) {
+      // One Tools rule now governs commands and other tools. Prefer the saved
+      // Tools rule on conflict; use legacy Commands only if Tools is absent or invalid.
+      activity[category] = parseRule(stored[category]) ??
+        (category === "tools" ? parseRule(stored.shell) : undefined) ?? activity[category];
     }
     return { version: 1, activity };
   } catch { return defaultAppearance; }

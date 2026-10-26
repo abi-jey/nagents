@@ -58,9 +58,9 @@ function groupElements<T extends Element>(group: HTMLDetailsElement, selector: s
   return groupRecords(group).flatMap(record => [...record.querySelectorAll<T>(selector)]);
 }
 
-const shellDetails = (details: "collapsed" | "expanded") => ({
+const toolsDetails = (details: "collapsed" | "expanded") => ({
   ...defaultAppearance,
-  activity: { ...defaultAppearance.activity, shell: { placement: "grouped" as const, details } },
+  activity: { ...defaultAppearance.activity, tools: { placement: "grouped" as const, details } },
 });
 
 test("appearance defaults update mounted disclosures while explicit opens survive later changes", async () => {
@@ -68,8 +68,8 @@ test("appearance defaults update mounted disclosures while explicit opens surviv
   const prompt = user("question", "Run the check");
   const command = tool("command");
   try {
-    await ui.render([prompt, command], shellDetails("expanded"));
-    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')!;
+    await ui.render([prompt, command], toolsDetails("expanded"));
+    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')!;
     const article = ui.container.querySelector<HTMLElement>('[data-record-key="command"]')!;
     const details = article.querySelector<HTMLDetailsElement>("details.execution-record")!;
     assert.equal(group.open, true);
@@ -77,17 +77,17 @@ test("appearance defaults update mounted disclosures while explicit opens surviv
 
     // With no user toggles, changing the default disclosure policy affects the
     // mounted nodes and does not get mistaken for a user preference.
-    await ui.render([prompt, command], shellDetails("collapsed"));
-    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    await ui.render([prompt, command], toolsDetails("collapsed"));
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="tools"]'), group);
     assert.equal(ui.container.querySelector('[data-record-key="command"]'), article);
     assert.equal(article.querySelector("details.execution-record"), details);
     assert.equal(group.open, false);
     assert.equal(details.open, false);
 
-    await ui.render([prompt, command], shellDetails("expanded"));
+    await ui.render([prompt, command], toolsDetails("expanded"));
     assert.equal(group.open, true, "an untouched group follows the expanded default again");
     assert.equal(details.open, true, "an untouched tool disclosure follows the expanded default again");
-    await ui.render([prompt, command], shellDetails("collapsed"));
+    await ui.render([prompt, command], toolsDetails("collapsed"));
     assert.equal(group.open, false);
     assert.equal(details.open, false);
 
@@ -102,9 +102,9 @@ test("appearance defaults update mounted disclosures while explicit opens surviv
     });
     assert.equal(group.open, true);
     assert.equal(details.open, true);
-    await ui.render([prompt, command], shellDetails("expanded"));
-    await ui.render([prompt, command], shellDetails("collapsed"));
-    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    await ui.render([prompt, command], toolsDetails("expanded"));
+    await ui.render([prompt, command], toolsDetails("collapsed"));
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="tools"]'), group);
     assert.equal(ui.container.querySelector('[data-record-key="command"]'), article);
     assert.equal(group.open, true, "an explicit open overrides later collapsed defaults");
     assert.equal(details.open, true, "an explicit tool open overrides later collapsed defaults");
@@ -120,7 +120,7 @@ test("Compact keeps messages and preserves grouped tool rows, open details, and 
     await ui.render([prompt, answer, first]);
     assert.equal(ui.container.querySelector('[data-record-key="question"]')?.textContent?.includes(prompt.text), true);
     assert.equal(ui.container.querySelector('[data-record-key="answer"]')?.textContent?.includes(answer.text), true);
-    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')!;
+    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')!;
     assert.equal(group.open, false, "Compact groups start collapsed");
     await act(async () => { group.open = true; group.dispatchEvent(new ui.dom.window.Event("toggle")); });
     const firstArticle = ui.container.querySelector<HTMLElement>('[data-record-key="tool-one"]')!;
@@ -135,7 +135,7 @@ test("Compact keeps messages and preserves grouped tool rows, open details, and 
 
     const second = tool("tool-two");
     await ui.render([prompt, answer, first, second]);
-    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="tools"]'), group);
     assert.equal(group.open, true);
     assert.equal(ui.container.querySelector('[data-record-key="tool-one"]'), firstArticle);
     assert.equal(firstDetails.open, true);
@@ -176,7 +176,7 @@ test("undisplayed response metadata does not split same-scope shell activity, wh
   const second = tool("round-two-tool");
   try {
     await ui.render([first]);
-    let groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    let groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')];
     assert.equal(groups.length, 1);
     const group = groups[0];
     const firstArticle = ui.container.querySelector<HTMLElement>('[data-record-key="round-one-tool"]')!;
@@ -193,11 +193,11 @@ test("undisplayed response metadata does not split same-scope shell activity, wh
     feed.dispatchEvent(new ui.dom.window.Event("scroll"));
 
     await ui.render([first, hiddenResponse]);
-    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="tools"]'), group);
     assert.equal(ui.container.querySelector('[data-record-key="round-two-response"]'), null);
 
     await ui.render([first, hiddenResponse, second]);
-    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')];
     assert.equal(groups.length, 1);
     assert.equal(groups[0], group);
     assert.equal(group.querySelector(".chat-activity-count")?.textContent, "2");
@@ -212,7 +212,7 @@ test("undisplayed response metadata does not split same-scope shell activity, wh
 
     const completedSecond = { ...second, state: "Completed", streaming: false, text: "round two output\n", result: "round two output\n" };
     await ui.render([first, hiddenResponse, completedSecond]);
-    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="tools"]'), group);
     assert.equal(group.dataset.state, "Done");
     assert.equal(firstDetails.open, true);
     assert.equal(ui.dom.window.document.activeElement, firstSummary);
@@ -222,7 +222,7 @@ test("undisplayed response metadata does not split same-scope shell activity, wh
       ...hiddenResponse.responseMetadata!, revision: 2, summary: "The provider supplied a plan.",
     } };
     await ui.render([first, visibleResponse, completedSecond]);
-    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')];
     assert.equal(groups.length, 2, "a displayable reasoning row separates the tool groups");
     assert.equal(groups[0], group, "the first group retains its mounted identity when the visible boundary appears");
     assert.ok(ui.container.querySelector('[data-record-key="round-two-response"]'));
@@ -231,7 +231,7 @@ test("undisplayed response metadata does not split same-scope shell activity, wh
       ...defaultAppearance.activity, reasoning: { ...defaultAppearance.activity.reasoning, placement: "hidden" as const },
     } };
     await ui.render([first, visibleResponse, completedSecond], hiddenReasoning);
-    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')];
     assert.equal(groups.length, 1, "changing reasoning visibility removes its layout boundary");
     assert.equal(groups[0], group);
     assert.equal(groups[0].querySelector(".chat-activity-count")?.textContent, "2");
@@ -241,7 +241,7 @@ test("undisplayed response metadata does not split same-scope shell activity, wh
       hiddenResponse,
       { ...completedSecond, recorded: true, historyId: "saved-second" },
     ]);
-    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+    groups = [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')];
     assert.equal(groups.length, 1, "saved history preserves the same visible grouping");
     assert.equal(groups[0], group);
     assert.equal(groups[0].querySelector(".chat-activity-count")?.textContent, "2");
@@ -257,11 +257,11 @@ test("a later failure changes the collapsed activity group to Needs attention an
   const first = tool("first-command", { state: "Completed", streaming: false });
   try {
     await ui.render([prompt, first]);
-    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')!;
+    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')!;
     assert.equal(group.open, false);
     const error = tool("later-error", { state: "Failed", error: "exit 4", streaming: false });
     await ui.render([prompt, first, error]);
-    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="tools"]'), group);
     assert.equal(group.dataset.state, "Needs attention");
     assert.equal(group.open, true, "An important failure overrides the collapsed preference");
     assert.equal(groupElements<HTMLElement>(group, '[data-record-key="later-error"]').length, 1);
@@ -291,7 +291,7 @@ test("Messages only hides routine activity while errors, warnings, and approvals
     }
 
     await ui.render([prompt, answer, routine, tool("routine-two", { streaming: false, state: "Completed" })], preset("detailed"));
-    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), null);
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="tools"]'), null);
     assert.ok(ui.container.querySelector('[data-record-key="routine"]'));
     assert.ok(ui.container.querySelector('[data-record-key="routine-two"]'));
     assert.equal(ui.container.querySelector<HTMLDetailsElement>('[data-record-key="routine"] details.execution-record')?.open, true,
@@ -412,7 +412,7 @@ test("late reasoning preserves the second tool across visible and hidden boundar
     reasoning: { ...defaultAppearance.activity.reasoning, placement: "hidden" as const } } };
   try {
     await ui.render([first, hidden, second]);
-    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')!;
+    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')!;
     const secondArticle = ui.container.querySelector<HTMLElement>('[data-record-key="diagnostic-second"]')!;
     const secondParent = secondArticle.parentElement!;
     const transcriptParent = secondParent.parentElement;
@@ -432,7 +432,7 @@ test("late reasoning preserves the second tool across visible and hidden boundar
       const article = ui.container.querySelector<HTMLElement>('[data-record-key="diagnostic-second"]');
       const details = article?.querySelector<HTMLDetailsElement>("details.execution-record");
       for (const header of ui.container.querySelectorAll<HTMLDetailsElement>("details.chat-activity-group")) groupRecords(header);
-      states.push({ phase, groups: ui.container.querySelectorAll('.chat-activity-group[data-category="shell"]').length,
+      states.push({ phase, groups: ui.container.querySelectorAll('.chat-activity-group[data-category="tools"]').length,
         sameParent: article?.parentElement === secondParent && secondParent.parentElement === transcriptParent, visible: !secondParent.hidden,
         sameArticle: article === secondArticle, sameDetails: details === secondDetails, open: details?.open === true,
         sameFocus: ui.dom.window.document.activeElement === secondSummary, scrollTop: feed.scrollTop });
@@ -454,7 +454,7 @@ test("late reasoning preserves the second tool across visible and hidden boundar
 for (const strict of [false, true]) test(`coalescing a focused activity header transfers focus to the surviving group${strict ? " in StrictMode" : ""}`, async () => {
   const ui = browser(strict);
   const first = tool("first", { state: "Completed", streaming: false });
-  const pending = tool("second", { title: "lookup", toolProgress: "streaming" });
+  const pending = tool("second", { title: "edit_file", toolProgress: "streaming" });
   try {
     await ui.render([first, pending]);
     const headers = [...ui.container.querySelectorAll<HTMLDetailsElement>("details.chat-activity-group")];
@@ -505,11 +505,50 @@ test("new activity and task links reveal flat group members and retain their dis
   } finally { await ui.close(); }
 });
 
-test("actual streamed successive-round calls merge into one Commands 2 live and after reload", async () => {
+test("mixed shell and ordinary tools share one group while preserving command inspection", async () => {
+  const ui = browser();
+  const command = tool("command", { title: "shell", inputs: JSON.stringify({ command: "printf smoke" }),
+    text: "smoke\n", approval: "Allowed once", state: "Receiving output" });
+  const others = ["read_file", "search", "channel_configuration", "run_shell_command"].map((title, index) =>
+    tool(`other-${index}`, { title, state: "Completed", streaming: false }));
+  try {
+    await ui.render([command, ...others], toolsDetails("expanded"));
+    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')!;
+    assert.equal(ui.container.querySelectorAll(".chat-activity-group").length, 1);
+    assert.equal(group.querySelector(".chat-activity-count")?.textContent, "5");
+    assert.deepEqual(groupElements<HTMLElement>(group, "article.entry.tool").map(row => row.dataset.recordKey),
+      ["command", ...others.map(value => value.id)]);
+    const article = ui.container.querySelector<HTMLElement>('[data-record-key="command"]')!;
+    assert.equal(article.querySelector(".tool-record")?.getAttribute("data-tool-family"), "command");
+    assert.ok(article.querySelector(".tool-symbol svg"));
+    assert.equal(article.querySelector(".execution-target")?.textContent, "printf smoke");
+    assert.match(article.textContent || "", /Allowed once/);
+    const output = article.querySelector('[data-panel="stream"]');
+    assert.match(output?.textContent || "", /smoke/);
+    const completed: Entry = { ...command, state: "Completed", streaming: false, durationMs: 1200,
+      commandOutcome: { kind: "exited", exitCode: 0 },
+      result: JSON.stringify({ output: "smoke\n", exit_code: 0, timed_out: false, truncated: false }) };
+    await ui.render([completed, ...others], toolsDetails("expanded"));
+    assert.equal(ui.container.querySelector('[data-record-key="command"]'), article);
+    assert.equal(article.querySelector('[data-panel="stream"]'), output);
+    assert.equal(article.querySelector(".execution-duration")?.textContent, "1.2 s");
+    for (const label of ["Inputs", "Result", "Details"]) {
+      const tab = [...article.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(value => value.textContent === label)!;
+      assert.ok(tab);
+      await act(async () => tab.click());
+      assert.equal(tab.getAttribute("aria-selected"), "true");
+    }
+    assert.match(article.querySelector('[data-panel="result"]')?.textContent || "", /smoke/);
+    assert.match(article.querySelector('[data-panel="metadata"]')?.textContent || "", /exited with code 0/i);
+    assert.match(article.querySelector('[data-panel="inputs"]')?.textContent || "", /printf smoke/);
+  } finally { await ui.close(); }
+});
+
+test("actual streamed successive-round calls merge into one Tools 2 live and after reload", async () => {
   const ui = browser();
   let entries: Entry[] = [];
   const send = (event: WireEvent) => { entries = appendEvent(entries, { run_id: "run", ...event }); };
-  const groups = () => [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')];
+  const groups = () => [...ui.container.querySelectorAll<HTMLDetailsElement>('.chat-activity-group[data-category="tools"]')];
   try {
     send({ event: "tool_call_progress", generation_id: "diagnostic-generation-one", index: 0, id: "", name: "shell",
       status: "streaming", arguments_text: '{"command":"first' });
@@ -530,15 +569,17 @@ test("actual streamed successive-round calls merge into one Commands 2 live and 
     assert.equal(metadata.responseMetadata?.summary, "");
     await ui.render(entries);
     assert.equal(ui.container.querySelector(`[data-record-key="${metadata.id}"]`), null);
-    send({ event: "tool_call_progress", generation_id: "diagnostic-generation-two", index: 0, id: "", name: "shell",
-      status: "streaming", arguments_text: '{"command":"second' });
+    send({ event: "tool_call_progress", generation_id: "diagnostic-generation-two", index: 0, id: "", name: "read_file",
+      status: "streaming", arguments_text: '{"path":"second' });
     const secondId = entries.at(-1)!.id;
     assert.equal(entries.at(-1)!.toolProgress, "streaming");
     await ui.render(entries);
-    send({ event: "tool_call", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "shell",
-      arguments: { command: "second" } });
-    send({ event: "tool_execution_started", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "shell" });
-    send({ event: "tool_result", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "shell", result: "second result" });
+    assert.equal(groups().length, 1, "mixed calls already share a group while arguments stream");
+    assert.equal(groups()[0].querySelector(".chat-activity-count")?.textContent, "2");
+    send({ event: "tool_call", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "read_file",
+      arguments: { path: "second" } });
+    send({ event: "tool_execution_started", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "read_file" });
+    send({ event: "tool_result", generation_id: "diagnostic-generation-two", index: 0, id: "diagnostic-call-two", name: "read_file", result: "second result" });
     assert.equal(entries.at(-1)!.id, secondId);
     assert.equal(entries.at(-1)!.toolProgress, undefined);
     assert.equal(entries.at(-1)!.state, "Completed");
@@ -548,13 +589,13 @@ test("actual streamed successive-round calls merge into one Commands 2 live and 
     const cold = new JSDOM(renderToStaticMarkup(createElement(Conversation, {
       entries, appearance: defaultAppearance, sessionId: "root", demo: false, canSubmit: false, submit() {},
     })));
-    const coldGroups = [...cold.window.document.querySelectorAll('.chat-activity-group[data-category="shell"]')];
+    const coldGroups = [...cold.window.document.querySelectorAll('.chat-activity-group[data-category="tools"]')];
     const reloaded = { groups: coldGroups.length, counts: coldGroups.map(group => group.querySelector(".chat-activity-count")?.textContent),
       order: [...cold.window.document.querySelectorAll<HTMLElement>("article.entry.tool")].map(row => row.dataset.recordKey) };
     cold.window.close();
     assert.deepEqual({ live, reloaded }, {
       live: { groups: 1, counts: ["2"], order: [firstId, secondId] },
       reloaded: { groups: 1, counts: ["2"], order: [firstId, secondId] },
-    }, "argument streaming must not permanently pin successive rounds into two Commands 1 wrappers");
+    }, "argument streaming must not permanently pin successive rounds into two Tools 1 wrappers");
   } finally { await ui.close(); }
 });

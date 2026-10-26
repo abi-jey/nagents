@@ -298,12 +298,16 @@ Chat bylines use the configured agent name once per admitted turn. Subagent
 conversations identify the immediate parent and target, for example
 **Assistant → Explorer**. Queued follow-ups do not restart the current byline.
 
-**Customize activity** controls commands, file changes, reasoning, agents,
-notices, and other tools separately. Choose visibility, grouped or separate
-placement, and the initial disclosure state. Reasoning can stay with its answer
-or appear before it. Individual disclosures keep your choice while content
-streams and saved history reconciles. Errors, interrupted responses, and approval
-requests remain visible at every detail level.
+**Customize activity** controls tools, file changes, reasoning, agents, and
+notices separately. Shell commands share the **Tools** group with adjacent reads,
+searches, and other tools in the same run, task, and activation. Messages and
+execution boundaries keep groups separate. Shell calls retain their terminal
+icon, command, output, status, approvals, and input/result details.
+Choose visibility, grouped or separate placement, and the initial disclosure
+state. Reasoning can stay with its answer or appear before it. Individual
+disclosures keep your choice while content streams and saved history reconciles.
+Errors, interrupted responses, and approval requests remain visible at every
+detail level.
 
 These are presentation preferences saved in this browser, across conversations.
 They do not change model requests, agent Markdown, or global/workspace defaults.
