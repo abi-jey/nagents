@@ -10,12 +10,12 @@ import pytest
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.live.delegation import ClientDelegationRequest
-from nagents.web.executions import MAX_PARALLEL_RUNS
+from nagents.web.execution.owners import MAX_PARALLEL_RUNS
 from nagents.web.live.bridge import MainAgentBridge
 from tests.support.hang_guard import HANG_GUARD
-from tests.web.test_web_subscription_lifecycle import Peer
-from tests.web.test_web_subscription_lifecycle import until
-from tests.web.test_web_wakeups import scheduled_app
+from tests.web.execution.test_web_subscription_lifecycle import Peer
+from tests.web.execution.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

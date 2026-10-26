@@ -35,7 +35,7 @@ from .settings import Revision
 from .settings import WorkspaceVoiceInput
 
 if TYPE_CHECKING:
-    from ..service import WebState
+    from ..execution.service import WebState
     from .runtime import LiveService
     from .settings import LiveConnection
     from .settings import LiveSettings

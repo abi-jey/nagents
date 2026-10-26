@@ -13,9 +13,9 @@ import pytest
 
 from nagents._async import finish_on_cancel
 from nagents.web.channels.host import ChannelHost
+from nagents.web.execution.service import Run
+from nagents.web.execution.service import WebState
 from nagents.web.routing import Work
-from nagents.web.service import Run
-from nagents.web.service import WebState
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io

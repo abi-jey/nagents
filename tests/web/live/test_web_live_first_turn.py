@@ -16,6 +16,7 @@ from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
 from nagents.live.runtime import ClientDelegations
 from nagents.types import Message
+from nagents.web.execution.subscriptions import Subscriber
 from nagents.web.live.bridge import MainAgentBridge
 from nagents.web.live.handoff import LoginDelegations
 from nagents.web.live.login import normalize_event
@@ -24,7 +25,6 @@ from nagents.web.live.routes import create_login_config
 from nagents.web.live.routes import voice_instructions
 from nagents.web.live.settings import LiveConnection
 from nagents.web.live.settings import LiveValues
-from nagents.web.subscriptions import Subscriber
 from nagents.web.voice_instructions import default_voice_instructions
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app

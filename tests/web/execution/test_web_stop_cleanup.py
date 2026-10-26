@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from nagents.harness.types import HarnessEvent
     from nagents.types import ContentPart
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 @pytest.mark.asyncio

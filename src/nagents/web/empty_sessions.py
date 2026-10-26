@@ -16,7 +16,7 @@ from .routing import RoutingStore
 if TYPE_CHECKING:
     import sqlite3
 
-    from .service import WebState
+    from .execution.service import WebState
     from .session_agents import Choice
 
 _ROOT = re.compile(r"ngn-[A-Za-z0-9-]{1,76}\Z")

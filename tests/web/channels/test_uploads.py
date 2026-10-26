@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"image-content-not-websocket-data"
 

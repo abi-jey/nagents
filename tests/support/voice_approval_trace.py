@@ -11,8 +11,8 @@ from typing import Literal
 if TYPE_CHECKING:
     import asyncio
 
-    from nagents.web.service import Run
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import Run
+    from nagents.web.execution.service import WebState
 
 Stage = Literal["admission", "run_started", "model_request", "scripted_generate", "tool_call", "approve", "pending"]
 _EVENT_STAGES: dict[str, Stage] = {

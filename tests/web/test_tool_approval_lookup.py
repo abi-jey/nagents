@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from nagents.web.tool_approvals import ToolApprovals
-from nagents.web.tool_approvals import ToolBinding
+from nagents.web.execution.approvals import ToolApprovals
+from nagents.web.execution.approvals import ToolBinding
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io

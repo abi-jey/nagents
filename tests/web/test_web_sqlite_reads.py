@@ -13,7 +13,7 @@ import aiosqlite
 import pytest
 
 from nagents.harness.config import HarnessConfig
-from nagents.web.service import WebState
+from nagents.web.execution.service import WebState
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.web.test_web_deletion import rows

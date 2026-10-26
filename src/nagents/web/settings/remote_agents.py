@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
-    from ..service import WebState
+    from ..execution.service import WebState
 
 logger = logging.getLogger(__name__)
 CALLBACK = "/remote-agent-login/callback"

@@ -49,6 +49,7 @@ from ._async import join_owned as _join
 from .channels.catalog import ChannelRevision
 from .channels.catalog import ConnectionInput
 from .deletion import delete_session
+from .execution.service import WebState as WebState
 from .live import instructions as live_instructions
 from .live.bridge import MainAgentBridge
 from .live.context import LiveSeed
@@ -62,7 +63,6 @@ from .live.settings import LiveSettings
 from .live.summary import VoiceContextSummarizer
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
-from .service import WebState as WebState
 from .session_actions import register_session_actions
 from .session_groups import SessionGroups
 from .session_groups import register_session_groups

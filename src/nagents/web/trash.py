@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from collections.abc import Iterator
 
-    from .service import WebState
+    from .execution.service import WebState
 
 logger = logging.getLogger(__name__)
 RETENTION_DAYS = 30

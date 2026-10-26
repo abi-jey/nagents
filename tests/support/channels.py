@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from nagents.channels.types import ChannelReceiver
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 URL = "http://127.0.0.1:8765"

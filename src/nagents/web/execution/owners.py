@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from nagents.provider.openai import OpenAIProvider
 
-from ._async import join_owned
+from .._async import join_owned
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

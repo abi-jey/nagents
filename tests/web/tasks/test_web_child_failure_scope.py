@@ -19,8 +19,8 @@ from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web._async import finish_on_cancel
+from nagents.web.execution.service import WebState
 from nagents.web.live.bridge import MainAgentBridge
-from nagents.web.service import WebState
 from tests.harness.test_harness import ScriptedProvider
 from tests.support.child_failures import ChildFailureScenario
 from tests.support.config import connection
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.service import Run
+    from nagents.web.execution.service import Run
     from tests.support.providers import FakeProvider
 
 

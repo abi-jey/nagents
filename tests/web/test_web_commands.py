@@ -16,7 +16,7 @@ from tests.support.channels import site
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.web.service import Run
+    from nagents.web.execution.service import Run
     from tests.support.channels import Site
 
 pytestmark = pytest.mark.requires_posix

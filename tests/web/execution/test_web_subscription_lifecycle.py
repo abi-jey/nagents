@@ -16,8 +16,8 @@ import pytest
 from fastapi import HTTPException
 from starlette.websockets import WebSocket
 
-from nagents.web import subscriptions
-from nagents.web.subscriptions import EventBus
+from nagents.web.execution import subscriptions
+from nagents.web.execution.subscriptions import EventBus
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 

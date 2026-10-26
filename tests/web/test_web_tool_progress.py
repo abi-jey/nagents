@@ -13,8 +13,8 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolCallProgressEvent
 from nagents.harness.types import ToolOutput
-from nagents.web.replay import RunReplay
-from nagents.web.service import Run
+from nagents.web.execution.replay import RunReplay
+from nagents.web.execution.service import Run
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 

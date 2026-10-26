@@ -25,11 +25,11 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.types import Message
+from nagents.web.execution.service import Run
 from nagents.web.live.bridge import MainAgentBridge
 from nagents.web.live.bridge import delegation_prompt
 from nagents.web.live.bridge import voice_display
 from nagents.web.live.login import ChatGPTLiveConnection
-from nagents.web.service import Run
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.voice_approval_trace import VoiceApprovalTrace
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest
     from nagents.types import GenerationConfig
     from nagents.types import ToolDefinition
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 def speech(text: str) -> str:

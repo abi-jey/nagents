@@ -21,7 +21,7 @@ from nagents.harness.providers import ProviderProfile
 from .._async import join_owned
 
 if TYPE_CHECKING:
-    from ..service import WebState
+    from ..execution.service import WebState
 
 LoginStatus = Literal["idle", "starting", "pending", "completed", "failed", "cancelled"]
 

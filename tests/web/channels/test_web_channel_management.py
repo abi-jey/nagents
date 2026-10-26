@@ -15,12 +15,12 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.extensions import ModelRequest
 from nagents.extensions import RunContext
-from nagents.web import service
 from nagents.web.channels.catalog import ConnectionInput
 from nagents.web.channels.catalog import SavedCatalog
 from nagents.web.channels.host import ChannelHost
 from nagents.web.channels.management import NAMES
 from nagents.web.channels.management import ChannelManagement
+from nagents.web.execution import service
 from tests.support.channels import FakeChannel
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from nagents.channels.types import ChannelValue
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
     from tests.support.channels import Site
     from tests.support.providers import FakeProvider
 

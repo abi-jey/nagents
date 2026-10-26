@@ -15,7 +15,7 @@ from nagents.extensions import AgentPlugin
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
 from nagents.types import ToolCall
-from nagents.web.tool_approvals import ToolApprovals
+from nagents.web.execution.approvals import ToolApprovals
 from tests.harness.test_harness import ScriptedProvider
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD

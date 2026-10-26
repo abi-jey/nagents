@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents import Agent
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 def caption(sequence: int, text: str, speaker: str = "user") -> dict[str, object]:

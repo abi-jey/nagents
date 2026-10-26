@@ -17,12 +17,12 @@ from nagents.types import Message
 from nagents.web import empty_sessions
 from nagents.web.app import create_app
 from nagents.web.channels.catalog import Connection
+from nagents.web.execution.service import Run
+from nagents.web.execution.service import WebState
+from nagents.web.execution.subscriptions import Subscriber
+from nagents.web.execution.wakeups import Chain
 from nagents.web.routing import RoutingStore
-from nagents.web.service import Run
-from nagents.web.service import WebState
-from nagents.web.subscriptions import Subscriber
 from nagents.web.trash import SessionTrash
-from nagents.web.wakeups import Chain
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
 from tests.web.test_web_deletion import quiet

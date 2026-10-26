@@ -14,7 +14,7 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import Usage
 from nagents.harness.config import HarnessConfig
-from nagents.web.service import Run
+from nagents.web.execution.service import Run
 from tests.support.web import LiveStream
 from tests.support.web import client_app
 

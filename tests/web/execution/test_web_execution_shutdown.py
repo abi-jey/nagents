@@ -13,10 +13,10 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from tests.support.channels import FakeChannel
 from tests.support.hang_guard import HANG_GUARD
-from tests.web.test_web_host_lifecycle import application
-from tests.web.test_web_host_lifecycle import idle
-from tests.web.test_web_host_lifecycle import statuses
-from tests.web.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_host_lifecycle import application
+from tests.web.execution.test_web_host_lifecycle import idle
+from tests.web.execution.test_web_host_lifecycle import statuses
+from tests.web.execution.test_web_subscription_lifecycle import until
 
 if TYPE_CHECKING:
     import sqlite3

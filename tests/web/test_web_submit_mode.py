@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.service import Run
+    from nagents.web.execution.service import Run
     from tests.support.channels import Site
     from tests.support.providers import FakeProvider
     from tests.support.providers import Script

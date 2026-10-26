@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
 
-    from ..service import WebState
+    from ..execution.service import WebState
 
 # These browser actions are additional to the client-neutral Harness builtins.
 WEB_RESERVED = frozenset({"settings", "tools", "channels", "voice", "stop"})

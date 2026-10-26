@@ -25,7 +25,7 @@ from .routing import RoutingStore
 if TYPE_CHECKING:
     import sqlite3
 
-    from .service import WebState
+    from .execution.service import WebState
 
 logger = logging.getLogger(__name__)
 

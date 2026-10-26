@@ -13,8 +13,8 @@ from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import AgentProfile
 from tests.support.hang_guard import HANG_GUARD
-from tests.web.test_web_subscription_lifecycle import until
-from tests.web.test_web_wakeups import scheduled_app
+from tests.web.execution.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
