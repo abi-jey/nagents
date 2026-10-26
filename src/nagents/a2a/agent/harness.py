@@ -15,21 +15,21 @@ from nagents.harness.runtime import Harness
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskStarted
 
+from ..output_channel import A2AOutputChannel
+from ..server.authorization import unavailable_credentials
 from .executor import PublicStatus
 from .executor import TaskExecutor
-from .output_channel import A2AOutputChannel
-from .server.authorization import unavailable_credentials
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
 
-    from .agent import AgentRuntime
+    from ..server.authorization import AuthorizationRegistry
+    from ..server.authorization import AuthorizationSession
+    from ..server.authorization import CredentialHandler
+    from ..server.config import A2AConfig
+    from ..store import SQLiteTaskStore
     from .executor import Execution
-    from .server.authorization import AuthorizationRegistry
-    from .server.authorization import AuthorizationSession
-    from .server.authorization import CredentialHandler
-    from .server.config import A2AConfig
-    from .store import SQLiteTaskStore
+    from .runtime import AgentRuntime
 
 HarnessFactory = Callable[["HarnessConfig", OpenAIAuth], Harness]
 

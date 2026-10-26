@@ -146,3 +146,11 @@ def test_a2a_client_public_imports_refer_to_the_same_definitions() -> None:
 
     for name in client.__all__:
         assert getattr(client, name) is getattr(transport, name)
+
+
+def test_a2a_agent_public_imports_refer_to_the_same_definitions() -> None:
+    from nagents.a2a import agent
+    from nagents.a2a.agent import runtime
+
+    for name in agent.__all__:
+        assert getattr(agent, name) is getattr(runtime, name)

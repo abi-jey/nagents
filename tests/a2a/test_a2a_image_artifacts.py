@@ -74,7 +74,7 @@ if TYPE_CHECKING:
 
     from a2a.server.events import EventQueue
 
-    from nagents.a2a.agent import AgentContext
+    from nagents.a2a.agent.runtime import AgentContext
     from nagents.types import GenerationConfig
     from nagents.types import ToolDefinition
 

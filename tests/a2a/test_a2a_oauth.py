@@ -58,7 +58,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from collections.abc import Mapping
 
-    from nagents.a2a.agent import AgentContext
+    from nagents.a2a.agent.runtime import AgentContext
     from nagents.a2a.server.oauth import AccessGrant
     from nagents.events import Event
     from nagents.types import Message

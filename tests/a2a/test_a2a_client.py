@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from starlette.types import Scope
     from starlette.types import Send
 
-    from nagents.a2a.agent import AgentContext
+    from nagents.a2a.agent.runtime import AgentContext
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolDefinition
