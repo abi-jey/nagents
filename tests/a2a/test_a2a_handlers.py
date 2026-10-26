@@ -32,12 +32,12 @@ from a2a.utils.errors import TaskNotCancelableError
 from a2a.utils.errors import TaskNotFoundError
 from starlette.requests import Request
 
-from nagents.a2a.auth import AuthenticationError
-from nagents.a2a.auth import Principal
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
-from nagents.a2a.handlers import AuthenticatedContextBuilder
-from nagents.a2a.handlers import OwnedRequestHandler
+from nagents.a2a.server.auth import AuthenticationError
+from nagents.a2a.server.auth import Principal
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
+from nagents.a2a.server.handlers import AuthenticatedContextBuilder
+from nagents.a2a.server.handlers import OwnedRequestHandler
 from nagents.a2a.store import SQLiteEventStream
 from nagents.a2a.store import SQLiteTaskStore
 from nagents.a2a.store import principal as context_principal

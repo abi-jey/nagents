@@ -128,3 +128,13 @@ def test_task_public_imports_refer_to_the_same_definitions() -> None:
 
     for name in tasks.__all__:
         assert getattr(tasks, name) is getattr(routes, name)
+
+
+def test_a2a_public_exports_still_resolve_after_server_moves() -> None:
+    from importlib import import_module
+
+    from nagents import a2a
+
+    for name in a2a.__all__:
+        implementation = import_module(f"nagents.a2a.{a2a._MODULES[name]}")
+        assert getattr(a2a, name) is getattr(implementation, name)

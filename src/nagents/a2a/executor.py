@@ -27,13 +27,13 @@ from nagents.events import TextDoneEvent
 
 from .agent import AgentContext
 from .agent import NativeAgentRuntime
-from .authorization import AuthorizationDenied
-from .authorization import AuthorizationSession
-from .authorization import current_authorization
-from .authorization import unavailable_credentials
 from .diagnostics import error_frames
 from .images import ImagePublisher
 from .images import current_image_publisher
+from .server.authorization import AuthorizationDenied
+from .server.authorization import AuthorizationSession
+from .server.authorization import current_authorization
+from .server.authorization import unavailable_credentials
 from .store import MessageClaim
 from .store import principal
 
@@ -43,10 +43,10 @@ if TYPE_CHECKING:
 
     from .agent import AgentFactory
     from .agent import AgentRuntime
-    from .auth import Principal
-    from .authorization import AuthorizationRegistry
-    from .authorization import CredentialHandler
-    from .config import A2AConfig
+    from .server.auth import Principal
+    from .server.authorization import AuthorizationRegistry
+    from .server.authorization import CredentialHandler
+    from .server.config import A2AConfig
     from .store import SQLiteTaskStore
 
 logger = logging.getLogger(__name__)

@@ -42,7 +42,7 @@ from a2a.utils.errors import TaskNotFoundError
 from a2a.utils.errors import UnsupportedOperationError
 from a2a.utils.proto_utils import to_stream_response
 
-from .auth import Principal
+from .server.auth import Principal
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from a2a.server.context import ServerCallContext
     from a2a.server.events import Event
 
-    from .config import A2AConfig
+    from .server.config import A2AConfig
 
 TERMINAL = frozenset(
     {

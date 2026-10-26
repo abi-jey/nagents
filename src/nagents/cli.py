@@ -601,7 +601,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_explicit=True,
             )
         if args.command == "a2a":
-            from .a2a.cli import serve as serve_a2a
+            from .a2a.server.cli import serve as serve_a2a
 
             serve_a2a(
                 config,

@@ -24,9 +24,9 @@ from a2a.utils.errors import InvalidParamsError
 from a2a.utils.errors import TaskNotFoundError
 from a2a.utils.errors import UnsupportedOperationError
 
-from nagents.a2a.auth import Principal
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
+from nagents.a2a.server.auth import Principal
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 from nagents.a2a.store import SQLiteEventStream
 from nagents.a2a.store import SQLiteTaskStore
 

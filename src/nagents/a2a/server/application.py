@@ -35,19 +35,19 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ..diagnostics import error_frames
+from ..executor import NagentsAgentExecutor
+from ..store import SQLiteEventStream
+from ..store import SQLiteTaskStore
+from ..store import private_file
 from .auth import AuthenticationError
 from .auth import Authenticator
 from .auth import Principal
 from .authorization import AuthorizationRegistry
 from .authorization import AuthorizationUnavailable
-from .diagnostics import error_frames
-from .executor import NagentsAgentExecutor
 from .handlers import AuthenticatedContextBuilder
 from .handlers import OwnedRequestHandler
 from .oauth import OAuthCoordinator
-from .store import SQLiteEventStream
-from .store import SQLiteTaskStore
-from .store import private_file
 
 if TYPE_CHECKING:
     from starlette.responses import Response
@@ -59,9 +59,9 @@ if TYPE_CHECKING:
 
     from nagents.harness.config import HarnessConfig
 
-    from .agent import AgentFactory
+    from ..agent import AgentFactory
+    from ..executor import TaskExecutor
     from .config import A2AConfig
-    from .executor import TaskExecutor
 
 logger = logging.getLogger(__name__)
 ExecutorBuilder = Callable[[SQLiteTaskStore, AuthorizationRegistry, OAuthCoordinator], "TaskExecutor"]
@@ -82,7 +82,7 @@ RPC_SCOPES = {
 
 def agent_card(config: A2AConfig) -> AgentCard:
     """Public minimal card: only the explicitly exported profile is disclosed."""
-    from .remote_config import PUBLIC_CLIENT_EXTENSION
+    from ..remote_config import PUBLIC_CLIENT_EXTENSION
 
     extensions: list[AgentExtension] = []
     if config.browser_client_id and not config.browser_client_secret_env:
@@ -414,7 +414,7 @@ def create_app(
 
 def create_harness_app(*, config: A2AConfig, harness_config: HarnessConfig) -> Starlette:
     """Serve one explicit ngn profile using the same framework A2A boundary."""
-    from .harness import HarnessAgentExecutor
+    from ..harness import HarnessAgentExecutor
 
     def build(store: SQLiteTaskStore, registry: AuthorizationRegistry, oauth: OAuthCoordinator) -> TaskExecutor:
         return HarnessAgentExecutor(config, harness_config, store, registry, credential_handler=oauth.credentials)

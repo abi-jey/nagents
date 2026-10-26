@@ -15,15 +15,15 @@ from a2a.types import Role
 from a2a.types import SendMessageRequest
 from a2a.types import TaskState
 
-from nagents.a2a.auth import AuthenticationError
-from nagents.a2a.auth import Principal
-from nagents.a2a.authorization import AuthorizationDenied
-from nagents.a2a.authorization import AuthorizationExpired
-from nagents.a2a.authorization import AuthorizationRegistry
-from nagents.a2a.authorization import AuthorizationSession
-from nagents.a2a.authorization import AuthorizationUnavailable
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
+from nagents.a2a.server.auth import AuthenticationError
+from nagents.a2a.server.auth import Principal
+from nagents.a2a.server.authorization import AuthorizationDenied
+from nagents.a2a.server.authorization import AuthorizationExpired
+from nagents.a2a.server.authorization import AuthorizationRegistry
+from nagents.a2a.server.authorization import AuthorizationSession
+from nagents.a2a.server.authorization import AuthorizationUnavailable
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 from nagents.a2a.store import MessageClaim
 from nagents.a2a.store import SQLiteTaskStore
 from nagents.harness.types import ApprovalRequest
@@ -161,7 +161,7 @@ def test_expired_authorization_cannot_be_inspected_or_used(tmp_path: Path, monke
         claim = await task_claim(store, alice, "expired-approval")
         record = await registry.create(claim.task_id, alice, "action", {"tool": "edit"})
         monkeypatch.setattr(
-            "nagents.a2a.authorization.time",
+            "nagents.a2a.server.authorization.time",
             SimpleNamespace(time=lambda: record.expires_at + 1),
         )
         with pytest.raises(AuthorizationUnavailable):

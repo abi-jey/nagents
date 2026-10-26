@@ -27,15 +27,15 @@ from a2a.types import TaskStatus
 from a2a.types import TaskStatusUpdateEvent
 
 from nagents.a2a import RemoteAgent
-from nagents.a2a.application import create_app
-from nagents.a2a.application import create_harness_app
 from nagents.a2a.client import RemoteAgentError
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
 from nagents.a2a.conversation import RemoteConversation
 from nagents.a2a.images import ImagePublisher
 from nagents.a2a.images import current_image_publisher
 from nagents.a2a.images import publish_image
+from nagents.a2a.server.application import create_app
+from nagents.a2a.server.application import create_harness_app
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 from nagents.agent import Agent
 from nagents.artifacts import ImageArtifact
 from nagents.artifacts import ImageArtifactReference
@@ -57,16 +57,16 @@ from nagents.session import SessionManager
 from nagents.types import ImageContent
 from nagents.types import Message
 from nagents.types import TextContent
+from tests.a2a.test_a2a_auth import AUDIENCE
+from tests.a2a.test_a2a_auth import IssuerState
+from tests.a2a.test_a2a_auth import access_claims
+from tests.a2a.test_a2a_auth import local_issuer
+from tests.a2a.test_a2a_auth import make_token
+from tests.a2a.test_a2a_auth import signing_key
+from tests.a2a.test_a2a_client import serve_asgi
 from tests.support.config import connection
 from tests.support.providers import FakeProvider
 from tests.support.providers import setup_harness
-from tests.test_a2a_auth import AUDIENCE
-from tests.test_a2a_auth import IssuerState
-from tests.test_a2a_auth import access_claims
-from tests.test_a2a_auth import local_issuer
-from tests.test_a2a_auth import make_token
-from tests.test_a2a_auth import signing_key
-from tests.test_a2a_client import serve_asgi
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -91,7 +91,7 @@ class RemoteStub:
 
 @pytest.fixture
 def images() -> dict[str, bytes]:
-    fixture_dir = Path(__file__).parent / "fixtures" / "a2a-images"
+    fixture_dir = Path(__file__).parents[1] / "fixtures" / "a2a-images"
     return {"red.png": (fixture_dir / "red.png").read_bytes(), "blue.jpg": (fixture_dir / "blue.jpg").read_bytes()}
 
 

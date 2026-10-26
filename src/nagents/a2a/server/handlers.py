@@ -25,12 +25,12 @@ from a2a.utils.proto_utils import validate_proto_required_fields
 from a2a.utils.task import apply_history_length
 from a2a.utils.task import validate_history_length
 
+from ..store import TERMINAL
+from ..store import MessageClaim
+from ..store import SQLiteTaskStore
+from ..store import principal
 from .auth import AuthenticationError
 from .auth import Principal
-from .store import TERMINAL
-from .store import MessageClaim
-from .store import SQLiteTaskStore
-from .store import principal
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

@@ -23,8 +23,8 @@ from a2a.types import GetTaskRequest
 from a2a.types import ListTasksRequest
 from a2a.types import SubscribeToTaskRequest
 
-from .config import endpoint
 from .errors import RemoteAgentError as RemoteAgentError
+from .server.config import endpoint
 
 if TYPE_CHECKING:
     from types import TracebackType

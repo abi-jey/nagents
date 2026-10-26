@@ -22,10 +22,10 @@ from a2a.types import TaskStatus
 from google.protobuf.json_format import MessageToDict
 
 from nagents.a2a import client as a2a_client
-from nagents.a2a.application import agent_card
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
 from nagents.a2a.conversation import RemoteConversation
+from nagents.a2a.server.application import agent_card
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 from nagents.events import DoneEvent
 from nagents.events import Event
 from nagents.events import TextDoneEvent

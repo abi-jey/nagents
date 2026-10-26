@@ -22,11 +22,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from nagents.a2a.auth import AuthenticationError
-from nagents.a2a.auth import Authenticator
-from nagents.a2a.auth import Principal
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
+from nagents.a2a.server.auth import AuthenticationError
+from nagents.a2a.server.auth import Authenticator
+from nagents.a2a.server.auth import Principal
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

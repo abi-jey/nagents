@@ -27,16 +27,16 @@ from a2a.types import TaskStatusUpdateEvent
 from a2a.utils.errors import TaskNotFoundError
 from a2a.utils.errors import UnsupportedOperationError
 
-from nagents.a2a.auth import Principal
-from nagents.a2a.authorization import AuthorizationRegistry
-from nagents.a2a.authorization import AuthorizationUnavailable
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
 from nagents.a2a.executor import NagentsAgentExecutor
 from nagents.a2a.executor import request_input
-from nagents.a2a.handlers import OwnedRequestHandler
 from nagents.a2a.harness import HarnessAgentExecutor
 from nagents.a2a.harness import HarnessRuntime
+from nagents.a2a.server.auth import Principal
+from nagents.a2a.server.authorization import AuthorizationRegistry
+from nagents.a2a.server.authorization import AuthorizationUnavailable
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
+from nagents.a2a.server.handlers import OwnedRequestHandler
 from nagents.a2a.store import SQLiteEventStream
 from nagents.a2a.store import SQLiteTaskStore
 from nagents.agent import Agent

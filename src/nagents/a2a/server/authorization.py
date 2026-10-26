@@ -23,17 +23,17 @@ from typing import TYPE_CHECKING
 
 from a2a.types import TaskState
 
+from ..store import TERMINAL
 from .auth import AuthenticationError
 from .auth import Principal
-from .store import TERMINAL
 
 if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest
     from nagents.types import ToolArguments
 
+    from ..store import SQLiteTaskStore
     from .config import A2AConfig
     from .oauth import AccessGrant
-    from .store import SQLiteTaskStore
 
 StatusReporter = Callable[[TaskState, str], Awaitable[None]]
 InputHandler = Callable[[str], Awaitable[str]]

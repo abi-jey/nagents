@@ -191,9 +191,9 @@ def card_for(url: str, data_dir: Path) -> dict[str, object]:
     pytest.importorskip("a2a")
     from google.protobuf.json_format import MessageToDict
 
-    from nagents.a2a.application import agent_card
-    from nagents.a2a.config import A2AConfig
-    from nagents.a2a.config import IssuerConfig
+    from nagents.a2a.server.application import agent_card
+    from nagents.a2a.server.config import A2AConfig
+    from nagents.a2a.server.config import IssuerConfig
 
     config = A2AConfig(
         public_url=url,

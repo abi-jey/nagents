@@ -10,11 +10,11 @@ import pytest
 from google.protobuf.json_format import MessageToDict
 
 from nagents.a2a import discovery
-from nagents.a2a.application import agent_card
 from nagents.a2a.client import RemoteAgentError
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
 from nagents.a2a.remote_config import RemoteAgentConfig
+from nagents.a2a.server.application import agent_card
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 from nagents.events import Event
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
