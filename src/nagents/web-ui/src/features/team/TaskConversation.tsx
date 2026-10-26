@@ -75,7 +75,7 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
   const rootName = agents.find(item => item.id === MAIN_AGENT)?.name || "Assistant";
   const parentName = agents.find(item => item.id === (agent?.parentId ?? MAIN_AGENT))?.name || rootName;
   const definition = agent?.profile || team.profile?.id || "";
-  const definitionName = profileLabel(team.profiles?.find(profile => profile.id === definition), definition);
+  const definitionName = profileLabel(team.profiles?.find(profile => profile.id === definition), agent?.providerKind === "a2a" ? "Remote agent" : definition);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: true })); return () => cancelAnimationFrame(frame); }, [team.selected]);
   const transcript = useMemo(() => new TaskTranscript(), [sessionId, team.selected]);
@@ -85,7 +85,7 @@ export function TaskConversation({ team, agents, token, sessionId, back, appeara
   const remote = agent?.providerKind === "a2a" || team.profile?.provider === "a2a";
   return <section className="focused-task-conversation" aria-label={`${name} conversation`}>
     <header className="focused-task-header"><button type="button" className="task-back" onClick={back}><Icon name="chevron" size={14} />{rootName}</button>
-      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{agent?.id && <><code>{agent.id}</code><span aria-hidden="true"> · </span></>}{definition && <span className="focused-task-definition" title={definitionName !== definition ? `Connection: ${definition}` : undefined}>Definition <b>{definitionName}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
+      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{agent?.id && <><code>{agent.id}</code><span aria-hidden="true"> · </span></>}{definition && <span className="focused-task-definition">Definition <b>{definitionName}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
       {agent && <AgentState agent={agent} />}
     </header>
     {remote && <div className="task-remote-connection"><RemoteStatus authentication={authentication} /><span>{agent?.trustRemoteTools || team.profile?.trust_remote_tools ? "Remote tools trusted" : "Remote tools reviewed"}</span>

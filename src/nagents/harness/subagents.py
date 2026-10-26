@@ -133,6 +133,7 @@ class TaskInfo:
     artifacts: tuple[ImageArtifactReference, ...] = ()
     parent_response_id: str = ""
     parent_response_session_id: str = ""
+    agent_name: str = ""
 
     @property
     def label(self) -> str:
@@ -612,6 +613,8 @@ class SubagentManager:
         if session_id:
             validate_session_id(session_id)
             info = self._lookup(session_id)
+            if agent:
+                agent = self.harness.resolve_delegation_target(agent)
             if agent and agent != info.profile:
                 raise ValueError("An existing session's agent profile cannot be changed")
             accepted = await self.continue_task(session_id, prompt, trigger="agent", options=options, title=title)
@@ -620,6 +623,7 @@ class SubagentManager:
             raise ValueError("session_id must be a short child ID or an empty string")
         agent = agent or "assistant"
         self._check_budget(prompt)
+        agent = self.harness.resolve_delegation_target(agent)
         profile = self.harness.delegation_profile(agent)
         options.validate(self.harness)
         if profile.a2a.configured and (compact_trigger or reasoning_effort):
@@ -674,6 +678,7 @@ class SubagentManager:
                 _parent_storage_id=accepted_parent,
                 depth=self.harness.subagent_depth + 1,
                 profile=agent,
+                agent_name=self.harness.agent_identities()[agent].name,
                 mode="reviewer" if self.harness.mode == "reviewer" else profile.mode,
                 provider=binding.provider,
                 provider_kind=self.harness.config.provider_profile().kind,

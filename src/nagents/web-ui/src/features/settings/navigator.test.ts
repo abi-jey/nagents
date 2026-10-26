@@ -69,6 +69,31 @@ function browser() {
   };
 }
 
+test("remote agent navigation shows the agent name and keeps the alias in connection details", async t => {
+  const ui = browser();
+  const reply = prefs("workspace");
+  reply.profiles.push({ id: "desktop-experiment", name: "Media Manager", description: "Manage media", source: "a2a.json", mode: "build", transport: "a2a" });
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json(reply);
+    if (path === "/api/remote-agents") return Response.json({ revision: "remote-revision", source_path: "a2a.json", agents: [{
+      name: "desktop-experiment", description: "Old desktop note", remote_name: "Media Manager", remote_description: "Manage media",
+      connection: { url: "https://peer.example", rpc_url: "", issuer: "", client_id: "", scopes: [], resource: "", token_env: "", ca_file: "", loopback_http: false, timeout: 120, metadata_url: "" },
+      signed_in: true, authentication: { state: "not_required", expires_at: 0, error_code: "" }, trust_remote_tools: false,
+    }] });
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    await ui.render({ scope: "agent", agent: "desktop-experiment", section: "Overview", serial: 1 });
+    assert.equal(ui.visible<HTMLElement>(".an-header h2")[0].textContent, "Media Manager");
+    const navigation = ui.visible<HTMLElement>('[aria-label="Settings hierarchy"]')[0].textContent || "";
+    assert.match(navigation, /Media Manager/);
+    assert.doesNotMatch(navigation, /desktop-experiment|Old desktop note/);
+    const details = ui.visible<HTMLElement>("details")[0].textContent || "";
+    assert.match(details, /Connection name.*desktop-experiment/);
+  } finally { await ui.close(); }
+});
+
 test("prompt customization starts with inherited Markdown and saving it preserves a separate tool draft", async t => {
   const ui = browser(); const writes: Record<string, unknown>[] = [];
   const markdown = "# Working style\n\n- Explain decisions briefly.\n- Keep existing files.";

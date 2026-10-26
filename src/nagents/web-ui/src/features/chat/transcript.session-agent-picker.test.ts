@@ -62,6 +62,18 @@ async function view(t: TestContext, data: SessionAgentSelection | undefined = se
   };
 }
 
+test("remote picker displays one public identity and sends the saved connection key", async t => {
+  const data = selection();
+  data.agent = "desktop-experiment";
+  data.effective = { agent: "desktop-experiment", display_name: "Media Manager", model: "", provider: "a2a", provider_kind: "a2a", mode: "build" };
+  data.profiles = [{ name: "desktop-experiment", display_name: "Media Manager", description: "Manage media", model: "", provider: "a2a", provider_kind: "a2a", mode: "build", disabled_reason: "" }];
+  const ui = await view(t, data);
+  assert.equal(ui.document.querySelectorAll(".session-agent-option").length, 1);
+  assert.doesNotMatch(ui.document.querySelector("dialog")!.textContent || "", /desktop-experiment/);
+  await act(async () => ui.option("Media Manager").click());
+  assert.deepEqual(ui.calls, ["desktop-experiment"]);
+});
+
 test("conversation picker shows profile descriptions, provider models, default and disabled reasons", async t => {
   const ui = await view(t);
   const dialog = ui.document.querySelector("dialog")!;

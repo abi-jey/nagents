@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import NotRequired
 from typing import TypedDict
 
 from fastapi import FastAPI
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
 
 class AgentIdentity(TypedDict):
     agent: str
+    display_name: NotRequired[str]
     model: str
     provider: str
     provider_kind: str
@@ -215,6 +217,7 @@ class SessionAgents:
         if profile.a2a.configured:
             return {
                 "agent": name,
+                "display_name": harness.agent_identities()[name].name,
                 "model": "",
                 "provider": "a2a",
                 "provider_kind": "a2a",
@@ -248,6 +251,7 @@ class SessionAgents:
         if harness._remote_profile.configured:
             return {
                 "agent": harness.config.agent,
+                "display_name": harness.agent_identities()[harness.config.agent].name,
                 "model": "",
                 "provider": "a2a",
                 "provider_kind": "a2a",
@@ -291,6 +295,7 @@ class SessionAgents:
 
     async def snapshot(self, session_id: str) -> dict[str, object]:
         self.state.harness.refresh_agent_definitions()
+        identities = self.state.harness.agent_identities()
         choice = await self.ensure(session_id)
         active = self.state.run_for(session_id)
         identity = (
@@ -310,7 +315,7 @@ class SessionAgents:
             "profiles": [
                 {
                     "name": name,
-                    "description": self.state.harness.config.profile(name).description,
+                    "description": identities[name].description,
                     **{key: value for key, value in self.identity(name).items() if key != "agent"},
                     "disabled_reason": self.unavailable(name),
                 }

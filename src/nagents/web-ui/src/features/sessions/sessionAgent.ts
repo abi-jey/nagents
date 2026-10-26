@@ -2,6 +2,7 @@ import { request, RequestError } from "../../api/client.js";
 
 export type SessionAgentIdentity = {
   agent: string;
+  display_name?: string;
   model: string;
   reasoning_effort?: string;
   provider: string;

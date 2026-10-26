@@ -112,7 +112,8 @@ test("native row content and controls stay intact while A2A rows omit fake model
   assert.equal(remote.querySelector(".team-agent-model"), null);
   assert.equal(remote.querySelector(".team-agent-context"), null);
   assert.equal(remote.querySelector(".team-agent-meter"), null);
-  assert.equal(remote.querySelector(".team-agent-heading .team-agent-definition")?.textContent, "remote-desktop");
+  assert.equal(remote.querySelector(".team-agent-heading .team-agent-definition")?.textContent, "Remote agent");
+  assert.doesNotMatch(remote.querySelector(".team-agent-open")?.getAttribute("aria-label") || "", /remote-desktop/);
   assert.equal(remote.querySelector(".team-agent-heading .team-agent-instance")?.textContent, "clear cedar");
   assert.equal(remote.querySelector(".team-state")?.getAttribute("title"), "Done");
   assert.equal(remote.querySelector("button button"), null);

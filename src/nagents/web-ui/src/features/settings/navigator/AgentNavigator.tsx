@@ -88,7 +88,7 @@ export function AgentNavigator({ request: opening, token, audio, close, changed,
   const catalogAgents = profiles.some(profile => profile.id === "assistant") ? profiles : [{ id: "assistant", name: "assistant", description: "Default conversational agent", mode: "build", source: "" }, ...profiles];
   const agents = [...catalogAgents, ...visited.filter(item => item.scope === "agent" && !catalogAgents.some(profile => profile.id === item.agent)
     && Object.values(drafts[targetKey(item)] || {}).some(Boolean)).map(item => ({ id: item.agent, name: `${item.agent} (removed)`, description: "This definition is no longer available. Your draft is kept for inspection.", mode: "", source: "" }))];
-  const name = addingRemote ? "Connect remote agent" : target.scope === "workspace" ? workspaceName : scopeName(target);
+  const name = addingRemote ? "Connect remote agent" : target.scope === "workspace" ? workspaceName : target.scope === "agent" ? agents.find(profile => profile.id === target.agent)?.name || "Agent" : scopeName(target);
   const remoteSelected = target.scope === "agent" && profiles.some(profile => profile.id === target.agent && profile.transport === "a2a");
   function node(item: NavigatorTarget, label: string, icon: IconName, detail = "") {
     const itemKey = targetKey(item), dirty = Object.values(drafts[itemKey] || {}).some(Boolean);
