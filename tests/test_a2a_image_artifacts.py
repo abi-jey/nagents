@@ -47,7 +47,7 @@ from nagents.harness.agent_updates import format_batch
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
-from nagents.harness.remote_artifacts import image_references
+from nagents.harness.remote.artifacts import image_references
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 from nagents.media import MediaCapabilities

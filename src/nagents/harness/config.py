@@ -31,7 +31,7 @@ from .providers import ScopedProviderRegistryStore
 from .providers import validate_provider
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
-from .remote_profiles import RemoteProfile
+from .remote.profiles import RemoteProfile
 from .resource_config import parse_mcp_servers
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
@@ -698,7 +698,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             overlay=True,
         )
     config.agent_sources = tuple(agent_sources)
-    from .remote_store import RemoteAgentStore
+    from .remote.store import RemoteAgentStore
 
     remote_agents = RemoteAgentStore(store.model_store("workspace").path.parent / "connections" / "a2a.json").load()
     for name, profile in remote_agents.agents.items():

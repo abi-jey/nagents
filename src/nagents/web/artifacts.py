@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from fastapi import Path as PathParameter
 from starlette.responses import Response
 
-from nagents.harness.remote_artifacts import image_bytes
+from nagents.harness.remote.artifacts import image_bytes
 from nagents.types import ImageContent
 
 from ._async import finish_on_cancel

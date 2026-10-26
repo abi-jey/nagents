@@ -2,8 +2,8 @@
 
 from nagents.harness.agent_identity import agent_identities
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_profiles import RemoteProfile
-from nagents.harness.remote_store import RemoteAgentMetadata
+from nagents.harness.remote.profiles import RemoteProfile
+from nagents.harness.remote.store import RemoteAgentMetadata
 
 
 def test_remote_identity_uses_card_metadata_and_keeps_connection_note_private() -> None:

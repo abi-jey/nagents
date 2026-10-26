@@ -28,10 +28,10 @@ from nagents.types import ContentPart
 from nagents.types import Message
 from nagents.types import TextContent
 
-from .remote_artifacts import image_references
-from .remote_credentials import RemoteCredentials
-from .types import Notice
-from .types import RemoteArtifacts
+from ..types import Notice
+from ..types import RemoteArtifacts
+from .artifacts import image_references
+from .credentials import RemoteCredentials
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -41,8 +41,8 @@ if TYPE_CHECKING:
     from nagents.a2a.conversation import RemoteConversation
     from nagents.artifacts import ImageArtifact
 
-    from .runtime import Harness
-    from .types import HarnessEvent
+    from ..runtime import Harness
+    from ..types import HarnessEvent
 
 logger = logging.getLogger(__name__)
 
@@ -206,14 +206,14 @@ async def owned_remote_task(
 
 async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
     """Admit a stable message once; retain identity on failure instead of replaying."""
-    from .runtime import _HarnessSession
+    from ..runtime import _HarnessSession
 
     session_id = harness.session_id
     message = Message(role="user", content=prompt)
     if isinstance(harness.agent.session, _HarnessSession):
         harness.agent.session.prepare_input(session_id, message)
     await harness.agent.session.add_message(session_id, message)
-    from .task_activity import ChildActivity
+    from ..task_activity import ChildActivity
 
     for plugin in harness.agent.plugins:
         if isinstance(plugin, ChildActivity):
@@ -329,7 +329,7 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
                     )
                     if update.status_text and update.status_text != last_status:
                         last_status = update.status_text
-                        from .remote_approvals import review_action
+                        from .approvals import review_action
 
                         if not await review_action(harness, remote, task_id, update.status_text):
                             yield Notice(update.status_text)

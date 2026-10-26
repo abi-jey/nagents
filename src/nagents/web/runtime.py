@@ -41,8 +41,8 @@ def server_logging_config() -> dict[str, object]:
     loggers.update(
         {
             "nagents.harness.subagents": {"handlers": ["default"], "level": "INFO", "propagate": False},
-            "nagents.harness.remote_runtime": {"handlers": ["default"], "level": "INFO", "propagate": False},
-            "nagents.harness.remote_credentials": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+            "nagents.harness.remote.runtime": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "nagents.harness.remote.credentials": {"handlers": ["default"], "level": "WARNING", "propagate": False},
         }
     )
     return configuration

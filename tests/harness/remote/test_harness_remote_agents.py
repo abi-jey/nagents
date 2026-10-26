@@ -15,9 +15,9 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolResultEvent
 from nagents.harness.agent_definitions import discover_agents
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_credentials import RemoteCredentials
-from nagents.harness.remote_profiles import RemoteProfile
-from nagents.harness.remote_store import RemoteAgentStore
+from nagents.harness.remote.credentials import RemoteCredentials
+from nagents.harness.remote.profiles import RemoteProfile
+from nagents.harness.remote.store import RemoteAgentStore
 from nagents.harness.subagents import SubagentManager
 from nagents.harness.subagents import TaskInfo
 from nagents.types import ToolCall

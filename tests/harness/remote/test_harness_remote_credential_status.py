@@ -19,9 +19,9 @@ import httpx
 import pytest
 
 from nagents.harness.private_store import ProtectedStoreError
-from nagents.harness.remote_credentials import RemoteCredentialError
-from nagents.harness.remote_credentials import RemoteCredentials
-from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote.credentials import RemoteCredentialError
+from nagents.harness.remote.credentials import RemoteCredentials
+from nagents.harness.remote.profiles import RemoteProfile
 
 pytestmark = pytest.mark.requires_posix
 
@@ -364,7 +364,7 @@ def test_global_refresh_lock_rotates_once_across_workspace_processes(
     credentials.save("initial-access", time.time() + 3600)
     seed_grant(credentials, expires_at=1.0, token_endpoint=f"{issuer}/token")
 
-    source = str(Path(__file__).resolve().parents[1] / "src")
+    source = str(Path(__file__).resolve().parents[3] / "src")
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [source, env.get("PYTHONPATH", "")]))
     workspace_a, workspace_b = tmp_path / "workspace-a", tmp_path / "workspace-b"
@@ -375,8 +375,8 @@ import asyncio
 import pathlib
 import sys
 import time
-from nagents.harness.remote_credentials import RemoteCredentials
-from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote.credentials import RemoteCredentials
+from nagents.harness.remote.profiles import RemoteProfile
 
 issuer = sys.argv[1]
 ready = pathlib.Path(sys.argv[2])
