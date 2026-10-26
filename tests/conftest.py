@@ -38,7 +38,7 @@ def workspace_discovery_only() -> Iterator[None]:
     from unittest.mock import patch
 
     from nagents.harness.runtime import Harness
-    from nagents.harness.tools import CodingTools
+    from nagents.harness.tools.coding import CodingTools
 
     with (
         patch.object(Harness, "load_project_instructions"),

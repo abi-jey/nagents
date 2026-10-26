@@ -162,3 +162,11 @@ def test_harness_provider_public_imports_refer_to_the_same_definitions() -> None
 
     for name in providers.__all__:
         assert getattr(providers, name) is getattr(registry, name)
+
+
+def test_harness_tool_public_imports_refer_to_the_same_definitions() -> None:
+    from nagents.harness import tools
+    from nagents.harness.tools import coding
+
+    for name in tools.__all__:
+        assert getattr(tools, name) is getattr(coding, name)

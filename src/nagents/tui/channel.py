@@ -20,9 +20,9 @@ from nagents.channels.types import ChannelReceiveCapabilities
 from nagents.channels.types import ChannelRenderCapabilities
 from nagents.channels.types import ChannelSendCapabilities
 from nagents.extensions import AgentPlugin
-from nagents.harness.execution import bind_channel_send
-from nagents.harness.execution import delivery_origin
 from nagents.harness.runtime import _HarnessSession
+from nagents.harness.tools.execution import bind_channel_send
+from nagents.harness.tools.execution import delivery_origin
 from nagents.session.deliveries import DeliveryJournal
 from nagents.types import Message
 

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from nagents.mcp import MCPServerConfig
 
 if TYPE_CHECKING:
-    from .config import HarnessConfig
+    from ..config import HarnessConfig
 
 
 def parse_mcp_servers(value: object, directory: Path, workspace: Path) -> tuple[MCPServerConfig, ...]:

@@ -16,7 +16,7 @@ from nagents.events import ErrorEvent
 from nagents.events import FinishReason
 from nagents.events import TextDoneEvent
 from nagents.harness import Harness
-from nagents.harness.tools import CodingTools
+from nagents.harness.tools.coding import CodingTools
 from tests.support.providers import setup_harness
 
 if TYPE_CHECKING:

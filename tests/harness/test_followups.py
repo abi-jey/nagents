@@ -11,7 +11,7 @@ import pytest
 from nagents.events import TextDoneEvent
 from nagents.harness.followups import RunInput
 from nagents.harness.runtime import Harness
-from nagents.harness.tools import CodingTools
+from nagents.harness.tools.coding import CodingTools
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect
 from tests.support.providers import setup_harness

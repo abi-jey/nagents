@@ -16,8 +16,8 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import load_config
-from nagents.harness.resource_config import read_resource_configuration
-from tests.harness.test_resource_reload import server
+from nagents.harness.tools.resource_config import read_resource_configuration
+from tests.harness.tools.test_resource_reload import server
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
 
@@ -246,7 +246,7 @@ async def test_late_untrusted_project_is_reported_once_and_never_loaded(
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
     harness.config.resource_paths = (trusted,)
     try:
-        with caplog.at_level(logging.INFO, logger="nagents.harness.resources"):
+        with caplog.at_level(logging.INFO, logger="nagents.harness.tools.resources"):
             events = await collect(harness)
             await harness.resources.reload()
         warnings = [

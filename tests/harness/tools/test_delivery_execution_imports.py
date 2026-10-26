@@ -60,7 +60,7 @@ if mode == 'harness':
 if mode in {'custom', 'custom_subclass'}:
     from nagents.events import TextDoneEvent, ToolCallEvent, ToolResultEvent
     from nagents.harness import Harness, HarnessConfig
-    from nagents.harness.execution import bind_channel_send, delivery_origin
+    from nagents.harness.tools.execution import bind_channel_send, delivery_origin
     from nagents.harness.runtime import _HarnessSession
     from nagents.session import SessionManager
     from tests.support.config import connection

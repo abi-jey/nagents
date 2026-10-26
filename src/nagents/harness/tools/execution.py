@@ -26,8 +26,8 @@ if TYPE_CHECKING:
     from nagents.types import ToolCall
     from nagents.types import ToolDefinition
 
-    from .runtime import Harness
-    from .tools import HarnessExecutor
+    from ..runtime import Harness
+    from .coding import HarnessExecutor
 
 
 _current: ContextVar["ExecutionBridge | None"] = ContextVar("delivery_execution", default=None)

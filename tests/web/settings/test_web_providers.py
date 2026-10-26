@@ -19,7 +19,7 @@ from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.tools import CodingTools
+from nagents.harness.tools.coding import CodingTools
 from tests.support.config import connection
 from tests.support.web import client_app
 

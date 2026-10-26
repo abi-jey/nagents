@@ -41,7 +41,7 @@ async def test_configuration_is_logged_once_not_replayed_and_runtime_notices_sti
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
     harness.diagnostics.extend(startup)
     try:
-        with caplog.at_level(logging.INFO, logger="nagents.harness.resources"):
+        with caplog.at_level(logging.INFO, logger="nagents.harness.tools.resources"):
             await harness.initialize(create_session=False)
             first = await collect(harness, "First request")
             second = await collect(harness, "Follow-up request")
@@ -70,7 +70,7 @@ async def test_new_foreign_configuration_is_diagnostic_not_a_chat_message(
 
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
     try:
-        with caplog.at_level(logging.INFO, logger="nagents.harness.resources"):
+        with caplog.at_level(logging.INFO, logger="nagents.harness.tools.resources"):
             first = await collect(harness)
             second = await collect(harness)
         assert not any(isinstance(event, Notice) for event in (*first, *second))

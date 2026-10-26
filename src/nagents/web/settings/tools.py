@@ -12,8 +12,8 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from nagents.harness.tool_config import HarnessToolRegistry
-from nagents.harness.tools import MODIFYING_TOOLS
+from nagents.harness.tools.coding import MODIFYING_TOOLS
+from nagents.harness.tools.configuration import HarnessToolRegistry
 from nagents.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:

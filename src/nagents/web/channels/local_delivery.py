@@ -21,7 +21,7 @@ from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelReceiveCapabilities
 from nagents.channels.types import ChannelRenderCapabilities
 from nagents.channels.types import ChannelSendCapabilities
-from nagents.harness.execution import delivery_origin
+from nagents.harness.tools.execution import delivery_origin
 from nagents.session.deliveries import DeliveryJournal
 
 if TYPE_CHECKING:

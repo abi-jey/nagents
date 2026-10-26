@@ -10,7 +10,7 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.web.app import create_app
-from tests.harness.test_resource_reload import server
+from tests.harness.tools.test_resource_reload import server
 from tests.support.providers import setup_harness
 
 if TYPE_CHECKING:

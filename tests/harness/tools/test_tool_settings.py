@@ -18,7 +18,7 @@ from nagents.extensions import CompactionResult
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.tool_config import WorkspaceTools
+from nagents.harness.tools.configuration import WorkspaceTools
 from nagents.session import SessionManager
 from nagents.types import Message
 from tests.harness.test_harness import ScriptedProvider

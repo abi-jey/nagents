@@ -258,7 +258,7 @@ def audit_trace(requests: list[dict[str, object]], tool_events: list[dict[str, o
     """
     from typing import cast
 
-    from nagents.harness.tools import _validate
+    from nagents.harness.tools.coding import _validate
 
     records: list[CallRecord] = []
     request_map = {str(request.get("generation_id", "")): request for request in requests}

@@ -48,9 +48,9 @@ from nagents.types import JsonValue
 from nagents.types import ToolCall
 from nagents.types import ToolDefinition
 
+from ..types import ToolOutput
 from .execution import _execution_for
 from .execution import _mask_delivery_authority
-from .types import ToolOutput
 
 READ_ONLY_TOOLS = frozenset(
     {
@@ -68,8 +68,8 @@ READ_ONLY_TOOLS = frozenset(
 MODIFYING_TOOLS = frozenset({"edit", "write", "shell", "remote_agent_configure"})
 
 if TYPE_CHECKING:
+    from ..runtime import Harness
     from .execution import ExecutionBridge
-    from .runtime import Harness
 
 _PRUNED = {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 _CREDENTIALS = {

@@ -17,7 +17,7 @@ from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote.profiles import RemoteProfile
 from nagents.harness.session_identity import SessionIdentityStore
-from nagents.harness.tools import CodingTools
+from nagents.harness.tools.coding import CodingTools
 from nagents.types import JsonValue
 from nagents.types import Message
 from nagents.types import ToolCall

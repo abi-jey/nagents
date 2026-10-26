@@ -39,7 +39,6 @@ from nagents.provider.reasoning import validate_reasoning_choice
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
-from ..execution import ExecutionBridge
 from ..followups import RunInput
 from ..followups import RunTurn
 from ..providers.factory import HarnessProvider
@@ -54,7 +53,8 @@ from ..task_activity import ChildActivity
 from ..task_activity import TaskOptions
 from ..task_activity import compaction_snapshot
 from ..task_activity import public_payload
-from ..tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
+from ..tools.coding import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
+from ..tools.execution import ExecutionBridge
 from ..types import Notice
 from ..types import RemoteArtifacts
 from ..types import TaskActivity

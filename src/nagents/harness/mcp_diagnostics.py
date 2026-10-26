@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Literal
 
-from .resource_config import ignored_project
+from .tools.resource_config import ignored_project
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from .config import HarnessConfig
-    from .resource_config import ResourceConfiguration
+    from .tools.resource_config import ResourceConfiguration
 
 
 @dataclass(frozen=True)
