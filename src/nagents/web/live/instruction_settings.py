@@ -6,13 +6,13 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..voice_instructions import default_voice_instructions
-from ..voice_instructions import default_voice_instructions_path
+from ..voice.instructions import default_voice_instructions
+from ..voice.instructions import default_voice_instructions_path
 
 if TYPE_CHECKING:
-    from ..voice_instruction_store import InstructionPreference
-    from ..voice_instruction_store import InstructionScope
-    from ..voice_instruction_store import VoiceInstructionStore
+    from ..voice.store import InstructionPreference
+    from ..voice.store import InstructionScope
+    from ..voice.store import VoiceInstructionStore
 
 
 @dataclass(frozen=True)

@@ -16,14 +16,14 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
 
-from ..voice_instruction_store import InstructionScope
-from ..voice_instruction_store import validate_instruction_text
+from ..voice.store import InstructionScope
+from ..voice.store import validate_instruction_text
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ..execution.service import WebState
-    from ..voice_preferences import Scope
+    from ..voice.preferences import Scope
     from .settings import LiveSettings
 
 logger = logging.getLogger(__name__)

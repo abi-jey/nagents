@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 
     import pytest
 
-    from nagents.web.voice_preferences import Scope
-    from nagents.web.voice_preferences import VoicePreferenceSnapshot
+    from nagents.web.voice.preferences import Scope
+    from nagents.web.voice.preferences import VoicePreferenceSnapshot
 
 
 def test_global_live_read_rejects_markdown_change_between_voice_and_prompt_reads(

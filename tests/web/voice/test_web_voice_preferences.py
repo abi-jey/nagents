@@ -22,8 +22,8 @@ from nagents.web.live.routes import unavailable_reason
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings
 from nagents.web.live.settings import WorkspaceVoiceInput
-from nagents.web.voice_preferences import VoiceOverrides
-from nagents.web.voice_preferences import VoicePreferences
+from nagents.web.voice.preferences import VoiceOverrides
+from nagents.web.voice.preferences import VoicePreferences
 from tests.support.web import client_app
 
 if TYPE_CHECKING:

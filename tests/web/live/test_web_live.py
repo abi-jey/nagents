@@ -36,7 +36,7 @@ from nagents.web.live.settings import LIVE_VOICES
 from nagents.web.live.settings import LiveConnection
 from nagents.web.live.settings import LiveSettings
 from nagents.web.live.settings import LiveValues
-from nagents.web.voice_instructions import default_voice_instructions
+from nagents.web.voice.instructions import default_voice_instructions
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL
