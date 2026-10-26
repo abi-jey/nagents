@@ -13,16 +13,16 @@ from time import monotonic
 from time import time
 from typing import TYPE_CHECKING
 
-from nagents.harness.connection import codex_discovery_selected
+from nagents.harness.providers.connection import codex_discovery_selected
 from nagents.provider.context import MAX_METADATA_MODELS
 from nagents.provider.context import METADATA_TTL
 from nagents.provider.openai import _load_config
 from nagents.provider.openai import _local_credentials
 
 if TYPE_CHECKING:
-    from nagents.harness.auth import OpenAIAuth
-    from nagents.harness.model_catalog import ModelCatalog
-    from nagents.harness.providers import ProviderProfile
+    from nagents.harness.providers.auth import OpenAIAuth
+    from nagents.harness.providers.model_catalog import ModelCatalog
+    from nagents.harness.providers.registry import ProviderProfile
     from nagents.types import ReasoningEffort
 
 MAX_CATALOG_CONNECTIONS = 128

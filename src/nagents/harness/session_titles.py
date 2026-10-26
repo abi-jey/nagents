@@ -28,9 +28,9 @@ from nagents.types import TextContent
 
 from .agents.updates import NOTIFICATION_PREFIX
 from .agents.updates import WAKEUP_PREFIX
-from .connection import build_provider
-from .provider import HarnessProvider
-from .provider import UnavailableModelProvider
+from .providers.connection import build_provider
+from .providers.factory import HarnessProvider
+from .providers.factory import UnavailableModelProvider
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

@@ -22,8 +22,8 @@ from nagents.harness import Harness
 from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.web.app import WebState
 from nagents.web.execution import wakeups
 from nagents.web.execution.wakeups import Chain

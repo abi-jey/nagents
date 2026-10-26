@@ -23,9 +23,9 @@ import aiohttp
 from nagents.provider import Provider
 from nagents.provider.openai import USER_AGENT
 
-from .config import DEFAULT_HARNESS_MODEL
+from ..config import DEFAULT_HARNESS_MODEL
 from .credentials import ProviderLoginError
-from .providers import PROVIDERS
+from .registry import PROVIDERS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

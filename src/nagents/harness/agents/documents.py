@@ -9,10 +9,10 @@ from importlib import resources
 from typing import TYPE_CHECKING
 from typing import Literal
 
-from ..model_bindings import AgentModelStore
+from ..providers.model_bindings import AgentModelStore
 
 if TYPE_CHECKING:
-    from ..providers import ScopedProviderRegistryStore
+    from ..providers.registry import ScopedProviderRegistryStore
 
 DocumentScope = Literal["global", "workspace", "agent"]
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def bundled_assistant() -> tuple[dict[str, object], str]:
 
 def ensure_agent_documents(providers: ScopedProviderRegistryStore) -> None:
     """Run at startup. UI writes disable management; external true flags remain authoritative."""
-    from ..providers import _exclusive_lock
+    from ..providers.registry import _exclusive_lock
 
     store = AgentModelStore(providers.model_store("global").path.parent)
     store._check_directory()

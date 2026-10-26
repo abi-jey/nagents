@@ -11,11 +11,11 @@ import pytest
 
 from nagents.events import ErrorEvent
 from nagents.harness.config import load_config
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.provider import UnavailableModelProvider
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.factory import UnavailableModelProvider
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.types import Message
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app

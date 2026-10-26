@@ -43,12 +43,8 @@ from .agents.identity import agent_identities
 from .agents.status import AgentStatusResult
 from .agents.subagents import DEFAULT_TASK_OPTIONS
 from .agents.subagents import SubagentManager
-from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .config import AgentProfile
-from .connection import build_provider
-from .credentials import ProviderLogin
-from .credentials import ProviderLoginStore
 from .default_instructions import load_default_instructions
 from .execution import ExecutionBridge
 from .execution import _is_owned_adapter
@@ -61,18 +57,22 @@ from .followups import FollowupReady
 from .followups import RunInput
 from .followups import RunInputs
 from .followups import RunTurn
-from .model_bindings import ModelBinding
-from .model_bindings import ResolvedModelBinding
-from .model_bindings import resolve_model_binding
-from .model_catalog import ModelCatalog
-from .provider import DemoCompaction
-from .provider import HarnessProvider
-from .provider import UnavailableModelProvider
-from .providers import ProviderProfile
-from .providers import ProviderRegistry
-from .providers import ScopedProviderRegistryStore
-from .reasoning import ReasoningPreference
-from .reasoning import resolve_effort
+from .providers.auth import OpenAIAuth
+from .providers.connection import build_provider
+from .providers.credentials import ProviderLogin
+from .providers.credentials import ProviderLoginStore
+from .providers.factory import DemoCompaction
+from .providers.factory import HarnessProvider
+from .providers.factory import UnavailableModelProvider
+from .providers.model_bindings import ModelBinding
+from .providers.model_bindings import ResolvedModelBinding
+from .providers.model_bindings import resolve_model_binding
+from .providers.model_catalog import ModelCatalog
+from .providers.reasoning import ReasoningPreference
+from .providers.reasoning import resolve_effort
+from .providers.registry import ProviderProfile
+from .providers.registry import ProviderRegistry
+from .providers.registry import ScopedProviderRegistryStore
 from .remote.tools import RemoteAgentTools
 from .resources import HarnessResources
 from .session_titles import generate_title
@@ -101,9 +101,9 @@ if TYPE_CHECKING:
     from nagents.types import ToolArguments
     from nagents.types import ToolDefinition
 
-    from .auth import DeviceAuthorization
     from .config import HarnessConfig
-    from .model_catalog import ModelCapabilities
+    from .providers.auth import DeviceAuthorization
+    from .providers.model_catalog import ModelCapabilities
     from .remote.store import RemoteAgentMetadata
     from .types import ApprovalHandler
     from .types import WakeupHandler
@@ -1447,7 +1447,7 @@ class Harness:
     async def save_provider(
         self, name: str, profile: ProviderProfile, revision: str, scope: str = "workspace"
     ) -> ProviderRegistry:
-        from .providers import NAME
+        from .providers.registry import NAME
 
         with self.operation("save provider"):
             current = self.provider_store.load_scope(scope)

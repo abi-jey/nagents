@@ -14,7 +14,7 @@ from textual.widgets import Static
 from textual.widgets import TextArea
 
 from nagents.harness.agents.subagents import TaskInfo
-from nagents.harness.auth import DeviceAuthorization
+from nagents.harness.providers.auth import DeviceAuthorization
 from nagents.harness.types import ApprovalRequest
 from nagents.tui.login import DEVICE_URL
 from nagents.tui.login import DeviceLoginModal

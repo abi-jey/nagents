@@ -15,7 +15,7 @@ from nagents.cli import _parser
 from nagents.cli import main
 from nagents.exceptions import ModelListError
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.provider import CodexCredentials
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider

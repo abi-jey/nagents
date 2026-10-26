@@ -13,9 +13,9 @@ import pytest
 
 from nagents.harness.agents.documents import agent_document_store
 from nagents.harness.agents.documents import bundled_assistant
-from nagents.harness.model_bindings import AgentModelStore
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.model_bindings import AgentModelStore
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.web.settings.test_model_binding_settings import configuration

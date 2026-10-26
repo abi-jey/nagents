@@ -18,11 +18,11 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from nagents.harness import auth as auth_module
-from nagents.harness.auth import CLIENT_ID
-from nagents.harness.auth import OpenAIAuth
-from nagents.harness.auth import OpenAIAuthError
-from nagents.harness.auth import _tokens
+from nagents.harness.providers import auth as auth_module
+from nagents.harness.providers.auth import CLIENT_ID
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.auth import OpenAIAuthError
+from nagents.harness.providers.auth import _tokens
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
@@ -224,7 +224,7 @@ def test_timeout_uses_limiting_budget_before_clock_advances(
     def timeout(*args: object, **kwargs: object) -> None:
         raise error_type(ACCESS)
 
-    monkeypatch.setattr("nagents.harness.auth.monotonic", lambda: 100.0)
+    monkeypatch.setattr("nagents.harness.providers.auth.monotonic", lambda: 100.0)
     monkeypatch.setattr(aiohttp, "ClientSession", timeout)
 
     async def scenario() -> None:

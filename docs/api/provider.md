@@ -316,7 +316,7 @@ ngn login --status
 import asyncio
 
 from nagents import OpenAIProvider, ModelListError
-from nagents.harness.auth import OpenAIAuth
+from nagents.harness.providers.auth import OpenAIAuth
 
 
 async def codex_models() -> None:

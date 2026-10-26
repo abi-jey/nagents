@@ -23,14 +23,14 @@ from pydantic import Field
 from pydantic import SecretStr
 from pydantic import field_validator
 
-from nagents.harness.auth import OpenAIAuth
-from nagents.harness.connection import codex_discovery_selected
-from nagents.harness.connection import live_auth_available
-from nagents.harness.live_profiles import LIVE_FIELDS
-from nagents.harness.live_profiles import LiveProfile
-from nagents.harness.providers import KINDS
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.connection import codex_discovery_selected
+from nagents.harness.providers.connection import live_auth_available
+from nagents.harness.providers.live_profiles import LIVE_FIELDS
+from nagents.harness.providers.live_profiles import LiveProfile
+from nagents.harness.providers.registry import KINDS
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.live import LiveConfig
 from nagents.provider.auth import validate_prefix
 

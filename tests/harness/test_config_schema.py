@@ -17,7 +17,7 @@ from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.harness.providers import API_NAMES
+from nagents.harness.providers.registry import API_NAMES
 from tests.support.config import connection
 
 

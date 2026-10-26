@@ -29,10 +29,10 @@ from nagents.events import ErrorEvent
 from nagents.events import FinishReason
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness.auth import OpenAIAuth
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.types import TranscriptAbandoned
 from nagents.harness.types import TranscriptAnchor
 from nagents.provider.openai import CodexCredentials
@@ -78,7 +78,7 @@ def configuration(workspace: Path, model: str, private_root: Path = PRIVATE_ROOT
 def request_deadline(value: object) -> float:
     # Older frozen runtimes remain usable with the unchanged callback fixture.
     try:
-        from nagents.harness.providers import validate_request_timeout
+        from nagents.harness.providers.registry import validate_request_timeout
     except ImportError:
         raise ValueError("A named request deadline requires a nagents 0.18-compatible runtime") from None
     return validate_request_timeout(value)

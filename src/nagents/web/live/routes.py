@@ -18,7 +18,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from nagents.agent import Agent
-from nagents.harness.connection import build_live_provider
+from nagents.harness.providers.connection import build_live_provider
 from nagents.live import LiveConfig
 from nagents.live.delegation import ClientDelegationHandler
 from nagents.live.delegation import ClientDelegationObserver

@@ -27,7 +27,7 @@ from benchmarks.terminal_bench.prepare import reuse_runtime_bundle
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.harness import Harness
-from nagents.harness import providers
+from nagents.harness.providers import registry as providers
 from nagents.provider import OpenAIProvider
 from nagents.provider.openai import CodexCredentials
 from nagents.types import Message

@@ -14,9 +14,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.web.live.routes import create_agent
 from nagents.web.live.routes import unavailable_reason
 from nagents.web.live.settings import GlobalVoiceInput

@@ -13,9 +13,9 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.harness.commands import CommandResult
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.types import Message
 from tests.support.hang_guard import HANG_GUARD

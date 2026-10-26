@@ -12,10 +12,10 @@ from nagents.events import TextDoneEvent
 from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.tools import CodingTools
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.harness.auth import OpenAIAuth
+    from nagents.harness.providers.auth import OpenAIAuth
     from nagents.types import Message
 
 EMPTY_REVISION = "0" * 64

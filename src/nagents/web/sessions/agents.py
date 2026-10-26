@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from nagents.harness.reasoning import resolve_effort
+from nagents.harness.providers.reasoning import resolve_effort
 from nagents.provider.context import ContextMetadata
 from nagents.tools.registry import ToolRegistry
 

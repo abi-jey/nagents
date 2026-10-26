@@ -12,9 +12,9 @@ import pytest
 
 from nagents.harness import runtime
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from tests.support.web import client_app
@@ -22,7 +22,7 @@ from tests.support.web import client_app
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.harness.auth import OpenAIAuth
+    from nagents.harness.providers.auth import OpenAIAuth
     from nagents.provider.context import ContextMetadata
 
 

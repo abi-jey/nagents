@@ -20,10 +20,10 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.default_instructions import load_default_instructions
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.harness.task_activity import TaskOptions
 from nagents.harness.types import TaskCompleted

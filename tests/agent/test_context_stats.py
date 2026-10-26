@@ -423,8 +423,8 @@ def test_deferred_auth_usage_is_bound_after_credentials_resolve(tmp_path: Path) 
     from nagents.events import TextDoneEvent
     from nagents.events import Usage
     from nagents.harness.config import HarnessConfig
-    from nagents.harness.provider import HarnessProvider
-    from nagents.harness.providers import ProviderProfile
+    from nagents.harness.providers.factory import HarnessProvider
+    from nagents.harness.providers.registry import ProviderProfile
     from nagents.provider import Provider
     from nagents.types import GenerationConfig
 

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from ..config import AgentProfile
 from ..private_store import ProtectedFileStore
 from ..private_store import ProtectedStoreError
-from ..providers import _exclusive_lock
+from ..providers.registry import _exclusive_lock
 from .profiles import RemoteProfile
 
 if TYPE_CHECKING:

@@ -39,12 +39,12 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import Harness
-from nagents.harness import provider_login
 from nagents.harness.commands import BUILTIN_COMMANDS
 from nagents.harness.commands import split_command
-from nagents.harness.credentials import ProviderLogin
 from nagents.harness.execution import host_run
 from nagents.harness.followups import RunInput
+from nagents.harness.providers import login as provider_login
+from nagents.harness.providers.credentials import ProviderLogin
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskDeliveryWarning
@@ -94,10 +94,10 @@ if TYPE_CHECKING:
 
     from nagents.channels.delivery_types import DeliveryReceipt
     from nagents.channels.types import ChannelValue
-    from nagents.harness.auth import DeviceAuthorization
     from nagents.harness.commands import Command
-    from nagents.harness.provider_login import LoginMethod
-    from nagents.harness.providers import ProviderProfile
+    from nagents.harness.providers.auth import DeviceAuthorization
+    from nagents.harness.providers.login import LoginMethod
+    from nagents.harness.providers.registry import ProviderProfile
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
 
@@ -1349,7 +1349,7 @@ class NagentsApp(App[None]):
             self._launch(self._login, "Starting ChatGPT/Codex device login...")
         elif method == "openrouter":
             if hasattr(self.harness, "provider_store"):
-                from nagents.harness.providers import ProviderProfile
+                from nagents.harness.providers.registry import ProviderProfile
 
                 self.push_screen(
                     ProviderEditor(profile=ProviderProfile(kind="openrouter")),
@@ -1442,7 +1442,7 @@ class NagentsApp(App[None]):
             self._launch(lambda: self._delete_provider(name, scope), "Deleting provider...")
 
     def _save_provider(self, result: tuple[str, object] | None, scope: str = "workspace") -> None:
-        from nagents.harness.providers import ProviderProfile
+        from nagents.harness.providers.registry import ProviderProfile
 
         if not result:
             return

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import Usage
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.provider.openai import OpenAIProvider
 from nagents.types import RetryConfig
 
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.harness.config import HarnessConfig
-    from nagents.harness.credentials import ProviderLoginStore
+    from nagents.harness.providers.credentials import ProviderLoginStore
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolDefinition

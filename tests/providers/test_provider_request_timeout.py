@@ -16,20 +16,20 @@ import aiohttp
 import pytest
 from fastapi import HTTPException
 
-from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.harness.connection import build_live_provider
-from nagents.harness.connection import build_provider
-from nagents.harness.credentials import ProviderLoginError
-from nagents.harness.credentials import ProviderLoginStore
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ProviderRegistryStore
-from nagents.harness.providers import ScopedProviderRegistryStore
-from nagents.harness.providers import validate_request_timeout
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.connection import build_live_provider
+from nagents.harness.providers.connection import build_provider
+from nagents.harness.providers.credentials import ProviderLoginError
+from nagents.harness.providers.credentials import ProviderLoginStore
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ProviderRegistryStore
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import validate_request_timeout
 from nagents.harness.runtime import Harness
 from nagents.harness.tools import CodingTools
 from nagents.live import LiveConfig

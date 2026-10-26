@@ -42,10 +42,10 @@ from nagents.types import TextContent
 from ..execution import ExecutionBridge
 from ..followups import RunInput
 from ..followups import RunTurn
-from ..provider import HarnessProvider
-from ..reasoning import ReasoningPreference
-from ..reasoning import resolve_effort
-from ..reasoning import validate_effort
+from ..providers.factory import HarnessProvider
+from ..providers.reasoning import ReasoningPreference
+from ..providers.reasoning import resolve_effort
+from ..providers.reasoning import validate_effort
 from ..remote.artifacts import referenced_images
 from ..session_identity import SessionIdentityStore
 from ..session_identity import validate_session_id
@@ -82,8 +82,8 @@ if TYPE_CHECKING:
     from nagents.types import ToolArguments
 
     from ..config import AgentProfile
-    from ..model_bindings import ModelBinding
-    from ..providers import ProviderProfile
+    from ..providers.model_bindings import ModelBinding
+    from ..providers.registry import ProviderProfile
     from ..runtime import Harness
 
 MAX_RETAINED_TASKS = 64

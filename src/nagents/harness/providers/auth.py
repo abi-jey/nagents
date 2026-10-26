@@ -32,8 +32,8 @@ import aiohttp
 from nagents.provider.openai import USER_AGENT
 from nagents.provider.openai import CodexCredentials
 
-from .private_store import ProtectedFileStore
-from .private_store import ProtectedStoreError
+from ..private_store import ProtectedFileStore
+from ..private_store import ProtectedStoreError
 
 if TYPE_CHECKING:
     from pathlib import Path

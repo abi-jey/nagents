@@ -20,14 +20,14 @@ from nagents.provider.reasoning import native_openai_api
 from nagents.types import Message
 
 from .model_bindings import ModelBinding
-from .providers import PROVIDERS
+from .registry import PROVIDERS
 
 if TYPE_CHECKING:
     from nagents.extensions import CompactionRequest
     from nagents.types import GenerationConfig
     from nagents.types import ToolDefinition
 
-    from .config import HarnessConfig
+    from ..config import HarnessConfig
     from .credentials import ProviderLoginStore
 
 

@@ -16,8 +16,8 @@ from dataclasses import field
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from .private_store import ProtectedFileStore
-from .private_store import ProtectedStoreError
+from ..private_store import ProtectedFileStore
+from ..private_store import ProtectedStoreError
 
 if TYPE_CHECKING:
     from pathlib import Path

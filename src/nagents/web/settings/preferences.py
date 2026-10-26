@@ -29,11 +29,11 @@ from nagents._sqlite import database_write
 from nagents.compaction import ModelCompaction
 from nagents.harness.agents.documents import agent_document_store
 from nagents.harness.agents.subagent_settings import SubagentLimits
-from nagents.harness.model_bindings import AgentModelStore
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.providers import API_NAMES
-from nagents.harness.providers import PROVIDERS
-from nagents.harness.reasoning import resolve_effort
+from nagents.harness.providers.model_bindings import AgentModelStore
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.reasoning import resolve_effort
+from nagents.harness.providers.registry import API_NAMES
+from nagents.harness.providers.registry import PROVIDERS
 from nagents.provider.reasoning import reasoning_effort_options
 from nagents.types import ReasoningEffort
 
@@ -46,8 +46,8 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
-    from nagents.harness.model_bindings import AgentModelPreference
-    from nagents.harness.model_catalog import ModelCatalog
+    from nagents.harness.providers.model_bindings import AgentModelPreference
+    from nagents.harness.providers.model_catalog import ModelCatalog
 
 MAX_SETTINGS_BYTES = 16384
 logger = logging.getLogger(__name__)

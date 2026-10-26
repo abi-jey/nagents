@@ -11,7 +11,7 @@ import pytest
 from nagents.adapters.responses import format_request
 from nagents.events import ErrorEvent
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType

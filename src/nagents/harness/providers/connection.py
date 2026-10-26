@@ -15,7 +15,7 @@ from nagents.provider.openai import CodexConfigError
 from nagents.provider.openai import _load_config
 from nagents.types import RetryConfig
 
-from .provider import HarnessProvider
+from .factory import HarnessProvider
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -27,9 +27,9 @@ if TYPE_CHECKING:
     from nagents.types import Message
     from nagents.types import ToolDefinition
 
+    from ..config import HarnessConfig
     from .auth import OpenAIAuth
-    from .config import HarnessConfig
-    from .providers import ProviderProfile
+    from .registry import ProviderProfile
 
 
 class _EntraFoundryProvider(FoundryProvider):

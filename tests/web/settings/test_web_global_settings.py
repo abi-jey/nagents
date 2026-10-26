@@ -4,10 +4,10 @@ import asyncio
 from pathlib import Path
 
 from nagents.harness.config import HarnessConfig
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 

@@ -11,7 +11,7 @@ from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.harness.reasoning import ReasoningPreference
+from nagents.harness.providers.reasoning import ReasoningPreference
 from nagents.harness.task_activity import TaskOptions
 
 

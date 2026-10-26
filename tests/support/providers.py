@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.runtime import Harness
 from tests.support.config import connection
 

@@ -18,10 +18,10 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.types import Message

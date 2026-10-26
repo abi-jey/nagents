@@ -8,9 +8,9 @@ from typing import cast
 
 from fastapi import HTTPException
 
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings
 from nagents.web.live.settings import WorkspaceVoiceInput
