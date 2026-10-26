@@ -31,8 +31,8 @@ from tests.support.web import LiveStream
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 from tests.support.web import submit_and_wait
-from tests.web.test_web_subscription_lifecycle import until
-from tests.web.test_web_wakeups import scheduled_app
+from tests.web.execution.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -41,8 +41,8 @@ if TYPE_CHECKING:
     from nagents.events import Event
     from nagents.harness.types import HarnessEvent
     from nagents.types import ContentPart
-    from nagents.web.service import Run
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import Run
+    from nagents.web.execution.service import WebState
     from tests.support.providers import FakeProvider
 
 

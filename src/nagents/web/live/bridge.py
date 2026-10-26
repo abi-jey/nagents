@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 
     from nagents.live.delegation import LiveAppend
 
-    from ..service import Run
-    from ..service import WebState
+    from ..execution.service import Run
+    from ..execution.service import WebState
 
 DelegationStatus = Literal["queued", "working", "completed", "failed", "cancelled"]
 

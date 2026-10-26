@@ -28,7 +28,7 @@ from .preferences import _GLOBAL_SETTINGS_TABLE
 from .preferences import SettingsValues
 
 if TYPE_CHECKING:
-    from ..service import WebState
+    from ..execution.service import WebState
 
 logger = logging.getLogger(__name__)
 

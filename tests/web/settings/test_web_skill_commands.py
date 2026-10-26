@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.harness.config import HarnessConfig
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 def _config(path: Path) -> HarnessConfig:

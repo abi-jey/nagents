@@ -20,7 +20,7 @@ from tests.web.test_web_deletion import quiet
 from tests.web.test_web_deletion import rows
 
 if TYPE_CHECKING:
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 @pytest.mark.parametrize("trash_purge", [False, True])

@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
 
-    from .service import Run
-    from .service import WebState
+    from .execution.service import Run
+    from .execution.service import WebState
 
 
 class AgentIdentity(TypedDict):

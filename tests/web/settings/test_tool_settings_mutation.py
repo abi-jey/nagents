@@ -14,8 +14,8 @@ from unittest.mock import patch
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.web.channels.host import ChannelHost
+from nagents.web.execution.service import WebState
 from nagents.web.routing import RoutingStore
-from nagents.web.service import WebState
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
@@ -176,7 +176,7 @@ def test_queued_save_times_out_without_writing(tmp_path: Path, monkeypatch: pyte
             owner: AbstractContextManager[None] = app.state.web.idle(allow_running=True)
             owner.__enter__()
             try:
-                monkeypatch.setattr("nagents.web.service.MUTATION_WAIT_TIMEOUT", 0.01)
+                monkeypatch.setattr("nagents.web.execution.service.MUTATION_WAIT_TIMEOUT", 0.01)
                 queued = asyncio.Event()
                 with track_queued_mutations(queued):
                     request = asyncio.create_task(save_tools(client, headers, revision, {"reviewer": {"shell": False}}))

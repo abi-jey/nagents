@@ -19,7 +19,7 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from tests.support.config import connection
 from tests.support.providers import FakeProvider
 from tests.support.web import client_app
-from tests.web.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_subscription_lifecycle import until
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

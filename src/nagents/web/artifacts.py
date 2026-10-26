@@ -24,7 +24,7 @@ from .session_actions import RootId  # noqa: TC001 - FastAPI resolves this alias
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .service import WebState
+    from .execution.service import WebState
 
 
 def register_artifacts(app: FastAPI, get: Callable[[], WebState]) -> None:

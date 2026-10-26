@@ -10,14 +10,14 @@ from typing import cast
 
 import pytest
 
-from nagents.web.service import Run
+from nagents.web.execution.service import Run
 from tests.support.voice_approval_trace import VoiceApprovalTrace
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.harness.runtime import Harness
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 def test_forced_approval_timeout_reports_safe_live_tasks_and_early_bridge_failure(tmp_path: Path) -> None:

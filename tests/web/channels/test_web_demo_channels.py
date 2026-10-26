@@ -32,7 +32,7 @@ from tests.support.hang_guard import HANG_GUARD
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 URL = "http://127.0.0.1:8765"
 pytestmark = pytest.mark.requires_posix

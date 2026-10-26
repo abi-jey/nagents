@@ -11,12 +11,12 @@ import pytest
 from nagents.events import TextDoneEvent
 from nagents.session.forks import fork_in
 from nagents.types import Message
-from nagents.web.wakeups import Chain
+from nagents.web.execution.wakeups import Chain
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
+from tests.web.execution.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_wakeups import scheduled_app
 from tests.web.test_web_deletion import quiet
-from tests.web.test_web_subscription_lifecycle import until
-from tests.web.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
     import sqlite3
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event as ModelEvent
     from nagents.harness.types import SessionInfo
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
     from tests.support.providers import FakeProvider
 
 

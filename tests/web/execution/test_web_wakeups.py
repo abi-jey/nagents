@@ -24,11 +24,11 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
-from nagents.web import wakeups
 from nagents.web.app import WebState
-from nagents.web.wakeups import Chain
-from nagents.web.wakeups import Wakeup
-from nagents.web.wakeups import Wakeups
+from nagents.web.execution import wakeups
+from nagents.web.execution.wakeups import Chain
+from nagents.web.execution.wakeups import Wakeup
+from nagents.web.execution.wakeups import Wakeups
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.service import Run
+    from nagents.web.execution.service import Run
     from tests.support.providers import Script
 
 

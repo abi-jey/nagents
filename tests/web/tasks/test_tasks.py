@@ -21,14 +21,14 @@ from nagents.harness.tools import CodingTools
 from nagents.types import JsonValue
 from nagents.types import Message
 from nagents.types import ToolCall
-from nagents.web.service import Run
+from nagents.web.execution.service import Run
 from nagents.web.tasks import routes as task_api
 from nagents.web.tasks.store import TaskStore
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import assert_balanced
 from tests.support.web import submit_and_wait
-from tests.web.test_web_subscription_lifecycle import until
-from tests.web.test_web_wakeups import scheduled_app
+from tests.web.execution.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

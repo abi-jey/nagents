@@ -16,8 +16,8 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.provider.openai import CodexConfigError
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import _load_config
+from nagents.web.execution.service import Run
 from nagents.web.live.auth import LOGIN_VOICES
-from nagents.web.service import Run
 from tests.providers.test_openai_local import write_config
 from tests.providers.test_openai_local import write_oauth_auth
 from tests.support.web import client_app

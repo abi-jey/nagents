@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     from nagents.harness.types import HarnessEvent
     from nagents.types import ContentPart
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 URL = "http://127.0.0.1:8765"

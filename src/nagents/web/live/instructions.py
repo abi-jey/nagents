@@ -22,7 +22,7 @@ from ..voice_instruction_store import validate_instruction_text
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ..service import WebState
+    from ..execution.service import WebState
     from ..voice_preferences import Scope
     from .settings import LiveSettings
 

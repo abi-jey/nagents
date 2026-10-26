@@ -13,8 +13,8 @@ from nagents.events import ToolCallEvent
 from nagents.harness.agents.subagent_settings import SubagentLimits
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import LiveStream
+from tests.web.execution.test_web_wakeups import scheduled_app
 from tests.web.test_web_tool_approvals import decide
-from tests.web.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.service import Run
+    from nagents.web.execution.service import Run
     from tests.support.providers import FakeProvider
 
 

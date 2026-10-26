@@ -34,8 +34,8 @@ if TYPE_CHECKING:
     from nagents.harness.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
 
-    from ..service import Run
-    from ..service import WebState
+    from ..execution.service import Run
+    from ..execution.service import WebState
 
 MAX_TOOL_EVENTS = 128
 MAX_APPROVAL_EVENTS = 32

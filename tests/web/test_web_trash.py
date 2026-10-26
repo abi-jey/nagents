@@ -21,17 +21,17 @@ from nagents.channels.types import ChannelCommand
 from nagents.types import Message
 from nagents.web import deletion
 from nagents.web.channels.catalog import Connection
-from nagents.web.service import Run
-from nagents.web.service import WebState
-from nagents.web.subscriptions import Subscriber
+from nagents.web.execution.service import Run
+from nagents.web.execution.service import WebState
+from nagents.web.execution.subscriptions import Subscriber
 from nagents.web.trash import PURGE_BATCH
 from nagents.web.trash import SessionTrash
 from nagents.web.trash import TrashItem
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
+from tests.web.execution.test_web_subscription_lifecycle import Peer
 from tests.web.test_web_deletion import quiet
 from tests.web.test_web_deletion import rows
-from tests.web.test_web_subscription_lifecycle import Peer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,7 +52,7 @@ class Clock:
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
     value = Clock()
-    monkeypatch.setattr("nagents.web.service.SessionTrash", partial(SessionTrash, clock=value))
+    monkeypatch.setattr("nagents.web.execution.service.SessionTrash", partial(SessionTrash, clock=value))
     return value
 
 

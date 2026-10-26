@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     import httpx
 
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 async def create_folder(client: httpx.AsyncClient, headers: dict[str, str], name: str, parent: str = "") -> str:

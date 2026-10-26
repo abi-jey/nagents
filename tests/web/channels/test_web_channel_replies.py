@@ -19,8 +19,8 @@ from nagents.types import ToolCall
 from nagents.web.channels.catalog import ConnectionInput
 from nagents.web.channels.catalog import SavedCatalog
 from nagents.web.channels.host import ChannelHost
+from nagents.web.execution.service import Run
 from nagents.web.live.bridge import MainAgentBridge
-from nagents.web.service import Run
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider

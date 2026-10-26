@@ -25,13 +25,13 @@ from nagents.harness.config import HarnessConfig
 from nagents.types import Message
 from nagents.web.app import create_app
 from nagents.web.channels.catalog import ChannelCatalog
-from nagents.web.subscriptions import Subscriber
+from nagents.web.execution.subscriptions import Subscriber
 from tests.support.channels import FakeChannel
 from tests.support.channels import site
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
-from tests.web.test_web_subscription_lifecycle import until
+from tests.web.execution.test_web_subscription_lifecycle import until
 
 if TYPE_CHECKING:
     import sqlite3
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from nagents.channels.types import ChannelDelivery
     from nagents.channels.types import ChannelSend
     from nagents.events import Event
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 pytestmark = pytest.mark.requires_posix
 T = TypeVar("T")

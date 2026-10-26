@@ -20,9 +20,9 @@ from nagents.channels.types import ChannelActivity
 from nagents.channels.types import ChannelMessage
 from nagents.types import Message
 from nagents.web.channels import catalog
-from nagents.web.service import Run
-from nagents.web.subscriptions import EventBus
-from nagents.web.subscriptions import Subscriber
+from nagents.web.execution.service import Run
+from nagents.web.execution.subscriptions import EventBus
+from nagents.web.execution.subscriptions import Subscriber
 from tests.support.channels import URL
 from tests.support.channels import FakeChannel
 from tests.support.channels import site

@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     from nagents.live.delegation import LiveAppend
     from nagents.live.delegation import LiveAppendKind
 
-    from ..service import Run
-    from ..service import WebState
+    from ..execution.service import Run
+    from ..execution.service import WebState
 
 logger = logging.getLogger("uvicorn.error")
 

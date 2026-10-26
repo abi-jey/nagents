@@ -37,8 +37,8 @@ if TYPE_CHECKING:
     from nagents.events import Event
     from nagents.live.delegation import LiveAppendKind
     from nagents.types import Message
-    from nagents.web.service import Run
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import Run
+    from nagents.web.execution.service import WebState
 
 
 @asynccontextmanager

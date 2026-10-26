@@ -10,7 +10,7 @@ from uvicorn import Config
 from uvicorn.config import LOGGING_CONFIG
 from uvicorn.logging import DefaultFormatter
 
-from .subscriptions import MAX_FRAME
+from .execution.subscriptions import MAX_FRAME
 
 
 class UTCDefaultFormatter(DefaultFormatter):

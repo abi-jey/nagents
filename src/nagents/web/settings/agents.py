@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from nagents.harness import Harness
     from nagents.types import ToolDefinition
 
-    from ..service import WebState
+    from ..execution.service import WebState
 
 logger = logging.getLogger(__name__)
 AgentName = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]

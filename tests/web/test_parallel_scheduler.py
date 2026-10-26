@@ -10,9 +10,9 @@ import pytest
 from fastapi import HTTPException
 
 from nagents.events import TextDoneEvent
-from nagents.web.wakeups import Chain
+from nagents.web.execution.wakeups import Chain
 from tests.support.hang_guard import HANG_GUARD
-from tests.web.test_web_wakeups import scheduled_app
+from tests.web.execution.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

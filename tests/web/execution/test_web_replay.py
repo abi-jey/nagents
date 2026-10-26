@@ -13,9 +13,9 @@ from nagents.events import ToolCallEvent
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolOutput
-from nagents.web.replay import RunReplay
+from nagents.web.execution.replay import RunReplay
+from nagents.web.execution.service import Run
 from nagents.web.routing import RoutingStore
-from nagents.web.service import Run
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 
@@ -231,7 +231,10 @@ def test_overflow_omits_incomplete_archive_instead_of_erasing_earlier_client_evi
     monkeypatch: pytest.MonkeyPatch, budget: str
 ) -> None:
     monkeypatch.setattr(
-        "nagents.web.replay.MAX_RUN_EVENTS" if budget == "events" else "nagents.web.replay.MAX_RUN_BYTES", 2
+        "nagents.web.execution.replay.MAX_RUN_EVENTS"
+        if budget == "events"
+        else "nagents.web.execution.replay.MAX_RUN_BYTES",
+        2,
     )
     run = Run("ngn-root")
     run.remember({"event": "run_started"})

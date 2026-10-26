@@ -17,8 +17,8 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.deletion import delete_session
+from nagents.web.execution.service import Run
 from nagents.web.live.bridge import MainAgentBridge
-from nagents.web.service import Run
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import assert_balanced
 from tests.support.web import ControlledHarness

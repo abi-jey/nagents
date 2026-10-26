@@ -47,8 +47,8 @@ if TYPE_CHECKING:
 
     from nagents.harness.runtime import Harness
 
-    from ..service import Run
-    from ..service import WebState
+    from ..execution.service import Run
+    from ..execution.service import WebState
 
 RootId = Annotated[str, PathParameter(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")]
 AgentSessionId = Annotated[str, PathParameter(min_length=2, max_length=14, pattern=rf"^{SESSION_ID_PATTERN}$")]
@@ -730,7 +730,7 @@ class Tasks:
         return {"task": task}
 
     def launch(self, root: str, body: TaskMessageInput, *, agent_session_id: str = "", agent: str = "") -> None:
-        from ..service import Run
+        from ..execution.service import Run
 
         if root in self.state.channels.work_tasks or root in self.state.channels.work_cleanup:
             raise HTTPException(409, "This chat is finishing another operation. Retry shortly.")

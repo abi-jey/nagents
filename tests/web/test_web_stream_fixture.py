@@ -23,7 +23,7 @@ from tests.support.web import stop_maintenance
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.web.service import WebState
+    from nagents.web.execution.service import WebState
 
 
 def test_output_consumer_cannot_steal_subscription_handshake(tmp_path: Path) -> None:

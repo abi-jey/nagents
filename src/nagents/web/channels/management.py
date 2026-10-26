@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from nagents.types import JsonSchema
     from nagents.types import ToolDefinition
 
-    from ..service import Run
+    from ..execution.service import Run
     from .host import ChannelHost
 
 NAMES = ("channel_configuration", "channel_configure")

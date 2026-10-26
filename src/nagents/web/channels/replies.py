@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 
     from nagents.harness.types import ApprovalRequest
 
-    from ..service import Run
-    from ..service import WebState
+    from ..execution.service import Run
+    from ..execution.service import WebState
 
 # Capture the implementation identities at import, rather than accepting a
 # same-named replacement or looking up a potentially replaced instance method.

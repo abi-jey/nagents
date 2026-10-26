@@ -31,9 +31,9 @@ from nagents.harness.types import ApprovalRequest
 from nagents.web.channels import notices as channel_notices
 from nagents.web.channels.catalog import Connection
 from nagents.web.channels.notices import ChannelNotices
-from nagents.web.service import Pending
-from nagents.web.service import Run
-from nagents.web.service import WebState
+from nagents.web.execution.service import Pending
+from nagents.web.execution.service import Run
+from nagents.web.execution.service import WebState
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 

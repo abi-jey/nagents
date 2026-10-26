@@ -21,7 +21,7 @@ from time import monotonic
 from typing import TYPE_CHECKING
 from weakref import ref
 
-from ._async import finish_on_cancel
+from .._async import finish_on_cancel
 
 logger = logging.getLogger("uvicorn.error")
 
