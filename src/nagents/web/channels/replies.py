@@ -12,15 +12,15 @@ from copy import deepcopy
 from types import MethodType
 from typing import TYPE_CHECKING
 
-from .channel_host import ChannelHost
+from .host import ChannelHost
 
 if TYPE_CHECKING:
     import sqlite3
 
     from nagents.harness.types import ApprovalRequest
 
-    from .service import Run
-    from .service import WebState
+    from ..service import Run
+    from ..service import WebState
 
 # Capture the implementation identities at import, rather than accepting a
 # same-named replacement or looking up a potentially replaced instance method.

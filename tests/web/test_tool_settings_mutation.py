@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.web.channel_host import ChannelHost
+from nagents.web.channels.host import ChannelHost
 from nagents.web.routing import RoutingStore
 from nagents.web.service import WebState
 from tests.support.config import connection

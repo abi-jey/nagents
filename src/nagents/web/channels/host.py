@@ -26,15 +26,15 @@ from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelSend
 from nagents.channels.types import ChannelValue
 
-from ._async import join_owned as _join
+from .._async import join_owned as _join
+from ..executions import MAX_PARALLEL_RUNS
+from ..routing import RoutingStore
+from .activity import ChannelActivities
 from .catalog import ChannelCatalog
-from .channel_activity import ChannelActivities
-from .channel_management import ChannelManagement
-from .channel_privacy import CredentialGuard
-from .channel_privacy import CredentialProtectionError
-from .executions import MAX_PARALLEL_RUNS
 from .local_delivery import WebChannel
-from .routing import RoutingStore
+from .management import ChannelManagement
+from .privacy import CredentialGuard
+from .privacy import CredentialProtectionError
 from .upload_store import expire as expire_uploads
 
 logger = logging.getLogger(__name__)
@@ -53,11 +53,11 @@ if TYPE_CHECKING:
     from nagents.types import ContentPart
     from nagents.types import ToolDefinition
 
+    from ..routing import ChatOwner
+    from ..routing import Work
+    from ..service import Run
+    from ..service import WebState
     from .catalog import ConnectionInput
-    from .routing import ChatOwner
-    from .routing import Work
-    from .service import Run
-    from .service import WebState
 
 _HOSTS: set[Path] = set()
 _HOST_LOCK = Lock()

@@ -16,9 +16,9 @@ from nagents.harness import runtime
 from nagents.harness.types import ApprovalRequest
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.types import ToolCall
-from nagents.web.catalog import ConnectionInput
-from nagents.web.catalog import SavedCatalog
-from nagents.web.channel_host import ChannelHost
+from nagents.web.channels.catalog import ConnectionInput
+from nagents.web.channels.catalog import SavedCatalog
+from nagents.web.channels.host import ChannelHost
 from nagents.web.live.bridge import MainAgentBridge
 from nagents.web.service import Run
 from tests.support.channels import site

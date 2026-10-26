@@ -46,7 +46,7 @@ This is a delivery integration, not a claim that every UI interaction becomes a
 | Channel contract | `src/nagents/channels/types.py`: optional hooks and a flat `capabilities` tuple; `listen` and `send` are abstract. |
 | Standalone execution | `src/nagents/agent.py`: `add_channel()` only attaches; `listen()` owns Agent execution and guards independent runs. |
 | Dispatch | `src/nagents/channels/runtime.py`: catalog, action schemas, file loading and send validation currently live inside `ChannelRuntime`. |
-| Existing host-managed precedent | `src/nagents/web/channel_host.py`: registers tool wrappers and reuses `ChannelRuntime` with `_active = True`, without running its listener. |
+| Existing host-managed precedent | `src/nagents/web/channels/host.py`: registers tool wrappers and reuses `ChannelRuntime` with `_active = True`, without running its listener. |
 | TUI | `src/nagents/tui/app.py`: submits through its own queue and calls `Harness.run()` / task continuation; it has no channel integration. |
 | Browser ingress | `src/nagents/web/app.py`, `routing.py`, `service.py`: queued `/api/messages` enters a durable, deduplicated inbox and survives browser disconnection. `/api/events` subscriptions deliver execution updates. |
 | Approval enforcement | `src/nagents/harness/tools.py`: the executor checks schemas, profiles, approval and callable identity. |

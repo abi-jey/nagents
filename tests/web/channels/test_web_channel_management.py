@@ -16,11 +16,11 @@ from nagents.events import ToolCallEvent
 from nagents.extensions import ModelRequest
 from nagents.extensions import RunContext
 from nagents.web import service
-from nagents.web.catalog import ConnectionInput
-from nagents.web.catalog import SavedCatalog
-from nagents.web.channel_host import ChannelHost
-from nagents.web.channel_management import NAMES
-from nagents.web.channel_management import ChannelManagement
+from nagents.web.channels.catalog import ConnectionInput
+from nagents.web.channels.catalog import SavedCatalog
+from nagents.web.channels.host import ChannelHost
+from nagents.web.channels.management import NAMES
+from nagents.web.channels.management import ChannelManagement
 from tests.support.channels import FakeChannel
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD

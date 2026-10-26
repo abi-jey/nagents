@@ -28,9 +28,9 @@ from nagents.events import ToolResultEvent
 from nagents.harness.config import HarnessConfig
 from nagents.harness.followups import RunTurn
 from nagents.harness.types import ApprovalRequest
-from nagents.web import channel_notices
-from nagents.web.catalog import Connection
-from nagents.web.channel_notices import ChannelNotices
+from nagents.web.channels import notices as channel_notices
+from nagents.web.channels.catalog import Connection
+from nagents.web.channels.notices import ChannelNotices
 from nagents.web.service import Pending
 from nagents.web.service import Run
 from nagents.web.service import WebState

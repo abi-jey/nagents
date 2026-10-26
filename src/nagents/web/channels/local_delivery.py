@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from nagents.channels.types import ChannelSend
     from nagents.channels.types import ChannelValue
 
-    from .service import WebState
+    from ..service import WebState
 
 MEDIA_TYPES = (
     "image/png",

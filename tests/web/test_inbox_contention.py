@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from nagents._async import finish_on_cancel
-from nagents.web.channel_host import ChannelHost
+from nagents.web.channels.host import ChannelHost
 from nagents.web.routing import Work
 from nagents.web.service import Run
 from nagents.web.service import WebState

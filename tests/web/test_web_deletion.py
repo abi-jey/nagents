@@ -18,7 +18,7 @@ from nagents.channels.store import finish_on_cancel
 from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web import deletion
-from nagents.web.catalog import Connection
+from nagents.web.channels.catalog import Connection
 from nagents.web.service import Run
 from nagents.web.service import WebState
 from nagents.web.subscriptions import Subscriber

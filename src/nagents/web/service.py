@@ -36,9 +36,10 @@ from nagents.response_metadata import observe_responses
 
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
-from .channel_host import ChannelHost
-from .channel_notices import ChannelNotices
-from .channel_replies import automatic_reply
+from .channels.host import ChannelHost
+from .channels.notices import ChannelNotices
+from .channels.replies import automatic_reply
+from .channels.uploads import Uploads
 from .delivery_transcript import DeliveryTranscript
 from .diagnostics import exception_diagnostic
 from .executions import MAX_PARALLEL_RUNS
@@ -60,7 +61,6 @@ from .tasks import Tasks
 from .tool_approvals import ToolApprovals
 from .tool_approvals import ToolBinding
 from .trash import SessionTrash
-from .uploads import Uploads
 from .wakeups import Chain
 from .wakeups import Wakeups
 

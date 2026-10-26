@@ -20,7 +20,7 @@ from nagents.channels import ChannelSend
 from nagents.channels.runtime import _envelope
 from nagents.harness.config import HarnessConfig
 from nagents.harness.types import ApprovalRequest
-from nagents.web.catalog import Connection
+from nagents.web.channels.catalog import Connection
 from nagents.web.service import Pending
 from nagents.web.service import Run
 from nagents.web.service import WebState

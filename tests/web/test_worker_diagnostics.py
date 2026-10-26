@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from nagents.web.channel_host import ChannelHost
+from nagents.web.channels.host import ChannelHost
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 
