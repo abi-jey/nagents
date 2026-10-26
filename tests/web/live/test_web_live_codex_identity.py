@@ -28,7 +28,7 @@ from nagents.web.live.routes import create_login_config
 from nagents.web.live.routes import unavailable_reason
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings
-from nagents.web.voice_preferences import VoicePreferences
+from nagents.web.voice.preferences import VoicePreferences
 from tests.providers.test_openai_local import write_api_key_auth
 from tests.providers.test_openai_local import write_config
 from tests.providers.test_openai_local import write_oauth_auth

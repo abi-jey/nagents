@@ -25,7 +25,7 @@ from nagents.web.live.routes import create_login_config
 from nagents.web.live.routes import voice_instructions
 from nagents.web.live.settings import LiveConnection
 from nagents.web.live.settings import LiveValues
-from nagents.web.voice_instructions import default_voice_instructions
+from nagents.web.voice.instructions import default_voice_instructions
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.web.live.test_web_live_bridge import _config

@@ -35,15 +35,15 @@ from nagents.live import LiveConfig
 from nagents.provider.auth import validate_prefix
 
 from .._async import join_owned
-from ..voice_instruction_store import InstructionScope
-from ..voice_instruction_store import VoiceInstructionStore
-from ..voice_preferences import MAX_VOICE_BYTES
-from ..voice_preferences import ContextMode
-from ..voice_preferences import Scope
-from ..voice_preferences import VoiceInstructions
-from ..voice_preferences import VoiceOverrides
-from ..voice_preferences import VoicePreferenceStore
-from ..voice_preferences import VoicePreferences
+from ..voice.preferences import MAX_VOICE_BYTES
+from ..voice.preferences import ContextMode
+from ..voice.preferences import Scope
+from ..voice.preferences import VoiceInstructions
+from ..voice.preferences import VoiceOverrides
+from ..voice.preferences import VoicePreferenceStore
+from ..voice.preferences import VoicePreferences
+from ..voice.store import InstructionScope
+from ..voice.store import VoiceInstructionStore
 from .auth import LOGIN_VOICES
 from .auth import resolve_voice_auth
 from .instruction_settings import AuthoredPrompt

@@ -18,7 +18,7 @@ from nagents.provider.openai import _CodexConfig
 from nagents.web.live.auth import resolve_voice_auth
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings
-from nagents.web.voice_preferences import VoicePreferences
+from nagents.web.voice.preferences import VoicePreferences
 
 if TYPE_CHECKING:
     from pathlib import Path

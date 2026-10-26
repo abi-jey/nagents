@@ -17,7 +17,7 @@ from nagents.harness.live_profiles import LIVE_FIELDS
 from nagents.harness.providers import KINDS
 from nagents.live import LiveConfig
 
-from .voice_instruction_store import validate_instruction_text
+from .store import validate_instruction_text
 
 if TYPE_CHECKING:
     from nagents.harness.providers import ScopedProviderRegistryStore

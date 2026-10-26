@@ -26,7 +26,7 @@ from nagents.live.delegation import ClientDelegationRequest
 from nagents.session import SessionManager
 
 from ..routing import RoutingStore
-from ..voice_preferences import Scope
+from ..voice.preferences import Scope
 from .login import LoginVoiceConfig
 from .settings import AgentVoiceInput
 from .settings import AgentVoiceRevision

@@ -14,8 +14,8 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings
 from nagents.web.live.settings import WorkspaceVoiceInput
-from nagents.web.voice_preferences import VoiceOverrides
-from nagents.web.voice_preferences import VoicePreferences
+from nagents.web.voice.preferences import VoiceOverrides
+from nagents.web.voice.preferences import VoicePreferences
 
 if TYPE_CHECKING:
     from pathlib import Path
