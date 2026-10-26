@@ -65,7 +65,7 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("help", "Show available commands"),
     Command("new", "Start a new session"),
     Command("fork", "Fork this conversation into an independent session", argument_hint="[title]"),
-    Command("rename", "Rename the current conversation", argument_hint="<title>", requires_arguments=True),
+    Command("rename", "Set a title or generate one from the latest ten user messages", argument_hint="[title]"),
     Command("sessions", "List and resume local sessions"),
     Command("compact", "Compact the current conversation"),
     Command("agent", "Show or switch the agent profile", argument_hint="[name]"),
