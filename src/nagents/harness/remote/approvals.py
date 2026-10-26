@@ -8,13 +8,13 @@ import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from .private_store import ProtectedStoreError
-from .types import Notice
+from ..private_store import ProtectedStoreError
+from ..types import Notice
 
 if TYPE_CHECKING:
     from nagents.a2a.client import RemoteAgent
 
-    from .runtime import Harness
+    from ..runtime import Harness
 
 logger = logging.getLogger(__name__)
 

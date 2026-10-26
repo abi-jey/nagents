@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_approvals import review_action
-from nagents.harness.remote_profiles import RemoteProfile
-from nagents.harness.remote_store import RemoteAgentCatalog
+from nagents.harness.remote.approvals import review_action
+from nagents.harness.remote.profiles import RemoteProfile
+from nagents.harness.remote.store import RemoteAgentCatalog
 
 if TYPE_CHECKING:
     from nagents.harness.types import Notice
@@ -230,7 +230,7 @@ async def test_workspace_connection_trust_approves_only_the_validated_remote_ope
     profile = RemoteProfile(url="https://peer.example")
     harness = ApprovalHarness(allowed=False, trusted=True, accepted_profile=profile)
     remote = RemotePeer(record())
-    with caplog.at_level(logging.INFO, logger="nagents.harness.remote_approvals"):
+    with caplog.at_level(logging.INFO, logger="nagents.harness.remote.approvals"):
         handled = await review_action(
             harness,  # type: ignore[arg-type]
             remote,  # type: ignore[arg-type]

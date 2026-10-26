@@ -18,8 +18,8 @@ from .config import _install_profile
 from .config import _json_profile
 from .private_store import ProtectedStoreError
 from .providers import ScopedProviderRegistryStore
-from .remote_store import RemoteAgentMetadata
-from .remote_store import RemoteAgentStore
+from .remote.store import RemoteAgentMetadata
+from .remote.store import RemoteAgentStore
 
 
 class AgentCatalog:

@@ -51,7 +51,7 @@ from .provider import HarnessProvider
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
 from .reasoning import validate_effort
-from .remote_artifacts import referenced_images
+from .remote.artifacts import referenced_images
 from .session_identity import SessionIdentityStore
 from .session_identity import validate_session_id
 from .session_identity import validate_title

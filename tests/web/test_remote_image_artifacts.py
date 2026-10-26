@@ -12,8 +12,8 @@ from typing import cast
 import pytest
 
 from nagents.artifacts import ImageArtifactReference
-from nagents.harness.remote_artifacts import image_references
-from nagents.harness.remote_artifacts import referenced_images
+from nagents.harness.remote.artifacts import image_references
+from nagents.harness.remote.artifacts import referenced_images
 from nagents.types import ContentPart
 from nagents.types import ImageContent
 from nagents.types import Message

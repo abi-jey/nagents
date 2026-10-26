@@ -15,7 +15,7 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote.profiles import RemoteProfile
 from nagents.harness.session_identity import SessionIdentityStore
 from nagents.harness.tools import CodingTools
 from nagents.types import JsonValue

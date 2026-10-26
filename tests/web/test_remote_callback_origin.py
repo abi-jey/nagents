@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote.profiles import RemoteProfile
 from nagents.web.settings import remote_agents
 from tests.support.web import client_app
 from tests.web.settings.test_web_remote_agents import AGENT_URL

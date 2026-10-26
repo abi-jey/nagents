@@ -6,13 +6,13 @@ import asyncio
 import importlib.util
 from typing import TYPE_CHECKING
 
-from .config import AgentProfile
-from .remote_profiles import RemoteProfile
+from ..config import AgentProfile
+from .profiles import RemoteProfile
 
 if TYPE_CHECKING:
     from nagents.types import JsonValue
 
-    from .runtime import Harness
+    from ..runtime import Harness
 
 
 class RemoteAgentTools:

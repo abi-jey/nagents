@@ -25,10 +25,10 @@ def test_server_config_emits_audited_lifecycle_info_with_utc_time_only() -> None
         logging.getLogger("nagents.harness.subagents").info(
             "Subagent execution started: task=task-id profile=assistant elapsed_ms=12.5"
         )
-        logging.getLogger("nagents.harness.remote_runtime").info(
+        logging.getLogger("nagents.harness.remote.runtime").info(
             "A2A cancellation requested: session=session-id task=task-id"
         )
-        logging.getLogger("nagents.harness.remote_credentials").warning(
+        logging.getLogger("nagents.harness.remote.credentials").warning(
             "Remote credential lock failed: phase=acquire_lock error_type=BlockingIOError"
         )
         logging.getLogger("nagents.harness.unrelated").info("UNRELATED_INFO_MARKER")

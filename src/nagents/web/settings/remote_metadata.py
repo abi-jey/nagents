@@ -8,11 +8,11 @@ import time
 from typing import TYPE_CHECKING
 
 from nagents._async import finish_on_cancel
-from nagents.harness.remote_credentials import RemoteCredentials
+from nagents.harness.remote.credentials import RemoteCredentials
 
 if TYPE_CHECKING:
     from nagents.harness.config import AgentProfile
-    from nagents.harness.remote_store import RemoteAgentStore
+    from nagents.harness.remote.store import RemoteAgentStore
     from nagents.harness.runtime import Harness
 
 logger = logging.getLogger(__name__)

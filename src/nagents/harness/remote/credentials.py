@@ -20,8 +20,8 @@ from typing import TypedDict
 from nagents.a2a.errors import RemoteAgentError
 from nagents.a2a.remote_config import remote_endpoint
 
-from .private_store import ProtectedFileStore
-from .private_store import ProtectedStoreError
+from ..private_store import ProtectedFileStore
+from ..private_store import ProtectedStoreError
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from .remote_profiles import RemoteProfile
+    from .profiles import RemoteProfile
 
 
 class RemoteAuthenticationStatus(TypedDict):

@@ -38,11 +38,11 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_artifacts import referenced_images
-from nagents.harness.remote_profiles import RemoteProfile
-from nagents.harness.remote_runtime import _load_state
-from nagents.harness.remote_runtime import owned_remote_task
-from nagents.harness.remote_runtime import run_remote
+from nagents.harness.remote.artifacts import referenced_images
+from nagents.harness.remote.profiles import RemoteProfile
+from nagents.harness.remote.runtime import _load_state
+from nagents.harness.remote.runtime import owned_remote_task
+from nagents.harness.remote.runtime import run_remote
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.session import SessionManager
@@ -458,7 +458,7 @@ async def test_binding_error_consumer_can_write_session_database_while_stream_is
 async def test_local_cancel_retains_only_complete_remote_child_images_without_replay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, complete_image: bool
 ) -> None:
-    image_data = (Path(__file__).parent / "fixtures" / "a2a-images" / "red.png").read_bytes()
+    image_data = (Path(__file__).parents[2] / "fixtures" / "a2a-images" / "red.png").read_bytes()
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         del provider, messages
@@ -579,7 +579,7 @@ async def test_local_cancel_retains_only_complete_remote_child_images_without_re
 async def test_cancel_during_committed_remote_image_insert_does_not_duplicate_history_or_references(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    image_data = (Path(__file__).parent / "fixtures" / "a2a-images" / "red.png").read_bytes()
+    image_data = (Path(__file__).parents[2] / "fixtures" / "a2a-images" / "red.png").read_bytes()
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         del provider, messages

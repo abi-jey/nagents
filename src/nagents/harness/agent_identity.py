@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from .config import AgentProfile
-    from .remote_store import RemoteAgentMetadata
+    from .remote.store import RemoteAgentMetadata
 
 
 @dataclass(frozen=True)

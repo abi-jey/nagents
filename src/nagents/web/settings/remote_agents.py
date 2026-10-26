@@ -26,9 +26,9 @@ from starlette.responses import JSONResponse
 from starlette.responses import RedirectResponse
 
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_credentials import RemoteCredentials
-from nagents.harness.remote_profiles import RemoteProfile
-from nagents.harness.remote_profiles import remote_endpoint
+from nagents.harness.remote.credentials import RemoteCredentials
+from nagents.harness.remote.profiles import RemoteProfile
+from nagents.harness.remote.profiles import remote_endpoint
 
 if TYPE_CHECKING:
     from collections.abc import Callable

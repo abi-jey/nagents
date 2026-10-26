@@ -22,7 +22,7 @@ from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
 from nagents.extensions import AgentPlugin
 from nagents.harness.execution import _register_owned_adapter_type
-from nagents.harness.remote_artifacts import image_references
+from nagents.harness.remote.artifacts import image_references
 from nagents.harness.runtime import _HarnessSession
 from nagents.session import response_metadata
 from nagents.session.deliveries import DeliveryJournal

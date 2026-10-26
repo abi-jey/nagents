@@ -24,9 +24,9 @@ from nagents.events import ToolCallEvent
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.remote_credentials import RemoteCredentials
-from nagents.harness.remote_profiles import RemoteProfile
-from nagents.harness.remote_store import RemoteAgentMetadata
+from nagents.harness.remote.credentials import RemoteCredentials
+from nagents.harness.remote.profiles import RemoteProfile
+from nagents.harness.remote.store import RemoteAgentMetadata
 from nagents.web.security import LocalOnly
 from nagents.web.settings import remote_agents
 from tests.support.providers import FakeProvider
@@ -741,7 +741,7 @@ def test_card_refresh_has_total_deadline_independent_of_profile_timeout(
     async def scenario() -> None:
         pytest.importorskip("a2a")
         from nagents.a2a.client import RemoteAgent
-        from nagents.harness.remote_store import RemoteAgentStore
+        from nagents.harness.remote.store import RemoteAgentStore
         from nagents.web.settings.remote_metadata import RemoteMetadataRefresh
 
         class HangingTransport(httpx.AsyncBaseTransport):
@@ -779,7 +779,7 @@ def test_metadata_constructor_runs_off_loop_and_is_joined_on_shutdown(
 
         pytest.importorskip("a2a")
         from nagents.a2a.client import RemoteAgent
-        from nagents.harness.remote_store import RemoteAgentStore
+        from nagents.harness.remote.store import RemoteAgentStore
         from nagents.web.settings.remote_metadata import RemoteMetadataRefresh
 
         started = threading.Event()

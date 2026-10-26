@@ -31,8 +31,8 @@ from nagents.events import Event
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
-from nagents.harness.remote_credentials import RemoteCredentials
-from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote.credentials import RemoteCredentials
+from nagents.harness.remote.profiles import RemoteProfile
 from nagents.harness.types import TaskActivity
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification

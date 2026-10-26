@@ -71,7 +71,7 @@ from .providers import ProviderRegistry
 from .providers import ScopedProviderRegistryStore
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
-from .remote_tools import RemoteAgentTools
+from .remote.tools import RemoteAgentTools
 from .resources import HarnessResources
 from .skills import HarnessSkillDiscoverer
 from .subagents import DEFAULT_TASK_OPTIONS
@@ -103,7 +103,7 @@ if TYPE_CHECKING:
     from .auth import DeviceAuthorization
     from .config import HarnessConfig
     from .model_catalog import ModelCapabilities
-    from .remote_store import RemoteAgentMetadata
+    from .remote.store import RemoteAgentMetadata
     from .types import ApprovalHandler
     from .types import WakeupHandler
 
@@ -914,7 +914,7 @@ class Harness:
 
     async def _generation_events(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
         if self._remote_profile.configured:
-            from .remote_runtime import run_remote
+            from .remote.runtime import run_remote
 
             if not isinstance(prompt, str):
                 yield ErrorEvent(
