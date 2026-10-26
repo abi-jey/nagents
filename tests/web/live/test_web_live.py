@@ -27,7 +27,7 @@ from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 from nagents.provider import FoundryProvider
 from nagents.provider.base import Provider
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import CodexCredentials
 from nagents.web.live.routes import create_agent
 from nagents.web.live.routes import create_login_config
 from nagents.web.live.runtime import LiveService

@@ -30,7 +30,7 @@ from nagents.harness.runtime import Harness
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskStarted
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import Message
 from nagents.types import ToolCall
 from tests.support.config import connection

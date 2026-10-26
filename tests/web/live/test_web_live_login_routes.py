@@ -13,13 +13,13 @@ from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.provider.openai import CodexConfigError
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import _load_config
+from nagents.provider.codex.openai import CodexConfigError
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import _load_config
 from nagents.web.execution.service import Run
 from nagents.web.live.auth import LOGIN_VOICES
-from tests.providers.test_openai_local import write_config
-from tests.providers.test_openai_local import write_oauth_auth
+from tests.providers.codex.test_openai_local import write_config
+from tests.providers.codex.test_openai_local import write_oauth_auth
 from tests.support.web import client_app
 
 if TYPE_CHECKING:

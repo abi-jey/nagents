@@ -27,8 +27,8 @@ from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
-from nagents.provider.openai import CODEX_ENDPOINT
-from nagents.provider.openai import CodexConfigError
+from nagents.provider.codex.openai import CODEX_ENDPOINT
+from nagents.provider.codex.openai import CodexConfigError
 from nagents.web.live.routes import create_agent
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings

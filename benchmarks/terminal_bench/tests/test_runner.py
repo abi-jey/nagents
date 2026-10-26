@@ -23,7 +23,7 @@ from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.types import TranscriptAbandoned
 from nagents.harness.types import TranscriptAnchor
 from nagents.provider import OpenAIProvider
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import CodexCredentials
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

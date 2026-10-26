@@ -24,7 +24,7 @@ from tests.web.live.test_web_live_relay import Output
 from tests.web.live.test_web_live_relay import Source
 
 if TYPE_CHECKING:
-    from nagents.provider.openai import CodexCredentials
+    from nagents.provider.codex.openai import CodexCredentials
 
 SECRET = "private-token-body-sdp-url-marker"
 VOICE_ID = "f" * 32

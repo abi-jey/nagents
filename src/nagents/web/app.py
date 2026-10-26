@@ -35,7 +35,7 @@ from nagents.harness.providers.model_bindings import ModelBinding
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import validate_request_timeout
 from nagents.provider import OpenAIProvider
-from nagents.provider._codex_catalog import catalog_logging
+from nagents.provider.codex._catalog import catalog_logging
 from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
 

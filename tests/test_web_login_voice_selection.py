@@ -12,9 +12,9 @@ from nagents.harness.providers.registry import KINDS
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.provider.openai import CodexConfigError
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import _CodexConfig
+from nagents.provider.codex.openai import CodexConfigError
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import _CodexConfig
 from nagents.web.live.auth import resolve_voice_auth
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings

@@ -14,9 +14,9 @@ from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.provider.gateway import GatewayHTTPClient
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import OpenAIProvider
 from nagents.web.settings.preferences import SettingsValues
 from nagents.web.settings.preferences import WebSettings
 from tests.support.web import client_app

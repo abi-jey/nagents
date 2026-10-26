@@ -14,10 +14,10 @@ from time import time
 from typing import TYPE_CHECKING
 
 from nagents.harness.providers.connection import codex_discovery_selected
+from nagents.provider.codex.openai import _load_config
+from nagents.provider.codex.openai import _local_credentials
 from nagents.provider.context import MAX_METADATA_MODELS
 from nagents.provider.context import METADATA_TTL
-from nagents.provider.openai import _load_config
-from nagents.provider.openai import _local_credentials
 
 if TYPE_CHECKING:
     from nagents.harness.providers.auth import OpenAIAuth

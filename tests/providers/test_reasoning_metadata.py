@@ -25,8 +25,8 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.provider import Provider
 from nagents.provider import ProviderType
-from nagents.provider.openai import _request_body
-from nagents.provider.openai import _usage
+from nagents.provider.codex.openai import _request_body
+from nagents.provider.codex.openai import _usage
 from nagents.types import GenerationConfig
 from nagents.types import Message
 from nagents.types import ToolCall

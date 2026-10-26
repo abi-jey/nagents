@@ -125,7 +125,7 @@ def test_provider_text_done_event_is_terminal(tmp_path: Path, monkeypatch: pytes
     from nagents.events import TextDoneEvent
     from nagents.events import ToolCallEvent
     from nagents.events import Usage
-    from nagents.provider.openai import OpenAIProvider
+    from nagents.provider.codex.openai import OpenAIProvider
     from nagents.types import GenerationConfig
     from nagents.types import Message
 
@@ -183,7 +183,7 @@ def test_provider_failure_is_not_a_cheap_completed_evaluation(tmp_path: Path, mo
     import benchmarks.tool_descriptions.run as benchmark
     from nagents.events import ErrorEvent
     from nagents.events import Event
-    from nagents.provider.openai import OpenAIProvider
+    from nagents.provider.codex.openai import OpenAIProvider
 
     async def failed_generate(self: OpenAIProvider, *args: object, **kwargs: object) -> AsyncIterator[Event]:
         yield ErrorEvent(message="Rate limited", code="CODEX_HTTP_429")
@@ -310,7 +310,7 @@ def test_observed_generation_hash_tracks_native_result_format(tmp_path: Path, mo
     import nagents.agent as agent_module
     from nagents.events import Event
     from nagents.events import TextDoneEvent
-    from nagents.provider.openai import OpenAIProvider
+    from nagents.provider.codex.openai import OpenAIProvider
     from nagents.types import Message
 
     captured: list[list[Message]] = []

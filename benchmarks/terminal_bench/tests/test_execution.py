@@ -14,7 +14,7 @@ from benchmarks.terminal_bench.summarize import summarize_events
 from nagents.events import ErrorEvent
 from nagents.events import FinishReason
 from nagents.events import TextDoneEvent
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

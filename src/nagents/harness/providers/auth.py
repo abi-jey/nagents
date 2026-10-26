@@ -29,8 +29,8 @@ from typing import cast
 
 import aiohttp
 
-from nagents.provider.openai import USER_AGENT
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import USER_AGENT
+from nagents.provider.codex.openai import CodexCredentials
 
 from ..private_store import ProtectedFileStore
 from ..private_store import ProtectedStoreError

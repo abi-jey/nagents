@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from nagents.live.delegation import ClientDelegationObserver
     from nagents.live.delegation import ClientDelegationRequest
     from nagents.live.delegation import LiveAppendKind
-    from nagents.provider.openai import CodexCredentials
+    from nagents.provider.codex.openai import CodexCredentials
 
 Payload = dict[str, object]
 CALLS_URL = "https://chatgpt.com/backend-api/wham/realtime/calls?intent=quicksilver&architecture=avas"

@@ -11,7 +11,7 @@ import pytest
 
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers.model_catalog import ModelCatalog
-from nagents.provider import _codex_catalog as catalog
+from nagents.provider.codex import _catalog as catalog
 from tests.support.config import connection
 from tests.support.web import client_app
 

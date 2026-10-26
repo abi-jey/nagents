@@ -11,8 +11,8 @@ from nagents.provider import FoundryProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
-from nagents.provider.openai import CodexConfigError
-from nagents.provider.openai import _load_config
+from nagents.provider.codex.openai import CodexConfigError
+from nagents.provider.codex.openai import _load_config
 from nagents.types import RetryConfig
 
 from .factory import HarnessProvider

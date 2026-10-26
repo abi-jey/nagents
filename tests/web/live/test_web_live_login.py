@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 from aiohttp import web
 
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import CodexCredentials
 from nagents.web.live import login as live_login
 from nagents.web.live.login import ChatGPTLiveConnection
 from nagents.web.live.login import LoginVoiceConfig

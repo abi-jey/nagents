@@ -17,7 +17,7 @@ from aiortc import RTCSessionDescription
 from av import AudioFrame
 
 from nagents.audio import AudioFormat
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import CodexCredentials
 from nagents.web.live import runtime
 from nagents.web.live.login import LoginVoiceConfig
 from nagents.web.live.login import LoginVoiceError

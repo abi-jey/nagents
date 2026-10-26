@@ -34,9 +34,9 @@ from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.provider import _diagnostics
 from nagents.provider import base
-from nagents.provider import openai
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex import openai
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import Message
 from nagents.types import RetryConfig
 from tests.support.hang_guard import HANG_GUARD

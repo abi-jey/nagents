@@ -34,7 +34,7 @@ from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.media import MediaCapabilities
 from nagents.provider._diagnostics import transport_diagnostic
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.provider.reasoning import validate_reasoning_choice
 from nagents.types import ImageContent
 from nagents.types import TextContent

@@ -16,11 +16,11 @@ from nagents import Message
 from nagents import RealtimeConfig
 from nagents.events import TextDoneEvent
 from nagents.provider import Provider
-from nagents.provider.openai import CODEX_ENDPOINT
-from nagents.provider.openai import DEFAULT_CODEX_MODEL
-from nagents.provider.openai import CodexConfigError
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import CODEX_ENDPOINT
+from nagents.provider.codex.openai import DEFAULT_CODEX_MODEL
+from nagents.provider.codex.openai import CodexConfigError
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import RetryConfig
 
 if TYPE_CHECKING:

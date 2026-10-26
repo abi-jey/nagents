@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 from typing import Literal
 
 from nagents.harness.providers.connection import _codex_files_exist
-from nagents.provider.openai import CodexConfigError
-from nagents.provider.openai import _load_config
+from nagents.provider.codex.openai import CodexConfigError
+from nagents.provider.codex.openai import _load_config
 
 if TYPE_CHECKING:
     from nagents.harness.providers.auth import OpenAIAuth
     from nagents.harness.providers.registry import ProviderProfile
-    from nagents.provider.openai import CodexCredentials
+    from nagents.provider.codex.openai import CodexCredentials
 
 VoiceAuth = Literal["api-key", "chatgpt", "entra"]
 LoginCredentials = Callable[[], Awaitable["CodexCredentials"]]

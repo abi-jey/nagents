@@ -10,16 +10,16 @@ from aiohttp import web
 from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolCallProgressEvent
-from nagents.provider._codex_diagnostics import codex_protocol_reason
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex._diagnostics import codex_protocol_reason
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import Message
-from tests.providers.test_openai_provider import call_item
-from tests.providers.test_openai_provider import credentials
-from tests.providers.test_openai_provider import endpoint
-from tests.providers.test_openai_provider import sse
+from tests.providers.codex.test_openai_provider import call_item
+from tests.providers.codex.test_openai_provider import credentials
+from tests.providers.codex.test_openai_provider import endpoint
+from tests.providers.codex.test_openai_provider import sse
 
 if TYPE_CHECKING:
-    from nagents.provider.openai import CodexCredentials
+    from nagents.provider.codex.openai import CodexCredentials
 
 PRIVATE = "PRIVATE-UPSTREAM-PAYLOAD"
 

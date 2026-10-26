@@ -13,15 +13,15 @@ from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import Message
+from tests.providers.codex.test_openai_provider import call_item
+from tests.providers.codex.test_openai_provider import completion
+from tests.providers.codex.test_openai_provider import credentials
+from tests.providers.codex.test_openai_provider import endpoint as codex_endpoint
+from tests.providers.codex.test_openai_provider import text_item
 from tests.providers.test_gateway_provider import endpoint
 from tests.providers.test_gateway_provider import sse
-from tests.providers.test_openai_provider import call_item
-from tests.providers.test_openai_provider import completion
-from tests.providers.test_openai_provider import credentials
-from tests.providers.test_openai_provider import endpoint as codex_endpoint
-from tests.providers.test_openai_provider import text_item
 from tests.providers.test_tool_stream_boundaries import generate
 from tests.support.config import connection
 
