@@ -138,3 +138,11 @@ def test_a2a_public_exports_still_resolve_after_server_moves() -> None:
     for name in a2a.__all__:
         implementation = import_module(f"nagents.a2a.{a2a._MODULES[name]}")
         assert getattr(a2a, name) is getattr(implementation, name)
+
+
+def test_a2a_client_public_imports_refer_to_the_same_definitions() -> None:
+    from nagents.a2a import client
+    from nagents.a2a.client import transport
+
+    for name in client.__all__:
+        assert getattr(client, name) is getattr(transport, name)

@@ -21,8 +21,8 @@ from a2a.types import TaskState
 from a2a.types import TaskStatus
 from google.protobuf.json_format import MessageToDict
 
-from nagents.a2a import client as a2a_client
-from nagents.a2a.conversation import RemoteConversation
+from nagents.a2a.client import transport as a2a_client
+from nagents.a2a.client.conversation import RemoteConversation
 from nagents.a2a.server.application import agent_card
 from nagents.a2a.server.config import A2AConfig
 from nagents.a2a.server.config import IssuerConfig
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from nagents.a2a.client import RemoteAgent
+    from nagents.a2a.client.transport import RemoteAgent
     from nagents.harness.types import HarnessEvent
     from nagents.types import Message
 

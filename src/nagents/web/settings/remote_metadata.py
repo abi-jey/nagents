@@ -86,7 +86,7 @@ class RemoteMetadataRefresh:
             logger.warning("Remote card metadata refresh failed error_type=%s", type(error).__name__)
 
     async def _refresh(self, store: RemoteAgentStore, alias: str, profile: AgentProfile) -> None:
-        from nagents.a2a.client import RemoteAgent
+        from nagents.a2a.client.transport import RemoteAgent
 
         credentials = RemoteCredentials(profile.a2a)
         token_provider = credentials.token if profile.a2a.issuer or profile.a2a.token_env else None

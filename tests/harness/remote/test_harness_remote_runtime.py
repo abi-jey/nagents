@@ -24,8 +24,8 @@ from a2a.types import TaskStatus
 from a2a.types import TaskStatusUpdateEvent
 
 from nagents import _sqlite
-from nagents.a2a import client as a2a_client
-from nagents.a2a.conversation import RemoteConversation
+from nagents.a2a.client import transport as a2a_client
+from nagents.a2a.client.conversation import RemoteConversation
 from nagents.a2a.server.application import create_app
 from nagents.a2a.server.config import A2AConfig
 from nagents.a2a.server.config import IssuerConfig
@@ -68,7 +68,7 @@ if TYPE_CHECKING:
     from a2a.types import SendMessageRequest
 
     from nagents.a2a.agent import AgentContext
-    from nagents.a2a.client import RemoteAgent
+    from nagents.a2a.client.transport import RemoteAgent
     from nagents.types import GenerationConfig
     from nagents.types import ToolDefinition
 

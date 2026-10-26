@@ -9,9 +9,9 @@ import httpx
 import pytest
 from google.protobuf.json_format import MessageToDict
 
-from nagents.a2a import discovery
-from nagents.a2a.client import RemoteAgentError
-from nagents.a2a.remote_config import RemoteAgentConfig
+from nagents.a2a.client import discovery
+from nagents.a2a.client.configuration import RemoteAgentConfig
+from nagents.a2a.client.transport import RemoteAgentError
 from nagents.a2a.server.application import agent_card
 from nagents.a2a.server.config import A2AConfig
 from nagents.a2a.server.config import IssuerConfig
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from nagents.a2a.discovery import RemoteDiscovery
+    from nagents.a2a.client.discovery import RemoteDiscovery
     from nagents.types import Message
 
 

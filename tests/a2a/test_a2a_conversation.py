@@ -16,8 +16,8 @@ from a2a.types import TaskState
 from a2a.types import TaskStatus
 from a2a.types import TaskStatusUpdateEvent
 
-from nagents.a2a.client import RemoteAgentError
-from nagents.a2a.conversation import RemoteConversation
+from nagents.a2a.client.conversation import RemoteConversation
+from nagents.a2a.client.transport import RemoteAgentError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

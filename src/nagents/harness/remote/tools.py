@@ -70,7 +70,7 @@ class RemoteAgentTools:
         )
         discovered_name = discovered_description = ""
         if not issuer and not token_env:
-            from nagents.a2a.discovery import discover_remote
+            from nagents.a2a.client.discovery import discover_remote
 
             discovery = await discover_remote(profile)
             profile = discovery.connection

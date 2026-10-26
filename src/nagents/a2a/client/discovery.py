@@ -11,10 +11,10 @@ import httpx
 from a2a.client import A2ACardResolver
 from google.protobuf.json_format import MessageToDict
 
-from .client import RemoteAgentError
-from .remote_config import PUBLIC_CLIENT_EXTENSION
-from .remote_config import RemoteAgentConfig
-from .remote_config import remote_endpoint
+from .configuration import PUBLIC_CLIENT_EXTENSION
+from .configuration import RemoteAgentConfig
+from .configuration import remote_endpoint
+from .transport import RemoteAgentError
 
 
 @dataclass(frozen=True)

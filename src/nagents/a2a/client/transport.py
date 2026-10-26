@@ -23,8 +23,8 @@ from a2a.types import GetTaskRequest
 from a2a.types import ListTasksRequest
 from a2a.types import SubscribeToTaskRequest
 
-from .errors import RemoteAgentError as RemoteAgentError
-from .server.config import endpoint
+from ..errors import RemoteAgentError as RemoteAgentError
+from ..server.config import endpoint
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from a2a.types import StreamResponse
     from a2a.types import Task
 
-    from .remote_config import RemoteAgentConfig
+    from .configuration import RemoteAgentConfig
 
 AccessTokenProvider = Callable[[], Awaitable[str]]
 

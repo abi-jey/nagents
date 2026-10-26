@@ -44,9 +44,9 @@ if TYPE_CHECKING:
     from starlette.types import Scope
     from starlette.types import Send
 
-    from nagents.a2a.client import AccessTokenProvider
-    from nagents.a2a.client import RemoteAgent
-    from nagents.a2a.remote_config import RemoteAgentConfig
+    from nagents.a2a.client.configuration import RemoteAgentConfig
+    from nagents.a2a.client.transport import AccessTokenProvider
+    from nagents.a2a.client.transport import RemoteAgent
     from nagents.events import Event
     from nagents.types import Message as HarnessMessage
 
@@ -171,7 +171,7 @@ def install_sdk_transport(
     monkeypatch: pytest.MonkeyPatch,
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> None:
-    from nagents.a2a.client import RemoteAgent
+    from nagents.a2a.client.transport import RemoteAgent
 
     transport = httpx.MockTransport(handler)
     original_factory = RemoteAgent.from_config
@@ -740,7 +740,7 @@ def test_card_refresh_has_total_deadline_independent_of_profile_timeout(
 ) -> None:
     async def scenario() -> None:
         pytest.importorskip("a2a")
-        from nagents.a2a.client import RemoteAgent
+        from nagents.a2a.client.transport import RemoteAgent
         from nagents.harness.remote.store import RemoteAgentStore
         from nagents.web.settings.remote_metadata import RemoteMetadataRefresh
 
@@ -778,7 +778,7 @@ def test_metadata_constructor_runs_off_loop_and_is_joined_on_shutdown(
         import threading
 
         pytest.importorskip("a2a")
-        from nagents.a2a.client import RemoteAgent
+        from nagents.a2a.client.transport import RemoteAgent
         from nagents.harness.remote.store import RemoteAgentStore
         from nagents.web.settings.remote_metadata import RemoteMetadataRefresh
 

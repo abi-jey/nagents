@@ -12,7 +12,7 @@ from ..private_store import ProtectedStoreError
 from ..types import Notice
 
 if TYPE_CHECKING:
-    from nagents.a2a.client import RemoteAgent
+    from nagents.a2a.client.transport import RemoteAgent
 
     from ..runtime import Harness
 

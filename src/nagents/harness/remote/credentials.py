@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING
 from typing import Literal
 from typing import TypedDict
 
+from nagents.a2a.client.configuration import remote_endpoint
 from nagents.a2a.errors import RemoteAgentError
-from nagents.a2a.remote_config import remote_endpoint
 
 from ..private_store import ProtectedFileStore
 from ..private_store import ProtectedStoreError
