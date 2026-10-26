@@ -54,7 +54,7 @@ def imports(path: Path, *, annotations: bool) -> list[tuple[str, str]]:
             )
             found.extend((target, alias.name) for alias in node.names)
 
-    Visitor().visit(ast.parse(path.read_text()))
+    Visitor().visit(ast.parse(path.read_text(encoding="utf-8")))
     return found
 
 
@@ -71,7 +71,8 @@ def private_edges() -> set[tuple[str, str, str]]:
 
 def test_private_cross_package_imports_require_an_explicit_boundary_review() -> None:
     allowed = {
-        tuple(edge) for edge in json.loads((Path(__file__).parent / "support/import_boundaries.json").read_text())
+        tuple(edge)
+        for edge in json.loads((Path(__file__).parent / "support/import_boundaries.json").read_text(encoding="utf-8"))
     }
     unexpected = private_edges() - allowed
     assert not unexpected, f"New private cross-package imports: {sorted(unexpected)}"
