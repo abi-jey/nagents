@@ -18,7 +18,7 @@ from nagents.web.routing import RoutingStore
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
-from tests.web.test_web_deletion import quiet
+from tests.web.sessions.test_web_deletion import quiet
 
 if TYPE_CHECKING:
     from pathlib import Path

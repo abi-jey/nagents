@@ -21,8 +21,8 @@ from nagents.web.channels.uploads import supported
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
-from tests.web.test_web_deletion import quiet
-from tests.web.test_web_deletion import rows
+from tests.web.sessions.test_web_deletion import quiet
+from tests.web.sessions.test_web_deletion import rows
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

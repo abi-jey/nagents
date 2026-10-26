@@ -19,7 +19,7 @@ from nagents.types import DocumentContent
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
-from ..history import WebHistory
+from ..sessions.history import WebHistory
 from .local_delivery import valid_media
 from .upload_store import TYPES
 from .upload_store import expire

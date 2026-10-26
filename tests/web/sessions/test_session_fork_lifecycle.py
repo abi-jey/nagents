@@ -16,7 +16,7 @@ from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.web.execution.test_web_subscription_lifecycle import until
 from tests.web.execution.test_web_wakeups import scheduled_app
-from tests.web.test_web_deletion import quiet
+from tests.web.sessions.test_web_deletion import quiet
 
 if TYPE_CHECKING:
     import sqlite3
@@ -149,7 +149,7 @@ def test_fork_blocks_source_wakeups_and_cancellation_joins_atomic_selection(
                 assert release.wait(HANG_GUARD)
                 return new
 
-            monkeypatch.setattr("nagents.web.session_actions.fork_in", held)
+            monkeypatch.setattr("nagents.web.sessions.actions.fork_in", held)
             task = asyncio.create_task(
                 client.post(f"/api/sessions/{root}/fork", headers=headers, json={"title": "Owned fork"})
             )

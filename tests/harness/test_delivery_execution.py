@@ -21,7 +21,7 @@ from nagents.harness.execution import revalidate_origin
 from nagents.session import SessionManager
 from nagents.types import Message
 from nagents.types import ToolCall
-from nagents.web.history import WebHistory
+from nagents.web.sessions.history import WebHistory
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect
 from tests.support.providers import notifications

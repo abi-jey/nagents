@@ -40,15 +40,12 @@ from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
 
 from . import built_assets
-from . import empty_sessions
 from . import is_loopback_host
 from . import local_authority
-from . import session_agents
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
 from .channels.catalog import ChannelRevision
 from .channels.catalog import ConnectionInput
-from .deletion import delete_session
 from .execution.service import WebState as WebState
 from .live import instructions as live_instructions
 from .live.bridge import MainAgentBridge
@@ -63,9 +60,12 @@ from .live.settings import LiveSettings
 from .live.summary import VoiceContextSummarizer
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
-from .session_actions import register_session_actions
-from .session_groups import SessionGroups
-from .session_groups import register_session_groups
+from .sessions import agents as session_agents
+from .sessions import empty as empty_sessions
+from .sessions.actions import register_session_actions
+from .sessions.deletion import delete_session
+from .sessions.groups import SessionGroups
+from .sessions.groups import register_session_groups
 from .settings import agents as agent_settings
 from .settings import skills
 from .settings.preferences import SettingsInput
@@ -419,7 +419,7 @@ def create_app(
     from .channels.local_delivery import register_assets
 
     register_assets(app, lambda: state)
-    from .artifacts import register_artifacts
+    from .sessions.artifacts import register_artifacts
 
     register_artifacts(app, lambda: state)
     from .channels.uploads import register_uploads

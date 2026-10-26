@@ -16,7 +16,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.web.execution.service import WebState
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
-from tests.web.test_web_deletion import rows
+from tests.web.sessions.test_web_deletion import rows
 
 
 async def _exercise_pending_writer(

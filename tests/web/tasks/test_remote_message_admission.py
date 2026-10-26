@@ -10,7 +10,7 @@ import pytest
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.remote.profiles import RemoteProfile
-from nagents.web.session_agents import Choice
+from nagents.web.sessions.agents import Choice
 from tests.support.web import LiveStream
 from tests.support.web import client_app
 

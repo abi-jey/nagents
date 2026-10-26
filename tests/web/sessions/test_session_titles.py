@@ -11,7 +11,7 @@ import pytest
 from nagents.types import Message
 from tests.support.titles import title_model
 from tests.support.web import client_app
-from tests.web.test_web_deletion import quiet
+from tests.web.sessions.test_web_deletion import quiet
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -69,7 +69,7 @@ def test_generation_does_not_hold_host_mutation_guard_or_overwrite_manual_rename
                 await release.wait()
                 return "Late generated title"
 
-            monkeypatch.setattr("nagents.web.session_actions.generate_title", generate)
+            monkeypatch.setattr("nagents.web.sessions.actions.generate_title", generate)
             pending = asyncio.create_task(client.post(f"/api/sessions/{root}/rename", headers=headers, json={}))
             await asyncio.wait_for(started.wait(), 3)
             changed = await client.post(f"/api/sessions/{root}/rename", headers=headers, json={"title": manual_title})

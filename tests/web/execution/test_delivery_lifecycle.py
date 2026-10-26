@@ -16,8 +16,8 @@ from nagents.session.deliveries import DeliveryJournal
 from nagents.types import Message
 from nagents.types import ToolCall
 from tests.support.web import client_app
-from tests.web.test_web_deletion import quiet
-from tests.web.test_web_deletion import rows
+from tests.web.sessions.test_web_deletion import quiet
+from tests.web.sessions.test_web_deletion import rows
 
 if TYPE_CHECKING:
     from nagents.web.execution.service import WebState

@@ -7,17 +7,17 @@ from contextlib import nullcontext
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from ._async import finish_on_cancel
+from .._async import finish_on_cancel
+from ..routing import RoutingStore
 from .deletion import _guard_rows
 from .deletion import _remove_content
 from .history import WebHistory
-from .routing import RoutingStore
 
 if TYPE_CHECKING:
     import sqlite3
 
-    from .execution.service import WebState
-    from .session_agents import Choice
+    from ..execution.service import WebState
+    from .agents import Choice
 
 _ROOT = re.compile(r"ngn-[A-Za-z0-9-]{1,76}\Z")
 _REFERENCES = (
