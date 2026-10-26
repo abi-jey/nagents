@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from nagents.channels.types import ChannelMessage
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
     from nagents.types import ContentPart
     from nagents.types import ToolDefinition
 

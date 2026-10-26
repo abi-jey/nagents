@@ -21,7 +21,7 @@ from nagents.live.delegation import ClientDelegationRequest
 from nagents.web._async import finish_on_cancel
 from nagents.web.execution.service import WebState
 from nagents.web.live.bridge import MainAgentBridge
-from tests.harness.test_harness import ScriptedProvider
+from tests.harness.runtime.test_harness import ScriptedProvider
 from tests.support.child_failures import ChildFailureScenario
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD

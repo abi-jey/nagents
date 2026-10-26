@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from nagents.channels.dispatcher import ChannelDispatcher
 from nagents.events import Event
 from nagents.harness.providers.auth import OpenAIAuth
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskStarted
 

@@ -26,7 +26,7 @@ from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness.config import HarnessConfig
-from nagents.harness.followups import RunTurn
+from nagents.harness.runtime.followups import RunTurn
 from nagents.harness.types import ApprovalRequest
 from nagents.web.channels import notices as channel_notices
 from nagents.web.channels.catalog import Connection

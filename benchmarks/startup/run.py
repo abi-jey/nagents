@@ -17,7 +17,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import nagents.harness.runtime as runtime
+import nagents.harness.runtime.core as runtime
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
 from nagents.migrations.manager import MigrationManager

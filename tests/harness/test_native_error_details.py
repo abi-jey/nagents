@@ -11,7 +11,7 @@ import pytest
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness.task_activity import public_payload
+from nagents.harness.runtime.task_activity import public_payload
 from nagents.harness.types import TaskCompleted
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect

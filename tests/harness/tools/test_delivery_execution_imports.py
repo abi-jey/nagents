@@ -61,7 +61,7 @@ if mode in {'custom', 'custom_subclass'}:
     from nagents.events import TextDoneEvent, ToolCallEvent, ToolResultEvent
     from nagents.harness import Harness, HarnessConfig
     from nagents.harness.tools.execution import bind_channel_send, delivery_origin
-    from nagents.harness.runtime import _HarnessSession
+    from nagents.harness.runtime.core import _HarnessSession
     from nagents.session import SessionManager
     from tests.support.config import connection
     from tests.support.providers import FakeProvider

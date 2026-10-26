@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Collection
     from collections.abc import Iterator
 
-    from .runtime import Harness
+    from .core import Harness
 
 
 def split_command(text: str) -> tuple[str, str]:

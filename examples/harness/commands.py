@@ -1,4 +1,4 @@
-"""Load with ngn --plugin examples/harness/commands.py:setup, then type /."""
+"""Load with ngn --plugin examples/harness/runtime/commands.py:setup, then type /."""
 
 from __future__ import annotations
 

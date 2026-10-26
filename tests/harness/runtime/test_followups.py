@@ -9,8 +9,8 @@ from unittest.mock import Mock
 import pytest
 
 from nagents.events import TextDoneEvent
-from nagents.harness.followups import RunInput
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
+from nagents.harness.runtime.followups import RunInput
 from nagents.harness.tools.coding import CodingTools
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect

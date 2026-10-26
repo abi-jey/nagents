@@ -11,11 +11,11 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness import runtime
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
+from nagents.harness.runtime import core as runtime
 from tests.support.config import connection
 from tests.support.providers import FakeProvider
 from tests.support.web import client_app

@@ -27,7 +27,7 @@ from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
-from nagents.harness.runtime import _HarnessSession
+from nagents.harness.runtime.core import _HarnessSession
 from nagents.harness.tools.execution import bind_channel_send
 from nagents.harness.tools.execution import host_run
 from nagents.harness.types import TaskDeliveryWarning
@@ -72,8 +72,8 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
-    from nagents.harness.followups import RunInput
-    from nagents.harness.followups import RunTurn
+    from nagents.harness.runtime.followups import RunInput
+    from nagents.harness.runtime.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import SessionInfo
     from nagents.types import ContentPart

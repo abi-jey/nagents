@@ -16,8 +16,8 @@ from nagents.harness import HarnessConfig
 from nagents.harness import load_config
 from nagents.harness.tools.coding import CodingTools
 from nagents.skills import Skill
-from tests.harness.test_harness import ScriptedProvider
-from tests.harness.test_harness import approve
+from tests.harness.runtime.test_harness import ScriptedProvider
+from tests.harness.runtime.test_harness import approve
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 

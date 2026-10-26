@@ -39,20 +39,20 @@ from nagents.provider.reasoning import validate_reasoning_choice
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
-from ..followups import RunInput
-from ..followups import RunTurn
 from ..providers.factory import HarnessProvider
 from ..providers.reasoning import ReasoningPreference
 from ..providers.reasoning import resolve_effort
 from ..providers.reasoning import validate_effort
 from ..remote.artifacts import referenced_images
+from ..runtime.followups import RunInput
+from ..runtime.followups import RunTurn
+from ..runtime.task_activity import ChildActivity
+from ..runtime.task_activity import TaskOptions
+from ..runtime.task_activity import compaction_snapshot
+from ..runtime.task_activity import public_payload
 from ..session_identity import SessionIdentityStore
 from ..session_identity import validate_session_id
 from ..session_identity import validate_title
-from ..task_activity import ChildActivity
-from ..task_activity import TaskOptions
-from ..task_activity import compaction_snapshot
-from ..task_activity import public_payload
 from ..tools.coding import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
 from ..tools.execution import ExecutionBridge
 from ..types import Notice
@@ -84,7 +84,7 @@ if TYPE_CHECKING:
     from ..config import AgentProfile
     from ..providers.model_bindings import ModelBinding
     from ..providers.registry import ProviderProfile
-    from ..runtime import Harness
+    from ..runtime.core import Harness
 
 MAX_RETAINED_TASKS = 64
 MAX_FOLLOWUPS = 8
@@ -1273,7 +1273,7 @@ class SubagentManager:
         )
 
     def _create_child(self, agent: str, info: TaskInfo | None = None, *, continuing: bool = False) -> Harness:
-        from ..runtime import Harness
+        from ..runtime.core import Harness
 
         parent = self._children[info.session_id] if continuing and info is not None else self.harness
         options = self._options.get(info.session_id, TaskOptions()) if info else TaskOptions()

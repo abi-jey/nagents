@@ -14,7 +14,7 @@ from nagents.events import ToolCallEvent
 from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.execution.service import Run
 from nagents.web.live.bridge import MainAgentBridge

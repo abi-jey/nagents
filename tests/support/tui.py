@@ -12,8 +12,8 @@ from nagents.events import DoneEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolResultEvent
-from nagents.harness.commands import CommandRegistry
 from nagents.harness.config import HarnessConfig
+from nagents.harness.runtime.commands import CommandRegistry
 from nagents.harness.types import ApprovalRequest
 from nagents.harness.types import HarnessEvent
 from nagents.harness.types import SessionInfo

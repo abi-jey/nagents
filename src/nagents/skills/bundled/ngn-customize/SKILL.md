@@ -27,12 +27,12 @@ for verification, not additional files automatically loaded by the skill tool.
 | Ordered lifecycle transformations | `AgentPlugin`, `RunContext`, `ModelRequest` | `extensions.py` |
 | Replace the context algorithm | `CompactionStrategy`, `CompactionRequest`, `CompactionResult` | `extensions.py`, `agent.py` |
 | Configure model-based compaction | `ModelCompaction` | `compaction.py` |
-| Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime.py`, `harness/config.py` |
+| Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime/core.py`, `harness/config.py` |
 | Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools/coding.py` |
 | Markdown/TOML agent discovery and imports | `discover_agents`, `import_agents`, `agent_imports` | `harness/agents/definitions.py` |
 | Unified assistant properties and UI edits | Native `prompt`, `model`, `tools`, and `live` frontmatter | `harness/agents/definitions.py`, `harness/providers/model_bindings.py` |
 | On-demand task guidance | `Skill`, `SkillDiscoverer`, `Agent.load_skill` | `skills/`, `agent.py` |
-| Prompt/local commands | `CommandRegistry.register`, `CommandResult` | `harness/commands.py` |
+| Prompt/local commands | `CommandRegistry.register`, `CommandResult` | `harness/runtime/commands.py` |
 | Child agents and follow-ups | `SubagentManager`, `Harness.tasks`, `continue_task` | `harness/agents/subagents.py` |
 | Remote A2A agents and authentication discovery | `RemoteAgentConfig`, `discover_remote`, `RemoteConversation`, `remote_agent_configure` | `a2a/client/configuration.py`, `a2a/client/discovery.py`, `harness/remote/store.py` |
 | Delayed continuations | `schedule_wakeup`, `WakeupHandler`, `Harness.wakeup_handler` | `harness/types.py`, `web/execution/wakeups.py` |

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from nagents.harness.config import HarnessConfig
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
     from nagents.provider import Provider
     from nagents.types import ToolDefinition
 

@@ -15,18 +15,18 @@ import pytest
 
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness.commands import BUILTIN_COMMANDS
-from nagents.harness.commands import Command
-from nagents.harness.commands import CommandRegistry
-from nagents.harness.commands import CommandResult
-from nagents.harness.commands import split_command
 from nagents.harness.config import AgentProfile
+from nagents.harness.runtime.commands import BUILTIN_COMMANDS
+from nagents.harness.runtime.commands import Command
+from nagents.harness.runtime.commands import CommandRegistry
+from nagents.harness.runtime.commands import CommandResult
+from nagents.harness.runtime.commands import split_command
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from nagents.harness.commands import CommandHandler
+    from nagents.harness.runtime.commands import CommandHandler
 
 
 @pytest.fixture
@@ -567,7 +567,7 @@ def test_skill_execution_preserves_symlink_and_workspace_guards(
 
 
 def test_commands_source_has_no_ui_or_runtime_imports() -> None:
-    source = Path(__file__).parents[2] / "src/nagents/harness/commands.py"
+    source = Path(__file__).parents[3] / "src/nagents/harness/runtime/commands.py"
     tree = ast.parse(source.read_text())
     imports = [node for node in ast.walk(tree) if isinstance(node, ast.Import | ast.ImportFrom)]
     names = [name.name for node in imports if isinstance(node, ast.Import) for name in node.names]

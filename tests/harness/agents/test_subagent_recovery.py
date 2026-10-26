@@ -12,7 +12,7 @@ from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification
 from tests.support.hang_guard import HANG_GUARD

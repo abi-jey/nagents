@@ -12,7 +12,7 @@ from nagents.events import ReasoningChunkEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness.followups import RunInput
+from nagents.harness.runtime.followups import RunInput
 from nagents.harness.tools.coding import HarnessExecutor
 from nagents.harness.types import TaskActivity
 from nagents.harness.types import TaskMessage
@@ -298,7 +298,7 @@ def test_saved_child_settings_apply_only_on_next_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from nagents.harness.task_activity import TaskOptions
+    from nagents.harness.runtime.task_activity import TaskOptions
 
     async def scenario() -> None:
         started, release = asyncio.Event(), asyncio.Event()

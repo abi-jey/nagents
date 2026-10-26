@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
     from nagents.channels import ChannelExecutionPhase
     from nagents.channels import ChannelValue
-    from nagents.harness.followups import RunTurn
+    from nagents.harness.runtime.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
 
     from ..execution.service import Run

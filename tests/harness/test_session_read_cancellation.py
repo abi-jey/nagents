@@ -17,9 +17,9 @@ import pytest
 
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import HarnessConfig
-from nagents.harness.runtime import Harness
-from nagents.harness.task_activity import ChildActivity
-from nagents.harness.task_activity import ChildHistoryCommitted
+from nagents.harness.runtime.core import Harness
+from nagents.harness.runtime.task_activity import ChildActivity
+from nagents.harness.runtime.task_activity import ChildHistoryCommitted
 from nagents.types import Message
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io

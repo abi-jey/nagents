@@ -24,15 +24,15 @@ from pydantic import Field
 from pydantic import field_validator
 
 from nagents.harness.agents.identity import agent_identities
-from nagents.harness.followups import RunInput
 from nagents.harness.private_store import ProtectedStoreError
 from nagents.harness.providers.reasoning import ReasoningPreference
 from nagents.harness.providers.reasoning import resolve_effort
 from nagents.harness.remote.credentials import RemoteCredentials
-from nagents.harness.runtime import _HarnessSession
+from nagents.harness.runtime.core import _HarnessSession
+from nagents.harness.runtime.followups import RunInput
+from nagents.harness.runtime.task_activity import TaskOptions
 from nagents.harness.session_identity import SESSION_ID_PATTERN
 from nagents.harness.session_identity import validate_title
-from nagents.harness.task_activity import TaskOptions
 from nagents.session import response_metadata
 from nagents.types import TextContent
 
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from collections.abc import Callable
 
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
 
     from ..execution.service import Run
     from ..execution.service import WebState

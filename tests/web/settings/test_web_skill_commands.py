@@ -12,11 +12,11 @@ from uuid import uuid4
 import pytest
 
 from nagents.events import TextDoneEvent
-from nagents.harness.commands import CommandResult
 from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.commands import CommandResult
+from nagents.harness.runtime.core import Harness
 from nagents.types import Message
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness

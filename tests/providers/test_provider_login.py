@@ -25,7 +25,7 @@ from nagents.harness.providers.credentials import ProviderLogin
 from nagents.harness.providers.credentials import ProviderLoginError
 from nagents.harness.providers.credentials import ProviderLoginStore
 from nagents.harness.providers.factory import HarnessProvider
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from tests.support.config import connection
 
 if TYPE_CHECKING:

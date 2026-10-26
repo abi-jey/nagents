@@ -685,7 +685,7 @@ listing one twice can invoke setup twice and can fail on duplicate registrations
 
 ```bash
 ngn --config /path/to/settings.json --plugin /path/to/extension.py:setup
-ngn --plugin examples/harness/commands.py:setup
+ngn --plugin examples/harness/runtime/commands.py:setup
 ```
 
 Plugins are fully trusted Python code, not a sandbox or just prompt text. They

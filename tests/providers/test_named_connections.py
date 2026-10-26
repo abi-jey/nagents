@@ -26,7 +26,7 @@ from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.provider.codex.openai import CODEX_ENDPOINT
 from nagents.provider.codex.openai import CodexConfigError
 from nagents.web.live.routes import create_agent

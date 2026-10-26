@@ -21,7 +21,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.tools.configuration import WorkspaceTools
 from nagents.session import SessionManager
 from nagents.types import Message
-from tests.harness.test_harness import ScriptedProvider
+from tests.harness.runtime.test_harness import ScriptedProvider
 from tests.support.config import connection
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io

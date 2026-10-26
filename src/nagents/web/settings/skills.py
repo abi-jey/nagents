@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException
 from fastapi import Query
 
-from nagents.harness.commands import split_command
+from nagents.harness.runtime.commands import split_command
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

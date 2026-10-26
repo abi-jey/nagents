@@ -68,7 +68,7 @@ READ_ONLY_TOOLS = frozenset(
 MODIFYING_TOOLS = frozenset({"edit", "write", "shell", "remote_agent_configure"})
 
 if TYPE_CHECKING:
-    from ..runtime import Harness
+    from ..runtime.core import Harness
     from .execution import ExecutionBridge
 
 _PRUNED = {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"}

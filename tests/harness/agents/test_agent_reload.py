@@ -13,7 +13,6 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.extensions import RunContext
-from nagents.harness import runtime
 from nagents.harness.agents.subagents import SubagentManager
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import AgentProfile
@@ -24,8 +23,9 @@ from nagents.harness.providers.model_bindings import ModelBinding
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.runtime import Harness
-from nagents.harness.task_activity import TaskOptions
+from nagents.harness.runtime import core as runtime
+from nagents.harness.runtime.core import Harness
+from nagents.harness.runtime.task_activity import TaskOptions
 from nagents.harness.types import TaskCompleted
 from tests.support.config import connection
 from tests.support.providers import FakeProvider

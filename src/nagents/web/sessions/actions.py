@@ -13,7 +13,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
-from nagents.harness.session_titles import generate_title
+from nagents.harness.runtime.session_titles import generate_title
 from nagents.session.forks import SessionForkError
 from nagents.session.forks import fork_in
 from nagents.session.forks import rename_in

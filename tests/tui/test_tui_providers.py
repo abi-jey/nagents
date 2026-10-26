@@ -12,7 +12,7 @@ from textual.widgets import Static
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.tui.app import NagentsApp
 from nagents.tui.providers import ProviderEditor
 from nagents.tui.screens import ChoiceModal

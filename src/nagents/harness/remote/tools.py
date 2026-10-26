@@ -12,7 +12,7 @@ from .profiles import RemoteProfile
 if TYPE_CHECKING:
     from nagents.types import JsonValue
 
-    from ..runtime import Harness
+    from ..runtime.core import Harness
 
 
 class RemoteAgentTools:

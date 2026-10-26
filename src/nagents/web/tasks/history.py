@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from nagents.extensions import AgentPlugin
-from nagents.harness.runtime import _HarnessSession
+from nagents.harness.runtime.core import _HarnessSession
 from nagents.harness.tools.execution import _register_owned_adapter_type
 
 from .._async import finish_on_cancel

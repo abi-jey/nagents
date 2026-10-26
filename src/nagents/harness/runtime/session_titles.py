@@ -26,11 +26,11 @@ from nagents.types import GenerationConfig
 from nagents.types import Message
 from nagents.types import TextContent
 
-from .agents.updates import NOTIFICATION_PREFIX
-from .agents.updates import WAKEUP_PREFIX
-from .providers.connection import build_provider
-from .providers.factory import HarnessProvider
-from .providers.factory import UnavailableModelProvider
+from ..agents.updates import NOTIFICATION_PREFIX
+from ..agents.updates import WAKEUP_PREFIX
+from ..providers.connection import build_provider
+from ..providers.factory import HarnessProvider
+from ..providers.factory import UnavailableModelProvider
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from nagents.provider import Provider
     from nagents.session import SessionManager
 
-    from .runtime import Harness
+    from .core import Harness
 
 TITLE_PROMPT = (
     "Name this conversation using only the supplied user messages. "

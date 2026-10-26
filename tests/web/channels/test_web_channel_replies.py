@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness import runtime
+from nagents.harness.runtime import core as runtime
 from nagents.harness.types import ApprovalRequest
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.types import ToolCall

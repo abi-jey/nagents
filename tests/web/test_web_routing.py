@@ -15,7 +15,7 @@ from nagents.channels.types import ChannelSend
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness import runtime
+from nagents.harness.runtime import core as runtime
 from tests.support.channels import FakeChannel
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD

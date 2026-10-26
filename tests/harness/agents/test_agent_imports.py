@@ -11,7 +11,6 @@ import pytest
 from nagents.cli import main
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness import runtime
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
@@ -19,7 +18,8 @@ from nagents.harness.config import load_config
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime import core as runtime
+from nagents.harness.runtime.core import Harness
 from nagents.harness.types import TaskCompleted
 from nagents.types import ToolCall
 from tests.support.providers import FakeProvider

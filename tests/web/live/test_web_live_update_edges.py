@@ -16,7 +16,7 @@ import pytest
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.providers.factory import HarnessProvider
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.harness.tools.coding import CodingTools
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.live.bridge import MainAgentBridge

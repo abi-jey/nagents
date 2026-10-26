@@ -9,13 +9,13 @@ from unittest.mock import patch
 import pytest
 
 from nagents.events import TextDoneEvent
-from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers.model_bindings import ModelBinding
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
+from nagents.harness.runtime import core as runtime
 from nagents.harness.tools.coding import CodingTools
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider

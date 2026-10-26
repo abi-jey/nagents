@@ -12,7 +12,7 @@ from nagents.events import DoneEvent
 from nagents.events import FinishReason
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness import runtime
+from nagents.harness.runtime import core as runtime
 
 from . import run
 from . import telemetry
@@ -179,7 +179,7 @@ def test_provenance_tracks_imported_runtime_outside_benchmark_checkout(
     hashes = run.source_hashes()
     assert set(key for key in hashes if key.startswith("src/nagents/")) == {
         "src/nagents/agent.py",
-        "src/nagents/harness/runtime.py",
+        "src/nagents/harness/runtime/core.py",
     }
     assert run.source_roots()["src/nagents"] == str(imported_root)
     assert "benchmarks/orchestration/run.py" in hashes
