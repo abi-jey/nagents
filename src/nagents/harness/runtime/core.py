@@ -45,6 +45,7 @@ from ..agents.subagents import DEFAULT_TASK_OPTIONS
 from ..agents.subagents import SubagentManager
 from ..config import AgentProfile
 from ..default_instructions import load_default_instructions
+from ..integrations.skills import HarnessSkillDiscoverer
 from ..providers.auth import OpenAIAuth
 from ..providers.connection import build_provider
 from ..providers.credentials import ProviderLogin
@@ -62,7 +63,6 @@ from ..providers.registry import ProviderProfile
 from ..providers.registry import ProviderRegistry
 from ..providers.registry import ScopedProviderRegistryStore
 from ..remote.tools import RemoteAgentTools
-from ..skills import HarnessSkillDiscoverer
 from ..tools.coding import CodingTools
 from ..tools.coding import HarnessExecutor
 from ..tools.configuration import HarnessToolRegistry

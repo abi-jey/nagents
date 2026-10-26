@@ -14,7 +14,7 @@ import pytest
 from nagents.cli import main
 from nagents.harness import Harness
 from nagents.harness import load_config
-from nagents.harness.mcp_diagnostics import ignored_foreign_configs
+from nagents.harness.integrations.mcp_diagnostics import ignored_foreign_configs
 from tests.harness.tools.test_resource_reload import server
 from tests.support.web import client_app
 

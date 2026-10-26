@@ -16,7 +16,7 @@
   ["nagents.harness.session_identity", "nagents._sqlite", "write_database"],
   ["nagents.harness.runtime.session_titles", "nagents._async", "finish_on_cancel"],
   ["nagents.harness.runtime.session_titles", "nagents.channels.runtime", "_INBOUND_PREFIX"],
-  ["nagents.harness.skills", "nagents._async", "finish_on_cancel"],
+  ["nagents.harness.integrations.skills", "nagents._async", "finish_on_cancel"],
   ["nagents.harness.agents.subagent_settings", "nagents._async", "finish_on_cancel"],
   ["nagents.harness.agents.subagent_settings", "nagents._sqlite", "write_database"],
   ["nagents.harness.agents.subagents", "nagents._async", "join_owned"],

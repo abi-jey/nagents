@@ -35,12 +35,12 @@ from nagents.tools.registry import ToolRegistry
 from nagents.types import Message
 from nagents.types import ToolDefinition
 
-from ..mcp_diagnostics import MCPDiagnostics
-from ..mcp_diagnostics import MCPServerFailure
-from ..mcp_diagnostics import configuration_sources
-from ..mcp_diagnostics import ignored_foreign_configs
-from ..plugin_loader import PluginModule
-from ..plugin_loader import load_plugin
+from ..integrations.mcp_diagnostics import MCPDiagnostics
+from ..integrations.mcp_diagnostics import MCPServerFailure
+from ..integrations.mcp_diagnostics import configuration_sources
+from ..integrations.mcp_diagnostics import ignored_foreign_configs
+from ..integrations.plugin_loader import PluginModule
+from ..integrations.plugin_loader import load_plugin
 from ..runtime.commands import CommandRegistry
 from ..types import Notice
 from .resource_config import ResourceConfigError
