@@ -27,10 +27,10 @@ from a2a.types import TaskStatusUpdateEvent
 from a2a.utils.errors import TaskNotFoundError
 from a2a.utils.errors import UnsupportedOperationError
 
-from nagents.a2a.executor import NagentsAgentExecutor
-from nagents.a2a.executor import request_input
-from nagents.a2a.harness import HarnessAgentExecutor
-from nagents.a2a.harness import HarnessRuntime
+from nagents.a2a.agent.executor import NagentsAgentExecutor
+from nagents.a2a.agent.executor import request_input
+from nagents.a2a.agent.harness import HarnessAgentExecutor
+from nagents.a2a.agent.harness import HarnessRuntime
 from nagents.a2a.server.auth import Principal
 from nagents.a2a.server.authorization import AuthorizationRegistry
 from nagents.a2a.server.authorization import AuthorizationUnavailable
@@ -61,7 +61,7 @@ from tests.support.providers import FakeProvider
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.a2a.agent import AgentContext
+    from nagents.a2a.agent.runtime import AgentContext
     from nagents.harness.auth import OpenAIAuth
 
 

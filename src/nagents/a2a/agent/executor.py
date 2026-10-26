@@ -25,29 +25,29 @@ from nagents.events import ErrorEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 
-from .agent import AgentContext
-from .agent import NativeAgentRuntime
-from .diagnostics import error_frames
-from .images import ImagePublisher
-from .images import current_image_publisher
-from .server.authorization import AuthorizationDenied
-from .server.authorization import AuthorizationSession
-from .server.authorization import current_authorization
-from .server.authorization import unavailable_credentials
-from .store import MessageClaim
-from .store import principal
+from ..diagnostics import error_frames
+from ..images import ImagePublisher
+from ..images import current_image_publisher
+from ..server.authorization import AuthorizationDenied
+from ..server.authorization import AuthorizationSession
+from ..server.authorization import current_authorization
+from ..server.authorization import unavailable_credentials
+from ..store import MessageClaim
+from ..store import principal
+from .runtime import AgentContext
+from .runtime import NativeAgentRuntime
 
 if TYPE_CHECKING:
     from a2a.server.agent_execution import RequestContext
     from a2a.server.events import EventQueue
 
-    from .agent import AgentFactory
-    from .agent import AgentRuntime
-    from .server.auth import Principal
-    from .server.authorization import AuthorizationRegistry
-    from .server.authorization import CredentialHandler
-    from .server.config import A2AConfig
-    from .store import SQLiteTaskStore
+    from ..server.auth import Principal
+    from ..server.authorization import AuthorizationRegistry
+    from ..server.authorization import CredentialHandler
+    from ..server.config import A2AConfig
+    from ..store import SQLiteTaskStore
+    from .runtime import AgentFactory
+    from .runtime import AgentRuntime
 
 logger = logging.getLogger(__name__)
 

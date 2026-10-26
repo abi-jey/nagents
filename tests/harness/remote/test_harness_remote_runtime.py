@@ -67,7 +67,7 @@ if TYPE_CHECKING:
 
     from a2a.types import SendMessageRequest
 
-    from nagents.a2a.agent import AgentContext
+    from nagents.a2a.agent.runtime import AgentContext
     from nagents.a2a.client.transport import RemoteAgent
     from nagents.types import GenerationConfig
     from nagents.types import ToolDefinition

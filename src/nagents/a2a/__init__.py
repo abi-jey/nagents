@@ -10,8 +10,9 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .agent import AgentContext as AgentContext
-    from .agent import AgentFactory as AgentFactory
+    from .agent.executor import request_input as request_input
+    from .agent.runtime import AgentContext as AgentContext
+    from .agent.runtime import AgentFactory as AgentFactory
     from .client.configuration import RemoteAgentConfig as RemoteAgentConfig
     from .client.conversation import RemoteConversation as RemoteConversation
     from .client.conversation import RemoteUpdate as RemoteUpdate
@@ -19,7 +20,6 @@ if TYPE_CHECKING:
     from .client.discovery import discover_remote as discover_remote
     from .client.transport import RemoteAgent as RemoteAgent
     from .errors import RemoteAgentError as RemoteAgentError
-    from .executor import request_input as request_input
     from .images import publish_image as publish_image
     from .images import publish_image_file as publish_image_file
     from .server.application import create_app as create_app
@@ -62,11 +62,11 @@ _MODULES = {
     "A2AConfig": "server.config",
     "IssuerConfig": "server.config",
     "ServiceConfig": "server.config",
-    "AgentContext": "agent",
-    "AgentFactory": "agent",
+    "AgentContext": "agent.runtime",
+    "AgentFactory": "agent.runtime",
     "create_app": "server.application",
     "create_harness_app": "server.application",
-    "request_input": "executor",
+    "request_input": "agent.executor",
     "publish_image": "images",
     "publish_image_file": "images",
     "AccessGrant": "server.oauth",

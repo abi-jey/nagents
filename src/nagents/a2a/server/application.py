@@ -35,8 +35,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ..agent.executor import NagentsAgentExecutor
 from ..diagnostics import error_frames
-from ..executor import NagentsAgentExecutor
 from ..store import SQLiteEventStream
 from ..store import SQLiteTaskStore
 from ..store import private_file
@@ -59,8 +59,8 @@ if TYPE_CHECKING:
 
     from nagents.harness.config import HarnessConfig
 
-    from ..agent import AgentFactory
-    from ..executor import TaskExecutor
+    from ..agent.executor import TaskExecutor
+    from ..agent.runtime import AgentFactory
     from .config import A2AConfig
 
 logger = logging.getLogger(__name__)
@@ -414,7 +414,7 @@ def create_app(
 
 def create_harness_app(*, config: A2AConfig, harness_config: HarnessConfig) -> Starlette:
     """Serve one explicit ngn profile using the same framework A2A boundary."""
-    from ..harness import HarnessAgentExecutor
+    from ..agent.harness import HarnessAgentExecutor
 
     def build(store: SQLiteTaskStore, registry: AuthorizationRegistry, oauth: OAuthCoordinator) -> TaskExecutor:
         return HarnessAgentExecutor(config, harness_config, store, registry, credential_handler=oauth.credentials)

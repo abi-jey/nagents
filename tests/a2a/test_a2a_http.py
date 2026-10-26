@@ -38,7 +38,7 @@ from tests.a2a.test_a2a_auth import signing_key
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.a2a.agent import AgentContext
+    from nagents.a2a.agent.runtime import AgentContext
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite test storage requires POSIX")
 

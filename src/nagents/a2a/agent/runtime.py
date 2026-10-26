@@ -22,9 +22,9 @@ if TYPE_CHECKING:
     from nagents.events import ToolResultEvent
     from nagents.types import ToolCall
 
+    from ..server.auth import Principal
+    from ..server.authorization import AuthorizationSession
     from .executor import PublicStatus
-    from .server.auth import Principal
-    from .server.authorization import AuthorizationSession
 
 
 @dataclass(frozen=True)
