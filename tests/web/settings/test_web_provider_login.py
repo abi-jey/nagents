@@ -16,7 +16,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.connection import build_provider
 from nagents.harness.providers import ProviderProfile
 from nagents.provider import OpenAIProvider
-from nagents.web import provider_login
+from nagents.web.settings import provider_login
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
-    from nagents.web.provider_login import LoginSnapshot
-    from nagents.web.provider_login import ProviderLogin
+    from nagents.web.settings.provider_login import LoginSnapshot
+    from nagents.web.settings.provider_login import ProviderLogin
     from tests.support.channels import Site
 
 pytestmark = pytest.mark.requires_posix

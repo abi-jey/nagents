@@ -17,8 +17,8 @@ from nagents.harness.runtime import Harness
 from nagents.provider.gateway import GatewayHTTPClient
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import OpenAIProvider
-from nagents.web.settings import SettingsValues
-from nagents.web.settings import WebSettings
+from nagents.web.settings.preferences import SettingsValues
+from nagents.web.settings.preferences import WebSettings
 from tests.support.web import client_app
 
 if TYPE_CHECKING:

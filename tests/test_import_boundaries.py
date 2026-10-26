@@ -112,3 +112,11 @@ def test_live_route_public_imports_refer_to_the_same_definitions() -> None:
 
     for name in live.__all__:
         assert getattr(live, name) is getattr(routes, name)
+
+
+def test_settings_public_imports_refer_to_the_same_definitions() -> None:
+    from nagents.web import settings
+    from nagents.web.settings import preferences
+
+    for name in settings.__all__:
+        assert getattr(settings, name) is getattr(preferences, name)

@@ -29,7 +29,7 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.types import Message
 from nagents.types import ToolCall
 from nagents.web.app import create_app
-from nagents.web.settings import SettingsValues
+from nagents.web.settings.preferences import SettingsValues
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL

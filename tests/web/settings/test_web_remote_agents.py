@@ -27,8 +27,8 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.remote_credentials import RemoteCredentials
 from nagents.harness.remote_profiles import RemoteProfile
 from nagents.harness.remote_store import RemoteAgentMetadata
-from nagents.web import remote_agents
 from nagents.web.security import LocalOnly
+from nagents.web.settings import remote_agents
 from tests.support.providers import FakeProvider
 from tests.support.web import LiveStream
 from tests.support.web import client_app
@@ -164,7 +164,7 @@ def mock_issuer(monkeypatch: pytest.MonkeyPatch, *, calls: list[httpx.Request], 
                 transport=transport,
             )
 
-    monkeypatch.setattr("nagents.web.remote_agents.httpx.AsyncClient", MockIssuerClient)
+    monkeypatch.setattr("nagents.web.settings.remote_agents.httpx.AsyncClient", MockIssuerClient)
 
 
 def install_sdk_transport(
@@ -742,7 +742,7 @@ def test_card_refresh_has_total_deadline_independent_of_profile_timeout(
         pytest.importorskip("a2a")
         from nagents.a2a.client import RemoteAgent
         from nagents.harness.remote_store import RemoteAgentStore
-        from nagents.web.remote_metadata import RemoteMetadataRefresh
+        from nagents.web.settings.remote_metadata import RemoteMetadataRefresh
 
         class HangingTransport(httpx.AsyncBaseTransport):
             async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -759,7 +759,7 @@ def test_card_refresh_has_total_deadline_independent_of_profile_timeout(
             return original_factory(profile, tokens, transport=HangingTransport())
 
         monkeypatch.setattr(RemoteAgent, "from_config", classmethod(with_hanging_transport))
-        monkeypatch.setattr("nagents.web.remote_metadata.REMOTE_CARD_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr("nagents.web.settings.remote_metadata.REMOTE_CARD_TIMEOUT_SECONDS", 0.01)
         profile = AgentProfile(a2a=RemoteProfile(url=AGENT_URL, timeout=3600))
         store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
         manager = RemoteMetadataRefresh()
@@ -780,7 +780,7 @@ def test_metadata_constructor_runs_off_loop_and_is_joined_on_shutdown(
         pytest.importorskip("a2a")
         from nagents.a2a.client import RemoteAgent
         from nagents.harness.remote_store import RemoteAgentStore
-        from nagents.web.remote_metadata import RemoteMetadataRefresh
+        from nagents.web.settings.remote_metadata import RemoteMetadataRefresh
 
         started = threading.Event()
         release = threading.Event()
@@ -834,7 +834,7 @@ def test_restricted_metadata_schedule_never_connects_to_remote_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restricted_mode: str
 ) -> None:
     async def scenario() -> None:
-        from nagents.web.remote_metadata import RemoteMetadataRefresh
+        from nagents.web.settings.remote_metadata import RemoteMetadataRefresh
 
         called: list[str] = []
 

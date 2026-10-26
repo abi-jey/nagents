@@ -18,12 +18,12 @@ from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import ScopedProviderRegistryStore
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
-from tests.web.test_model_binding_settings import configuration
+from tests.web.settings.test_model_binding_settings import configuration
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.web.settings import SettingsValues
+    from nagents.web.settings.preferences import SettingsValues
 
 
 _EMPTY_MODEL_BINDING = ModelBinding()

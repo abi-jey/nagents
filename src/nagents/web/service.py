@@ -46,16 +46,16 @@ from .executions import MAX_PARALLEL_RUNS
 from .executions import Executions
 from .history import WebHistory
 from .live.inspection import model_requests
-from .provider_setup import provider_error
-from .provider_setup import provider_error_diagnostic
-from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
-from .remote_metadata import RemoteMetadataRefresh
 from .replay import RunReplay
 from .response_metadata import Responses
 from .session_agents import SessionAgents
-from .subagent_settings import WebSubagentSettings
+from .settings.provider_setup import provider_error
+from .settings.provider_setup import provider_error_diagnostic
+from .settings.provider_setup import provider_setup
+from .settings.remote_metadata import RemoteMetadataRefresh
+from .settings.subagents import WebSubagentSettings
 from .subscriptions import EventBus
 from .tasks import Tasks
 from .tool_approvals import ToolApprovals
@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from nagents.types import ContentPart
 
     from .routing import Work
-    from .settings import WebSettings
+    from .settings.preferences import WebSettings
     from .wakeups import Wakeup
 
 APPROVAL_TIMEOUT = 300

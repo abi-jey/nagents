@@ -19,7 +19,7 @@ from nagents.tools.registry import ToolRegistry
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .service import WebState
+    from ..service import WebState
 
 
 class ToolSettingsInput(BaseModel):

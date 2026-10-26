@@ -37,7 +37,7 @@ from nagents.harness.subagent_settings import SubagentLimits
 from nagents.provider.reasoning import reasoning_effort_options
 from nagents.types import ReasoningEffort
 
-from ._async import join_owned as _join
+from .._async import join_owned as _join
 from .model_capabilities import CatalogCapabilities
 from .model_capabilities import catalog_route
 

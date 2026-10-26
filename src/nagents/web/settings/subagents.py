@@ -22,13 +22,13 @@ from nagents.harness.subagent_settings import SubagentLimits
 from nagents.harness.subagent_settings import SubagentSettingsSnapshot
 from nagents.harness.subagent_settings import limit_scope
 
-from ._async import join_owned
-from .settings import MAX_SETTINGS_BYTES
-from .settings import _GLOBAL_SETTINGS_TABLE
-from .settings import SettingsValues
+from .._async import join_owned
+from .preferences import MAX_SETTINGS_BYTES
+from .preferences import _GLOBAL_SETTINGS_TABLE
+from .preferences import SettingsValues
 
 if TYPE_CHECKING:
-    from .service import WebState
+    from ..service import WebState
 
 logger = logging.getLogger(__name__)
 

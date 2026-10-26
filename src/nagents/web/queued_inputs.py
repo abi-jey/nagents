@@ -15,9 +15,9 @@ from fastapi import HTTPException
 from nagents.harness.commands import split_command
 from nagents.harness.followups import RunInput
 
-from . import skills
 from ._async import finish_on_cancel
 from ._async import join_owned
+from .settings import skills
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

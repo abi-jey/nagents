@@ -15,9 +15,9 @@ from nagents.harness.model_catalog import ModelCatalog
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
-from nagents.web import model_capabilities
-from nagents.web.model_capabilities import CatalogCapabilities
-from nagents.web.model_capabilities import catalog_route
+from nagents.web.settings import model_capabilities
+from nagents.web.settings.model_capabilities import CatalogCapabilities
+from nagents.web.settings.model_capabilities import catalog_route
 from tests.support.web import client_app
 
 if TYPE_CHECKING:

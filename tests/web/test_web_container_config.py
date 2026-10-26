@@ -22,7 +22,7 @@ from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
-from nagents.web.provider_setup import provider_error
+from nagents.web.settings.provider_setup import provider_error
 from tests.support.web import client_app
 from tests.support.web import submit_and_wait
 
