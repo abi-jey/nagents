@@ -28,7 +28,7 @@ from nagents.channels.types import ChannelValue
 
 from .._async import join_owned as _join
 from ..execution.owners import MAX_PARALLEL_RUNS
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 from .activity import ChannelActivities
 from .catalog import ChannelCatalog
 from .local_delivery import WebChannel
@@ -55,8 +55,8 @@ if TYPE_CHECKING:
 
     from ..execution.service import Run
     from ..execution.service import WebState
-    from ..routing import ChatOwner
-    from ..routing import Work
+    from ..http.routing import ChatOwner
+    from ..http.routing import Work
     from .catalog import ConnectionInput
 
 _HOSTS: set[Path] = set()

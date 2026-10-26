@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolDefinition
-    from nagents.web.routing import Work
+    from nagents.web.http.routing import Work
 
 
 @pytest.fixture(autouse=True)

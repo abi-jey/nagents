@@ -21,7 +21,7 @@ from nagents.session.forks import title_revision
 from nagents.session.forks import title_text
 
 from .._async import finish_on_cancel
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 
 if TYPE_CHECKING:
     import sqlite3

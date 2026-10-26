@@ -141,7 +141,7 @@ def services(monkeypatch: pytest.MonkeyPatch) -> list[RoutedLiveService]:
         instances.append(instance)
         return instance
 
-    monkeypatch.setattr("nagents.web.app.LiveService", service)
+    monkeypatch.setattr("nagents.web.http.app.LiveService", service)
     return instances
 
 

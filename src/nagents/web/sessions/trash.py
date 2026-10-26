@@ -18,7 +18,7 @@ from fastapi import HTTPException
 
 from .._async import finish_on_cancel
 from .._async import join_owned as _join
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 from .deletion import _guard_rows
 from .deletion import _quarantine_pending
 from .deletion import _release_bindings

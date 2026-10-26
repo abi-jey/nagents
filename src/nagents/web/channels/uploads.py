@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from nagents.types import ContentPart
 
     from ..execution.service import WebState
-    from ..routing import Work
+    from ..http.routing import Work
 
 
 def supported(harness: Harness) -> tuple[str, ...]:

@@ -36,7 +36,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Child agents and follow-ups | `SubagentManager`, `Harness.tasks`, `continue_task` | `harness/agents/subagents.py` |
 | Remote A2A agents and authentication discovery | `RemoteAgentConfig`, `discover_remote`, `RemoteConversation`, `remote_agent_configure` | `a2a/client/configuration.py`, `a2a/client/discovery.py`, `harness/remote/store.py` |
 | Delayed continuations | `schedule_wakeup`, `WakeupHandler`, `Harness.wakeup_handler` | `harness/types.py`, `web/execution/wakeups.py` |
-| External transports and routing | `Channel`, `ChannelPlugin`, `Agent.add_channel`, `listen` | `channels/`, `web/channels/host.py`, `web/routing.py` |
+| External transports and routing | `Channel`, `ChannelPlugin`, `Agent.add_channel`, `listen` | `channels/`, `web/channels/host.py`, `web/http/routing.py` |
 | Client-specific settings and presentation | TUI commands/themes; web settings/subscriptions; CLI events | `tui/`, `web/`, `cli.py` |
 
 ## Configure the Harness

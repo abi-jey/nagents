@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
     from nagents.channels.types import Channel
 
-    from ..routing import RoutingStore
+    from ..http.routing import RoutingStore
 
 
 class ChannelActivities:

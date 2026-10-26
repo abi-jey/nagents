@@ -33,8 +33,8 @@ from nagents.types import TextContent
 
 from .._async import finish_on_cancel
 from ..channels.local_delivery import presentation
+from ..http.routing import RoutingStore
 from ..live import captions as live_captions
-from ..routing import RoutingStore
 from .agents import initialize_markers
 from .agents import merge_markers
 
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from nagents.extensions import RunContext
     from nagents.types import Message
 
-    from ..routing import Work
+    from ..http.routing import Work
 
 
 @dataclass

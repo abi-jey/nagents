@@ -9,7 +9,7 @@ from nagents.channels.runtime import _envelope
 from nagents.channels.types import ChannelCommand
 from nagents.channels.types import ChannelMessage
 from nagents.session import SessionManager
-from nagents.web.routing import RoutingStore
+from nagents.web.http.routing import RoutingStore
 
 
 async def store_at(path: Path) -> RoutingStore:

@@ -15,7 +15,7 @@ from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolOutput
 from nagents.web.execution.replay import RunReplay
 from nagents.web.execution.service import Run
-from nagents.web.routing import RoutingStore
+from nagents.web.http.routing import RoutingStore
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 

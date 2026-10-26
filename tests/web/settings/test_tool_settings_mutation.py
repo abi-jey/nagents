@@ -15,7 +15,7 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.web.channels.host import ChannelHost
 from nagents.web.execution.service import WebState
-from nagents.web.routing import RoutingStore
+from nagents.web.http.routing import RoutingStore
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app

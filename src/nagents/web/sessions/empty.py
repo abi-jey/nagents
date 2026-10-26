@@ -8,7 +8,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from .._async import finish_on_cancel
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 from .deletion import _guard_rows
 from .deletion import _remove_content
 from .history import WebHistory

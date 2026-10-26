@@ -295,7 +295,7 @@ async def test_serve_exposes_mcp_tools_and_reloads_after_final_response(
     import httpx
 
     from nagents.harness.providers.registry import ProviderRegistry
-    from nagents.web.app import create_app
+    from nagents.web.http.app import create_app
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         assert "mcp__fixture__echo" in provider.schemas[-1]

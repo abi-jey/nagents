@@ -7,7 +7,7 @@ import sqlite3
 
 from fastapi import HTTPException
 
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 
 MAX_CAPTION_CHARACTERS = 4096
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")

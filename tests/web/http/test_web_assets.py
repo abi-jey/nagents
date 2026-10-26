@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from nagents.web.assets import prepare_assets
-from nagents.web.assets import source_hashes
+from nagents.web.http.assets import prepare_assets
+from nagents.web.http.assets import source_hashes
 
 
 def _stamp(web: Path) -> None:
@@ -44,7 +44,7 @@ def web(tmp_path: Path) -> Path:
 
 def test_fresh_source_build_needs_no_npm(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     npm = Mock(side_effect=AssertionError("Fresh builds must work offline without Node"))
-    monkeypatch.setattr("nagents.web.assets.shutil.which", npm)
+    monkeypatch.setattr("nagents.web.http.assets.shutil.which", npm)
     assert prepare_assets(web) == web / "static"
     npm.assert_not_called()
 
@@ -87,8 +87,8 @@ def test_stale_source_build_uses_canonical_npm_commands(
         return subprocess.CompletedProcess(command, 0)
 
     run = Mock(side_effect=rebuild)
-    monkeypatch.setattr("nagents.web.assets.run_build_command", run)
-    monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: "/tools/npm")
+    monkeypatch.setattr("nagents.web.http.assets.run_build_command", run)
+    monkeypatch.setattr("nagents.web.http.assets.shutil.which", lambda _: "/tools/npm")
     # A different current directory/workspace must never choose a different frontend.
     monkeypatch.chdir(tmp_path)
     assert prepare_assets(web, dev=True) == web / "static"
@@ -102,7 +102,7 @@ def test_packaged_build_uses_bundle_without_npm_or_workspace_source(web: Path, m
     workspace = web.parents[1] / "workspace"
     source.rename(workspace)
     monkeypatch.chdir(workspace)
-    monkeypatch.setattr("nagents.web.assets.shutil.which", Mock(side_effect=AssertionError("No npm in a wheel")))
+    monkeypatch.setattr("nagents.web.http.assets.shutil.which", Mock(side_effect=AssertionError("No npm in a wheel")))
     assert prepare_assets(web) == web / "static"
 
 
@@ -122,14 +122,14 @@ def test_broken_packaged_build_fails_without_downloading(
         manifest.write_text('{"version": 1, "assets": {"index.html": 3}}', encoding="utf-8")
     else:
         (web / "static" / "assets" / "app.js").write_text("corrupt", encoding="utf-8")
-    monkeypatch.setattr("nagents.web.assets.shutil.which", Mock(side_effect=AssertionError("No downloads")))
+    monkeypatch.setattr("nagents.web.http.assets.shutil.which", Mock(side_effect=AssertionError("No downloads")))
     with pytest.raises(ValueError, match="Reinstall a release"):
         prepare_assets(web)
 
 
 def test_stale_source_without_node_has_actionable_error(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (web / "static" / "build.json").unlink()
-    monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: None)
+    monkeypatch.setattr("nagents.web.http.assets.shutil.which", lambda _: None)
     with pytest.raises(ValueError, match=r"Node.js 20.19.*ngn serve"):
         prepare_assets(web, dev=True)
 
@@ -145,8 +145,8 @@ def test_failed_rebuild_never_falls_back_to_stale_assets(
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr("nagents.web.assets.run_build_command", fail)
-    monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: "/tools/npm")
+    monkeypatch.setattr("nagents.web.http.assets.run_build_command", fail)
+    monkeypatch.setattr("nagents.web.http.assets.shutil.which", lambda _: "/tools/npm")
     with pytest.raises(ValueError, match=r"Could not build|incomplete"):
         prepare_assets(web, dev=True)
 
@@ -155,21 +155,23 @@ def test_normal_source_launch_serves_existing_bundle_without_inspecting_source(
     web: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (web.parent / "web-ui" / "src" / "App.tsx").write_text("unbuilt changes", encoding="utf-8")
-    monkeypatch.setattr("nagents.web.assets.source_hashes", Mock(side_effect=AssertionError("No source inspection")))
-    monkeypatch.setattr("nagents.web.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
+    monkeypatch.setattr(
+        "nagents.web.http.assets.source_hashes", Mock(side_effect=AssertionError("No source inspection"))
+    )
+    monkeypatch.setattr("nagents.web.http.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
     assert prepare_assets(web) == web / "static"
 
 
 def test_normal_source_launch_does_not_build_missing_assets(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (web / "static" / "build.json").unlink()
-    monkeypatch.setattr("nagents.web.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
+    monkeypatch.setattr("nagents.web.http.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
     with pytest.raises(ValueError, match="ngn serve --dev"):
         prepare_assets(web)
 
 
 def test_dev_requires_source_even_with_valid_packaged_assets(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (web.parent / "web-ui").rename(web.parent / "unrelated-source")
-    monkeypatch.setattr("nagents.web.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
+    monkeypatch.setattr("nagents.web.http.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
     with pytest.raises(ValueError, match="editable source checkout"):
         prepare_assets(web, dev=True)
 
@@ -180,7 +182,7 @@ def test_packaged_asset_inventory_includes_source_excluded_names(web: Path, monk
     extra.write_text("public asset", encoding="utf-8")
     _stamp(web)
     (web.parent / "web-ui").rename(web.parent / "unrelated-source")
-    monkeypatch.setattr("nagents.web.assets.shutil.which", Mock(side_effect=AssertionError("No npm in a wheel")))
+    monkeypatch.setattr("nagents.web.http.assets.shutil.which", Mock(side_effect=AssertionError("No npm in a wheel")))
     assert prepare_assets(web) == web / "static"
     extra.write_text("changed asset", encoding="utf-8")
     with pytest.raises(ValueError, match="Reinstall a release"):

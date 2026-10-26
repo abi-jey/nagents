@@ -16,7 +16,7 @@ from typing import Literal
 from nagents.channels.runtime import _INBOUND_PREFIX
 
 from .._async import finish_on_cancel
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from nagents.web.build_process import run_build_command
+from nagents.web.http.build_process import run_build_command
 from tests.support.hang_guard import HANG_GUARD
 
 
@@ -37,7 +37,7 @@ def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: i
         "subprocess.Popen([sys.executable, 'child.py'])\ntime.sleep(30)\n",
         encoding="utf-8",
     )
-    driver_source = "import os, sys, time\nfrom pathlib import Path\nfrom nagents.web import build_process\n"
+    driver_source = "import os, sys, time\nfrom pathlib import Path\nfrom nagents.web.http import build_process\n"
     if during_spawn:
         # A child can execute before Popen returns to its caller. Deliver the
         # real interrupt exactly in that ownership window, without a timing bet.

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.routing import Work
+    from nagents.web.http.routing import Work
     from tests.support.providers import FakeProvider
 
 pytestmark = pytest.mark.requires_posix

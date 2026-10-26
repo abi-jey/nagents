@@ -97,7 +97,7 @@ import importlib
 import sys
 for name in ('nagents.web.live', 'nagents.web.live.output', 'nagents.web.live.loop_diagnostics'):
     importlib.import_module(name)
-blocked = ('nagents.harness', 'nagents.tui', 'nagents.web.app', 'nagents.web.live.routes', 'fastapi')
+blocked = ('nagents.harness', 'nagents.tui', 'nagents.web.http.app', 'nagents.web.live.routes', 'fastapi')
 assert not any(name == item or name.startswith(item + '.') for name in sys.modules for item in blocked)
 """
     result = subprocess.run(

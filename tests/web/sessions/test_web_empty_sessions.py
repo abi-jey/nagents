@@ -14,13 +14,13 @@ from nagents.channels.store import InboxStore
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import HarnessConfig
 from nagents.types import Message
-from nagents.web.app import create_app
 from nagents.web.channels.catalog import Connection
 from nagents.web.execution.service import Run
 from nagents.web.execution.service import WebState
 from nagents.web.execution.subscriptions import Subscriber
 from nagents.web.execution.wakeups import Chain
-from nagents.web.routing import RoutingStore
+from nagents.web.http.app import create_app
+from nagents.web.http.routing import RoutingStore
 from nagents.web.sessions import empty as empty_sessions
 from nagents.web.sessions.trash import SessionTrash
 from tests.support.web import ControlledHarness

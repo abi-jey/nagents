@@ -18,7 +18,7 @@ from nagents.harness.remote.artifacts import image_bytes
 from nagents.types import ImageContent
 
 from .._async import finish_on_cancel
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 from .actions import RootId  # noqa: TC001 - FastAPI resolves this alias at runtime.
 
 if TYPE_CHECKING:
