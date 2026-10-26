@@ -13,13 +13,13 @@ import pytest
 from nagents.events import Event
 from nagents.events import TextDoneEvent
 from nagents.events import ToolResultEvent
-from nagents.harness.agent_definitions import discover_agents
+from nagents.harness.agents.definitions import discover_agents
+from nagents.harness.agents.subagents import SubagentManager
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote.credentials import RemoteCredentials
 from nagents.harness.remote.profiles import RemoteProfile
 from nagents.harness.remote.store import RemoteAgentStore
-from nagents.harness.subagents import SubagentManager
-from nagents.harness.subagents import TaskInfo
 from nagents.types import ToolCall
 from tests.support.providers import FakeProvider
 from tests.support.providers import collect

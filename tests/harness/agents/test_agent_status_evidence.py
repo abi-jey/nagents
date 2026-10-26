@@ -8,11 +8,11 @@ import pytest
 
 from nagents.events import TokenUsage
 from nagents.events import Usage
-from nagents.harness.agent_status import AgentStatusCollection
-from nagents.harness.agent_status import AgentStatusResult
-from nagents.harness.agent_status import SessionEvidence
-from nagents.harness.agent_status import make_status
-from nagents.harness.subagents import TaskInfo
+from nagents.harness.agents.status import AgentStatusCollection
+from nagents.harness.agents.status import AgentStatusResult
+from nagents.harness.agents.status import SessionEvidence
+from nagents.harness.agents.status import make_status
+from nagents.harness.agents.subagents import TaskInfo
 
 
 class Opaque:

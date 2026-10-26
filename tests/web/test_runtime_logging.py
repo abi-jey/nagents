@@ -22,7 +22,7 @@ def test_server_config_emits_audited_lifecycle_info_with_utc_time_only() -> None
         stream = StringIO()
         config["handlers"]["default"]["stream"] = stream
         logging.config.dictConfig(config)
-        logging.getLogger("nagents.harness.subagents").info(
+        logging.getLogger("nagents.harness.agents.subagents").info(
             "Subagent execution started: task=task-id profile=assistant elapsed_ms=12.5"
         )
         logging.getLogger("nagents.harness.remote.runtime").info(

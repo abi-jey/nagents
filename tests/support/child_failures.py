@@ -10,7 +10,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolCallProgressEvent
 from nagents.harness import runtime
-from nagents.harness.subagents import SubagentManager
+from nagents.harness.agents.subagents import SubagentManager
 from nagents.harness.tools import CodingTools
 from nagents.harness.types import TaskCompleted
 from tests.support.providers import FakeProvider
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     import pytest
 
     from nagents.events import Event
+    from nagents.harness.agents.subagents import TaskInfo
     from nagents.harness.config import HarnessConfig
-    from nagents.harness.subagents import TaskInfo
     from nagents.harness.types import TaskMessage
     from nagents.types import Message
 

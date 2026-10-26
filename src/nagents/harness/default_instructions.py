@@ -3,7 +3,7 @@
 
 def load_default_instructions() -> str:
     """Use the Markdown resource as the sole source of the default coding policy."""
-    from .agent_documents import bundled_assistant
+    from .agents.documents import bundled_assistant
 
     try:
         document, _ = bundled_assistant()

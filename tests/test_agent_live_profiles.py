@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi import HTTPException
 
-from nagents.harness.agent_catalog import AgentCatalog
-from nagents.harness.agent_definitions import discover_agents
+from nagents.harness.agents.catalog import AgentCatalog
+from nagents.harness.agents.definitions import discover_agents
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config

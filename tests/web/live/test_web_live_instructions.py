@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 from typing import cast
 
-from nagents.harness.agent_documents import agent_document_store
+from nagents.harness.agents.documents import agent_document_store
 from tests.support.web import client_app
 from tests.test_agent_live_profiles import configuration
 

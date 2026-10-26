@@ -10,8 +10,8 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.followups import RunInput
-from nagents.harness.subagent_settings import SubagentLimits
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD

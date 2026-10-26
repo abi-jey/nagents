@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from nagents.harness.agent_documents import agent_document_store
+from nagents.harness.agents.documents import agent_document_store
 from nagents.harness.live_profiles import LIVE_FIELDS
 from nagents.harness.providers import KINDS
 from nagents.live import LiveConfig

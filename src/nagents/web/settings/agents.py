@@ -13,10 +13,10 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from nagents.harness.agent_behavior import BehaviorScope
-from nagents.harness.agent_behavior import behavior_layers
-from nagents.harness.agent_behavior import behavior_store
-from nagents.harness.agent_behavior import resolve_behavior
+from nagents.harness.agents.behavior import BehaviorScope
+from nagents.harness.agents.behavior import behavior_layers
+from nagents.harness.agents.behavior import behavior_store
+from nagents.harness.agents.behavior import resolve_behavior
 from nagents.harness.config import AgentProfile
 from nagents.harness.default_instructions import load_default_instructions
 from nagents.harness.tool_config import HarnessToolRegistry

@@ -27,13 +27,13 @@ from pydantic import model_validator
 
 from nagents._sqlite import database_write
 from nagents.compaction import ModelCompaction
-from nagents.harness.agent_documents import agent_document_store
+from nagents.harness.agents.documents import agent_document_store
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.model_bindings import AgentModelStore
 from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import API_NAMES
 from nagents.harness.providers import PROVIDERS
 from nagents.harness.reasoning import resolve_effort
-from nagents.harness.subagent_settings import SubagentLimits
 from nagents.provider.reasoning import reasoning_effort_options
 from nagents.types import ReasoningEffort
 

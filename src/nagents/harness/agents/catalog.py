@@ -7,19 +7,19 @@ import json
 from dataclasses import asdict
 from dataclasses import replace
 
-from .agent_definitions import discover_agents
-from .agent_definitions import import_agents
-from .config import AgentDefinitionSource
-from .config import AgentProfile
-from .config import HarnessConfig
-from .config import _install_agents
-from .config import _install_assistant_metadata
-from .config import _install_profile
-from .config import _json_profile
-from .private_store import ProtectedStoreError
-from .providers import ScopedProviderRegistryStore
-from .remote.store import RemoteAgentMetadata
-from .remote.store import RemoteAgentStore
+from ..config import AgentDefinitionSource
+from ..config import AgentProfile
+from ..config import HarnessConfig
+from ..config import _install_agents
+from ..config import _install_assistant_metadata
+from ..config import _install_profile
+from ..config import _json_profile
+from ..private_store import ProtectedStoreError
+from ..providers import ScopedProviderRegistryStore
+from ..remote.store import RemoteAgentMetadata
+from ..remote.store import RemoteAgentStore
+from .definitions import discover_agents
+from .definitions import import_agents
 
 
 class AgentCatalog:

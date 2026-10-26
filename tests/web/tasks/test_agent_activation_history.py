@@ -14,8 +14,8 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.session_identity import SessionIdentityStore
-from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web.routing import RoutingStore
 from tests.support.providers import notifications

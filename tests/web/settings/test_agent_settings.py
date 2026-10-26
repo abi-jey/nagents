@@ -10,8 +10,8 @@ from typing import cast
 
 import pytest
 
-from nagents.harness.agent_behavior import behavior_store
-from nagents.harness.agent_documents import agent_document_store
+from nagents.harness.agents.behavior import behavior_store
+from nagents.harness.agents.documents import agent_document_store
 from nagents.harness.model_bindings import ModelBinding
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app

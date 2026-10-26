@@ -12,12 +12,12 @@ import pytest
 from nagents.cli import _parser
 from nagents.cli import _record_cli_subagent_limit_overrides
 from nagents.harness import Harness
+from nagents.harness.agents.subagent_settings import LocalSubagentSettings
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.providers import API_NAMES
-from nagents.harness.subagent_settings import LocalSubagentSettings
-from nagents.harness.subagent_settings import SubagentLimits
 from tests.support.config import connection
 
 

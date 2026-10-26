@@ -6,14 +6,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Literal
 
-from .agent_documents import agent_document_store
-from .default_instructions import load_default_instructions
+from ..default_instructions import load_default_instructions
+from .documents import agent_document_store
 
 if TYPE_CHECKING:
-    from .config import AgentProfile
-    from .model_bindings import AgentModelPreference
-    from .model_bindings import AgentModelStore
-    from .providers import ScopedProviderRegistryStore
+    from ..config import AgentProfile
+    from ..model_bindings import AgentModelPreference
+    from ..model_bindings import AgentModelStore
+    from ..providers import ScopedProviderRegistryStore
 
 BehaviorScope = Literal["global", "workspace", "agent"]
 BehaviorOrigin = Literal["builtin", "global", "workspace", "definition", "agent"]

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.events import TextDoneEvent
-from nagents.harness.subagent_settings import SubagentLimits
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
 

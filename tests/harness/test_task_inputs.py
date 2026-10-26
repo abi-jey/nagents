@@ -346,7 +346,7 @@ def test_full_activity_queue_coalesces_fragments_to_one_history_refresh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from nagents.harness.subagents import TaskInfo
+    from nagents.harness.agents.subagents import TaskInfo
     from nagents.harness.types import Notice
 
     async def scenario() -> None:

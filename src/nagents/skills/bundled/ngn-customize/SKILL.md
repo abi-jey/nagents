@@ -29,11 +29,11 @@ for verification, not additional files automatically loaded by the skill tool.
 | Configure model-based compaction | `ModelCompaction` | `compaction.py` |
 | Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime.py`, `harness/config.py` |
 | Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools.py` |
-| Markdown/TOML agent discovery and imports | `discover_agents`, `import_agents`, `agent_imports` | `harness/agent_definitions.py` |
-| Unified assistant properties and UI edits | Native `prompt`, `model`, `tools`, and `live` frontmatter | `harness/agent_definitions.py`, `harness/model_bindings.py` |
+| Markdown/TOML agent discovery and imports | `discover_agents`, `import_agents`, `agent_imports` | `harness/agents/definitions.py` |
+| Unified assistant properties and UI edits | Native `prompt`, `model`, `tools`, and `live` frontmatter | `harness/agents/definitions.py`, `harness/model_bindings.py` |
 | On-demand task guidance | `Skill`, `SkillDiscoverer`, `Agent.load_skill` | `skills/`, `agent.py` |
 | Prompt/local commands | `CommandRegistry.register`, `CommandResult` | `harness/commands.py` |
-| Child agents and follow-ups | `SubagentManager`, `Harness.tasks`, `continue_task` | `harness/subagents.py` |
+| Child agents and follow-ups | `SubagentManager`, `Harness.tasks`, `continue_task` | `harness/agents/subagents.py` |
 | Remote A2A agents and authentication discovery | `RemoteAgentConfig`, `discover_remote`, `RemoteConversation`, `remote_agent_configure` | `a2a/remote_config.py`, `a2a/discovery.py`, `harness/remote/store.py` |
 | Delayed continuations | `schedule_wakeup`, `WakeupHandler`, `Harness.wakeup_handler` | `harness/types.py`, `web/wakeups.py` |
 | External transports and routing | `Channel`, `ChannelPlugin`, `Agent.add_channel`, `listen` | `channels/`, `web/channels/host.py`, `web/routing.py` |

@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException
 
 from nagents.channels.store import InboxStore
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.session_identity import initialize_identity_schema
 from nagents.harness.session_identity import validate_session_id
-from nagents.harness.subagents import TaskInfo
 
 from ..routing import RoutingStore
 

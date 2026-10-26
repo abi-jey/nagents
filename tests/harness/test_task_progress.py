@@ -14,8 +14,8 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.harness.agents.subagents import SubagentManager
 from nagents.harness.runtime import Harness
-from nagents.harness.subagents import SubagentManager
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.harness.subagents import TaskInfo
+    from nagents.harness.agents.subagents import TaskInfo
     from nagents.harness.types import HarnessEvent
     from nagents.harness.types import TaskMessage
     from nagents.types import Message

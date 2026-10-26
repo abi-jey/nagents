@@ -8,9 +8,9 @@ from typing import cast
 
 import pytest
 
-from nagents.harness.agent_definitions import MAX_HEADER_BYTES
-from nagents.harness.agent_definitions import _yaml_header
-from nagents.harness.agent_definitions import discover_agents
+from nagents.harness.agents.definitions import MAX_HEADER_BYTES
+from nagents.harness.agents.definitions import _yaml_header
+from nagents.harness.agents.definitions import discover_agents
 
 if TYPE_CHECKING:
     from pathlib import Path

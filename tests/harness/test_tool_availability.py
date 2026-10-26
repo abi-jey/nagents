@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.harness import Harness
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.subagent_settings import SubagentLimits
 from nagents.tools.registry import ToolRegistry
 from nagents.types import ToolCall
 from tests.support.config import connection
