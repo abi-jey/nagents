@@ -12,12 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .agent import AgentContext as AgentContext
     from .agent import AgentFactory as AgentFactory
-    from .application import create_app as create_app
-    from .application import create_harness_app as create_harness_app
     from .client import RemoteAgent as RemoteAgent
-    from .config import A2AConfig as A2AConfig
-    from .config import IssuerConfig as IssuerConfig
-    from .config import ServiceConfig as ServiceConfig
     from .conversation import RemoteConversation as RemoteConversation
     from .conversation import RemoteUpdate as RemoteUpdate
     from .discovery import RemoteDiscovery as RemoteDiscovery
@@ -26,9 +21,14 @@ if TYPE_CHECKING:
     from .executor import request_input as request_input
     from .images import publish_image as publish_image
     from .images import publish_image_file as publish_image_file
-    from .oauth import AccessGrant as AccessGrant
-    from .oauth import request_credentials as request_credentials
     from .remote_config import RemoteAgentConfig as RemoteAgentConfig
+    from .server.application import create_app as create_app
+    from .server.application import create_harness_app as create_harness_app
+    from .server.config import A2AConfig as A2AConfig
+    from .server.config import IssuerConfig as IssuerConfig
+    from .server.config import ServiceConfig as ServiceConfig
+    from .server.oauth import AccessGrant as AccessGrant
+    from .server.oauth import request_credentials as request_credentials
 
 __all__ = [
     "A2AConfig",
@@ -59,18 +59,18 @@ _MODULES = {
     "RemoteUpdate": "conversation",
     "RemoteAgent": "client",
     "RemoteAgentError": "errors",
-    "A2AConfig": "config",
-    "IssuerConfig": "config",
-    "ServiceConfig": "config",
+    "A2AConfig": "server.config",
+    "IssuerConfig": "server.config",
+    "ServiceConfig": "server.config",
     "AgentContext": "agent",
     "AgentFactory": "agent",
-    "create_app": "application",
-    "create_harness_app": "application",
+    "create_app": "server.application",
+    "create_harness_app": "server.application",
     "request_input": "executor",
     "publish_image": "images",
     "publish_image_file": "images",
-    "AccessGrant": "oauth",
-    "request_credentials": "oauth",
+    "AccessGrant": "server.oauth",
+    "request_credentials": "server.oauth",
 }
 
 

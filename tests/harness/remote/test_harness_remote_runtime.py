@@ -25,10 +25,10 @@ from a2a.types import TaskStatusUpdateEvent
 
 from nagents import _sqlite
 from nagents.a2a import client as a2a_client
-from nagents.a2a.application import create_app
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
 from nagents.a2a.conversation import RemoteConversation
+from nagents.a2a.server.application import create_app
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 from nagents.agent import Agent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
@@ -48,16 +48,16 @@ from nagents.provider import ProviderType
 from nagents.session import SessionManager
 from nagents.types import ImageContent
 from nagents.types import Message
+from tests.a2a.test_a2a_auth import AUDIENCE
+from tests.a2a.test_a2a_auth import IssuerState
+from tests.a2a.test_a2a_auth import access_claims
+from tests.a2a.test_a2a_auth import local_issuer
+from tests.a2a.test_a2a_auth import make_token
+from tests.a2a.test_a2a_auth import signing_key
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
-from tests.test_a2a_auth import AUDIENCE
-from tests.test_a2a_auth import IssuerState
-from tests.test_a2a_auth import access_claims
-from tests.test_a2a_auth import local_issuer
-from tests.test_a2a_auth import make_token
-from tests.test_a2a_auth import signing_key
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

@@ -33,33 +33,33 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from nagents.a2a import request_credentials
-from nagents.a2a.application import create_app
-from nagents.a2a.authorization import AuthorizationDenied
-from nagents.a2a.authorization import AuthorizationExpired
-from nagents.a2a.authorization import AuthorizationSession
-from nagents.a2a.authorization import AuthorizationUnavailable
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
-from nagents.a2a.config import ServiceConfig
+from nagents.a2a.server.application import create_app
+from nagents.a2a.server.authorization import AuthorizationDenied
+from nagents.a2a.server.authorization import AuthorizationExpired
+from nagents.a2a.server.authorization import AuthorizationSession
+from nagents.a2a.server.authorization import AuthorizationUnavailable
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
+from nagents.a2a.server.config import ServiceConfig
 from nagents.agent import Agent
 from nagents.events import DoneEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.session import SessionManager
-from tests.test_a2a_auth import AUDIENCE
-from tests.test_a2a_auth import IssuerState
-from tests.test_a2a_auth import SignedKey
-from tests.test_a2a_auth import access_claims
-from tests.test_a2a_auth import local_issuer
-from tests.test_a2a_auth import make_token
-from tests.test_a2a_auth import signing_key
+from tests.a2a.test_a2a_auth import AUDIENCE
+from tests.a2a.test_a2a_auth import IssuerState
+from tests.a2a.test_a2a_auth import SignedKey
+from tests.a2a.test_a2a_auth import access_claims
+from tests.a2a.test_a2a_auth import local_issuer
+from tests.a2a.test_a2a_auth import make_token
+from tests.a2a.test_a2a_auth import signing_key
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from collections.abc import Mapping
 
     from nagents.a2a.agent import AgentContext
-    from nagents.a2a.oauth import AccessGrant
+    from nagents.a2a.server.oauth import AccessGrant
     from nagents.events import Event
     from nagents.types import Message
 
@@ -340,7 +340,7 @@ def test_downstream_grant_is_private_scoped_and_consent_failures_do_not_release_
                                 pending = service.authorizations._pending[identifier]
                                 fake_now = pending.record.expires_at + 1
                                 expiry_patcher.setattr(
-                                    "nagents.a2a.authorization.time",
+                                    "nagents.a2a.server.authorization.time",
                                     SimpleNamespace(time=lambda: fake_now),
                                 )
 
@@ -761,11 +761,11 @@ async def _keycloak_user_tokens(settings: dict[str, str], username: str, passwor
 )
 def test_live_keycloak_a2a_and_browser_approval_are_owner_scoped(tmp_path: Path) -> None:
     async def scenario() -> None:
-        from tests.test_a2a_http import HTTPProvider
-        from tests.test_a2a_http import object_map
-        from tests.test_a2a_http import rpc
-        from tests.test_a2a_http import send_params
-        from tests.test_a2a_http import task_from
+        from tests.a2a.test_a2a_http import HTTPProvider
+        from tests.a2a.test_a2a_http import object_map
+        from tests.a2a.test_a2a_http import rpc
+        from tests.a2a.test_a2a_http import send_params
+        from tests.a2a.test_a2a_http import task_from
 
         credentials = _read_idp_fixture()
         if credentials is None:
@@ -1014,11 +1014,11 @@ def test_live_keycloak_a2a_and_browser_approval_are_owner_scoped(tmp_path: Path)
 )
 def test_live_keycloak_downstream_consent_is_task_and_owner_scoped(tmp_path: Path) -> None:
     async def scenario() -> None:
-        from tests.test_a2a_http import HTTPProvider
-        from tests.test_a2a_http import object_map
-        from tests.test_a2a_http import rpc
-        from tests.test_a2a_http import send_params
-        from tests.test_a2a_http import task_from
+        from tests.a2a.test_a2a_http import HTTPProvider
+        from tests.a2a.test_a2a_http import object_map
+        from tests.a2a.test_a2a_http import rpc
+        from tests.a2a.test_a2a_http import send_params
+        from tests.a2a.test_a2a_http import task_from
 
         credentials = _read_idp_fixture()
         if credentials is None:

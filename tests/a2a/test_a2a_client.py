@@ -27,10 +27,10 @@ from starlette.applications import Starlette
 
 from nagents.a2a import RemoteAgent
 from nagents.a2a import RemoteAgentError
-from nagents.a2a.application import agent_card
-from nagents.a2a.application import create_app
-from nagents.a2a.config import A2AConfig
-from nagents.a2a.config import IssuerConfig
+from nagents.a2a.server.application import agent_card
+from nagents.a2a.server.application import create_app
+from nagents.a2a.server.config import A2AConfig
+from nagents.a2a.server.config import IssuerConfig
 from nagents.agent import Agent
 from nagents.events import DoneEvent
 from nagents.events import Event
@@ -39,11 +39,11 @@ from nagents.events import TextDoneEvent
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.session import SessionManager
-from tests.test_a2a_auth import IssuerState
-from tests.test_a2a_auth import access_claims
-from tests.test_a2a_auth import local_issuer
-from tests.test_a2a_auth import make_token
-from tests.test_a2a_auth import signing_key
+from tests.a2a.test_a2a_auth import IssuerState
+from tests.a2a.test_a2a_auth import access_claims
+from tests.a2a.test_a2a_auth import local_issuer
+from tests.a2a.test_a2a_auth import make_token
+from tests.a2a.test_a2a_auth import signing_key
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

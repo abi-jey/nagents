@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 import uvicorn
 
-from nagents.a2a import cli as a2a_cli
+from nagents.a2a.server import cli as a2a_cli
 from nagents.cli import main
 
 if TYPE_CHECKING:

@@ -41,7 +41,7 @@ With the development test dependencies installed, run the real-IdP integration
 case and then stop only this helper's labelled container:
 
 ```sh
-NGN_A2A_KEYCLOAK_E2E=1 python -m pytest tests/test_a2a_oauth.py -k live_keycloak
+NGN_A2A_KEYCLOAK_E2E=1 python -m pytest tests/a2a/test_a2a_oauth.py -k live_keycloak
 python -m examples.a2a.keycloak_fixture down
 ```
 
