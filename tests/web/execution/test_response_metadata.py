@@ -24,7 +24,7 @@ from nagents.harness.tools.coding import CodingTools
 from nagents.session import response_metadata as storage
 from nagents.session.response_metadata import response_write
 from nagents.types import Message
-from nagents.web.diagnostics import exception_diagnostic
+from nagents.web.http.diagnostics import exception_diagnostic
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.support.web import LiveStream

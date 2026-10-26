@@ -22,9 +22,9 @@ from nagents.types import ToolCall
 from nagents.web.execution.service import Run
 from nagents.web.execution.service import WebState
 from nagents.web.execution.wakeups import Chain
-from nagents.web.routing import ChatOwner
-from nagents.web.routing import RoutingStore
-from nagents.web.routing import Work
+from nagents.web.http.routing import ChatOwner
+from nagents.web.http.routing import RoutingStore
+from nagents.web.http.routing import Work
 from nagents.web.sessions.deletion import delete_session
 from tests.support.channels import FakeChannel
 from tests.support.channels import site

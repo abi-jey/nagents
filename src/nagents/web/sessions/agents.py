@@ -23,7 +23,7 @@ from nagents.tools.registry import ToolRegistry
 
 from .._async import finish_on_cancel
 from .._async import join_owned
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 from .actions import RootId  # noqa: TC001
 
 if TYPE_CHECKING:

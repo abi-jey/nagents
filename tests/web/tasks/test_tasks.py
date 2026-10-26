@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.web.routing import Work
+    from nagents.web.http.routing import Work
     from tests.support.providers import FakeProvider
 
 pytestmark = pytest.mark.requires_posix

@@ -27,7 +27,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.remote.credentials import RemoteCredentials
 from nagents.harness.remote.profiles import RemoteProfile
 from nagents.harness.remote.store import RemoteAgentMetadata
-from nagents.web.security import LocalOnly
+from nagents.web.http.security import LocalOnly
 from nagents.web.settings import remote_agents
 from tests.support.providers import FakeProvider
 from tests.support.web import LiveStream

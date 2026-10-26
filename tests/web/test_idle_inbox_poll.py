@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from nagents.session import SessionManager
-from nagents.web.routing import RoutingStore
+from nagents.web.http.routing import RoutingStore
 
 
 def test_empty_inbox_poll_succeeds_while_another_writer_holds_lock(

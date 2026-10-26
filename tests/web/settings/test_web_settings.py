@@ -28,7 +28,7 @@ from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.types import Message
 from nagents.types import ToolCall
-from nagents.web.app import create_app
+from nagents.web.http.app import create_app
 from nagents.web.settings.preferences import SettingsValues
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD

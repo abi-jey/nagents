@@ -40,7 +40,7 @@ from ..channels.host import ChannelHost
 from ..channels.notices import ChannelNotices
 from ..channels.replies import automatic_reply
 from ..channels.uploads import Uploads
-from ..diagnostics import exception_diagnostic
+from ..http.diagnostics import exception_diagnostic
 from ..live.inspection import model_requests
 from ..sessions.agents import SessionAgents
 from ..sessions.history import WebHistory
@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     from nagents.harness.types import SessionInfo
     from nagents.types import ContentPart
 
-    from ..routing import Work
+    from ..http.routing import Work
     from ..settings.preferences import WebSettings
     from .wakeups import Wakeup
 

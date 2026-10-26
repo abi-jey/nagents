@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
     from nagents.channels import ChannelReceiver
     from nagents.harness.types import HarnessEvent
-    from nagents.web.routing import ChatOwner
+    from nagents.web.http.routing import ChatOwner
 
 
 class NoticeChannel(Channel):

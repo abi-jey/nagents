@@ -24,7 +24,7 @@ from nagents.types import Message as SessionMessage
 from nagents.web import built_assets
 from nagents.web import local_authority
 from nagents.web import serve
-from nagents.web.app import create_app
+from nagents.web.http.app import create_app
 from tests.providers.codex.test_openai_provider import endpoint as openai_endpoint
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
@@ -604,7 +604,7 @@ def test_approval_expiry_fails_closed(tmp_path: Path) -> None:
         async with client_app(tmp_path, controlled=True) as (app, _, headers, harnesses):
             harness = harnesses[0]
             assert isinstance(harness, ControlledHarness)
-            with patch("nagents.web.app.APPROVAL_TIMEOUT", 0.01):
+            with patch("nagents.web.http.app.APPROVAL_TIMEOUT", 0.01):
                 stream = LiveStream(app, headers, harness.session_id, "approval")
                 assert "expired" in str((await stream.event("notice"))["text"])
                 closed = await stream.event("approval_closed")

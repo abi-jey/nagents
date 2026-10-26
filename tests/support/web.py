@@ -23,7 +23,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.tools.coding import CodingTools
-from nagents.web.app import create_app
+from nagents.web.http.app import create_app
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:

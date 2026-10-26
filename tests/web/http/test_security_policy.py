@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
-from nagents.web.security import LocalOnly
+from nagents.web.http.security import LocalOnly
 
 
 @pytest.mark.parametrize("path", ["/", "/missing", "/api/private"])

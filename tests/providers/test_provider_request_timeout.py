@@ -36,7 +36,7 @@ from nagents.live import LiveConfig
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.types import RetryConfig
-from nagents.web.app import _provider_profile
+from nagents.web.http.app import _provider_profile
 from tests.providers.codex.test_openai_local import write_api_key_auth
 from tests.providers.codex.test_openai_local import write_oauth_auth
 from tests.support.web import client_app

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .assets import prepare_assets
+from .http.assets import prepare_assets
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
@@ -59,8 +59,8 @@ def serve(
     try:
         import uvicorn
 
-        from .app import create_app
-        from .runtime import server_config
+        from .http.app import create_app
+        from .http.runtime import server_config
     except ModuleNotFoundError as error:
         if error.name not in {"fastapi", "starlette", "pydantic", "uvicorn", "anyio"}:
             raise
@@ -70,7 +70,7 @@ def serve(
             "Textual is not required."
         ) from error
     if dev:
-        from .dev import serve_dev
+        from .http.dev import serve_dev
 
         serve_dev(config, host=host, port=port, resume_session=resume_session, continue_session=continue_session)
         return

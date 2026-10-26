@@ -16,7 +16,7 @@ def test_server_config_emits_audited_lifecycle_info_with_utc_time_only() -> None
         from io import StringIO
 
         from fastapi import FastAPI
-        from nagents.web.runtime import server_config
+        from nagents.web.http.runtime import server_config
 
         config = server_config(FastAPI(), host="127.0.0.1", port=0).log_config
         stream = StringIO()

@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from nagents.web.security import LocalOnly
+from nagents.web.http.security import LocalOnly
 
 
 def navigation_app(*, remote_bind: bool = False) -> FastAPI:

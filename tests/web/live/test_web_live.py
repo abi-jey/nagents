@@ -184,7 +184,7 @@ def services(monkeypatch: pytest.MonkeyPatch) -> list[FakeLiveService]:
         instances.append(service)
         return service
 
-    monkeypatch.setattr("nagents.web.app.LiveService", factory)
+    monkeypatch.setattr("nagents.web.http.app.LiveService", factory)
     return instances
 
 

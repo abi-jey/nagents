@@ -24,11 +24,11 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.web.app import WebState
 from nagents.web.execution import wakeups
 from nagents.web.execution.wakeups import Chain
 from nagents.web.execution.wakeups import Wakeup
 from nagents.web.execution.wakeups import Wakeups
+from nagents.web.http.app import WebState
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
@@ -97,7 +97,7 @@ async def scheduled_app(
         profiles={"reviewer": AgentProfile(mode="reviewer")},
     )
     with (
-        patch("nagents.web.app.WebState", side_effect=state),
+        patch("nagents.web.http.app.WebState", side_effect=state),
         nullcontext() if start else patch.object(Wakeups, "start"),
     ):
         async with client_app(tmp_path, controlled=False, config=config) as (app, client, headers, _):

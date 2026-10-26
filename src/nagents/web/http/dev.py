@@ -50,7 +50,7 @@ class SourceReload(BaseReload):
 
 
 def development_app(config: HarnessConfig, host: str, port: int, resume: str, continue_session: bool) -> FastAPI:
-    assets = prepare_assets(Path(__file__).resolve().parent, dev=True)
+    assets = prepare_assets(Path(__file__).resolve().parents[1], dev=True)
     build_id = hashlib.sha256((assets / "build.json").read_bytes()).hexdigest()[:12]
     print(f"ngn: React UI build {build_id} from {assets}", file=sys.stderr, flush=True)
     return create_app(
@@ -59,7 +59,7 @@ def development_app(config: HarnessConfig, host: str, port: int, resume: str, co
 
 
 def serve_dev(config: HarnessConfig, *, host: str, port: int, resume_session: str, continue_session: bool) -> None:
-    web = Path(__file__).resolve().parent
+    web = Path(__file__).resolve().parents[1]
     prepare_assets(web, dev=True)
     factory = partial(development_app, config, host, port, resume_session, continue_session)
     settings = server_config(factory, host=host, port=port, factory=True)

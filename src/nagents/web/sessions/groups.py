@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 
 if TYPE_CHECKING:
     import sqlite3

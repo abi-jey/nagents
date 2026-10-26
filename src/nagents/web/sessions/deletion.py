@@ -20,7 +20,7 @@ from nagents.session.deliveries import cleanup_deliveries
 
 from .._async import finish_on_cancel
 from .._async import join_owned
-from ..routing import RoutingStore
+from ..http.routing import RoutingStore
 
 if TYPE_CHECKING:
     import sqlite3

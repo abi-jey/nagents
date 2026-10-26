@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
     from nagents.live.delegation import LiveAppendKind
     from nagents.types import Message
-    from nagents.web.routing import ChatOwner
+    from nagents.web.http.routing import ChatOwner
     from tests.support.channels import FakeChannel
     from tests.support.channels import Site
 

@@ -21,11 +21,11 @@ from nagents.channels.types import ChannelMessage
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
 from nagents.provider import Provider
-from nagents.web.app import create_app
 from nagents.web.channels.catalog import ChannelCatalog
 from nagents.web.channels.catalog import Connection
 from nagents.web.channels.catalog import SavedCatalog
-from nagents.web.routing import RoutingStore
+from nagents.web.http.app import create_app
+from nagents.web.http.routing import RoutingStore
 from tests.support.config import connection as make_connection
 from tests.support.hang_guard import HANG_GUARD
 

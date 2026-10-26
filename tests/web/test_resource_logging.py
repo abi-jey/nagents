@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.events import TextDoneEvent
-from nagents.web.app import create_app
+from nagents.web.http.app import create_app
 from tests.harness.tools.test_resource_reload import server
 from tests.support.providers import setup_harness
 

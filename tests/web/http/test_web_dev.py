@@ -14,8 +14,9 @@ from nagents.cli import _parser
 from nagents.cli import main
 from nagents.harness.config import HarnessConfig
 from nagents.web import serve
-from nagents.web.dev import SourceReload
-from nagents.web.runtime import server_config
+from nagents.web.http.dev import SourceReload
+from nagents.web.http.dev import development_app
+from nagents.web.http.runtime import server_config
 
 
 @pytest.mark.parametrize("dev", [False, True])
@@ -31,12 +32,31 @@ def test_cli_development_mode_is_explicit(tmp_path: Path, monkeypatch: pytest.Mo
 def test_dev_launch_selects_supervisor_before_creating_application(tmp_path: Path) -> None:
     config = HarnessConfig(workspace=tmp_path, demo=True)
     with (
-        patch("nagents.web.dev.serve_dev") as start,
+        patch("nagents.web.http.dev.serve_dev") as start,
         patch("nagents.web.built_assets", side_effect=AssertionError("Wrong launch path")),
-        patch("nagents.web.app.create_app", side_effect=AssertionError("No Harness in the supervisor")),
+        patch("nagents.web.http.app.create_app", side_effect=AssertionError("No Harness in the supervisor")),
     ):
         serve(config, dev=True, host="localhost", port=9876, resume_session="saved")
     start.assert_called_once_with(config, host="localhost", port=9876, resume_session="saved", continue_session=False)
+
+
+def test_development_app_uses_the_web_asset_root(tmp_path: Path) -> None:
+    web = tmp_path / "nagents" / "web"
+    assets = web / "static"
+    assets.mkdir(parents=True)
+    (assets / "build.json").write_text("{}", encoding="utf-8")
+    config = HarnessConfig(workspace=tmp_path, demo=True)
+    app = FastAPI()
+    with (
+        patch("nagents.web.http.dev.__file__", str(web / "http" / "dev.py")),
+        patch("nagents.web.http.dev.prepare_assets", return_value=assets) as prepare,
+        patch("nagents.web.http.dev.create_app", return_value=app) as create,
+    ):
+        assert development_app(config, "localhost", 9876, "saved", False) is app
+    prepare.assert_called_once_with(web, dev=True)
+    create.assert_called_once_with(
+        config, host="localhost", port=9876, assets=assets, resume_session="saved", continue_session=False
+    )
 
 
 @pytest.mark.parametrize("kind", ["edit", "add", "delete", "python", "lockfile"])

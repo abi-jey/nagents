@@ -39,46 +39,46 @@ from nagents.provider.codex._catalog import catalog_logging
 from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
 
-from . import built_assets
-from . import is_loopback_host
-from . import local_authority
-from ._async import finish_on_cancel
-from ._async import join_owned as _join
-from .channels.catalog import ChannelRevision
-from .channels.catalog import ConnectionInput
-from .execution.service import WebState as WebState
-from .live import instructions as live_instructions
-from .live.bridge import MainAgentBridge
-from .live.context import LiveSeed
-from .live.context import read_seed
-from .live.context import with_summary
-from .live.routes import create_agent as create_live_agent
-from .live.routes import create_login_config
-from .live.routes import register as register_live
-from .live.runtime import LiveService
-from .live.settings import LiveSettings
-from .live.summary import VoiceContextSummarizer
+from .. import built_assets
+from .. import is_loopback_host
+from .. import local_authority
+from .._async import finish_on_cancel
+from .._async import join_owned as _join
+from ..channels.catalog import ChannelRevision
+from ..channels.catalog import ConnectionInput
+from ..execution.service import WebState as WebState
+from ..live import instructions as live_instructions
+from ..live.bridge import MainAgentBridge
+from ..live.context import LiveSeed
+from ..live.context import read_seed
+from ..live.context import with_summary
+from ..live.routes import create_agent as create_live_agent
+from ..live.routes import create_login_config
+from ..live.routes import register as register_live
+from ..live.runtime import LiveService
+from ..live.settings import LiveSettings
+from ..live.summary import VoiceContextSummarizer
+from ..sessions import agents as session_agents
+from ..sessions import empty as empty_sessions
+from ..sessions.actions import register_session_actions
+from ..sessions.deletion import delete_session
+from ..sessions.groups import SessionGroups
+from ..sessions.groups import register_session_groups
+from ..settings import agents as agent_settings
+from ..settings import skills
+from ..settings.preferences import SettingsInput
+from ..settings.preferences import SettingsRevision
+from ..settings.preferences import WebSettings
+from ..settings.provider_login import ProviderLogin
+from ..settings.provider_setup import provider_setup
+from ..settings.tools import register as register_tool_settings
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
-from .sessions import agents as session_agents
-from .sessions import empty as empty_sessions
-from .sessions.actions import register_session_actions
-from .sessions.deletion import delete_session
-from .sessions.groups import SessionGroups
-from .sessions.groups import register_session_groups
-from .settings import agents as agent_settings
-from .settings import skills
-from .settings.preferences import SettingsInput
-from .settings.preferences import SettingsRevision
-from .settings.preferences import WebSettings
-from .settings.provider_login import ProviderLogin
-from .settings.provider_setup import provider_setup
-from .settings.tools import register as register_tool_settings
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
 
-    from .live.login import LoginVoiceConfig
+    from ..live.login import LoginVoiceConfig
 
 APPROVAL_TIMEOUT = 300
 logger = logging.getLogger("uvicorn.error")
@@ -400,7 +400,7 @@ def create_app(
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_tool_settings(app, lambda: state)
-    from .tasks.routes import register as register_tasks
+    from ..tasks.routes import register as register_tasks
 
     register_tasks(app, lambda: state)
     skills.register(app, lambda: state)
@@ -408,21 +408,21 @@ def create_app(
     register_session_actions(app, lambda: state, lambda: live)
     session_agents.register(app, lambda: state)
     agent_settings.register(app, lambda: state)
-    from .settings.remote_agents import register as register_remote_agents
+    from ..settings.remote_agents import register as register_remote_agents
 
     register_remote_agents(app, lambda: state)
-    from .settings.agent_models import register as register_agent_models
+    from ..settings.agent_models import register as register_agent_models
 
     register_agent_models(app, lambda: state)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
     live_instructions.register(app, lambda: live_settings, lambda: state)
-    from .channels.local_delivery import register_assets
+    from ..channels.local_delivery import register_assets
 
     register_assets(app, lambda: state)
-    from .sessions.artifacts import register_artifacts
+    from ..sessions.artifacts import register_artifacts
 
     register_artifacts(app, lambda: state)
-    from .channels.uploads import register_uploads
+    from ..channels.uploads import register_uploads
 
     register_uploads(app, lambda: state)
 

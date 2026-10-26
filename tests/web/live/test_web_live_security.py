@@ -6,7 +6,7 @@ from fastapi import WebSocket
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from nagents.web.security import LocalOnly
+from nagents.web.http.security import LocalOnly
 
 
 @pytest.mark.parametrize("protocol", ["ngn.live.v2"])

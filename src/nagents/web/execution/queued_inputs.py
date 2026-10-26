@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from nagents.harness import Harness
     from nagents.types import ContentPart
 
-    from ..routing import Work
+    from ..http.routing import Work
     from .service import Run
     from .service import WebState
 

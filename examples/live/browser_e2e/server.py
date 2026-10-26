@@ -21,11 +21,11 @@ from fastapi import WebSocket
 from starlette.responses import FileResponse
 from starlette.websockets import WebSocketDisconnect
 
-import nagents.web.app as web_app
+import nagents.web.http.app as web_app
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.web.app import create_app
-from nagents.web.runtime import server_logging_config
+from nagents.web.http.app import create_app
+from nagents.web.http.runtime import server_logging_config
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -204,7 +204,7 @@ def instrument(app: FastAPI, fixtures: Path, *, offline: bool, gap_ms: int) -> N
         source_root = Path(web_app.__file__).resolve().parent.parent
         package_root = source_root.parents[1]
         module_names = (
-            "web/app.py",
+            "web/http/app.py",
             "web/live/routes.py",
             "web/live/runtime.py",
             "web/live/relay.py",

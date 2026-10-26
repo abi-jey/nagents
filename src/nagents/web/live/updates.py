@@ -12,7 +12,7 @@ from nagents.harness.followups import RunTurn
 from nagents.live.runtime import result_chunks
 
 from .._async import join_owned
-from ..routing import Work
+from ..http.routing import Work
 
 if TYPE_CHECKING:
     from collections.abc import Callable
