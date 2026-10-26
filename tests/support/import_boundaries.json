@@ -91,8 +91,8 @@
   ["nagents.web.settings.preferences", "nagents._sqlite", "database_write"],
   ["nagents.web.settings.subagents", "nagents._sqlite", "database_writes"],
   ["nagents.web.subscriptions", "nagents.cli", "_json_default"],
-  ["nagents.web.task_history", "nagents.harness.execution", "_register_owned_adapter_type"],
-  ["nagents.web.task_history", "nagents.harness.runtime", "_HarnessSession"],
-  ["nagents.web.tasks", "nagents.harness.runtime", "_HarnessSession"],
+  ["nagents.web.tasks.history", "nagents.harness.execution", "_register_owned_adapter_type"],
+  ["nagents.web.tasks.history", "nagents.harness.runtime", "_HarnessSession"],
+  ["nagents.web.tasks.routes", "nagents.harness.runtime", "_HarnessSession"],
   ["nagents.web.wakeups", "nagents.cli", "_json_default"]
 ]

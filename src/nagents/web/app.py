@@ -400,7 +400,7 @@ def create_app(
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_tool_settings(app, lambda: state)
-    from .tasks import register as register_tasks
+    from .tasks.routes import register as register_tasks
 
     register_tasks(app, lambda: state)
     skills.register(app, lambda: state)

@@ -120,3 +120,11 @@ def test_settings_public_imports_refer_to_the_same_definitions() -> None:
 
     for name in settings.__all__:
         assert getattr(settings, name) is getattr(preferences, name)
+
+
+def test_task_public_imports_refer_to_the_same_definitions() -> None:
+    from nagents.web import tasks
+    from nagents.web.tasks import routes
+
+    for name in tasks.__all__:
+        assert getattr(tasks, name) is getattr(routes, name)

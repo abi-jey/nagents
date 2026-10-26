@@ -66,8 +66,8 @@ _SAFE_VERBS = frozenset(
 )
 _TARGETS = (
     "tests/channels/test_channels_runtime.py::test_durable_acceptance_and_dedup_survive_a_new_agent",
-    "tests/web/test_web_child_failure_scope.py::test_stop_still_cancels_chat_and_voice_trees[True]",
-    "tests/web/test_web_child_failure_scope.py::test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_voice",
+    "tests/web/tasks/test_web_child_failure_scope.py::test_stop_still_cancels_chat_and_voice_trees[True]",
+    "tests/web/tasks/test_web_child_failure_scope.py::test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_voice",
     "tests/web/settings/test_agent_models.py::test_next_real_response_uses_the_saved_provider_and_model_together",
     "tests/web/settings/test_web_settings.py::test_settings_cancellation_joins_transaction_and_keeps_get_consistent",
     "tests/web/settings/test_web_settings.py::test_settings_save_and_reset_while_run_or_approval_continues",

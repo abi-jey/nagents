@@ -9,8 +9,8 @@ from nagents.extensions import AgentPlugin
 from nagents.harness.execution import _register_owned_adapter_type
 from nagents.harness.runtime import _HarnessSession
 
-from ._async import finish_on_cancel
-from .task_store import now
+from .._async import finish_on_cancel
+from .store import now
 
 if TYPE_CHECKING:
     import sqlite3
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from nagents.extensions import RunContext
     from nagents.types import Message
 
-    from .task_store import TaskStore
+    from .store import TaskStore
 
 
 class TaskInputIdentity(AgentPlugin):
