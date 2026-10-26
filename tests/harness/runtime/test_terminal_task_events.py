@@ -11,7 +11,6 @@ from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.agents.subagents import SubagentManager
-from nagents.harness.runtime.core import Harness
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification
 from tests.support.hang_guard import HANG_GUARD
@@ -30,10 +29,9 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 
-@pytest.fixture(autouse=True)
-def portable_harness_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
-    # These lifecycle contracts do not read guarded workspace instructions.
-    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+# These contracts exercise real lifecycle execution, not guarded workspace
+# instructions or skill discovery. Keep that unrelated work out of the barrier.
+pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -43,14 +41,20 @@ def test_terminal_parent_error_flushes_completed_lifecycle_without_waiting_or_re
 ) -> None:
     async def scenario() -> None:
         completed, running = asyncio.Event(), asyncio.Event()
+        child_failed = asyncio.Event()
+        child_errors: list[str] = []
         never = asyncio.Event()
         gate_calls = 0
+        gate_reached = False
         original_publish = SubagentManager._publish
 
         def publish(manager: SubagentManager, info: TaskInfo, event: TaskCompleted | TaskMessage) -> None:
             original_publish(manager, info, event)
             if isinstance(event, TaskCompleted) and event.result == "retained completed result":
                 completed.set()
+            elif isinstance(event, TaskCompleted):
+                child_errors.append(f"{event.status}: {event.error or event.result or 'No child result'}")
+                child_failed.set()
 
         monkeypatch.setattr(SubagentManager, "_publish", publish)
 
@@ -77,9 +81,19 @@ def test_terminal_parent_error_flushes_completed_lifecycle_without_waiting_or_re
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
 
         async def publication_gate() -> str:
-            nonlocal gate_calls
+            nonlocal gate_calls, gate_reached
             gate_calls += 1
-            await asyncio.gather(completed.wait(), running.wait())
+            ready = asyncio.gather(completed.wait(), running.wait())
+            failed = asyncio.create_task(child_failed.wait())
+            try:
+                await asyncio.wait((ready, failed), return_when=asyncio.FIRST_COMPLETED)
+                assert not child_errors, f"Child ended before the lifecycle barrier: {child_errors}"
+                await ready
+                gate_reached = True
+            finally:
+                ready.cancel()
+                failed.cancel()
+                await asyncio.gather(ready, failed, return_exceptions=True)
             return "one operation, with one completed and one still-running child"
 
         harness.agent.register_tool(publication_gate)
@@ -88,7 +102,16 @@ def test_terminal_parent_error_flushes_completed_lifecycle_without_waiting_or_re
             # Exercise the real root budget without shrinking the child's budget.
             harness.agent.max_tool_rounds = 1
         try:
-            events = await asyncio.wait_for(collect(harness), HANG_GUARD)
+            try:
+                events = await asyncio.wait_for(collect(harness), HANG_GUARD)
+            except TimeoutError as error:
+                error.add_note(
+                    f"Lifecycle barrier: calls={gate_calls}, completed={completed.is_set()}, "
+                    f"running={running.is_set()}, reached={gate_reached}; "
+                    f"children={[(info.status, info.error) for info in harness.tasks.list()]}"
+                )
+                raise
+            assert gate_reached, f"Lifecycle barrier was not satisfied: {child_errors}"
             errors = [event for event in events if isinstance(event, ErrorEvent)]
             expected = (
                 "Max tool rounds (1) exceeded" if failure == "round_limit" else "original terminal provider error"
