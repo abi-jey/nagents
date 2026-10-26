@@ -51,6 +51,7 @@ async def test_atomic_upgrade_preserves_existing_messages(tmp_path: Path) -> Non
             (4,),
             (5,),
             (6,),
+            (7,),
         ]
 
 
@@ -115,6 +116,7 @@ async def test_independent_session_initializers_serialize_fresh_and_upgrade(tmp_
                 (4,),
                 (5,),
                 (6,),
+                (7,),
             ]
             assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
@@ -184,7 +186,7 @@ async def test_targeted_migration_persists_versions_independently_of_atomic_init
 ) -> None:
     path = tmp_path / "targeted.db"
     manager = MigrationManager(path, migrations=migrations, atomic=atomic)
-    for version in (1, 4, 5, 6, 5, 1, 6):
+    for version in (1, 4, 5, 6, 7, 5, 1, 7):
         await manager.migrate_to(version)
         assert await manager.get_version() == version
         with sqlite3.connect(path) as db:
@@ -195,4 +197,6 @@ async def test_targeted_migration_persists_versions_independently_of_atomic_init
             assert ("ngn_web_uploads" in names) == (version >= 4)
             assert ("ngn_session_forks" in names) == (version >= 5)
             assert ("ngn_session_fork_counters" in names) == (version >= 6)
+            assert ("ngn_context_message_copies" in names) == (version >= 7)
+            assert ("ngn_session_title_revisions" in names) == (version >= 7)
             assert "v2_sessions" in names

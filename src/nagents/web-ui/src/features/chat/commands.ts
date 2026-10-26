@@ -7,7 +7,7 @@ export const webCommands = [
   { name: "skills", description: "Browse skills available to this agent", argument: "[search]" },
   { name: "new", description: "Start a new conversation", argument: "" },
   { name: "fork", description: "Branch from this conversation's saved context", argument: "[title]" },
-  { name: "rename", description: "Rename this conversation", argument: "<title>" },
+  { name: "rename", description: "Set a title or generate one from your latest 10 messages", argument: "[title]" },
   { name: "sessions", description: "Browse or resume conversations", argument: "[session ID]" },
   { name: "compact", description: "Summarize the current conversation", argument: "" },
   { name: "model", description: "Choose the workspace model", argument: "[model ID]" },
@@ -40,7 +40,6 @@ export function commandIntent(value: string, allowSkills = false): CommandIntent
   }
   const argument = parts.join(" ");
   if (argument && !command.argument) throw new Error(`Usage: /${command.name}. Your draft is kept.`);
-  if (name === "rename" && !argument) throw new Error("Usage: /rename <title>. Your draft is kept.");
   return { name: command.name, argument };
 }
 

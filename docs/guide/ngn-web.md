@@ -446,7 +446,7 @@ draft and display an error.
 | `/<skill-name> [task]`, `/skill:<skill-name> [task]` | Invoke a discovered skill through the conversation's normal input queue. |
 | `/new` | Start or reuse a blank conversation. |
 | `/fork [title]` | Copy the current idle conversation into an independent branch and select it. Title is optional: defaults to `<chat title> · fork 1`, `fork 2`, etc. Other chats may continue running. |
-| `/rename <title>` | Persist a name of 1–80 printable characters for the current conversation. |
+| `/rename [title]` | Save an explicit name of 1–80 printable characters, or omit it to generate a title from the latest 10 user messages using a small model on this chat's provider connection. |
 | `/sessions [session ID]`, `/resume [session ID]` | Browse conversations or select one. |
 | `/compact` | Queue compaction of the submitted conversation. |
 | `/model [model ID]`, `/provider [name]` | Open settings or select a model or connection. |
@@ -455,6 +455,13 @@ draft and display an error.
 | `/context` | Show the conversation's context estimate. |
 | `/settings`, `/tools`, `/channels`, `/voice` | Open the corresponding settings. |
 | `/stop` | Stop the active run. |
+
+Empty `/rename` uses only the latest ten saved user messages, capped at 2,000
+characters each, including messages before compaction. Assistant output, tools,
+background updates, wake-ups, and attachment bytes are excluded. It makes a
+separate request without tools, leaving the chat's model and history unchanged.
+If small-model discovery is unavailable, supply a title explicitly. A manual
+rename made while generation is pending takes precedence over the generated name.
 
 `/compact` accepts no arguments or attachments. The browser submits
 `command: "compact"` alongside the exact `/compact` prompt to `POST /api/messages`;
@@ -802,7 +809,7 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/{session_id}/fork` | `{title?: string}` atomically copies the quiescent root, selects its independent fork, and returns the new snapshot. `forked_from` records ancestry separately from subagent relationships. The source's pending work, approvals, wakeups, and channel authority are never copied. |
-| `POST sessions/{session_id}/rename` | `{title: string}` saves a nonblank name of at most 80 printable characters and returns the current selection's snapshot. Renaming another row does not navigate or cancel work. |
+| `POST sessions/{session_id}/rename` | `{title: string}` saves an explicit name of at most 80 printable characters; an empty or omitted title generates one from the latest 10 user messages. Returns the current selection's snapshot. Renaming another row does not navigate or cancel work. |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
 | `GET session-groups` | Folder tree `{revision, groups: [{id, name, collapsed, parent_id}], memberships: {session_id: group_id}}`; empty `parent_id` means top level |
 | `POST session-groups/create` | `{revision, name, parent_id?}` creates a folder; sibling names are unique ignoring case, 1-80 characters; up to 128 folders and 12 levels |

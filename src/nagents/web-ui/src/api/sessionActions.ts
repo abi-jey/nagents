@@ -11,7 +11,7 @@ export function sessionTitle(value: string, required: boolean): string {
 
 export async function changeSession(token: string, id: string, action: "fork" | "rename", value: string): Promise<Snapshot> {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw new Error("Invalid chat. Refresh before trying again.");
-  const title = sessionTitle(value, action === "rename");
+  const title = sessionTitle(value, false);
   const result: unknown = await (await request(`sessions/${encodeURIComponent(id)}/${action}`, token, { title })).json();
   if (!validSnapshot(result) || (action === "fork" && result.session_id === id))
     throw new Error("Invalid chat response. Reconnect to check the result before trying again.");

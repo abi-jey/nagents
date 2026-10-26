@@ -12,6 +12,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.tui import NagentsApp
 from nagents.tui.widgets import Turn
 from nagents.types import Message
+from tests.support.titles import title_model
 from tests.support.tui import idle
 from tests.support.tui import send
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
@@ -36,7 +37,8 @@ def test_tui_fork_and_rename_keep_history_without_sending_commands_to_model(
         async with app.run_test(size=(100, 32)) as pilot:
             await idle(app, pilot)
             commands = {command.name: command for command in harness.commands.list()}
-            assert commands["fork"].argument_hint == "[title]" and commands["rename"].requires_arguments
+            assert commands["fork"].argument_hint == commands["rename"].argument_hint == "[title]"
+            assert not commands["rename"].requires_arguments
             await send(app, pilot, f"/fork {title}".strip())
             await idle(app, pilot)
             target = harness.session_id
@@ -48,9 +50,13 @@ def test_tui_fork_and_rename_keep_history_without_sending_commands_to_model(
             await send(app, pilot, "/rename Chosen name")
             await idle(app, pilot)
             assert next(item for item in await harness.list_sessions() if item.id == target).title == "Chosen name"
+            stub = title_model(monkeypatch)
+            harness.config.demo = False
             await send(app, pilot, "/rename")
             await idle(app, pilot)
-            assert app._status_error and "title" in app._status_text
+            assert not app._status_error
+            assert next(item for item in await harness.list_sessions() if item.id == target).title == stub.reply
+            assert len(stub.requests) == 1 and stub.requests[0].provider.model == "gpt-6-luna"
             assert len(await harness.history()) == 2
             assert [message.content for message in await harness.agent.session.get_history(source)] == [
                 "Saved question",
