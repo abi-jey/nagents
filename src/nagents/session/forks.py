@@ -44,10 +44,20 @@ def root_title(db: sqlite3.Connection, source: str) -> str:
     return str(row[0])
 
 
+def title_revision(db: sqlite3.Connection, source: str) -> int:
+    row = db.execute("SELECT revision FROM ngn_session_title_revisions WHERE session_id = ?", (source,)).fetchone()
+    return int(row[0]) if row else 0
+
+
 def rename_in(db: sqlite3.Connection, source: str, title: str) -> None:
     title = title_text(title)
     root_title(db, source)
     db.execute("UPDATE harness_sessions SET title = ? WHERE id = ?", (title, source))
+    db.execute(
+        "INSERT INTO ngn_session_title_revisions VALUES (?, 1) "
+        "ON CONFLICT(session_id) DO UPDATE SET revision = revision + 1",
+        (source,),
+    )
     db.execute("UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (source,))
 
 
@@ -216,6 +226,11 @@ def fork_in(db: sqlite3.Connection, source: str, title: str = "") -> str:
         ).lastrowid
         assert inserted is not None
         ids[int(old)] = inserted
+        if "ngn_context_message_copies" in tables:
+            db.execute(
+                "INSERT INTO ngn_context_message_copies SELECT ? FROM ngn_context_message_copies WHERE history_id = ?",
+                (inserted, old),
+            )
     if boundary is not None:
         if int(boundary) not in ids:
             raise SessionForkError("Source context boundary has no matching conversation message.")

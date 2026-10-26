@@ -346,6 +346,7 @@ class SessionManager:
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         row,
                     )
+                    await db.execute("INSERT INTO ngn_context_message_copies VALUES (?)", (cursor.lastrowid,))
                     if first_id is None:
                         first_id = cursor.lastrowid
                 assert first_id is not None
