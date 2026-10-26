@@ -155,6 +155,7 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
             }
         )
     available = {str(tool["name"]) for tool in tools if tool["available"]}
+    identities = harness.agent_identities()
     return {
         "scope": scope,
         "agent": agent,
@@ -186,8 +187,8 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
         "profiles": [
             {
                 "id": name,
-                "name": name,
-                "description": harness.config.profile(name).description,
+                "name": identities[name].name,
+                "description": identities[name].description,
                 "source": harness.config.profile(name).source,
                 "source_format": harness.config.profile(name).source_format,
                 "mode": harness.mode_for_profile(name),

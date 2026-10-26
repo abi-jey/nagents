@@ -188,7 +188,7 @@ async def test_configure_then_delegate_uses_remote_sdk_and_preserves_remote_hist
                 yield ToolCallEvent(
                     id="delegate-remote",
                     name="to_agent",
-                    arguments={"agent": "peer", "prompt": "Return the deterministic peer answer."},
+                    arguments={"agent": "Remote agent", "prompt": "Return the deterministic peer answer."},
                 )
             else:
                 yield TextDoneEvent(text="Remote work was delegated.")
@@ -224,7 +224,8 @@ async def test_configure_then_delegate_uses_remote_sdk_and_preserves_remote_hist
             assert isinstance(properties, dict)
             agent = properties["agent"]
             assert isinstance(agent, dict)
-            assert "peer" in agent["enum"]
+            assert "Remote agent" in agent["enum"]
+            assert "peer" not in agent["enum"]
             assert observed == ["Return the deterministic peer answer."]
             delegated = next(info for info in harness.tasks.list() if info.profile == "peer")
             worker = harness.tasks._workers[delegated.session_id]

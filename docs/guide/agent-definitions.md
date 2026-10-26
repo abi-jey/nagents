@@ -35,6 +35,15 @@ definitions appear as **Not started** without a restart. Already issued tool
 batches keep the definitions they were given; a rename cannot redirect an
 accepted delegation. Running children retain their identity and history.
 
+Remote agents appear by their advertised AgentCard name and description. The
+saved connection name and local note appear only in the agent's connection
+settings. The model-facing `to_agent.agent` enum uses the advertised name and
+ngn resolves it to the saved connection within that model generation. Colliding
+names receive an opaque suffix; a remote name cannot shadow another agent.
+Until card metadata is available, ngn displays `Remote agent`. Host APIs retain
+the stable connection key, and card refreshes do not rename saved connections
+or change their permissions.
+
 ## Native format
 
 Use UTF-8 Markdown containing only a YAML header enclosed by `---`. Put the full

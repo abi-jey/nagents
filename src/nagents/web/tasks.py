@@ -23,6 +23,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
+from nagents.harness.agent_identity import agent_identities
 from nagents.harness.followups import RunInput
 from nagents.harness.private_store import ProtectedStoreError
 from nagents.harness.reasoning import ReasoningPreference
@@ -189,6 +190,10 @@ class Tasks:
                 remote_catalog = profile_owner._agent_catalog.remote_store.load()
             except (ProtectedStoreError, ValueError):
                 remote_catalog = None
+            identities = agent_identities(
+                {name: profile_owner.config.profile(name) for name in profile_owner.config.profile_names},
+                remote_catalog.advertised if remote_catalog is not None else {},
+            )
             for name in profile_owner.config.profile_names:
                 profile = profile_owner.config.profile(name)
                 remote = profile.a2a.configured
@@ -232,6 +237,7 @@ class Tasks:
                     {
                         "id": name,
                         "name": name,
+                        "display_name": identities[name].name,
                         "description": profile.description[:2000],
                         "remote_name": advertised.name if advertised is not None else "",
                         "remote_description": advertised.description[:2000] if advertised is not None else "",

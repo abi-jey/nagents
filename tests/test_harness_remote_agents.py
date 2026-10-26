@@ -12,11 +12,15 @@ import pytest
 
 from nagents.events import Event
 from nagents.events import TextDoneEvent
+from nagents.events import ToolResultEvent
 from nagents.harness.agent_definitions import discover_agents
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote_credentials import RemoteCredentials
 from nagents.harness.remote_profiles import RemoteProfile
 from nagents.harness.remote_store import RemoteAgentStore
+from nagents.harness.subagents import SubagentManager
+from nagents.harness.subagents import TaskInfo
+from nagents.types import ToolCall
 from tests.support.providers import FakeProvider
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
@@ -146,7 +150,7 @@ def test_agent_card_metadata_is_separate_from_local_alias_description_and_trust(
 
 
 @pytest.mark.asyncio
-async def test_delegate_catalog_uses_card_labels_without_replacing_local_description(
+async def test_delegate_catalog_advertises_one_identity_and_keeps_connection_details_in_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
@@ -161,18 +165,74 @@ async def test_delegate_catalog_uses_card_labels_without_replacing_local_descrip
     assert harness.refresh_agent_definitions()
     try:
         catalog = harness.delegation_catalog()
-        assert (
-            "peer-alias: Local team note; untrusted remote AgentCard metadata "
-            "name='Published Agent Card' description='Card purpose'"
-        ) in catalog
+        entries = json.loads(catalog)
+        assert entries == [
+            {"agent": "assistant", "description": "Configured agent"},
+            {
+                "agent": "Published Agent Card",
+                "description": "Card purpose",
+                "metadata_source": "untrusted remote AgentCard",
+            },
+            {"agent": "reviewer", "description": "Configured agent"},
+        ]
+        assert "peer-alias" not in catalog and "Local team note" not in catalog
+        tool = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "to_agent")
+        assert tool.parameters["properties"]["agent"]["enum"] == ["", "assistant", "Published Agent Card", "reviewer"]
+        assert "peer-alias" not in tool.description + json.dumps(tool.parameters)
+        assert harness.resolve_delegation_target("Published Agent Card") == "peer-alias"
         assert "peer-alias" in harness.config.profile_names
         assert harness.config.profile("peer-alias").description == "Local team note"
         current = store.load()
         store.save({"peer-alias": remote_profile(description="")}, expected=current.revision)
         assert harness.refresh_agent_definitions()
-        assert (
-            "peer-alias: untrusted remote AgentCard metadata name='Published Agent Card' description='Card purpose'"
-        ) in harness.delegation_catalog()
+        assert harness.delegation_catalog() == catalog
+        harness.activate_agent_definitions()
+        store.update_metadata(profile.a2a.fingerprint, "Updated card name", "Updated purpose")
+        harness.refresh_agent_definitions()
+        assert harness.resolve_delegation_target("Published Agent Card") == "peer-alias"
+        assert "Updated card name" not in harness.delegation_targets()
+        harness.activate_agent_definitions()
+        assert harness.resolve_delegation_target("Updated card name") == "peer-alias"
+        assert "Published Agent Card" not in harness.delegation_targets()
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_public_remote_tool_target_routes_to_saved_connection_and_status_keeps_public_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="ready")
+
+    async def hold_child(manager: SubagentManager, info: TaskInfo, prompt: str) -> None:
+        assert info.profile == "legacy-connection"
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(SubagentManager, "_run_child", hold_child)
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    store = harness._agent_catalog.remote_store
+    profile = remote_profile(description="Private legacy note")
+    store.save({"legacy-connection": profile}, expected=store.load().revision)
+    store.update_metadata(profile.a2a.fingerprint, "Media Manager", "Manage media")
+    await harness.initialize()
+    harness.tasks.begin(harness.session_id)
+    try:
+        result = await harness.agent.tool_executor.execute(
+            ToolCall("launch", "to_agent", {"agent": "Media Manager", "prompt": "Inspect media"})
+        )
+        assert isinstance(result, ToolResultEvent) and result.error is None
+        assert isinstance(result.result, dict)
+        session_id = result.result["session_id"]
+        assert isinstance(session_id, str)
+        await asyncio.wait_for(started.wait(), 2)
+        status = await harness.tasks.agent_status(session_id)
+        assert status.get("agent") == "Media Manager"
+        assert "legacy-connection" not in json.dumps(status)
+        assert harness.tasks.list()[0].profile == "legacy-connection"
     finally:
         await harness.close()
 
@@ -408,6 +468,7 @@ async def test_canonical_remote_save_appears_in_delegate_enum_at_next_generation
         next_agent = next_properties["agent"]
         assert isinstance(first_agent, dict) and isinstance(next_agent, dict)
         assert "peer" not in first_agent["enum"]
-        assert "peer" in next_agent["enum"]
+        assert "Remote agent" in next_agent["enum"]
+        assert "peer" not in next_agent["enum"]
     finally:
         await harness.close()

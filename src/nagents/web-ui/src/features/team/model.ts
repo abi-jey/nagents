@@ -34,14 +34,14 @@ export type TaskDetail = {
   history_truncated?: boolean;
   before?: string;
 };
-export type TeamProfile = { id: string; name: string; description: string; remote_name?: string; remote_description?: string; metadata_status?: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string; authentication?: RemoteAuthentication; trust_remote_tools?: boolean };
+export type TeamProfile = { id: string; name: string; description: string; display_name?: string; remote_name?: string; remote_description?: string; metadata_status?: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string; authentication?: RemoteAuthentication; trust_remote_tools?: boolean };
 
 /** Card labels are presentation metadata; the local id still routes every action. */
 export function profileLabel(profile: TeamProfile | undefined, fallback = ""): string {
-  return (profile?.provider === "a2a" ? profile.remote_name?.trim() : "") || profile?.name || profile?.id || fallback;
+  return profile?.display_name || (profile?.provider === "a2a" ? profile.remote_name?.trim() || "Remote agent" : profile?.name || profile?.id || fallback);
 }
 export function profileDescription(profile: TeamProfile | undefined): string {
-  return (profile?.provider === "a2a" ? profile.remote_description?.trim() : "") || profile?.description || "";
+  return profile?.provider === "a2a" ? profile.remote_description?.trim() || "" : profile?.description || "";
 }
 export type TeamSubagentUsage = {
   limits: { max_concurrent_subagents: number; max_subagent_executions: number; max_subagent_depth: number };
@@ -67,7 +67,7 @@ export function definitionUsage(profile: TeamProfile, agents: readonly TeamAgent
 export function conversationAgent(selection: SessionAgentSelection | undefined, context: ContextStats | undefined,
   running: boolean, approval: boolean): TeamAgent {
   const identity = selection?.active || selection?.effective;
-  return { id: MAIN_AGENT, parentId: MAIN_AGENT, name: identity?.agent || "Assistant", profile: identity?.agent || "", prompt: "",
+  return { id: MAIN_AGENT, parentId: MAIN_AGENT, name: identity?.display_name || identity?.agent || "Assistant", profile: identity?.agent || "", prompt: "",
     reason: approval ? "Waiting for approval" : "", phase: approval ? "waiting" : running ? "running" : "ready",
     provider: identity?.provider || "", providerKind: identity?.provider_kind || "", model: identity?.model || "",
     reasoningEffort: identity?.reasoning_effort,

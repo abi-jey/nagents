@@ -16,7 +16,7 @@ export function SessionAgentPicker({ selection, loading, saving, error, choose, 
   const busy = saving || !!applying;
   const profiles = selection?.profiles || [];
   const needle = query.trim().toLowerCase();
-  const matches = profiles.filter(profile => [profile.name, profile.description, profile.model, profile.provider, profile.provider_kind]
+  const matches = profiles.filter(profile => [profile.display_name || profile.name, profile.description, profile.model, profile.provider, profile.provider_kind]
     .some(value => value.toLowerCase().includes(needle)));
   useEffect(() => {
     const element = dialog.current, previous = document.activeElement;
@@ -57,17 +57,17 @@ export function SessionAgentPicker({ selection, loading, saving, error, choose, 
     <div className="session-agent-picker-body">
       <p id={descriptionId} className="session-agent-picker-description">Choose who answers in this chat. Other chats and the workspace default stay unchanged.</p>
       {selection && <div className="session-agent-current" role="status">
-        <span>{selection.pending ? "Next run" : "This conversation"}<strong>{selection.effective.agent}</strong></span>
+        <span>{selection.pending ? "Next run" : "This conversation"}<strong>{selection.effective.display_name || selection.effective.agent}</strong></span>
         <span className="session-agent-provider"><ProviderLogo provider={selection.effective.provider_kind} />
           <span>{[selection.effective.provider || selection.effective.provider_kind, selection.effective.model].filter(Boolean).join(" · ") || "Model not configured"}</span></span>
-        {selection.pending && active && <p>The current run continues as <strong>{active.agent}</strong>. <strong>{selection.effective.agent}</strong> applies from the next run.</p>}
+        {selection.pending && active && <p>The current run continues as <strong>{active.display_name || active.agent}</strong>. <strong>{selection.effective.display_name || selection.effective.agent}</strong> applies from the next run.</p>}
         {!selection.pending && active && <p>Changes apply after the current run finishes.</p>}
         {active?.mode === "reviewer" && <p>The current run is read-only.</p>}
         {selection.effective.mode === "reviewer" && active?.mode !== "reviewer" && <p>Read-only restrictions apply now.</p>}
       </div>}
       {profiles.length > 6 && <label className="session-agent-search" htmlFor={searchId}><Icon name="search" size={16} /><span className="sr-only">Search agent profiles</span>
         <input id={searchId} type="search" value={query} placeholder="Find an agent…" onInput={event => setQuery(event.currentTarget.value)} /></label>}
-      <div className="session-agent-picker-status"><span role="status">{busy ? `Applying ${applying || "agent"}…` : loading ? "Loading agent profiles…" : `${profiles.length} profile${profiles.length === 1 ? "" : "s"}`}</span>
+      <div className="session-agent-picker-status"><span role="status">{busy ? `Applying ${profiles.find(profile => profile.name === applying)?.display_name || applying || "agent"}…` : loading ? "Loading agent profiles…" : `${profiles.length} profile${profiles.length === 1 ? "" : "s"}`}</span>
         <button type="button" disabled={busy || loading} onClick={() => { setLocalError(""); refresh(); }}>Refresh</button></div>
       {(error || localError) && <p className="session-agent-picker-error" role="alert">{error || localError}</p>}
       <ul className="session-agent-options" aria-label="Agent profiles" aria-busy={loading || busy}>{matches.map(profile => {
@@ -75,7 +75,7 @@ export function SessionAgentPicker({ selection, loading, saving, error, choose, 
         const reason = profile.disabled_reason;
         return <li key={profile.name}><button type="button" className={`session-agent-option${selected ? " is-selected" : ""}`} aria-pressed={selected}
           disabled={busy || loading || !!reason} onClick={() => void apply(profile.name)}>
-          <span className="session-agent-option-heading"><strong>{profile.name}</strong>
+          <span className="session-agent-option-heading"><strong>{profile.display_name || profile.name}</strong>
             {selection?.workspace_default === profile.name && <span className="session-agent-default">Workspace default</span>}
             <span className="session-agent-choice" aria-hidden="true">{selected ? "✓" : ""}</span></span>
           {profile.description && <span className="session-agent-description">{profile.description}</span>}

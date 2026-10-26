@@ -34,11 +34,12 @@ export function AgentState({ agent }: { agent: TeamAgent }) {
   return <span className={`team-state state-${agent.phase}`} title={agent.reason}><i aria-hidden="true" />{phaseLabel(agent)}</span>;
 }
 
-export function AgentRow({ agent, selected, inspect, settings, connection, arrivalAt = 0, grouped = false, connectionInGroup = false }: {
+export function AgentRow({ agent, selected, inspect, settings, connection, arrivalAt = 0, grouped = false, connectionInGroup = false, definitionName = "" }: {
   agent: TeamAgent; selected: boolean; inspect: () => void; settings: () => void; connection?: () => void; arrivalAt?: number;
-  grouped?: boolean; connectionInGroup?: boolean;
+  grouped?: boolean; connectionInGroup?: boolean; definitionName?: string;
 }) {
   const remote = agent.providerKind === "a2a";
+  const definition = definitionName || (remote ? "Remote agent" : agent.profile);
   const context = remote ? undefined : agent.context;
   const marker = compactionMarker(agent);
   const warning = compactionWarning(agent);
@@ -47,8 +48,8 @@ export function AgentRow({ agent, selected, inspect, settings, connection, arriv
   const hasDefinition = !!agent.id && !!agent.profile;
   return <article className={`team-agent-row${remote ? " is-remote" : ""}${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
     <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={[marker?.description, agent.providerKind === "a2a" && remoteAuthLabel(agent.authentication)].filter(Boolean).join(". ") || undefined}
-      aria-label={`Open ${agent.name} conversation.${agent.id ? ` Session ${agent.id}.` : ""} ${phaseLabel(agent)}${agent.profile ? `. Definition ${agent.profile}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
-      <span className="team-agent-heading"><span className="team-agent-identity"><strong className={grouped ? "team-agent-run-name" : hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${agent.profile}` : undefined}>{grouped ? agent.name : hasDefinition ? agent.profile : agent.name}</strong>{!grouped && hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}{agent.id && agent.name !== agent.id && <code className="team-agent-session-id">{agent.id}</code>}</span><AgentState agent={agent} /></span>
+      aria-label={`Open ${agent.name} conversation.${agent.id ? ` Session ${agent.id}.` : ""} ${phaseLabel(agent)}${agent.profile ? `. Definition ${definition}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
+      <span className="team-agent-heading"><span className="team-agent-identity"><strong className={grouped ? "team-agent-run-name" : hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${definition}` : undefined}>{grouped ? agent.name : hasDefinition ? definition : agent.name}</strong>{!grouped && hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}{agent.id && agent.name !== agent.id && <code className="team-agent-session-id">{agent.id}</code>}</span><AgentState agent={agent} /></span>
       {!remote && <><span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
       <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}${marker ? `; ${marker.description}` : ""}` : undefined}>
         {context ? contextSummary(context) : "Context unavailable"}
@@ -58,7 +59,7 @@ export function AgentRow({ agent, selected, inspect, settings, connection, arriv
       </span> : null}
       {warning && <span className="team-context-warning">{warning}</span>}</>}
     </button>
-    {remote && !connectionInGroup && <div className="team-agent-connection"><RemoteConnectionChip authentication={agent.authentication} name={agent.profile || agent.name} activate={connection || settings} /></div>}
+    {remote && !connectionInGroup && <div className="team-agent-connection"><RemoteConnectionChip authentication={agent.authentication} name={definition || agent.name} activate={connection || settings} /></div>}
     <button type="button" className="team-agent-settings" aria-label={`Settings for ${agent.name}`} onClick={settings}><Icon name="settings" size={14} /></button>
   </article>;
 }
@@ -187,7 +188,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     return <li key={`run:${agent.id || "main"}`} className="team-tree-branch" data-run-id={agent.id || "main"} data-bucket={bucket} hidden={hidden}>
       <div className="team-tree-row"><span className="team-tree-toggle-slot">{!!direct.length && <button type="button" className="team-tree-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${agent.name}'s agents`} aria-expanded={open}
         onClick={() => toggle(agent.id, open)}><Icon name="chevron" size={12} /></button>}</span>
-        <AgentRow agent={agent} grouped={!!agent.id} connectionInGroup={sharedConnection} selected={selected === agent.id} inspect={() => inspect(agent.id)} settings={() => configure(agent.id)} connection={showConnection ? () => configure(profileTarget(agent.profile)) : undefined} arrivalAt={arrivals[agent.id]} />
+        <AgentRow agent={agent} definitionName={agent.providerKind === "a2a" ? profileLabel(catalog.get(agent.profile), "Remote agent") : agent.profile} grouped={!!agent.id} connectionInGroup={sharedConnection} selected={selected === agent.id} inspect={() => inspect(agent.id)} settings={() => configure(agent.id)} connection={showConnection ? () => configure(profileTarget(agent.profile)) : undefined} arrivalAt={arrivals[agent.id]} />
       </div>
       {!!direct.length && <ol className="team-tree-children team-grouped-children" aria-label={`${agent.name}'s child agents`} hidden={!open}>{(groups.get(agent.id) || []).flatMap(group => groupItems(agent, group, depth + 1, open && !hidden))}</ol>}
     </li>;
@@ -195,7 +196,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
 
   function groupItems(parent: TeamAgent, group: DefinitionGroup, depth: number, parentOpen: boolean): ReactNode[] {
     const all = [...group.running, ...group.past], definition = catalog.get(group.profile);
-    const name = profileLabel(definition, group.profile || "Definition unavailable");
+    const name = profileLabel(definition, all.some(agent => agent.providerKind === "a2a") ? "Remote agent" : group.profile || "Definition unavailable");
     const open = isOpen(group.key, group.running.length > 0 || all.some(agent => focusedPath.has(agent.id)),
       all.some(agent => keyboardPath.has(agent.id)));
     if (parentOpen && open) nextOpened.add(group.key);
@@ -207,7 +208,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     const count = group.running.length + group.past.length;
     const result: ReactNode[] = [<li key={`group:${group.key}`} className={`team-definition-group${fresh ? " is-arriving" : ""}`} data-parent-id={parent.id} data-profile={group.profile}>
       <div className="team-definition-heading"><button type="button" className="team-definition-toggle" aria-expanded={open} aria-controls={(["running", "past"] as const).filter(bucket => group[bucket].length).map(bucket => `${domId}-${bucket}`).join(" ")} onClick={() => toggle(group.key, open)}>
-        <Icon name="chevron" size={11} /><strong title={[name !== group.profile ? `Connection: ${group.profile}` : "", profileDescription(definition)].filter(Boolean).join("\n") || undefined}>{name}</strong>{!open && <span title={`${group.running.length} running · ${group.past.length} past`}>{count}</span>}
+        <Icon name="chevron" size={11} /><strong title={profileDescription(definition) || undefined}>{name}</strong>{!open && <span title={`${group.running.length} running · ${group.past.length} past`}>{count}</span>}
       </button>{remote && <RemoteConnectionChip authentication={definition?.authentication || all[0].authentication} name={name} activate={connection!} />}
         <button type="button" className="team-definition-start" aria-label={`Start ${name} under ${parent.name}`} title={allowed.allowed ? `Start ${name} under ${parent.name}` : allowed.reason} disabled={!allowed.allowed} onClick={() => inspect(profileTarget(group.profile, parent.id))}><Icon name="plus" size={13} /></button>
       </div>
@@ -249,7 +250,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
             aria-label={`Open ${profileLabel(profile)} definition${definitionParent?.id ? ` under ${definitionParent.name}` : ""}`}
             aria-current={selected === target ? "page" : undefined}
             aria-description={!allowed.allowed ? allowed.reason : undefined}
-            title={[profile.source ? `Definition file: ${profile.source}` : "", profileLabel(profile) !== profile.name ? `Connection: ${profile.id}` : "", !allowed.allowed ? allowed.reason : ""].filter(Boolean).join(" · ") || undefined}
+            title={[profile.source ? `Definition file: ${profile.source}` : "", !allowed.allowed ? allowed.reason : ""].filter(Boolean).join(" · ") || undefined}
             onClick={() => inspect(target)}>
             <span><strong>{profileLabel(profile)}</strong><span>{definitionUsage(profile, agents)}</span></span>
             <small>{profileDescription(profile) || [profile.provider, profile.model].filter(Boolean).join(" · ")}</small>

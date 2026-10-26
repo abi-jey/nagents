@@ -162,7 +162,7 @@ async def _delegated_failure(
             yield ToolCallEvent(
                 id="delegate-remote-failure",
                 name="to_agent",
-                arguments={"agent": "peer", "prompt": "Check the configured remote task."},
+                arguments={"agent": "Remote agent", "prompt": "Check the configured remote task."},
             )
         else:
             yield TextDoneEvent(text="Waiting for the remote task outcome.")

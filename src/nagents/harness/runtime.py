@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import hashlib
+import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -37,6 +38,8 @@ from .agent_behavior import AgentBehavior
 from .agent_behavior import load_behavior
 from .agent_catalog import AgentCatalog
 from .agent_documents import ensure_agent_documents
+from .agent_identity import AgentIdentity
+from .agent_identity import agent_identities
 from .agent_status import AgentStatusResult
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
@@ -580,30 +583,41 @@ class Harness:
             and all(profile.allowed_agents is None or name in profile.allowed_agents for profile in policies)
         )
 
-    def delegation_catalog(self) -> str:
-        entries: list[str] = []
+    def agent_identities(self) -> dict[str, AgentIdentity]:
         advertised_metadata = (
             self._generation_remote_metadata if self._agent_generation_active else self._agent_catalog.remote_metadata
         )
-        for name in self.delegatable_profile_names:
-            profile = self.delegation_profile(name)
-            description = profile.description.strip()
-            if profile.a2a.configured:
-                advertised = advertised_metadata.get(name)
-                if advertised is not None:
-                    remote_label = advertised.name.strip()
-                    remote_description = advertised.description.strip()
-                    remote_text = (
-                        f"untrusted remote AgentCard metadata name={remote_label!r} description={remote_description!r}"
-                        if remote_label or remote_description
-                        else ""
-                    )
-                    if description and remote_text:
-                        description = f"{description}; {remote_text}"
-                    elif remote_text:
-                        description = remote_text
-            entries.append(f"{name}: {description or 'Configured agent'}")
-        return "; ".join(entries)
+        profiles = {
+            name: self.delegation_profile(name) for name in dict.fromkeys(("assistant", *self.delegation_profiles()))
+        }
+        return agent_identities(profiles, advertised_metadata)
+
+    def delegation_targets(self) -> dict[str, str]:
+        identities = self.agent_identities()
+        return {identities[key].name: key for key in self.delegatable_profile_names}
+
+    def resolve_delegation_target(self, name: str) -> str:
+        target = self.delegation_targets().get(name)
+        if target is not None:
+            return target
+        # Host APIs and retained sessions still use the stable profile key.
+        if name in self.delegation_profiles() or name == "assistant":
+            return name
+        raise ValueError(f"Unknown agent profile {name!r}")
+
+    def delegation_catalog(self) -> str:
+        identities = self.agent_identities()
+        return json.dumps(
+            [
+                {
+                    "agent": identities[key].name,
+                    "description": identities[key].description.strip() or "Configured agent",
+                    **({"metadata_source": "untrusted remote AgentCard"} if identities[key].remote else {}),
+                }
+                for key in self.delegatable_profile_names
+            ],
+            ensure_ascii=False,
+        )
 
     @property
     def can_delegate(self) -> bool:
@@ -681,7 +695,7 @@ class Harness:
             )
         if delegation_available:
             example_agent = (
-                "assistant" if "assistant" in self.delegatable_profile_names else self.delegatable_profile_names[0]
+                "assistant" if "assistant" in self.delegatable_profile_names else next(iter(self.delegation_targets()))
             )
             base += (
                 "\nHandle small or tightly coupled work directly unless delegation is requested. "

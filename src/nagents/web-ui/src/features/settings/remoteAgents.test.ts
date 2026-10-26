@@ -94,7 +94,7 @@ test("unused remote definitions remain visible with connection access without an
   assert.match(html, /<strong>Advertised name<\/strong>/);
   assert.match(html, /Not started/);
   assert.match(html, /remote-connection-chip/);
-  assert.match(html, /title="Connection: peer/);
+  assert.doesNotMatch(html, /Connection: peer|peer-alias/);
   assert.match(html, /Settings for Advertised name definition/);
   assert.doesNotMatch(html, /team-definition-group/);
   assert.match(html, /Advertised purpose/);
@@ -217,13 +217,13 @@ test("a rejected remote trust update leaves the connection untrusted and shows t
   assert.match(ui.dom.window.document.querySelector('[role="alert"]')?.textContent || "", /Connection changed/);
 });
 
-test("new remote agent name pattern is valid under HTML v-mode rules", async t => {
+test("new connection name pattern is valid under HTML v-mode rules", async t => {
   const ui = await renderEditor("", async () => Response.json({ revision: "revision-1", source_path: "/workspace/connections/a2a.json", agents: [] }));
   t.after(async () => ui.restore());
   const document = ui.dom.window.document;
   const details = document.querySelector("details")!;
   details.open = true;
-  const input = document.querySelector<HTMLInputElement>('input[placeholder="Use the remote agent’s name"]')!;
+  const input = document.querySelector<HTMLInputElement>('input[placeholder="Choose a name for this connection"]')!;
   const pattern = input.getAttribute("pattern");
   assert.ok(pattern);
   const validName = new RegExp(`^(?:${pattern})$`, "v");

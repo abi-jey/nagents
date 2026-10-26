@@ -637,6 +637,23 @@ def test_probe_uses_sdk_card_discovery_only_and_returns_safe_errors(
             assert refreshed["description"] == "Remote review agent"
             assert refreshed["remote_name"] == "Remote fixture"
             assert refreshed["remote_description"] == "A deterministic card used by the web probe test."
+            navigator = (await client.get("/api/agent-settings?scope=workspace", headers=headers)).json()
+            identity = next(item for item in navigator["profiles"] if item["id"] == "peer-review")
+            assert identity["name"] == "Remote fixture"
+            assert identity["description"] == refreshed["remote_description"]
+            root = harnesses[0].session_id
+            selection = (await client.get(f"/api/sessions/{root}/agent", headers=headers)).json()
+            picker_profile = next(item for item in selection["profiles"] if item["name"] == "peer-review")
+            assert picker_profile["display_name"] == "Remote fixture"
+            assert picker_profile["description"] == refreshed["remote_description"]
+            selected = await client.post(
+                f"/api/sessions/{root}/agent",
+                headers=headers,
+                json={"revision": selection["revision"], "agent": "peer-review"},
+            )
+            assert selected.status_code == 200
+            assert selected.json()["effective"]["display_name"] == "Remote fixture"
+            assert selected.json()["effective"]["agent"] == "peer-review"
 
             fail_remote_reads = True
             failed = await client.post("/api/remote-agents/peer-review/probe", headers=headers, json={})

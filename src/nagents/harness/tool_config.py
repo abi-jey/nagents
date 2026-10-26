@@ -170,7 +170,7 @@ class HarnessToolRegistry(ToolRegistry):
                         "For a new session select a profile (omission chooses assistant); "
                         "for an existing session omit to retain its profile. " + self.harness.delegation_catalog()
                     )
-                    parameter["enum"] = ["", *self.harness.delegatable_profile_names]
+                    parameter["enum"] = ["", *self.harness.delegation_targets()]
                     required = [name for name in tool.parameters.get("required", []) if name != "agent"]
                     tool.parameters["required"] = required
         return tools
