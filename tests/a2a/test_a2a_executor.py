@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.a2a.agent.runtime import AgentContext
-    from nagents.harness.auth import OpenAIAuth
+    from nagents.harness.providers.auth import OpenAIAuth
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite test storage requires POSIX")

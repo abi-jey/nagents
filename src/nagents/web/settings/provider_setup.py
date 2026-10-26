@@ -12,7 +12,7 @@ from typing import TypedDict
 
 from nagents.error_presentation import remote_error_message
 from nagents.error_presentation import transport_error_message
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider._codex_diagnostics import codex_protocol_reason
 from nagents.provider._diagnostics import transport_diagnostic

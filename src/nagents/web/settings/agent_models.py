@@ -15,8 +15,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
 
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.model_bindings import ResolvedModelBinding
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.model_bindings import ResolvedModelBinding
 
 if TYPE_CHECKING:
     from collections.abc import Callable

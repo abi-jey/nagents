@@ -294,7 +294,7 @@ async def test_serve_exposes_mcp_tools_and_reloads_after_final_response(
 ) -> None:
     import httpx
 
-    from nagents.harness.providers import ProviderRegistry
+    from nagents.harness.providers.registry import ProviderRegistry
     from nagents.web.app import create_app
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:

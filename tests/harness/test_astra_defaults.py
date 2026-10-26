@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderProfile
 from nagents.live import LiveConfig
 
 

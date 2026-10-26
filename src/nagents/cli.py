@@ -32,12 +32,12 @@ from .events import ToolCallEvent
 from .events import ToolResultEvent
 from .harness import Harness
 from .harness import load_config
-from .harness import provider_login
 from .harness.config import THEME_BACKGROUNDS
 from .harness.config import THEME_NAMES
 from .harness.config import HarnessConfig
-from .harness.credentials import ProviderLogin
-from .harness.providers import API_NAMES
+from .harness.providers import login as provider_login
+from .harness.providers.credentials import ProviderLogin
+from .harness.providers.registry import API_NAMES
 from .harness.types import ApprovalRequest
 from .harness.types import HarnessEvent
 from .harness.types import Notice
@@ -56,8 +56,8 @@ from .tool_outcomes import shell_outcome
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from .harness.auth import DeviceAuthorization
-    from .harness.provider_login import LoginMethod
+    from .harness.providers.auth import DeviceAuthorization
+    from .harness.providers.login import LoginMethod
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -585,7 +585,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config.global_model_default = config.model
         selected_name = getattr(args, "provider_id", config.provider)
         if selected_name:
-            from .harness.providers import ScopedProviderRegistryStore
+            from .harness.providers.registry import ScopedProviderRegistryStore
 
             profile = (
                 ScopedProviderRegistryStore(config.workspace, paths=config.provider_paths)

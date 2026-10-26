@@ -12,8 +12,8 @@ from textual.widgets import Button
 from textual.widgets import Input
 from textual.widgets import Static
 
-from nagents.harness import provider_login
-from nagents.harness.auth import DeviceAuthorization
+from nagents.harness.providers import login as provider_login
+from nagents.harness.providers.auth import DeviceAuthorization
 from nagents.tui.login import DEVICE_URL
 from nagents.tui.login import DeviceLoginModal
 from nagents.tui.login import LoginMethodModal
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
     from textual.pilot import Pilot
 
-    from nagents.harness.credentials import ProviderLogin
+    from nagents.harness.providers.credentials import ProviderLogin
     from nagents.tui import NagentsApp
 
 USER_CODE = "TEST-1234"

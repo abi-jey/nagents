@@ -11,10 +11,10 @@ from typing import cast
 import pytest
 
 from nagents._async import join_owned
-from nagents.harness.auth import DeviceAuthorization
 from nagents.harness.config import HarnessConfig
-from nagents.harness.connection import build_provider
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.auth import DeviceAuthorization
+from nagents.harness.providers.connection import build_provider
+from nagents.harness.providers.registry import ProviderProfile
 from nagents.provider import OpenAIProvider
 from nagents.web.settings import provider_login
 from tests.support.channels import site

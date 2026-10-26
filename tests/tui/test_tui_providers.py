@@ -10,8 +10,8 @@ from textual.widgets import Input
 from textual.widgets import Static
 
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.tui.app import NagentsApp
 from nagents.tui.providers import ProviderEditor

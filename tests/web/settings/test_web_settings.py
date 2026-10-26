@@ -21,11 +21,11 @@ from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.types import Message
 from nagents.types import ToolCall
 from nagents.web.app import create_app

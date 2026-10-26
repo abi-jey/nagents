@@ -31,9 +31,9 @@ from starlette.staticfiles import StaticFiles
 
 from nagents.agent import Agent
 from nagents.harness import Harness
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import validate_request_timeout
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import validate_request_timeout
 from nagents.provider import OpenAIProvider
 from nagents.provider._codex_catalog import catalog_logging
 from nagents.provider.context import validate_context_window

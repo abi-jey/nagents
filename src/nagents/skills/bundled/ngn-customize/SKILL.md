@@ -30,7 +30,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime.py`, `harness/config.py` |
 | Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools.py` |
 | Markdown/TOML agent discovery and imports | `discover_agents`, `import_agents`, `agent_imports` | `harness/agents/definitions.py` |
-| Unified assistant properties and UI edits | Native `prompt`, `model`, `tools`, and `live` frontmatter | `harness/agents/definitions.py`, `harness/model_bindings.py` |
+| Unified assistant properties and UI edits | Native `prompt`, `model`, `tools`, and `live` frontmatter | `harness/agents/definitions.py`, `harness/providers/model_bindings.py` |
 | On-demand task guidance | `Skill`, `SkillDiscoverer`, `Agent.load_skill` | `skills/`, `agent.py` |
 | Prompt/local commands | `CommandRegistry.register`, `CommandResult` | `harness/commands.py` |
 | Child agents and follow-ups | `SubagentManager`, `Harness.tasks`, `continue_task` | `harness/agents/subagents.py` |

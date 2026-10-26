@@ -17,7 +17,7 @@ from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import runtime
 from nagents.harness.agents.subagents import TaskInfo
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
@@ -35,8 +35,8 @@ if TYPE_CHECKING:
     from nagents.harness.agents.status import AgentStatusCollection
     from nagents.harness.agents.status import AgentStatusRecord
     from nagents.harness.agents.status import AgentStatusResult
-    from nagents.harness.auth import OpenAIAuth
     from nagents.harness.config import HarnessConfig
+    from nagents.harness.providers.auth import OpenAIAuth
     from nagents.types import Message
 
     Script = Callable[[FakeProvider, list[Message]], AsyncIterator[Event]]

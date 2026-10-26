@@ -25,7 +25,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.tools import _validate
 from nagents.provider.openai import OpenAIProvider
 from nagents.types import Message

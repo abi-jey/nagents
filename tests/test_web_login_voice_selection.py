@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi import HTTPException
 
-from nagents.harness.auth import OpenAIAuth
-from nagents.harness.providers import KINDS
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.registry import KINDS
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.provider.openai import CodexConfigError
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import _CodexConfig

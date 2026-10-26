@@ -14,9 +14,9 @@ from nagents.compaction import ModelCompaction
 from nagents.compaction import describe_compaction
 from nagents.compaction import get_model_context_limit
 from nagents.extensions import CompactionRequest
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ProviderRegistryStore
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType

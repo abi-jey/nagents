@@ -11,14 +11,14 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import HarnessConfig
-from nagents.harness.connection import build_live_provider
-from nagents.harness.connection import build_provider
-from nagents.harness.connection import live_auth_available
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.connection import build_live_provider
+from nagents.harness.providers.connection import build_provider
+from nagents.harness.providers.connection import live_auth_available
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 from nagents.provider.openai import CodexConfigError

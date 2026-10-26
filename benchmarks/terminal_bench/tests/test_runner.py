@@ -19,7 +19,7 @@ from nagents.cli import _event_record
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness import Harness
-from nagents.harness.providers import ProviderRegistryStore
+from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.types import TranscriptAbandoned
 from nagents.harness.types import TranscriptAnchor
 from nagents.provider import OpenAIProvider

@@ -17,7 +17,7 @@ from textual.widgets import Button
 from textual.widgets import Input
 from textual.widgets import Static
 
-from nagents.harness import provider_login
+from nagents.harness.providers import login as provider_login
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from textual.app import ComposeResult
     from textual.binding import BindingType
 
-    from nagents.harness.auth import DeviceAuthorization
-    from nagents.harness.provider_login import LoginMethod
+    from nagents.harness.providers.auth import DeviceAuthorization
+    from nagents.harness.providers.login import LoginMethod
 
 DEVICE_URL = "https://auth.openai.com/codex/device"
 

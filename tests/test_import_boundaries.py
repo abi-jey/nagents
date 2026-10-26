@@ -154,3 +154,11 @@ def test_a2a_agent_public_imports_refer_to_the_same_definitions() -> None:
 
     for name in agent.__all__:
         assert getattr(agent, name) is getattr(runtime, name)
+
+
+def test_harness_provider_public_imports_refer_to_the_same_definitions() -> None:
+    from nagents.harness import providers
+    from nagents.harness.providers import registry
+
+    for name in providers.__all__:
+        assert getattr(providers, name) is getattr(registry, name)

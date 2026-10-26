@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import HarnessConfig
-from nagents.harness.model_catalog import ModelCatalog
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.model_catalog import ModelCatalog
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.web.settings import model_capabilities
 from nagents.web.settings.model_capabilities import CatalogCapabilities
 from nagents.web.settings.model_capabilities import catalog_route
@@ -190,7 +190,7 @@ def test_save_verifies_choices_after_oauth_refresh_or_for_opaque_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str, advertised_after_refresh: bool
 ) -> None:
     from nagents.harness import runtime
-    from nagents.harness.auth import _Tokens
+    from nagents.harness.providers.auth import _Tokens
     from nagents.provider import Provider
     from nagents.provider import ProviderType
 

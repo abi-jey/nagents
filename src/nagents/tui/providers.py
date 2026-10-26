@@ -16,8 +16,8 @@ from textual.widgets import Input
 from textual.widgets import Select
 from textual.widgets import Static
 
-from nagents.harness.providers import KINDS
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.registry import KINDS
+from nagents.harness.providers.registry import ProviderProfile
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult

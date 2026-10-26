@@ -20,8 +20,8 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.tools import CodingTools
 from nagents.web.app import create_app
 from tests.support.hang_guard import HANG_GUARD

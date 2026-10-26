@@ -14,7 +14,7 @@ from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.events import Usage
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.web.settings.provider_setup import provider_error
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect

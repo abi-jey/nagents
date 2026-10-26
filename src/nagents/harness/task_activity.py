@@ -27,8 +27,8 @@ from nagents.events import ToolExecutionStartedEvent
 from nagents.events import ToolResultEvent
 from nagents.extensions import AgentPlugin
 
-from .reasoning import ReasoningPreference
-from .reasoning import resolve_effort
+from .providers.reasoning import ReasoningPreference
+from .providers.reasoning import resolve_effort
 from .types import Notice
 from .types import RemoteArtifacts
 from .types import ToolOutput

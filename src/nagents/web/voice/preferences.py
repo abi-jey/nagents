@@ -13,14 +13,14 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from nagents.harness.agents.documents import agent_document_store
-from nagents.harness.live_profiles import LIVE_FIELDS
-from nagents.harness.providers import KINDS
+from nagents.harness.providers.live_profiles import LIVE_FIELDS
+from nagents.harness.providers.registry import KINDS
 from nagents.live import LiveConfig
 
 from .store import validate_instruction_text
 
 if TYPE_CHECKING:
-    from nagents.harness.providers import ScopedProviderRegistryStore
+    from nagents.harness.providers.registry import ScopedProviderRegistryStore
 
 MAX_VOICE_INSTRUCTION_CHARACTERS = 12000
 MAX_VOICE_INSTRUCTION_BYTES = 24000

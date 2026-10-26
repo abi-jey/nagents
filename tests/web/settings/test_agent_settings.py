@@ -12,7 +12,7 @@ import pytest
 
 from nagents.harness.agents.behavior import behavior_store
 from nagents.harness.agents.documents import agent_document_store
-from nagents.harness.model_bindings import ModelBinding
+from nagents.harness.providers.model_bindings import ModelBinding
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io

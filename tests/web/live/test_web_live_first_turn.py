@@ -12,8 +12,8 @@ from pydantic import SecretStr
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderProfile
 from nagents.live.runtime import ClientDelegations
 from nagents.types import Message
 from nagents.web.execution.subscriptions import Subscriber

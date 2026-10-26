@@ -7,7 +7,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from nagents.events import TextDoneEvent
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

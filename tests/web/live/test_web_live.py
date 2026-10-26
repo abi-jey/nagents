@@ -17,12 +17,12 @@ from aiohttp import web
 from fastapi import HTTPException
 from pydantic import SecretStr
 
-from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 from nagents.provider import FoundryProvider

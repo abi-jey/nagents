@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from collections.abc import Mapping
 
-    from .providers import ProviderProfile
+    from .registry import ProviderProfile
 
 _PROVIDER = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _AGENT = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
@@ -389,7 +389,7 @@ class AgentModelStore:
     def _change(
         self, agent: str, changes: Mapping[str, object], removed: tuple[str, ...], *, expected: str
     ) -> AgentModelPreference:
-        from .providers import _exclusive_lock
+        from .registry import _exclusive_lock
 
         path = self._path(agent)
         if not isinstance(expected, str) or not _REVISION.fullmatch(expected):

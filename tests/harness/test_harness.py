@@ -34,11 +34,11 @@ from nagents.harness import Notice
 from nagents.harness import ToolOutput
 from nagents.harness import load_config
 from nagents.harness.config import AgentProfile
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import PROVIDERS
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ProviderRegistryStore
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import PROVIDERS
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.types import Message

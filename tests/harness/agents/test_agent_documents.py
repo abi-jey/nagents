@@ -10,8 +10,8 @@ import pytest
 from nagents.harness.agents.documents import agent_document_store
 from nagents.harness.agents.documents import bundled_assistant
 from nagents.harness.agents.documents import ensure_agent_documents
-from nagents.harness.model_bindings import AgentModelStore
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.model_bindings import AgentModelStore
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 
 if TYPE_CHECKING:
     from pathlib import Path

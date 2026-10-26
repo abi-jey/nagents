@@ -12,8 +12,8 @@ from nagents.harness.agents.documents import agent_document_store
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.harness.model_bindings import AgentModelStore
-    from nagents.harness.providers import ScopedProviderRegistryStore
+    from nagents.harness.providers.model_bindings import AgentModelStore
+    from nagents.harness.providers.registry import ScopedProviderRegistryStore
 
 InstructionScope = Literal["global", "workspace", "agent"]
 MAX_INSTRUCTION_BYTES = 24000

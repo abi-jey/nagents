@@ -13,8 +13,8 @@ from nagents.harness import Harness
 from nagents.harness.agents.updates import NOTIFICATION_PREFIX
 from nagents.harness.agents.updates import WAKEUP_PREFIX
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.session_titles import small_model
 from nagents.harness.session_titles import user_messages
 from nagents.provider.openai import CodexCredentials

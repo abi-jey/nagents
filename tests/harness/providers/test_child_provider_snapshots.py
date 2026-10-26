@@ -13,17 +13,17 @@ from nagents.harness import runtime
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.provider.openai import OpenAIProvider
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.harness.auth import OpenAIAuth
+    from nagents.harness.providers.auth import OpenAIAuth
 
 
 class RecordedProvider(HarnessProvider):

@@ -15,8 +15,8 @@ from nagents.events import ErrorEvent
 from nagents.events import ToolCallProgressEvent
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web._async import finish_on_cancel
 from nagents.web.execution.service import WebState

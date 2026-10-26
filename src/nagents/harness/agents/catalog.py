@@ -15,7 +15,7 @@ from ..config import _install_assistant_metadata
 from ..config import _install_profile
 from ..config import _json_profile
 from ..private_store import ProtectedStoreError
-from ..providers import ScopedProviderRegistryStore
+from ..providers.registry import ScopedProviderRegistryStore
 from ..remote.store import RemoteAgentMetadata
 from ..remote.store import RemoteAgentStore
 from .definitions import discover_agents

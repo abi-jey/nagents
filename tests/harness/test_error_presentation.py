@@ -18,9 +18,9 @@ from nagents.error_presentation import transport_error_message
 from nagents.events import ErrorEvent
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness.auth import OpenAIAuth
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.tools import CodingTools
 from nagents.provider.openai import CodexCredentials
 from nagents.tui import NagentsApp

@@ -11,8 +11,8 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness.auth import OpenAIAuth
-from nagents.harness.auth import _Tokens
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.auth import _Tokens
 from nagents.harness.runtime import Harness
 from nagents.provider.openai import OpenAIProvider
 from tests.support.hang_guard import HANG_GUARD

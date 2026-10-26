@@ -11,7 +11,7 @@ from unittest.mock import patch
 from aiohttp import web
 
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.runtime import Harness
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.observation import observe

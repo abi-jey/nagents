@@ -10,12 +10,12 @@ from typing import cast
 
 import pytest
 
-from nagents.harness.model_bindings import AgentModelStore
-from nagents.harness.model_bindings import ModelBinding
-from nagents.harness.model_bindings import resolve_model_binding
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.model_bindings import AgentModelStore
+from nagents.harness.providers.model_bindings import ModelBinding
+from nagents.harness.providers.model_bindings import resolve_model_binding
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 
 if TYPE_CHECKING:
     from pathlib import Path

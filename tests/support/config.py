@@ -1,6 +1,6 @@
 """Explicit provider profiles for programmatic Harness fixtures."""
 
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.registry import ProviderProfile
 
 
 def connection(

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from textual.pilot import Pilot
 
     from nagents.harness import Harness
-    from nagents.harness.auth import DeviceAuthorization
+    from nagents.harness.providers.auth import DeviceAuthorization
     from nagents.skills import Skill
 
 

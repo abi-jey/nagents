@@ -45,8 +45,8 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.agents.updates import format_batch
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.remote.artifacts import image_references
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage

@@ -26,8 +26,8 @@ from pydantic import field_validator
 from nagents.harness.agents.identity import agent_identities
 from nagents.harness.followups import RunInput
 from nagents.harness.private_store import ProtectedStoreError
-from nagents.harness.reasoning import ReasoningPreference
-from nagents.harness.reasoning import resolve_effort
+from nagents.harness.providers.reasoning import ReasoningPreference
+from nagents.harness.providers.reasoning import resolve_effort
 from nagents.harness.remote.credentials import RemoteCredentials
 from nagents.harness.runtime import _HarnessSession
 from nagents.harness.session_identity import SESSION_ID_PATTERN

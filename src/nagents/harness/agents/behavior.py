@@ -11,9 +11,9 @@ from .documents import agent_document_store
 
 if TYPE_CHECKING:
     from ..config import AgentProfile
-    from ..model_bindings import AgentModelPreference
-    from ..model_bindings import AgentModelStore
-    from ..providers import ScopedProviderRegistryStore
+    from ..providers.model_bindings import AgentModelPreference
+    from ..providers.model_bindings import AgentModelStore
+    from ..providers.registry import ScopedProviderRegistryStore
 
 BehaviorScope = Literal["global", "workspace", "agent"]
 BehaviorOrigin = Literal["builtin", "global", "workspace", "definition", "agent"]

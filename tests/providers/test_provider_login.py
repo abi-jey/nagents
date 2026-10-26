@@ -18,13 +18,13 @@ from aiohttp import web
 
 from nagents import cli
 from nagents.cli import main
-from nagents.harness import provider_login
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.harness.credentials import ProviderLogin
-from nagents.harness.credentials import ProviderLoginError
-from nagents.harness.credentials import ProviderLoginStore
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers import login as provider_login
+from nagents.harness.providers.credentials import ProviderLogin
+from nagents.harness.providers.credentials import ProviderLoginError
+from nagents.harness.providers.credentials import ProviderLoginStore
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.runtime import Harness
 from tests.support.config import connection
 

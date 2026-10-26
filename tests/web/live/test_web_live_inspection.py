@@ -15,7 +15,7 @@ from aiohttp import web
 
 from nagents.extensions import AgentPlugin
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.runtime import Harness
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.observation import observe

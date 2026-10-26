@@ -21,10 +21,10 @@ from typing import cast
 
 import yaml
 
-from ..live_profiles import LiveProfile
-from ..model_bindings import ModelBinding
-from ..reasoning import ReasoningPreference
-from ..reasoning import resolve_effort
+from ..providers.live_profiles import LiveProfile
+from ..providers.model_bindings import ModelBinding
+from ..providers.reasoning import ReasoningPreference
+from ..providers.reasoning import resolve_effort
 
 MAX_AGENT_FILES = 256
 MAX_AGENT_BYTES = 262144

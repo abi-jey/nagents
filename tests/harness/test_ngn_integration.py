@@ -21,9 +21,9 @@ from nagents.extensions import ModelRequest
 from nagents.extensions import RunContext
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ProviderRegistryStore
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.types import Message
 from tests.support.config import connection
 

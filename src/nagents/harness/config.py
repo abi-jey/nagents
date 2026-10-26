@@ -23,14 +23,14 @@ from nagents.types import ReasoningEffort
 from .agents.definitions import DefinitionBatch
 from .agents.definitions import discover_agents
 from .agents.definitions import import_agents
-from .live_profiles import LIVE_FIELDS
-from .live_profiles import LiveProfile
-from .model_bindings import ModelBinding
-from .providers import ProviderProfile
-from .providers import ScopedProviderRegistryStore
-from .providers import validate_provider
-from .reasoning import ReasoningPreference
-from .reasoning import resolve_effort
+from .providers.live_profiles import LIVE_FIELDS
+from .providers.live_profiles import LiveProfile
+from .providers.model_bindings import ModelBinding
+from .providers.reasoning import ReasoningPreference
+from .providers.reasoning import resolve_effort
+from .providers.registry import ProviderProfile
+from .providers.registry import ScopedProviderRegistryStore
+from .providers.registry import validate_provider
 from .remote.profiles import RemoteProfile
 from .resource_config import parse_mcp_servers
 

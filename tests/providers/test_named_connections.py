@@ -15,17 +15,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from nagents.harness import providers as providers_module
-from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
-from nagents.harness.connection import build_provider
-from nagents.harness.provider import HarnessProvider
-from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
-from nagents.harness.providers import ProviderRegistryStore
-from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.providers import registry as providers_module
+from nagents.harness.providers.auth import OpenAIAuth
+from nagents.harness.providers.connection import build_provider
+from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.providers.registry import ProviderRegistry
+from nagents.harness.providers.registry import ProviderRegistryStore
+from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.provider.openai import CODEX_ENDPOINT
 from nagents.provider.openai import CodexConfigError

@@ -15,8 +15,8 @@ from typing import TypedDict
 
 from fastapi import HTTPException
 
-from nagents.harness.auth import ISSUER
-from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers.auth import ISSUER
+from nagents.harness.providers.registry import ProviderProfile
 
 from .._async import join_owned
 

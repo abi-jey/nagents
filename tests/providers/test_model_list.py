@@ -15,7 +15,7 @@ from aiohttp import web
 from nagents import ModelListError
 from nagents import NagentsError
 from nagents.harness.config import HarnessConfig
-from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers.factory import HarnessProvider
 from nagents.http import HTTPClient
 from nagents.http import HTTPLogger
 from nagents.provider import FoundryProvider
