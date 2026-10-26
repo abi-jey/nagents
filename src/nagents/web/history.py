@@ -31,8 +31,8 @@ from nagents.types import DocumentContent
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
-from . import live_captions
 from ._async import finish_on_cancel
+from .live import captions as live_captions
 from .local_delivery import presentation
 from .routing import RoutingStore
 from .session_agents import initialize_markers

@@ -19,7 +19,7 @@ from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web._async import finish_on_cancel
-from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live.bridge import MainAgentBridge
 from nagents.web.service import WebState
 from tests.harness.test_harness import ScriptedProvider
 from tests.support.child_failures import ChildFailureScenario

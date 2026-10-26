@@ -10,7 +10,7 @@ import pytest
 from nagents.live.runtime import ClientDelegations
 from nagents.types import ImageContent
 from nagents.types import TextContent
-from nagents.web.live_handoff import LoginDelegations
+from nagents.web.live.handoff import LoginDelegations
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:

@@ -44,7 +44,7 @@ from .diagnostics import exception_diagnostic
 from .executions import MAX_PARALLEL_RUNS
 from .executions import Executions
 from .history import WebHistory
-from .live_inspection import model_requests
+from .live.inspection import model_requests
 from .provider_setup import provider_error
 from .provider_setup import provider_error_diagnostic
 from .provider_setup import provider_setup

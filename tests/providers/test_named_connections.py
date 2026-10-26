@@ -29,10 +29,10 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.provider.openai import CODEX_ENDPOINT
 from nagents.provider.openai import CodexConfigError
-from nagents.web.live import create_agent
-from nagents.web.live_settings import GlobalVoiceInput
-from nagents.web.live_settings import LiveSettings
-from nagents.web.live_settings import WorkspaceVoiceInput
+from nagents.web.live.routes import create_agent
+from nagents.web.live.settings import GlobalVoiceInput
+from nagents.web.live.settings import LiveSettings
+from nagents.web.live.settings import WorkspaceVoiceInput
 from nagents.web.voice_preferences import VoiceOverrides
 from nagents.web.voice_preferences import VoicePreferences
 from tests.support.config import connection

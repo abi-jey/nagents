@@ -19,7 +19,7 @@ from nagents.types import ToolCall
 from nagents.web.catalog import ConnectionInput
 from nagents.web.catalog import SavedCatalog
 from nagents.web.channel_host import ChannelHost
-from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live.bridge import MainAgentBridge
 from nagents.web.service import Run
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD

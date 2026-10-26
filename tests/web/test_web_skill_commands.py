@@ -21,7 +21,7 @@ from nagents.types import Message
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
-from tests.test_web_live_bridge import _config as _base_config
+from tests.web.live.test_web_live_bridge import _config as _base_config
 
 pytestmark = pytest.mark.requires_posix
 

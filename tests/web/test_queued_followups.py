@@ -17,13 +17,13 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.deletion import delete_session
-from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live.bridge import MainAgentBridge
 from nagents.web.service import Run
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import assert_balanced
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
-from tests.test_web_live_bridge import _config
+from tests.web.live.test_web_live_bridge import _config
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

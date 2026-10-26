@@ -15,9 +15,9 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.provider.openai import CodexConfigError
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import _CodexConfig
-from nagents.web.live_auth import resolve_voice_auth
-from nagents.web.live_settings import GlobalVoiceInput
-from nagents.web.live_settings import LiveSettings
+from nagents.web.live.auth import resolve_voice_auth
+from nagents.web.live.settings import GlobalVoiceInput
+from nagents.web.live.settings import LiveSettings
 from nagents.web.voice_preferences import VoicePreferences
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ def login(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
 
     monkeypatch.setattr(OpenAIAuth, "logged_in", logged_in)
     monkeypatch.setattr(OpenAIAuth, "credentials", credentials)
-    monkeypatch.setattr("nagents.web.live_auth._load_config", absent_codex)
+    monkeypatch.setattr("nagents.web.live.auth._load_config", absent_codex)
     return available
 
 
@@ -61,7 +61,7 @@ def test_auto_auth_uses_normal_key_default_but_does_not_bypass_a_broken_selected
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-environment-key")
     profile = ProviderProfile(kind="openai", auth="auto")
     assert resolve_voice_auth(profile, OpenAIAuth(), "gpt-live-1") == ("api-key", None)
-    monkeypatch.setattr("nagents.web.live_auth._codex_files_exist", lambda: True)
+    monkeypatch.setattr("nagents.web.live.auth._codex_files_exist", lambda: True)
     assert resolve_voice_auth(profile, OpenAIAuth(), "gpt-live-1") == ("chatgpt", None)
 
 
@@ -76,8 +76,8 @@ async def test_explicit_codex_login_keeps_its_own_server_credential_source(
     def selected(*, model: str) -> _CodexConfig:
         return SavedCodex(model=model, api="responses", home=tmp_path, oauth=True)
 
-    monkeypatch.setattr("nagents.web.live_auth._load_config", selected)
-    monkeypatch.setattr("nagents.web.live_auth._codex_files_exist", lambda: True)
+    monkeypatch.setattr("nagents.web.live.auth._load_config", selected)
+    monkeypatch.setattr("nagents.web.live.auth._codex_files_exist", lambda: True)
     login[0] = True
     auth, credentials = resolve_voice_auth(ProviderProfile(kind="openai", auth="codex"), OpenAIAuth(), "voice")
     assert auth == "chatgpt" and credentials is not None

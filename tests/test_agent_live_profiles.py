@@ -20,8 +20,8 @@ from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
-from nagents.web.live_settings import AgentVoiceInput
-from nagents.web.live_settings import LiveSettings
+from nagents.web.live.settings import AgentVoiceInput
+from nagents.web.live.settings import LiveSettings
 from nagents.web.session_agents import Choice
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
