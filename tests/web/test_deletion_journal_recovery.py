@@ -8,8 +8,8 @@ from typing import cast
 
 import pytest
 
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.session_identity import SessionIdentityStore
-from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web.deletion import delete_session
 from tests.support.web import client_app

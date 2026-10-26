@@ -11,8 +11,8 @@ from unittest.mock import patch
 import pytest
 
 from nagents.channels.store import InboxStore
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import HarnessConfig
-from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web import empty_sessions
 from nagents.web.app import create_app

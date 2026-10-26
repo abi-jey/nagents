@@ -39,39 +39,39 @@ from nagents.provider.reasoning import validate_reasoning_choice
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
-from .agent_status import AgentStatusResult
-from .agent_status import SessionEvidence
-from .agent_status import make_status
-from .agent_updates import format_batch
-from .agent_updates import format_wakeup
-from .execution import ExecutionBridge
-from .followups import RunInput
-from .followups import RunTurn
-from .provider import HarnessProvider
-from .reasoning import ReasoningPreference
-from .reasoning import resolve_effort
-from .reasoning import validate_effort
-from .remote.artifacts import referenced_images
-from .session_identity import SessionIdentityStore
-from .session_identity import validate_session_id
-from .session_identity import validate_title
+from ..execution import ExecutionBridge
+from ..followups import RunInput
+from ..followups import RunTurn
+from ..provider import HarnessProvider
+from ..reasoning import ReasoningPreference
+from ..reasoning import resolve_effort
+from ..reasoning import validate_effort
+from ..remote.artifacts import referenced_images
+from ..session_identity import SessionIdentityStore
+from ..session_identity import validate_session_id
+from ..session_identity import validate_title
+from ..task_activity import ChildActivity
+from ..task_activity import TaskOptions
+from ..task_activity import compaction_snapshot
+from ..task_activity import public_payload
+from ..tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
+from ..types import Notice
+from ..types import RemoteArtifacts
+from ..types import TaskActivity
+from ..types import TaskCompleted
+from ..types import TaskDeliveryWarning
+from ..types import TaskMessage
+from ..types import TaskNotification
+from ..types import TaskStarted
+from .status import AgentStatusResult
+from .status import SessionEvidence
+from .status import make_status
 from .subagent_settings import LocalSubagentSettings
 from .subagent_settings import SubagentLimits
 from .subagent_settings import SubagentSettingsHost
 from .subagent_settings import limit_scope
-from .task_activity import ChildActivity
-from .task_activity import TaskOptions
-from .task_activity import compaction_snapshot
-from .task_activity import public_payload
-from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
-from .types import Notice
-from .types import RemoteArtifacts
-from .types import TaskActivity
-from .types import TaskCompleted
-from .types import TaskDeliveryWarning
-from .types import TaskMessage
-from .types import TaskNotification
-from .types import TaskStarted
+from .updates import format_batch
+from .updates import format_wakeup
 
 if TYPE_CHECKING:
     import builtins
@@ -81,10 +81,10 @@ if TYPE_CHECKING:
     from nagents.types import ReasoningEffort
     from nagents.types import ToolArguments
 
-    from .config import AgentProfile
-    from .model_bindings import ModelBinding
-    from .providers import ProviderProfile
-    from .runtime import Harness
+    from ..config import AgentProfile
+    from ..model_bindings import ModelBinding
+    from ..providers import ProviderProfile
+    from ..runtime import Harness
 
 MAX_RETAINED_TASKS = 64
 MAX_FOLLOWUPS = 8
@@ -1273,7 +1273,7 @@ class SubagentManager:
         )
 
     def _create_child(self, agent: str, info: TaskInfo | None = None, *, continuing: bool = False) -> Harness:
-        from .runtime import Harness
+        from ..runtime import Harness
 
         parent = self._children[info.session_id] if continuing and info is not None else self.harness
         options = self._options.get(info.session_id, TaskOptions()) if info else TaskOptions()

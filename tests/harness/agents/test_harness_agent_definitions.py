@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from nagents.harness import agent_definitions
-from nagents.harness.agent_definitions import discover_agents
-from nagents.harness.agent_definitions import import_agents
+from nagents.harness.agents import definitions as agent_definitions
+from nagents.harness.agents.definitions import discover_agents
+from nagents.harness.agents.definitions import import_agents
 from nagents.harness.config import load_config
 
 if TYPE_CHECKING:

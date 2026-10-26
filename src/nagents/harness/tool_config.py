@@ -14,8 +14,8 @@ import yaml
 
 from nagents.tools.registry import ToolRegistry
 
-from .subagent_settings import LIMIT_FIELDS
-from .subagent_settings import LIMIT_RANGES
+from .agents.subagent_settings import LIMIT_FIELDS
+from .agents.subagent_settings import LIMIT_RANGES
 from .tools import MODIFYING_TOOLS
 from .tools import READ_ONLY_TOOLS
 

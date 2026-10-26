@@ -8,11 +8,11 @@ from typing import NotRequired
 from typing import TypedDict
 from typing import cast
 
-from nagents.harness.agent_updates import MAX_NOTIFICATION_BYTES
-from nagents.harness.agent_updates import NOTIFICATION_PREFIX
-from nagents.harness.agent_updates import WAKEUP_PREFIX
-from nagents.harness.agent_updates import format_batch
-from nagents.harness.agent_updates import format_wakeup
+from nagents.harness.agents.updates import MAX_NOTIFICATION_BYTES
+from nagents.harness.agents.updates import NOTIFICATION_PREFIX
+from nagents.harness.agents.updates import WAKEUP_PREFIX
+from nagents.harness.agents.updates import format_batch
+from nagents.harness.agents.updates import format_wakeup
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 

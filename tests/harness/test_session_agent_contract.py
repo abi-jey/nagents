@@ -16,8 +16,8 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import runtime
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.providers import ProviderProfile
-from nagents.harness.subagents import TaskInfo
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
@@ -32,9 +32,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.harness.agent_status import AgentStatusCollection
-    from nagents.harness.agent_status import AgentStatusRecord
-    from nagents.harness.agent_status import AgentStatusResult
+    from nagents.harness.agents.status import AgentStatusCollection
+    from nagents.harness.agents.status import AgentStatusRecord
+    from nagents.harness.agents.status import AgentStatusResult
     from nagents.harness.auth import OpenAIAuth
     from nagents.harness.config import HarnessConfig
     from nagents.types import Message

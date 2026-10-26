@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from textual.binding import BindingType
     from textual.widgets.tree import TreeNode
 
-    from nagents.harness.subagents import TaskInfo
+    from nagents.harness.agents.subagents import TaskInfo
     from nagents.types import Message
 
 

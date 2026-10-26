@@ -12,7 +12,7 @@ from nagents.events import DoneEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
-from nagents.harness.subagent_settings import SubagentLimits
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD

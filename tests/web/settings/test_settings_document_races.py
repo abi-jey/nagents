@@ -11,8 +11,8 @@ from unittest.mock import patch
 import aiosqlite
 import pytest
 
-from nagents.harness.agent_documents import agent_document_store
-from nagents.harness.agent_documents import bundled_assistant
+from nagents.harness.agents.documents import agent_document_store
+from nagents.harness.agents.documents import bundled_assistant
 from nagents.harness.model_bindings import AgentModelStore
 from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import ScopedProviderRegistryStore

@@ -10,7 +10,7 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness.subagent_settings import SubagentLimits
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import LiveStream
 from tests.web.test_web_tool_approvals import decide

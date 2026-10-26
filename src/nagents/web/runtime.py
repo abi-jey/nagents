@@ -40,7 +40,7 @@ def server_logging_config() -> dict[str, object]:
         raise RuntimeError("Uvicorn logging configuration has no logger map")
     loggers.update(
         {
-            "nagents.harness.subagents": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "nagents.harness.agents.subagents": {"handlers": ["default"], "level": "INFO", "propagate": False},
             "nagents.harness.remote.runtime": {"handlers": ["default"], "level": "INFO", "propagate": False},
             "nagents.harness.remote.credentials": {"handlers": ["default"], "level": "WARNING", "propagate": False},
         }

@@ -1,8 +1,13 @@
 """Local coding harness with explicit approvals and trusted Python extensions."""
 
-from .agent_status import AgentStatusCollection
-from .agent_status import AgentStatusRecord
-from .agent_status import AgentStatusResult
+from .agents.status import AgentStatusCollection
+from .agents.status import AgentStatusRecord
+from .agents.status import AgentStatusResult
+from .agents.subagent_settings import SubagentLimits
+from .agents.subagent_settings import SubagentSettingsHost
+from .agents.subagent_settings import SubagentSettingsSnapshot
+from .agents.subagents import SubagentManager
+from .agents.subagents import TaskInfo
 from .commands import Command
 from .commands import CommandHandler
 from .commands import CommandRegistry
@@ -10,11 +15,6 @@ from .commands import CommandResult
 from .config import HarnessConfig
 from .config import load_config
 from .runtime import Harness
-from .subagent_settings import SubagentLimits
-from .subagent_settings import SubagentSettingsHost
-from .subagent_settings import SubagentSettingsSnapshot
-from .subagents import SubagentManager
-from .subagents import TaskInfo
 from .types import ApprovalHandler
 from .types import ApprovalRequest
 from .types import HarnessEvent

@@ -37,9 +37,9 @@ if TYPE_CHECKING:
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
 
+    from .agents.subagents import SubagentManager
+    from .agents.subagents import TaskInfo
     from .runtime import Harness
-    from .subagents import SubagentManager
-    from .subagents import TaskInfo
     from .types import HarnessEvent
 
 MAX_ACTIVITY_TEXT = 32768

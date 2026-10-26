@@ -18,7 +18,7 @@ from nagents._async import finish_on_cancel
 from nagents._sqlite import write_database
 
 if TYPE_CHECKING:
-    from .config import HarnessConfig
+    from ..config import HarnessConfig
 
 LimitScope = Literal["global", "workspace"]
 LIMIT_FIELDS = ("max_concurrent_subagents", "max_subagent_executions", "max_subagent_depth")

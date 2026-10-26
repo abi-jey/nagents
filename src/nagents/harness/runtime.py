@@ -34,13 +34,15 @@ from nagents.types import GenerationConfig
 from nagents.types import ReasoningEffort
 from nagents.types import TextContent
 
-from .agent_behavior import AgentBehavior
-from .agent_behavior import load_behavior
-from .agent_catalog import AgentCatalog
-from .agent_documents import ensure_agent_documents
-from .agent_identity import AgentIdentity
-from .agent_identity import agent_identities
-from .agent_status import AgentStatusResult
+from .agents.behavior import AgentBehavior
+from .agents.behavior import load_behavior
+from .agents.catalog import AgentCatalog
+from .agents.documents import ensure_agent_documents
+from .agents.identity import AgentIdentity
+from .agents.identity import agent_identities
+from .agents.status import AgentStatusResult
+from .agents.subagents import DEFAULT_TASK_OPTIONS
+from .agents.subagents import SubagentManager
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .config import AgentProfile
@@ -75,8 +77,6 @@ from .remote.tools import RemoteAgentTools
 from .resources import HarnessResources
 from .session_titles import generate_title
 from .skills import HarnessSkillDiscoverer
-from .subagents import DEFAULT_TASK_OPTIONS
-from .subagents import SubagentManager
 from .task_activity import TaskOptions
 from .tool_config import HarnessToolRegistry
 from .tool_config import WorkspaceTools

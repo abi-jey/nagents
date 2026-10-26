@@ -21,12 +21,12 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.extensions import AgentPlugin
-from nagents.harness import subagents
+from nagents.harness.agents import subagents
+from nagents.harness.agents.subagent_settings import SubagentLimits
+from nagents.harness.agents.subagents import MAX_RESULT
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.runtime import Harness
-from nagents.harness.subagent_settings import SubagentLimits
-from nagents.harness.subagents import MAX_RESULT
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskStarted

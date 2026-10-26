@@ -16,11 +16,11 @@ from typing import TYPE_CHECKING
 import aiosqlite
 
 from nagents._sqlite import database_writes
-from nagents.harness.subagent_settings import LIMIT_FIELDS
-from nagents.harness.subagent_settings import LimitScope
-from nagents.harness.subagent_settings import SubagentLimits
-from nagents.harness.subagent_settings import SubagentSettingsSnapshot
-from nagents.harness.subagent_settings import limit_scope
+from nagents.harness.agents.subagent_settings import LIMIT_FIELDS
+from nagents.harness.agents.subagent_settings import LimitScope
+from nagents.harness.agents.subagent_settings import SubagentLimits
+from nagents.harness.agents.subagent_settings import SubagentSettingsSnapshot
+from nagents.harness.agents.subagent_settings import limit_scope
 
 from .._async import join_owned
 from .preferences import MAX_SETTINGS_BYTES

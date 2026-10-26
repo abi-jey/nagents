@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Literal
 
-from nagents.harness.agent_documents import agent_document_store
+from nagents.harness.agents.documents import agent_document_store
 
 if TYPE_CHECKING:
     from pathlib import Path

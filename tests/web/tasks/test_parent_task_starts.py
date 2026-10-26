@@ -9,9 +9,9 @@ from uuid import uuid4
 import pytest
 
 from nagents.events import TextDoneEvent
+from nagents.harness.agents.subagent_settings import SubagentLimits
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import AgentProfile
-from nagents.harness.subagent_settings import SubagentLimits
-from nagents.harness.subagents import TaskInfo
 from tests.support.hang_guard import HANG_GUARD
 from tests.web.test_web_subscription_lifecycle import until
 from tests.web.test_web_wakeups import scheduled_app

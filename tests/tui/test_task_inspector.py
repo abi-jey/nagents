@@ -13,7 +13,7 @@ from textual.widgets import Button
 from textual.widgets import Static
 from textual.widgets import TextArea
 
-from nagents.harness.subagents import TaskInfo
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.session import SessionManager
 from nagents.tui.tasks import AgentTree
 from nagents.tui.tasks import TaskScreen

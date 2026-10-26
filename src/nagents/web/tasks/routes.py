@@ -23,7 +23,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
-from nagents.harness.agent_identity import agent_identities
+from nagents.harness.agents.identity import agent_identities
 from nagents.harness.followups import RunInput
 from nagents.harness.private_store import ProtectedStoreError
 from nagents.harness.reasoning import ReasoningPreference

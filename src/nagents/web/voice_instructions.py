@@ -19,7 +19,7 @@ def default_voice_instructions(backend_mode: str) -> str:
     if backend_mode not in {"assistant", "hosted"}:
         raise ValueError("Unsupported voice backend mode")
     if backend_mode == "assistant":
-        from nagents.harness.agent_documents import bundled_assistant
+        from nagents.harness.agents.documents import bundled_assistant
 
         document, _ = bundled_assistant()
         live = document["live"]

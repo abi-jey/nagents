@@ -15,7 +15,7 @@ from fastapi import HTTPException
 
 from nagents.channels.store import InboxStore
 from nagents.channels.store import finish_on_cancel
-from nagents.harness.subagents import TaskInfo
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web import deletion
 from nagents.web.channels.catalog import Connection

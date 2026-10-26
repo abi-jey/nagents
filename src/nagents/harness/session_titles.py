@@ -26,8 +26,8 @@ from nagents.types import GenerationConfig
 from nagents.types import Message
 from nagents.types import TextContent
 
-from .agent_updates import NOTIFICATION_PREFIX
-from .agent_updates import WAKEUP_PREFIX
+from .agents.updates import NOTIFICATION_PREFIX
+from .agents.updates import WAKEUP_PREFIX
 from .connection import build_provider
 from .provider import HarnessProvider
 from .provider import UnavailableModelProvider

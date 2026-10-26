@@ -15,9 +15,9 @@ from typing import cast
 import aiosqlite
 import pytest
 
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.config import HarnessConfig
 from nagents.harness.runtime import Harness
-from nagents.harness.subagents import TaskInfo
 from nagents.harness.task_activity import ChildActivity
 from nagents.harness.task_activity import ChildHistoryCommitted
 from nagents.types import Message

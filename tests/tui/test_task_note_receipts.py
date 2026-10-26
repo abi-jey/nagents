@@ -9,7 +9,7 @@ from typing import Literal
 import pytest
 from textual.widgets import TextArea
 
-from nagents.harness.subagents import TaskInfo
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskMessage
 from nagents.tui.tasks import TaskScreen

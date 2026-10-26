@@ -8,9 +8,9 @@ from typing import cast
 
 import pytest
 
+from nagents.harness.agents.subagent_settings import LocalSubagentSettings
+from nagents.harness.agents.subagent_settings import SubagentLimits
 from nagents.harness.config import HarnessConfig
-from nagents.harness.subagent_settings import LocalSubagentSettings
-from nagents.harness.subagent_settings import SubagentLimits
 
 if TYPE_CHECKING:
     from pathlib import Path

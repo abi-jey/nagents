@@ -1,6 +1,6 @@
 """Remote presentation labels must not become connection routing authority."""
 
-from nagents.harness.agent_identity import agent_identities
+from nagents.harness.agents.identity import agent_identities
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote.profiles import RemoteProfile
 from nagents.harness.remote.store import RemoteAgentMetadata

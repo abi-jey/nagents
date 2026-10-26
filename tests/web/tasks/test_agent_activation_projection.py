@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.events import TextDoneEvent
+from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.session_identity import SessionIdentityStore
-from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from tests.web.test_web_wakeups import scheduled_app
 

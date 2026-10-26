@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from nagents.harness.agent_documents import agent_document_store
-from nagents.harness.agent_documents import bundled_assistant
-from nagents.harness.agent_documents import ensure_agent_documents
+from nagents.harness.agents.documents import agent_document_store
+from nagents.harness.agents.documents import bundled_assistant
+from nagents.harness.agents.documents import ensure_agent_documents
 from nagents.harness.model_bindings import AgentModelStore
 from nagents.harness.providers import ScopedProviderRegistryStore
 
@@ -42,7 +42,7 @@ def test_startup_materializes_missing_global_assistant_from_bundle(tmp_path: Pat
 def test_changed_bundle_replaces_entire_auto_updated_global_assistant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    import nagents.harness.agent_documents as documents
+    import nagents.harness.agents.documents as documents
 
     providers = provider_store(tmp_path)
     store = agent_document_store(providers, "global")
@@ -64,7 +64,7 @@ def test_changed_bundle_replaces_entire_auto_updated_global_assistant(
 def test_changed_bundle_preserves_global_customization_when_auto_update_is_false(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import nagents.harness.agent_documents as documents
+    import nagents.harness.agents.documents as documents
 
     providers = provider_store(tmp_path)
     store = agent_document_store(providers, "global")

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.harness.subagents import TaskInfo
+    from nagents.harness.agents.subagents import TaskInfo
     from nagents.types import Message
     from tests.support.providers import FakeProvider
 

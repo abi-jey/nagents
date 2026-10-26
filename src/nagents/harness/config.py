@@ -20,9 +20,9 @@ from nagents.mcp import MCPServerConfig
 from nagents.provider.reasoning import validate_reasoning_effort
 from nagents.types import ReasoningEffort
 
-from .agent_definitions import DefinitionBatch
-from .agent_definitions import discover_agents
-from .agent_definitions import import_agents
+from .agents.definitions import DefinitionBatch
+from .agents.definitions import discover_agents
+from .agents.definitions import import_agents
 from .live_profiles import LIVE_FIELDS
 from .live_profiles import LiveProfile
 from .model_bindings import ModelBinding
