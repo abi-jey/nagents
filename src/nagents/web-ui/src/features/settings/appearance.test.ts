@@ -45,23 +45,39 @@ test("malformed and oversized storage values fall back to Compact", () => {
   const arrays = parseAppearance(JSON.stringify({ version: 1, runUsage: ["expanded"], activity: {
     shell: { placement: ["separate"], details: ["expanded"] },
   } }));
-  assert.deepEqual(arrays.activity.shell, defaultAppearance.activity.shell);
+  assert.deepEqual(arrays.activity.tools, defaultAppearance.activity.tools);
+  assert.equal("shell" in arrays.activity, false);
   assert.equal("runUsage" in arrays, false, "obsolete presentation preferences are discarded");
 });
 
 test("partially invalid appearance settings preserve valid categories and default invalid fields", () => {
   const parsed = parseAppearance(JSON.stringify({ version: 1, runUsage: "invalid", activity: {
-    shell: { placement: "separate", details: "expanded" },
-    files: { placement: "hidden", details: "invalid" },
+    files: { placement: "separate", details: "expanded" },
     tools: { placement: "invalid", details: "expanded" },
     reasoning: null,
   } }));
-  assert.deepEqual(parsed.activity.shell, { placement: "separate", details: "expanded" });
-  assert.deepEqual(parsed.activity.files, defaultAppearance.activity.files);
+  assert.deepEqual(parsed.activity.files, { placement: "separate", details: "expanded" });
   assert.deepEqual(parsed.activity.tools, defaultAppearance.activity.tools);
   assert.deepEqual(parsed.activity.reasoning, defaultAppearance.activity.reasoning);
   assert.equal("runUsage" in parsed, false, "legacy run usage preferences are not exposed by the new appearance model");
   assert.equal(selectedAppearancePreset(parsed), undefined);
+});
+
+test("legacy Commands preferences migrate to Tools only without a valid Tools rule", () => {
+  const shell = { placement: "separate", details: "expanded" };
+  for (const tools of [undefined, null, { placement: "invalid", details: "expanded" }]) {
+    const parsed = parseAppearance(JSON.stringify({ version: 1, activity: { shell, tools } }));
+    assert.deepEqual(parsed.activity.tools, shell);
+    assert.equal("shell" in parsed.activity, false);
+    assert.deepEqual(parseAppearance(JSON.stringify(parsed)), parsed, "migration is stable after saving");
+  }
+  for (const placement of ["hidden", "grouped", "separate"]) {
+    const tools = { placement, details: "collapsed" };
+    const parsed = parseAppearance(JSON.stringify({ version: 1, activity: { shell, tools } }));
+    assert.deepEqual(parsed.activity.tools, tools, "Tools wins conflicting legacy settings");
+    assert.equal("shell" in parsed.activity, false);
+  }
+  for (const value of appearancePresets) assert.equal("shell" in value.value.activity, false);
 });
 
 test("local saves persist and notify this tab; browser storage events refresh other-tab changes", async () => {

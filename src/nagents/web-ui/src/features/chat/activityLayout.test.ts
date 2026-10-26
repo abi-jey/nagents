@@ -8,22 +8,46 @@ import type { ResponseMetadata } from "./responseMetadata.js";
 const entry = (id: string, kind: Entry["kind"], text = "", extra: Partial<Entry> = {}): Entry => ({ id, kind, text, ...extra });
 const item = (entry: Entry): TranscriptItem => ({ kind: "entry", entry });
 
-test("Compact groups only adjacent activity with the same category and execution scope", () => {
-  const first = item(entry("shell-one", "tool", "", { title: "run_shell_command", runId: "run" }));
-  const second = item(entry("shell-two", "tool", "", { title: "shell", runId: "run" }));
-  const third = item(entry("shell-child", "tool", "", { title: "shell", runId: "run", taskId: "child" }));
-  const separated = activityLayout([first, second, third], defaultAppearance);
-  assert.equal(separated[0].kind, "activity_group");
-  if (separated[0].kind === "activity_group") {
-    assert.equal(separated[0].category, "shell");
-    assert.deepEqual(separated[0].items, [first, second]);
+test("Compact combines commands, reads, searches, and channel tools in one same-scope Tools group", () => {
+  const tools = ["run_shell_command", "read_file", "search", "channel_send", "shell"].map((title, index) =>
+    item(entry(`tool-${index}`, "tool", "", { title, runId: "run", taskId: "worker", activation: 2 })));
+  for (const render of [activityLayout, (items: TranscriptItem[]) => new ActivityLayout().render(items, defaultAppearance)]) {
+    const result = render(tools, defaultAppearance);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].kind, "activity_group");
+    if (result[0].kind === "activity_group") {
+      assert.equal(result[0].category, "tools");
+      assert.deepEqual(result[0].items, tools, "grouping preserves invocation order and identity");
+    }
   }
-  assert.equal(separated[1].kind, "activity_group");
-  if (separated[1].kind === "activity_group") assert.deepEqual(separated[1].items, [third]);
+});
 
-  const tools = item(entry("tool", "tool", "", { title: "mcp__local__lookup", runId: "run" }));
-  const interrupted = activityLayout([first, tools, second], defaultAppearance);
-  assert.deepEqual(interrupted.map(value => value.kind), ["activity_group", "activity_group", "activity_group"]);
+test("Tools groups preserve run, task, activation, message, and other activity boundaries", () => {
+  const first = item(entry("shell", "tool", "", { title: "shell", runId: "run", taskId: "worker", activation: 2 }));
+  const read = item(entry("read", "tool", "", { title: "read_file", runId: "run", taskId: "worker", activation: 2 }));
+  const boundaries = [
+    item(entry("other-run", "tool", "", { title: "run_shell_command", runId: "other", taskId: "worker", activation: 2 })),
+    item(entry("other-task", "tool", "", { title: "run_shell_command", runId: "run", taskId: "other", activation: 2 })),
+    item(entry("other-activation", "tool", "", { title: "run_shell_command", runId: "run", taskId: "worker", activation: 3 })),
+    item(entry("root", "tool", "", { title: "run_shell_command", runId: "run" })),
+    item(entry("user", "user", "Next request")),
+    item(entry("assistant", "assistant", "An explanation")),
+    item(entry("edit", "tool", "", { title: "edit_file", runId: "run", taskId: "worker", activation: 2 })),
+  ];
+  for (const boundary of boundaries) {
+    const result = activityLayout([first, boundary, read], defaultAppearance);
+    assert.equal(result.length, 3, `boundary ${boundary.kind === "entry" && boundary.entry.id} is not absorbed`);
+    assert.equal(result[0].kind, "activity_group");
+    assert.equal(result[2].kind, "activity_group");
+    if (result[0].kind === "activity_group" && result[2].kind === "activity_group") {
+      assert.equal(result[0].category, "tools");
+      assert.equal(result[2].category, "tools");
+      assert.deepEqual(result[0].items, [first]);
+      assert.deepEqual(result[2].items, [read]);
+      assert.notEqual(result[0].id, result[2].id);
+    }
+    if (boundary.kind === "entry" && ["user", "assistant"].includes(boundary.entry.kind)) assert.equal(result[1], boundary);
+  }
 });
 
 test("response entries with no visible text or reasoning do not split adjacent activity", () => {
@@ -123,7 +147,7 @@ test("hidden activity is omitted but errors, warnings, and approval work stay vi
   assert.equal(activityState([item(entry("queued", "tool", "", { title: "shell", state: "Requested" }))]), "Running");
   assert.equal(activityState([item(entry("done", "tool", "", { title: "shell", state: "Completed" }))]), "Done");
   assert.equal(activityState([item(entry("unknown", "tool", "", { title: "shell", state: "Recorded result" }))]), "");
-  assert.equal(activityCategory(ordinary), "shell");
+  assert.equal(activityCategory(ordinary), "tools");
 });
 
 test("run usage metadata does not add a duplicate item to the conversation layout", () => {

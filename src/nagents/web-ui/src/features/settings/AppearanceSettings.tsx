@@ -3,7 +3,7 @@ import { Icon } from "../../components/Icon.js";
 import { activityCategories, appearancePresets, defaultAppearance, saveAppearance, selectedAppearancePreset, useAppearance } from "./appearance.js";
 import type { ActivityCategory, ActivityPlacement, DetailExpansion } from "./appearance.js";
 
-const categoryNames: Record<ActivityCategory, string> = { shell: "Commands", files: "File changes", reasoning: "Reasoning summaries", agents: "Agents", notices: "Notices", tools: "Other tools" };
+const categoryNames: Record<ActivityCategory, string> = { files: "File changes", reasoning: "Reasoning summaries", agents: "Agents", notices: "Notices", tools: "Tools" };
 export function AppearanceSettings({ initiallyExpanded = false }: { initiallyExpanded?: boolean } = {}) {
   const value = useAppearance();
   const selected = selectedAppearancePreset(value);

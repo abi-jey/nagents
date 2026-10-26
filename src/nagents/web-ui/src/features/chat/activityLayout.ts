@@ -6,7 +6,7 @@ import { hasResponseDetails } from "./responseMetadata.js";
 import { hasAssistantContent } from "./agentLabels.js";
 
 export const activityLabels: Record<Exclude<ActivityCategory, "reasoning">, { label: string; icon: IconName }> = {
-  shell: { label: "Commands", icon: "terminal" }, files: { label: "File changes", icon: "edit" },
+  files: { label: "File changes", icon: "edit" },
   agents: { label: "Agent activity", icon: "team" }, notices: { label: "Notices", icon: "clock" },
   tools: { label: "Tools", icon: "tools" },
 };
@@ -17,7 +17,7 @@ export function activityCategory(item: TranscriptItem): Exclude<ActivityCategory
   if (entry.delivery || entry.liveCaption || entry.uploads?.length || entry.artifacts?.length || entry.artifactError) return undefined;
   if (entry.kind === "tool") {
     const family = toolPresentation(entry.title || "", entry.remoteReview).family;
-    return family === "command" ? "shell" : ["edit", "write"].includes(family) ? "files"
+    return ["edit", "write"].includes(family) ? "files"
       : family === "team" ? "agents" : ["schedule", "compact"].includes(family) ? "notices" : "tools";
   }
   if (entry.kind === "task") return "agents";
