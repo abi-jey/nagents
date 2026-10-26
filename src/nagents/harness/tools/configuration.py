@@ -14,17 +14,17 @@ import yaml
 
 from nagents.tools.registry import ToolRegistry
 
-from .agents.subagent_settings import LIMIT_FIELDS
-from .agents.subagent_settings import LIMIT_RANGES
-from .tools import MODIFYING_TOOLS
-from .tools import READ_ONLY_TOOLS
+from ..agents.subagent_settings import LIMIT_FIELDS
+from ..agents.subagent_settings import LIMIT_RANGES
+from .coding import MODIFYING_TOOLS
+from .coding import READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.types import ToolDefinition
 
-    from .runtime import Harness
+    from ..runtime import Harness
 
 MAX_BYTES = 65536
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}\Z")

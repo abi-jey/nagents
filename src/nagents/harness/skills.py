@@ -10,7 +10,7 @@ from nagents.skills import BuiltinSkillDiscoverer
 from nagents.skills import Skill
 
 if TYPE_CHECKING:
-    from .tools import CodingTools
+    from .tools.coding import CodingTools
 
 
 class HarnessSkillDiscoverer:

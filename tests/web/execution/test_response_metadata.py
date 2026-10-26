@@ -20,7 +20,7 @@ from nagents.events import ToolCallEvent
 from nagents.events import Usage
 from nagents.harness import Harness
 from nagents.harness.session_identity import SessionIdentityStore
-from nagents.harness.tools import CodingTools
+from nagents.harness.tools.coding import CodingTools
 from nagents.session import response_metadata as storage
 from nagents.session.response_metadata import response_write
 from nagents.types import Message

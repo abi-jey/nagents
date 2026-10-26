@@ -15,7 +15,7 @@ import pytest
 from nagents.harness.config import HarnessConfig
 from nagents.mcp import MCPError
 from nagents.mcp import MCPManager
-from tests.harness.test_resource_reload import server
+from tests.harness.tools.test_resource_reload import server
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.support.web import LiveStream

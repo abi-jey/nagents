@@ -8,7 +8,7 @@ from time import monotonic
 from time import time
 from typing import TYPE_CHECKING
 
-from nagents.harness.execution import _is_owned_adapter
+from nagents.harness.tools.execution import _is_owned_adapter
 from nagents.session import SessionManager
 from nagents.session import response_metadata as storage
 

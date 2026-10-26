@@ -13,7 +13,7 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.followups import RunInput
-from nagents.harness.tools import HarnessExecutor
+from nagents.harness.tools.coding import HarnessExecutor
 from nagents.harness.types import TaskActivity
 from nagents.harness.types import TaskMessage
 from tests.support.hang_guard import HANG_GUARD
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.events import ToolResultEvent
-    from nagents.harness.execution import ExecutionBridge
+    from nagents.harness.tools.execution import ExecutionBridge
     from nagents.harness.types import HarnessEvent
     from nagents.types import Message
     from nagents.types import ToolCall

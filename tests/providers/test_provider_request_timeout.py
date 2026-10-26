@@ -31,7 +31,7 @@ from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.providers.registry import validate_request_timeout
 from nagents.harness.runtime import Harness
-from nagents.harness.tools import CodingTools
+from nagents.harness.tools.coding import CodingTools
 from nagents.live import LiveConfig
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider

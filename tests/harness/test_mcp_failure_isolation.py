@@ -21,7 +21,7 @@ from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
 from nagents.mcp.client import MCPClient
 from nagents.types import ToolCall
-from tests.harness.test_resource_reload import server
+from tests.harness.tools.test_resource_reload import server
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect
 from tests.support.providers import setup_harness

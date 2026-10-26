@@ -26,9 +26,9 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import ApprovalRequest
-from nagents.harness.execution import bind_channel_send
-from nagents.harness.execution import delivery_origin
-from nagents.harness.execution import host_run
+from nagents.harness.tools.execution import bind_channel_send
+from nagents.harness.tools.execution import delivery_origin
+from nagents.harness.tools.execution import host_run
 from nagents.session.deliveries import DeliveryJournal
 from nagents.session.manager import SessionManager
 from nagents.types import Message

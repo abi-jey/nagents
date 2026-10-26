@@ -35,26 +35,26 @@ from nagents.tools.registry import ToolRegistry
 from nagents.types import Message
 from nagents.types import ToolDefinition
 
-from .commands import CommandRegistry
-from .mcp_diagnostics import MCPDiagnostics
-from .mcp_diagnostics import MCPServerFailure
-from .mcp_diagnostics import configuration_sources
-from .mcp_diagnostics import ignored_foreign_configs
-from .plugin_loader import PluginModule
-from .plugin_loader import load_plugin
+from ..commands import CommandRegistry
+from ..mcp_diagnostics import MCPDiagnostics
+from ..mcp_diagnostics import MCPServerFailure
+from ..mcp_diagnostics import configuration_sources
+from ..mcp_diagnostics import ignored_foreign_configs
+from ..plugin_loader import PluginModule
+from ..plugin_loader import load_plugin
+from ..types import Notice
 from .resource_config import ResourceConfigError
 from .resource_config import ResourceConfiguration
 from .resource_config import ignored_project
 from .resource_config import read_resource_configuration
-from .types import Notice
 
 if TYPE_CHECKING:
     from nagents.events import Event
     from nagents.events import ToolResultEvent
     from nagents.types import ToolCall
 
-    from .config import HarnessConfig
-    from .runtime import Harness
+    from ..config import HarnessConfig
+    from ..runtime import Harness
 
 # Explicitly replaceable model behavior; host security and resource owners are
 # deliberately absent (provider, executor, session, tasks and approval handler).

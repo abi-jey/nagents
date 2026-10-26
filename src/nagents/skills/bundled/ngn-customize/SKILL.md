@@ -23,12 +23,12 @@ for verification, not additional files automatically loaded by the skill tool.
 | Persistent conversation and active context | `SessionManager`, `Message`, `Agent.session` | `session/manager.py`, `types.py` |
 | Model-callable Python functions | `Agent.register_tool`, `ToolRegistry.register` | `tools/registry.py` |
 | MCP server processes and tool wrappers | `MCPServerConfig`, `MCPClient`, `MCPManager` | `mcp/` |
-| Tool authorization/execution | `ToolExecutor.execute`, `HarnessExecutor` | `tools/executor.py`, `harness/tools.py` |
+| Tool authorization/execution | `ToolExecutor.execute`, `HarnessExecutor` | `tools/executor.py`, `harness/tools/coding.py` |
 | Ordered lifecycle transformations | `AgentPlugin`, `RunContext`, `ModelRequest` | `extensions.py` |
 | Replace the context algorithm | `CompactionStrategy`, `CompactionRequest`, `CompactionResult` | `extensions.py`, `agent.py` |
 | Configure model-based compaction | `ModelCompaction` | `compaction.py` |
 | Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime.py`, `harness/config.py` |
-| Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools.py` |
+| Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools/coding.py` |
 | Markdown/TOML agent discovery and imports | `discover_agents`, `import_agents`, `agent_imports` | `harness/agents/definitions.py` |
 | Unified assistant properties and UI edits | Native `prompt`, `model`, `tools`, and `live` frontmatter | `harness/agents/definitions.py`, `harness/providers/model_bindings.py` |
 | On-demand task guidance | `Skill`, `SkillDiscoverer`, `Agent.load_skill` | `skills/`, `agent.py` |

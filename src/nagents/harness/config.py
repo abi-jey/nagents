@@ -32,7 +32,7 @@ from .providers.registry import ProviderProfile
 from .providers.registry import ScopedProviderRegistryStore
 from .providers.registry import validate_provider
 from .remote.profiles import RemoteProfile
-from .resource_config import parse_mcp_servers
+from .tools.resource_config import parse_mcp_servers
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
 DEFAULT_HARNESS_MODEL = "gpt-6-astra"

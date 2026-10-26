@@ -15,7 +15,7 @@ from nagents.cli import main
 from nagents.harness import Harness
 from nagents.harness import load_config
 from nagents.harness.mcp_diagnostics import ignored_foreign_configs
-from tests.harness.test_resource_reload import server
+from tests.harness.tools.test_resource_reload import server
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
@@ -56,7 +56,7 @@ async def test_zero_servers_logs_every_reload_and_never_reads_foreign_or_untrust
         config = load_config(tmp_path)
     harness = Harness(config)
     try:
-        with caplog.at_level(logging.INFO, logger="nagents.harness.resources"):
+        with caplog.at_level(logging.INFO, logger="nagents.harness.tools.resources"):
             await harness.initialize(create_session=False)
             await harness.resources.reload()
             await harness.resources.reload()
@@ -105,7 +105,7 @@ async def test_counts_follow_loaded_tools_and_retain_previous_source_after_faile
     )
     harness = Harness(load_config(tmp_path))
     try:
-        with caplog.at_level(logging.INFO, logger="nagents.harness.resources"):
+        with caplog.at_level(logging.INFO, logger="nagents.harness.tools.resources"):
             await harness.initialize(create_session=False)
             loaded = harness.resources.mcp_diagnostics()
             assert loaded.configured_servers == loaded.connected_servers == 1

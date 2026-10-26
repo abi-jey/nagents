@@ -19,9 +19,9 @@ from nagents.harness.agents.behavior import behavior_store
 from nagents.harness.agents.behavior import resolve_behavior
 from nagents.harness.config import AgentProfile
 from nagents.harness.default_instructions import load_default_instructions
-from nagents.harness.tool_config import HarnessToolRegistry
-from nagents.harness.tools import MODIFYING_TOOLS
-from nagents.harness.tools import READ_ONLY_TOOLS
+from nagents.harness.tools.coding import MODIFYING_TOOLS
+from nagents.harness.tools.coding import READ_ONLY_TOOLS
+from nagents.harness.tools.configuration import HarnessToolRegistry
 from nagents.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:

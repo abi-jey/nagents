@@ -14,7 +14,7 @@ from nagents.harness.providers.model_bindings import ModelBinding
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.tools import CodingTools
+from nagents.harness.tools.coding import CodingTools
 from tests.support.web import client_app
 
 

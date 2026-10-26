@@ -41,10 +41,10 @@ from nagents.events import ToolResultEvent
 from nagents.harness import Harness
 from nagents.harness.commands import BUILTIN_COMMANDS
 from nagents.harness.commands import split_command
-from nagents.harness.execution import host_run
 from nagents.harness.followups import RunInput
 from nagents.harness.providers import login as provider_login
 from nagents.harness.providers.credentials import ProviderLogin
+from nagents.harness.tools.execution import host_run
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskDeliveryWarning

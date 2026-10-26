@@ -15,7 +15,7 @@ from nagents.harness import HarnessConfig
 from tests.support.config import connection
 
 if TYPE_CHECKING:
-    from nagents.harness.tools import CodingTools
+    from nagents.harness.tools.coding import CodingTools
     from nagents.harness.types import ApprovalRequest
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Guarded file tools require POSIX")

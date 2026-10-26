@@ -12,8 +12,8 @@ from nagents.extensions import ModelRequest
 from nagents.extensions import RunContext
 from nagents.types import Message
 from nagents.web.execution.approvals import ToolApprovals
-from tests.harness.test_resource_reload import isolate as isolate
-from tests.harness.test_resource_reload import plugin
+from tests.harness.tools.test_resource_reload import isolate as isolate
+from tests.harness.tools.test_resource_reload import plugin
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import setup_harness
 

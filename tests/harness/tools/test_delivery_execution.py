@@ -13,11 +13,11 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.extensions import AgentPlugin
-from nagents.harness.execution import ExecutionBridge
-from nagents.harness.execution import bind_channel_send
-from nagents.harness.execution import delivery_origin
-from nagents.harness.execution import host_run
-from nagents.harness.execution import revalidate_origin
+from nagents.harness.tools.execution import ExecutionBridge
+from nagents.harness.tools.execution import bind_channel_send
+from nagents.harness.tools.execution import delivery_origin
+from nagents.harness.tools.execution import host_run
+from nagents.harness.tools.execution import revalidate_origin
 from nagents.session import SessionManager
 from nagents.types import Message
 from nagents.types import ToolCall

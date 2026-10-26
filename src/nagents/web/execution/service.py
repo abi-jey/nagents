@@ -27,9 +27,9 @@ from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
-from nagents.harness.execution import bind_channel_send
-from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
+from nagents.harness.tools.execution import bind_channel_send
+from nagents.harness.tools.execution import host_run
 from nagents.harness.types import TaskDeliveryWarning
 from nagents.observation import scope as observation_scope
 from nagents.response_metadata import observe_responses

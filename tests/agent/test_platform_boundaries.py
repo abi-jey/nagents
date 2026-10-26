@@ -8,7 +8,7 @@ import pytest
 
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness import tools as tools_module
+from nagents.harness.tools import coding as tools_module
 
 
 @pytest.mark.parametrize("platform", [os.name, "nt"], ids=["host", "windows"])

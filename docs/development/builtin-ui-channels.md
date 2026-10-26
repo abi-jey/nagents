@@ -49,7 +49,7 @@ This is a delivery integration, not a claim that every UI interaction becomes a
 | Existing host-managed precedent | `src/nagents/web/channels/host.py`: registers tool wrappers and reuses `ChannelRuntime` with `_active = True`, without running its listener. |
 | TUI | `src/nagents/tui/app.py`: submits through its own queue and calls `Harness.run()` / task continuation; it has no channel integration. |
 | Browser ingress | `src/nagents/web/app.py`, `routing.py`, `service.py`: queued `/api/messages` enters a durable, deduplicated inbox and survives browser disconnection. `/api/events` subscriptions deliver execution updates. |
-| Approval enforcement | `src/nagents/harness/tools.py`: the executor checks schemas, profiles, approval and callable identity. |
+| Approval enforcement | `src/nagents/harness/tools/coding.py`: the executor checks schemas, profiles, approval and callable identity. |
 | Browser media presentation | `src/nagents/web-ui/src/features/chat/ChannelMessage.tsx`: images have markup, documents/audio have labels; there is no video player. |
 | Browser input | `Composer.tsx` and `/api/messages`: text and supported attachment submission. |
 
