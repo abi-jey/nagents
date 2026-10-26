@@ -37,7 +37,7 @@ from nagents.session import response_metadata
 from nagents.types import TextContent
 
 from .._async import finish_on_cancel
-from ..history import WebHistory
+from ..sessions.history import WebHistory
 from .history import TaskHistory
 from .store import TaskStore
 

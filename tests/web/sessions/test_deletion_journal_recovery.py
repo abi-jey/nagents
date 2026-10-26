@@ -11,10 +11,10 @@ import pytest
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.session_identity import SessionIdentityStore
 from nagents.types import Message
-from nagents.web.deletion import delete_session
+from nagents.web.sessions.deletion import delete_session
 from tests.support.web import client_app
-from tests.web.test_web_deletion import quiet
-from tests.web.test_web_deletion import rows
+from tests.web.sessions.test_web_deletion import quiet
+from tests.web.sessions.test_web_deletion import rows
 
 if TYPE_CHECKING:
     from pathlib import Path

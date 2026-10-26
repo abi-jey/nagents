@@ -17,14 +17,14 @@ from starlette.responses import Response
 from nagents.harness.remote.artifacts import image_bytes
 from nagents.types import ImageContent
 
-from ._async import finish_on_cancel
-from .routing import RoutingStore
-from .session_actions import RootId  # noqa: TC001 - FastAPI resolves this alias at runtime.
+from .._async import finish_on_cancel
+from ..routing import RoutingStore
+from .actions import RootId  # noqa: TC001 - FastAPI resolves this alias at runtime.
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .execution.service import WebState
+    from ..execution.service import WebState
 
 
 def register_artifacts(app: FastAPI, get: Callable[[], WebState]) -> None:

@@ -18,8 +18,8 @@ from nagents.web.channels.local_delivery import SEND
 from tests.support.web import client_app
 from tests.web.channels.test_uploads import PNG
 from tests.web.live.test_web_live_captions import caption
-from tests.web.test_web_deletion import quiet
-from tests.web.test_web_deletion import rows
+from tests.web.sessions.test_web_deletion import quiet
+from tests.web.sessions.test_web_deletion import rows
 
 if TYPE_CHECKING:
     import sqlite3

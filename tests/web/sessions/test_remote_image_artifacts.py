@@ -46,7 +46,7 @@ def test_assistant_image_history_has_metadata_reference_and_authenticated_exact_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected = (Path(__file__).parents[1] / "fixtures" / "a2a-images" / "red.png").read_bytes()
+    expected = (Path(__file__).parents[2] / "fixtures" / "a2a-images" / "red.png").read_bytes()
     with site(tmp_path, monkeypatch) as app:
         assert app.client.portal is not None
         history_id, root = add_image_history(app, expected)
@@ -94,7 +94,7 @@ def test_distinct_image_captions_survive_authenticated_history_roundtrip(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fixture_dir = Path(__file__).parents[1] / "fixtures" / "a2a-images"
+    fixture_dir = Path(__file__).parents[2] / "fixtures" / "a2a-images"
     png = (fixture_dir / "red.png").read_bytes()
     jpeg = (fixture_dir / "blue.jpg").read_bytes()
     with site(tmp_path, monkeypatch) as app:
@@ -147,7 +147,7 @@ def test_image_asset_does_not_cross_root_scope_or_survive_deleted_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected = (Path(__file__).parents[1] / "fixtures" / "a2a-images" / "blue.jpg").read_bytes()
+    expected = (Path(__file__).parents[2] / "fixtures" / "a2a-images" / "blue.jpg").read_bytes()
     with site(tmp_path, monkeypatch) as app:
         assert app.client.portal is not None
         history_id, root = add_image_history(app, expected, filename="cover.jpg")
@@ -187,7 +187,7 @@ def test_referenced_images_rejects_forged_foreign_root_and_orphan_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected = (Path(__file__).parents[1] / "fixtures" / "a2a-images" / "red.png").read_bytes()
+    expected = (Path(__file__).parents[2] / "fixtures" / "a2a-images" / "red.png").read_bytes()
     with site(tmp_path, monkeypatch) as app:
         assert app.client.portal is not None
         _, root = add_image_history(app, expected)
@@ -257,7 +257,7 @@ def test_remote_image_bytes_survive_web_history_reload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected = (Path(__file__).parents[1] / "fixtures" / "a2a-images" / "red.png").read_bytes()
+    expected = (Path(__file__).parents[2] / "fixtures" / "a2a-images" / "red.png").read_bytes()
     with site(tmp_path, monkeypatch) as app:
         assert app.client.portal is not None
         history_id, root = add_image_history(app, expected)

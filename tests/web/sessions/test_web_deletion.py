@@ -17,12 +17,12 @@ from nagents.channels.store import InboxStore
 from nagents.channels.store import finish_on_cancel
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.types import Message
-from nagents.web import deletion
 from nagents.web.channels.catalog import Connection
 from nagents.web.execution.service import Run
 from nagents.web.execution.service import WebState
 from nagents.web.execution.subscriptions import Subscriber
 from nagents.web.execution.wakeups import Chain
+from nagents.web.sessions import deletion
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.web.execution.test_web_subscription_lifecycle import Peer

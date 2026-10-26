@@ -15,7 +15,7 @@ from nagents.web.execution.wakeups import Chain
 from tests.support.hang_guard import HANG_GUARD
 from tests.web.execution.test_web_subscription_lifecycle import until
 from tests.web.execution.test_web_wakeups import scheduled_app
-from tests.web.test_web_deletion import rows
+from tests.web.sessions.test_web_deletion import rows
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

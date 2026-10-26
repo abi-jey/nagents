@@ -80,7 +80,7 @@ def test_nested_folders_reparent_rename_and_sibling_uniqueness(tmp_path: Path) -
 
 
 def test_folder_tree_rejects_cycles_missing_parents_and_deep_subtrees_atomically(tmp_path: Path) -> None:
-    from nagents.web.session_groups import MAX_GROUP_DEPTH
+    from nagents.web.sessions.groups import MAX_GROUP_DEPTH
 
     async def scenario() -> None:
         async with client_app(tmp_path) as (_, client, headers, _):
