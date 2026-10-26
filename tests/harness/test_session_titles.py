@@ -10,8 +10,8 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.harness import Harness
-from nagents.harness.agent_updates import NOTIFICATION_PREFIX
-from nagents.harness.agent_updates import WAKEUP_PREFIX
+from nagents.harness.agents.updates import NOTIFICATION_PREFIX
+from nagents.harness.agents.updates import WAKEUP_PREFIX
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
