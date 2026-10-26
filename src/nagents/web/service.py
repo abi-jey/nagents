@@ -57,7 +57,7 @@ from .settings.provider_setup import provider_setup
 from .settings.remote_metadata import RemoteMetadataRefresh
 from .settings.subagents import WebSubagentSettings
 from .subscriptions import EventBus
-from .tasks import Tasks
+from .tasks.routes import Tasks
 from .tool_approvals import ToolApprovals
 from .tool_approvals import ToolBinding
 from .trash import SessionTrash

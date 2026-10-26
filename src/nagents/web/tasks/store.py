@@ -26,7 +26,7 @@ from nagents.harness.session_identity import initialize_identity_schema
 from nagents.harness.session_identity import validate_session_id
 from nagents.harness.subagents import TaskInfo
 
-from .routing import RoutingStore
+from ..routing import RoutingStore
 
 if TYPE_CHECKING:
     from pathlib import Path

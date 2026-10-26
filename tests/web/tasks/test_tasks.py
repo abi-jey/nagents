@@ -21,9 +21,9 @@ from nagents.harness.tools import CodingTools
 from nagents.types import JsonValue
 from nagents.types import Message
 from nagents.types import ToolCall
-from nagents.web import tasks as task_api
 from nagents.web.service import Run
-from nagents.web.task_store import TaskStore
+from nagents.web.tasks import routes as task_api
+from nagents.web.tasks.store import TaskStore
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import assert_balanced
 from tests.support.web import submit_and_wait
