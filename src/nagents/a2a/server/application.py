@@ -82,7 +82,7 @@ RPC_SCOPES = {
 
 def agent_card(config: A2AConfig) -> AgentCard:
     """Public minimal card: only the explicitly exported profile is disclosed."""
-    from ..remote_config import PUBLIC_CLIENT_EXTENSION
+    from ..client.configuration import PUBLIC_CLIENT_EXTENSION
 
     extensions: list[AgentExtension] = []
     if config.browser_client_id and not config.browser_client_secret_env:

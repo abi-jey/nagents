@@ -161,7 +161,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     async def discover(body: ConnectionInput) -> dict[str, object]:
         require_network()
         try:
-            from nagents.a2a.discovery import discover_remote
+            from nagents.a2a.client.discovery import discover_remote
 
             discovery = await discover_remote(RemoteProfile.parse(body.model_dump()))
             return {
@@ -309,7 +309,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
         require_network()
         profile = configured(name)
         try:
-            from nagents.a2a.client import RemoteAgent
+            from nagents.a2a.client.transport import RemoteAgent
 
             credentials = RemoteCredentials(profile)
             async with RemoteAgent.from_config(

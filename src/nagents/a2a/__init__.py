@@ -12,16 +12,16 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .agent import AgentContext as AgentContext
     from .agent import AgentFactory as AgentFactory
-    from .client import RemoteAgent as RemoteAgent
-    from .conversation import RemoteConversation as RemoteConversation
-    from .conversation import RemoteUpdate as RemoteUpdate
-    from .discovery import RemoteDiscovery as RemoteDiscovery
-    from .discovery import discover_remote as discover_remote
+    from .client.configuration import RemoteAgentConfig as RemoteAgentConfig
+    from .client.conversation import RemoteConversation as RemoteConversation
+    from .client.conversation import RemoteUpdate as RemoteUpdate
+    from .client.discovery import RemoteDiscovery as RemoteDiscovery
+    from .client.discovery import discover_remote as discover_remote
+    from .client.transport import RemoteAgent as RemoteAgent
     from .errors import RemoteAgentError as RemoteAgentError
     from .executor import request_input as request_input
     from .images import publish_image as publish_image
     from .images import publish_image_file as publish_image_file
-    from .remote_config import RemoteAgentConfig as RemoteAgentConfig
     from .server.application import create_app as create_app
     from .server.application import create_harness_app as create_harness_app
     from .server.config import A2AConfig as A2AConfig
@@ -52,12 +52,12 @@ __all__ = [
     "request_input",
 ]
 _MODULES = {
-    "RemoteDiscovery": "discovery",
-    "discover_remote": "discovery",
-    "RemoteAgentConfig": "remote_config",
-    "RemoteConversation": "conversation",
-    "RemoteUpdate": "conversation",
-    "RemoteAgent": "client",
+    "RemoteDiscovery": "client.discovery",
+    "discover_remote": "client.discovery",
+    "RemoteAgentConfig": "client.configuration",
+    "RemoteConversation": "client.conversation",
+    "RemoteUpdate": "client.conversation",
+    "RemoteAgent": "client.transport",
     "RemoteAgentError": "errors",
     "A2AConfig": "server.config",
     "IssuerConfig": "server.config",

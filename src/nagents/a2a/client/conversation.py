@@ -19,8 +19,8 @@ from nagents.artifacts import MAX_ARTIFACT_IMAGES
 from nagents.artifacts import MAX_ARTIFACT_IMAGE_BYTES
 from nagents.artifacts import ImageArtifact
 
-from .client import RemoteAgent
-from .client import RemoteAgentError
+from .transport import RemoteAgent
+from .transport import RemoteAgentError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

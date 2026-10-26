@@ -37,8 +37,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from collections.abc import AsyncIterator
 
-    from nagents.a2a.client import RemoteAgent
-    from nagents.a2a.conversation import RemoteConversation
+    from nagents.a2a.client.conversation import RemoteConversation
+    from nagents.a2a.client.transport import RemoteAgent
     from nagents.artifacts import ImageArtifact
 
     from ..runtime import Harness
@@ -147,7 +147,7 @@ async def owned_remote_task(
     try:
         yield
     except (asyncio.CancelledError, GeneratorExit):
-        from nagents.a2a.conversation import TERMINAL_STATES
+        from nagents.a2a.client.conversation import TERMINAL_STATES
 
         if conversation.task_id and conversation.state not in TERMINAL_STATES:
             task_identity = (
@@ -221,9 +221,9 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
     try:
         from a2a.types import TaskState
 
-        from nagents.a2a.client import RemoteAgent
-        from nagents.a2a.conversation import TERMINAL_STATES
-        from nagents.a2a.conversation import RemoteConversation
+        from nagents.a2a.client.conversation import TERMINAL_STATES
+        from nagents.a2a.client.conversation import RemoteConversation
+        from nagents.a2a.client.transport import RemoteAgent
     except ModuleNotFoundError:
         yield failure_event(harness, "A2A_UNAVAILABLE", phase="dependency")
         return
