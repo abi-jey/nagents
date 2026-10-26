@@ -48,8 +48,8 @@ from . import session_agents
 from . import skills
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
-from .catalog import ChannelRevision
-from .catalog import ConnectionInput
+from .channels.catalog import ChannelRevision
+from .channels.catalog import ConnectionInput
 from .deletion import delete_session
 from .live import instructions as live_instructions
 from .live.bridge import MainAgentBridge
@@ -416,13 +416,13 @@ def create_app(
     register_agent_models(app, lambda: state)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
     live_instructions.register(app, lambda: live_settings, lambda: state)
-    from .local_delivery import register_assets
+    from .channels.local_delivery import register_assets
 
     register_assets(app, lambda: state)
     from .artifacts import register_artifacts
 
     register_artifacts(app, lambda: state)
-    from .uploads import register_uploads
+    from .channels.uploads import register_uploads
 
     register_uploads(app, lambda: state)
 

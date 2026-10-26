@@ -27,8 +27,8 @@ from nagents.channels.types import Channel
 from nagents.channels.types import ChannelPlugin
 from nagents.channels.types import ChannelValue
 
-from .channel_privacy import CredentialGuard
-from .channel_privacy import CredentialProtectionError
+from .privacy import CredentialGuard
+from .privacy import CredentialProtectionError
 
 if TYPE_CHECKING:
     from nagents.channels.types import ChannelFactory

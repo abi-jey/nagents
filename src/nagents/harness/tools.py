@@ -177,7 +177,7 @@ class HarnessExecutor(ToolExecutor):
         ):
             return False
         from nagents.channels.dispatcher import ChannelDispatcher
-        from nagents.web.channel_host import ChannelHost
+        from nagents.web.channels.host import ChannelHost
 
         function = tool.func
         owner = function.__self__

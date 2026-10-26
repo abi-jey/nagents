@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from nagents.web.channel_host import ChannelHost
+from nagents.web.channels.host import ChannelHost
 from tests.support import web as web_support
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import LiveStream

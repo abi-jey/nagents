@@ -19,7 +19,7 @@ from nagents.types import DocumentContent
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
-from .history import WebHistory
+from ..history import WebHistory
 from .local_delivery import valid_media
 from .upload_store import TYPES
 from .upload_store import expire
@@ -35,8 +35,8 @@ if TYPE_CHECKING:
     from nagents.harness import Harness
     from nagents.types import ContentPart
 
-    from .routing import Work
-    from .service import WebState
+    from ..routing import Work
+    from ..service import WebState
 
 
 def supported(harness: Harness) -> tuple[str, ...]:

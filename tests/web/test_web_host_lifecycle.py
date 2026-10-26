@@ -24,7 +24,7 @@ from nagents.harness import runtime
 from nagents.harness.config import HarnessConfig
 from nagents.types import Message
 from nagents.web.app import create_app
-from nagents.web.catalog import ChannelCatalog
+from nagents.web.channels.catalog import ChannelCatalog
 from nagents.web.subscriptions import Subscriber
 from tests.support.channels import FakeChannel
 from tests.support.channels import site

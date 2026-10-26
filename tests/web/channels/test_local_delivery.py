@@ -13,8 +13,8 @@ from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.types import Message
-from nagents.web.local_delivery import MEDIA_TYPES
-from nagents.web.local_delivery import valid_media
+from nagents.web.channels.local_delivery import MEDIA_TYPES
+from nagents.web.channels.local_delivery import valid_media
 from tests.support.channels import site
 
 if TYPE_CHECKING:

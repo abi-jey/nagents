@@ -331,7 +331,7 @@ Report accepted, executed, and remotely confirmed outcomes separately.
 
 - Core contracts: `src/nagents/channels/types.py`, `plugins.py`, `runtime.py`,
   `store.py`; attachment/listener ownership in `src/nagents/agent.py`.
-- Web host: `src/nagents/web/channel_host.py`, `routing.py`,
+- Web host: `src/nagents/web/channels/host.py`, `routing.py`,
   `channel_activity.py`, `channel_privacy.py`, and `catalog.py`.
 - [Channels guide](https://abi-jey.github.io/nagents/guide/channels/) and
   [web guide](https://abi-jey.github.io/nagents/guide/ngn-web/).

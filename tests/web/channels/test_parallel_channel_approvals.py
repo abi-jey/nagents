@@ -13,9 +13,9 @@ from nagents.channels import ChannelDelivery
 from nagents.channels import ChannelMessage
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.web.catalog import Connection
+from nagents.web.channels.catalog import Connection
 from tests.support.hang_guard import HANG_GUARD
-from tests.web.test_web_channel_approvals import ApprovalChannel
+from tests.web.channels.test_web_channel_approvals import ApprovalChannel
 from tests.web.test_web_subscription_lifecycle import until
 from tests.web.test_web_wakeups import scheduled_app
 

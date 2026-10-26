@@ -16,7 +16,7 @@ from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web import empty_sessions
 from nagents.web.app import create_app
-from nagents.web.catalog import Connection
+from nagents.web.channels.catalog import Connection
 from nagents.web.routing import RoutingStore
 from nagents.web.service import Run
 from nagents.web.service import WebState

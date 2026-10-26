@@ -23,7 +23,7 @@ from nagents._async import finish_on_cancel
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
 
-from .upload_store import bind as bind_uploads
+from .channels.upload_store import bind as bind_uploads
 
 if TYPE_CHECKING:
     from pathlib import Path

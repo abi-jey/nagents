@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.channels import ChannelActivity
-from tests.web.test_web_channel_notices import fixture
+from tests.web.channels.test_web_channel_notices import fixture
 
 if TYPE_CHECKING:
     from pathlib import Path

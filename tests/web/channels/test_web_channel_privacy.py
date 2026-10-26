@@ -18,9 +18,9 @@ from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelPlugin
 from nagents.channels.types import ChannelSend
 from nagents.channels.types import ChannelValue
-from nagents.web.catalog import Connection
-from nagents.web.channel_privacy import CredentialGuard
-from nagents.web.channel_privacy import CredentialProtectionError
+from nagents.web.channels.catalog import Connection
+from nagents.web.channels.privacy import CredentialGuard
+from nagents.web.channels.privacy import CredentialProtectionError
 from tests.support.channels import FakeChannel
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
@@ -364,7 +364,7 @@ def test_existing_connector_error_flags_are_preserved(tmp_path: Path, monkeypatc
 
 
 def test_credential_policy_is_bounded_and_does_not_forget_previous_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("nagents.web.channel_privacy.MAX_CREDENTIALS", 2)
+    monkeypatch.setattr("nagents.web.channels.privacy.MAX_CREDENTIALS", 2)
     guard = CredentialGuard()
     guard.remember({"first": TOKEN, "second": ROTATED})
     with pytest.raises(CredentialProtectionError) as error:

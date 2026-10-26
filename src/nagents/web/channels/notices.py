@@ -23,8 +23,8 @@ from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness.session_identity import validate_session_id
 
-from ._async import finish_on_cancel
-from .channel_privacy import CredentialProtectionError
+from .._async import finish_on_cancel
+from .privacy import CredentialProtectionError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,8 +34,8 @@ if TYPE_CHECKING:
     from nagents.harness.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
 
-    from .service import Run
-    from .service import WebState
+    from ..service import Run
+    from ..service import WebState
 
 MAX_TOOL_EVENTS = 128
 MAX_APPROVAL_EVENTS = 32

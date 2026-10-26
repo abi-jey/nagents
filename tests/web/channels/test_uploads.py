@@ -16,8 +16,8 @@ from nagents.media import MediaCapabilities
 from nagents.session import SessionManager
 from nagents.types import DocumentContent
 from nagents.types import ImageContent
-from nagents.web.upload_store import expire
-from nagents.web.uploads import supported
+from nagents.web.channels.upload_store import expire
+from nagents.web.channels.uploads import supported
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app

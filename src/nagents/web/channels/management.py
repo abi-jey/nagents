@@ -43,8 +43,8 @@ if TYPE_CHECKING:
     from nagents.types import JsonSchema
     from nagents.types import ToolDefinition
 
-    from .channel_host import ChannelHost
-    from .service import Run
+    from ..service import Run
+    from .host import ChannelHost
 
 NAMES = ("channel_configuration", "channel_configure")
 MAX_RESULTS = 32
