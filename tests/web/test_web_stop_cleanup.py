@@ -11,7 +11,7 @@ import pytest
 
 from nagents.events import TextChunkEvent
 from nagents.live.delegation import ClientDelegationRequest
-from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live.bridge import MainAgentBridge
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.support.web import LiveStream

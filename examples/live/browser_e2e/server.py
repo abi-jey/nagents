@@ -205,10 +205,10 @@ def instrument(app: FastAPI, fixtures: Path, *, offline: bool, gap_ms: int) -> N
         package_root = source_root.parents[1]
         module_names = (
             "web/app.py",
-            "web/live.py",
-            "web/live_runtime.py",
-            "web/live_relay.py",
-            "web/live_updates.py",
+            "web/live/routes.py",
+            "web/live/runtime.py",
+            "web/live/relay.py",
+            "web/live/updates.py",
         )
         modules = {
             name: hashlib.sha256((source_root / name).read_bytes()).hexdigest()

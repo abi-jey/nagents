@@ -11,7 +11,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.executions import MAX_PARALLEL_RUNS
-from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live.bridge import MainAgentBridge
 from tests.support.hang_guard import HANG_GUARD
 from tests.web.test_web_subscription_lifecycle import Peer
 from tests.web.test_web_subscription_lifecycle import until

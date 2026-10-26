@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Callable
 
-    from .live_runtime import LiveService
+    from .live.runtime import LiveService
     from .service import WebState
 
 RootId = Annotated[str, PathParameter(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")]

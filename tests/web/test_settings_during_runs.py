@@ -24,8 +24,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.web.live_runtime import LiveService
-    from nagents.web.live_settings import LiveSettings
+    from nagents.web.live.runtime import LiveService
+    from nagents.web.live.settings import LiveSettings
     from tests.support.providers import FakeProvider
 
 pytestmark = pytest.mark.requires_posix

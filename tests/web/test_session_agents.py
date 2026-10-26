@@ -13,7 +13,7 @@ from nagents.events import TextDoneEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.types import Message
-from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live.bridge import MainAgentBridge
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import submit_and_wait

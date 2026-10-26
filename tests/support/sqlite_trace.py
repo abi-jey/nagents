@@ -74,7 +74,7 @@ _TARGETS = (
     "tests/web/test_web_trash.py::test_policy_is_separate_revisioned_persistent_and_affects_only_future_deletions",
     "tests/web/test_subagent_limits.py::test_approved_limits_are_read_on_next_model_turn_without_resetting_usage",
     "tests/harness/test_subagent_limits_runtime.py::test_live_turn_reload_raises_limits_without_resetting_usage_or_occupied_slots",
-    "tests/test_web_live_update_edges.py::test_attention_cue_rechecks_quiet_state_and_never_speaks_native_instruction_text",
+    "tests/web/live/test_web_live_update_edges.py::test_attention_cue_rechecks_quiet_state_and_never_speaks_native_instruction_text",
 )
 _IDS = itertools.count(1)
 _TRACE_LOCAL = threading.local()

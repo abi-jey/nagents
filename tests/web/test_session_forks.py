@@ -16,10 +16,10 @@ from nagents.types import TextContent
 from nagents.types import ToolCall
 from nagents.web.local_delivery import SEND
 from tests.support.web import client_app
+from tests.web.live.test_web_live_captions import caption
 from tests.web.test_uploads import PNG
 from tests.web.test_web_deletion import quiet
 from tests.web.test_web_deletion import rows
-from tests.web.test_web_live_captions import caption
 
 if TYPE_CHECKING:
     import sqlite3

@@ -43,7 +43,6 @@ from . import agent_settings
 from . import built_assets
 from . import empty_sessions
 from . import is_loopback_host
-from . import live_instructions
 from . import local_authority
 from . import session_agents
 from . import skills
@@ -52,16 +51,17 @@ from ._async import join_owned as _join
 from .catalog import ChannelRevision
 from .catalog import ConnectionInput
 from .deletion import delete_session
-from .live import create_agent as create_live_agent
-from .live import create_login_config
-from .live import register as register_live
-from .live_bridge import MainAgentBridge
-from .live_context import LiveSeed
-from .live_context import read_seed
-from .live_context import with_summary
-from .live_runtime import LiveService
-from .live_settings import LiveSettings
-from .live_summary import VoiceContextSummarizer
+from .live import instructions as live_instructions
+from .live.bridge import MainAgentBridge
+from .live.context import LiveSeed
+from .live.context import read_seed
+from .live.context import with_summary
+from .live.routes import create_agent as create_live_agent
+from .live.routes import create_login_config
+from .live.routes import register as register_live
+from .live.runtime import LiveService
+from .live.settings import LiveSettings
+from .live.summary import VoiceContextSummarizer
 from .provider_login import ProviderLogin
 from .provider_setup import provider_setup
 from .security import SECURITY_HEADERS
@@ -78,7 +78,7 @@ from .tool_settings import register as register_tool_settings
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
 
-    from .live_login import LoginVoiceConfig
+    from .live.login import LoginVoiceConfig
 
 APPROVAL_TIMEOUT = 300
 logger = logging.getLogger("uvicorn.error")
