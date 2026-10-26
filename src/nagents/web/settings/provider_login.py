@@ -18,10 +18,10 @@ from fastapi import HTTPException
 from nagents.harness.auth import ISSUER
 from nagents.harness.providers import ProviderProfile
 
-from ._async import join_owned
+from .._async import join_owned
 
 if TYPE_CHECKING:
-    from .service import WebState
+    from ..service import WebState
 
 LoginStatus = Literal["idle", "starting", "pending", "completed", "failed", "cancelled"]
 

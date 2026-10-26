@@ -16,7 +16,7 @@ from nagents.harness.model_bindings import ModelBinding
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
-from tests.web.test_agent_models import configuration
+from tests.web.settings.test_agent_models import configuration
 
 if TYPE_CHECKING:
     from pathlib import Path

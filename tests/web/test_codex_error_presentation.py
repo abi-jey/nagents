@@ -9,8 +9,8 @@ import pytest
 
 from nagents.events import ErrorEvent
 from nagents.provider._diagnostics import transport_diagnostic
-from nagents.web.provider_setup import provider_error
-from nagents.web.provider_setup import provider_error_diagnostic
+from nagents.web.settings.provider_setup import provider_error
+from nagents.web.settings.provider_setup import provider_error_diagnostic
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
 from tests.support.web import submit_and_wait

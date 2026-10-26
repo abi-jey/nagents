@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
 
-    from .service import WebState
+    from ..service import WebState
 
 logger = logging.getLogger("uvicorn.error")
 AgentName = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]

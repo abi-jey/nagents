@@ -39,13 +39,11 @@ from nagents.provider._codex_catalog import catalog_logging
 from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
 
-from . import agent_settings
 from . import built_assets
 from . import empty_sessions
 from . import is_loopback_host
 from . import local_authority
 from . import session_agents
-from . import skills
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
 from .channels.catalog import ChannelRevision
@@ -62,18 +60,20 @@ from .live.routes import register as register_live
 from .live.runtime import LiveService
 from .live.settings import LiveSettings
 from .live.summary import VoiceContextSummarizer
-from .provider_login import ProviderLogin
-from .provider_setup import provider_setup
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
 from .service import WebState as WebState
 from .session_actions import register_session_actions
 from .session_groups import SessionGroups
 from .session_groups import register_session_groups
-from .settings import SettingsInput
-from .settings import SettingsRevision
-from .settings import WebSettings
-from .tool_settings import register as register_tool_settings
+from .settings import agents as agent_settings
+from .settings import skills
+from .settings.preferences import SettingsInput
+from .settings.preferences import SettingsRevision
+from .settings.preferences import WebSettings
+from .settings.provider_login import ProviderLogin
+from .settings.provider_setup import provider_setup
+from .settings.tools import register as register_tool_settings
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
@@ -408,10 +408,10 @@ def create_app(
     register_session_actions(app, lambda: state, lambda: live)
     session_agents.register(app, lambda: state)
     agent_settings.register(app, lambda: state)
-    from .remote_agents import register as register_remote_agents
+    from .settings.remote_agents import register as register_remote_agents
 
     register_remote_agents(app, lambda: state)
-    from .agent_models import register as register_agent_models
+    from .settings.agent_models import register as register_agent_models
 
     register_agent_models(app, lambda: state)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)

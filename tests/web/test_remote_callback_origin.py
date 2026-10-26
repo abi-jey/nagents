@@ -12,13 +12,13 @@ from starlette.requests import Request
 
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote_profiles import RemoteProfile
-from nagents.web import remote_agents
+from nagents.web.settings import remote_agents
 from tests.support.web import client_app
-from tests.web.test_web_remote_agents import AGENT_URL
-from tests.web.test_web_remote_agents import CLIENT_ID
-from tests.web.test_web_remote_agents import ISSUER
-from tests.web.test_web_remote_agents import config
-from tests.web.test_web_remote_agents import mock_issuer
+from tests.web.settings.test_web_remote_agents import AGENT_URL
+from tests.web.settings.test_web_remote_agents import CLIENT_ID
+from tests.web.settings.test_web_remote_agents import ISSUER
+from tests.web.settings.test_web_remote_agents import config
+from tests.web.settings.test_web_remote_agents import mock_issuer
 
 if TYPE_CHECKING:
     from pathlib import Path

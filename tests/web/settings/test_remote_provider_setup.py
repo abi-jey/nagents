@@ -12,8 +12,8 @@ from nagents.events import Event
 from nagents.events import TextDoneEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote_profiles import RemoteProfile
-from nagents.web.provider_setup import provider_error
-from nagents.web.provider_setup import provider_setup
+from nagents.web.settings.provider_setup import provider_error
+from nagents.web.settings.provider_setup import provider_setup
 from tests.support.providers import FakeProvider
 from tests.support.providers import setup_harness
 

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
-from tests.web.test_agent_models import configuration
-from tests.web.test_agent_settings import read
+from tests.web.settings.test_agent_models import configuration
+from tests.web.settings.test_agent_settings import read
 
 if TYPE_CHECKING:
     from pathlib import Path

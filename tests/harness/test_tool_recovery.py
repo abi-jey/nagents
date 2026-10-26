@@ -95,7 +95,7 @@ async def test_unknown_tools_never_prompt_for_approval(tmp_path: Path, monkeypat
 async def test_tool_contracts_expose_current_limits_to_root_and_native_child(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nagents.web.settings import SettingsValues
+    from nagents.web.settings.preferences import SettingsValues
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         yield TextDoneEvent(text="Unused")

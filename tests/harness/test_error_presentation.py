@@ -24,7 +24,7 @@ from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.tools import CodingTools
 from nagents.provider.openai import CodexCredentials
 from nagents.tui import NagentsApp
-from nagents.web.provider_setup import provider_error
+from nagents.web.settings.provider_setup import provider_error
 from tests.support.config import connection
 from tests.support.tui import idle
 from tests.support.web import client_app
