@@ -75,6 +75,7 @@ from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
 from .remote.tools import RemoteAgentTools
 from .resources import HarnessResources
+from .session_titles import generate_title
 from .skills import HarnessSkillDiscoverer
 from .task_activity import TaskOptions
 from .tool_config import HarnessToolRegistry
@@ -1247,16 +1248,18 @@ class Harness:
 
             return await _await_cleanup(asyncio.create_task(change()))
 
-    async def rename_session(self, title: str) -> None:
-        """Set a nonempty title, which later automatic title generation preserves."""
+    async def rename_session(self, title: str = "") -> str:
+        """Set an explicit title, or generate one from the latest ten user inputs."""
         with self.operation("rename session"):
             await self.initialize()
+            title = forks.title_text(title, optional=True) or await generate_title(self, self.session_id)
 
             def change(db: "sqlite3.Connection") -> str:
                 forks.rename_in(db, self.session_id, title)
                 return self.session_id
 
             await forks.transaction(self.agent.session.db_path, change)
+            return title
 
     async def resume(self, id: str) -> None:
         with self.operation("resume"):
