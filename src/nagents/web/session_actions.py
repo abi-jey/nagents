@@ -13,9 +13,11 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
+from nagents.harness.session_titles import generate_title
 from nagents.session.forks import SessionForkError
 from nagents.session.forks import fork_in
 from nagents.session.forks import rename_in
+from nagents.session.forks import title_revision
 from nagents.session.forks import title_text
 
 from ._async import finish_on_cancel
@@ -43,12 +45,12 @@ class ForkInput(BaseModel):
 
 class RenameInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-    title: str = Field(min_length=1, max_length=80)
+    title: str = Field(default="", max_length=80)
 
     @field_validator("title")
     @classmethod
     def valid_title(cls, value: str) -> str:
-        return title_text(value)
+        return title_text(value, optional=True)
 
 
 def quiescent(state: WebState, root: str) -> None:
@@ -98,16 +100,39 @@ def register_session_actions(app: FastAPI, state: Callable[[], WebState], live: 
     async def rename(session_id: RootId, body: RenameInput) -> dict[str, object]:
         async def change() -> dict[str, object]:
             host = state()
-            with host.idle(allow_running=True):
+            title = body.title
+            previous = await host.channels.store._transaction(
+                lambda db: (RoutingStore.root(db, session_id), title_revision(db, session_id))[1]
+            )
+            if not title:
+                try:
+                    async with (
+                        host.executions.auxiliary_provider(),
+                        host.session_agents.view(session_id) as harness,
+                    ):
+                        title = await generate_title(harness, session_id)
+                except (ValueError, NotImplementedError) as error:
+                    raise HTTPException(422, str(error)) from None
+                except TimeoutError:
+                    raise HTTPException(504, "Title generation timed out. Retry /rename or supply a title.") from None
 
-                def save(db: sqlite3.Connection) -> None:
-                    RoutingStore.root(db, session_id)
-                    rename_in(db, session_id, body.title)
+            async def persist() -> dict[str, object]:
+                with host.idle(allow_running=True):
 
-                await host.channels.store._transaction(save)
-                host.session_revision += 1
-                result = await host.snapshot()
-                host.bus.publish({"type": "sessions", "sessions": result["sessions"]})
-                return result
+                    def save(db: sqlite3.Connection) -> None:
+                        RoutingStore.root(db, session_id)
+                        if not body.title and title_revision(db, session_id) != previous:
+                            raise HTTPException(
+                                409, "This chat was renamed while its title was generating. Retry /rename."
+                            )
+                        rename_in(db, session_id, title)
 
-        return await finish_on_cancel(change())
+                    await host.channels.store._transaction(save)
+                    host.session_revision += 1
+                    result = await host.snapshot()
+                    host.bus.publish({"type": "sessions", "sessions": result["sessions"]})
+                    return result
+
+            return await finish_on_cancel(persist())
+
+        return await change()

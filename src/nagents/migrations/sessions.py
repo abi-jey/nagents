@@ -210,6 +210,33 @@ MIGRATION_006_FORK_NUMBERS = Migration(
 )
 
 
+MIGRATION_007_TITLE_INPUTS = Migration(
+    version=7,
+    description="Context-copy provenance and explicit session title revisions",
+    up_sql="""
+        CREATE TABLE ngn_context_message_copies (
+            history_id INTEGER PRIMARY KEY REFERENCES v2_messages(id)
+        );
+        CREATE TRIGGER ngn_context_message_copy_delete BEFORE DELETE ON v2_messages BEGIN
+            DELETE FROM ngn_context_message_copies WHERE history_id = OLD.id;
+        END;
+        CREATE TABLE ngn_session_title_revisions (
+            session_id TEXT PRIMARY KEY REFERENCES v2_sessions(id),
+            revision INTEGER NOT NULL CHECK(revision > 0)
+        );
+        CREATE TRIGGER ngn_session_title_revision_delete BEFORE DELETE ON v2_sessions BEGIN
+            DELETE FROM ngn_session_title_revisions WHERE session_id = OLD.id;
+        END;
+    """,
+    down_sql="""
+        DROP TRIGGER ngn_session_title_revision_delete;
+        DROP TABLE ngn_session_title_revisions;
+        DROP TRIGGER ngn_context_message_copy_delete;
+        DROP TABLE ngn_context_message_copies;
+    """,
+)
+
+
 migrations = [
     MIGRATION_001_INITIAL,
     MIGRATION_002_COMPACTION,
@@ -217,6 +244,7 @@ migrations = [
     MIGRATION_004_UPLOADS,
     MIGRATION_005_FORKS,
     MIGRATION_006_FORK_NUMBERS,
+    MIGRATION_007_TITLE_INPUTS,
 ]
 
 __all__ = [
@@ -226,5 +254,6 @@ __all__ = [
     "MIGRATION_004_UPLOADS",
     "MIGRATION_005_FORKS",
     "MIGRATION_006_FORK_NUMBERS",
+    "MIGRATION_007_TITLE_INPUTS",
     "migrations",
 ]

@@ -1700,8 +1700,8 @@ class NagentsApp(App[None]):
             await self._load_history()
             await self._notice("Forked conversation. New messages are independent of the original chat.")
         elif name == "/rename":
-            await self.harness.rename_session(argument)
-            await self._notice(f"Conversation renamed to {argument.strip()}.")
+            title = await self.harness.rename_session(argument)
+            await self._notice(f"Conversation renamed to {title}.")
         elif name == "/compact":
             await self._event(await self.harness.compact())
         elif name == "/agent":
