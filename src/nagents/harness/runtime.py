@@ -26,7 +26,7 @@ from nagents.compaction import ModelCompaction
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.observation import scope as observation_scope
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.session import SessionManager
 from nagents.session import forks
 from nagents.types import ContentPart

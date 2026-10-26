@@ -27,9 +27,9 @@ from urllib.parse import urlsplit
 
 from nagents.provider import ProviderType
 from nagents.provider.auth import validate_prefix
+from nagents.provider.codex.openai import CODEX_ENDPOINT
 from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
-from nagents.provider.openai import CODEX_ENDPOINT
 
 from .model_bindings import AgentModelStore
 from .model_bindings import ModelBinding

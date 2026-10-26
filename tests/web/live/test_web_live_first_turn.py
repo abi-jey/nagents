@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from nagents.events import Event
     from nagents.live.delegation import ClientDelegationRequest
     from nagents.live.delegation import LiveAppendKind
-    from nagents.provider.openai import CodexCredentials
+    from nagents.provider.codex.openai import CodexCredentials
 
 
 @pytest.mark.parametrize("prompt", ["", "# Speaking style\nGive detailed explanations when I ask."])

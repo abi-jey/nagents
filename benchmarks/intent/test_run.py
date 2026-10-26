@@ -178,5 +178,5 @@ def test_source_provenance_follows_imported_runtime(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(runtime, "__file__", str(package / "harness/runtime.py"))
     hashes = source_hashes()
     assert hashes["src/nagents/agent.py"] == hashlib.sha256(contents).hexdigest()
-    assert "src/nagents/provider/openai.py" not in hashes
+    assert "src/nagents/provider/codex/openai.py" not in hashes
     assert "benchmarks/intent/cases.py" in hashes

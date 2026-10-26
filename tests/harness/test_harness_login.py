@@ -21,9 +21,9 @@ from nagents.harness import load_config
 from nagents.harness import runtime
 from nagents.harness.providers.auth import DeviceAuthorization
 from nagents.harness.providers.factory import HarnessProvider
-from nagents.provider import openai as openai_module
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex import openai as openai_module
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import OpenAIProvider
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 

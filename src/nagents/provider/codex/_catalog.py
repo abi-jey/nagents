@@ -20,7 +20,7 @@ from weakref import ref
 
 import aiohttp
 
-from ..adapters._validation import load_object
+from ...adapters._validation import load_object
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

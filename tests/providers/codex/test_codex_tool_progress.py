@@ -21,15 +21,15 @@ from nagents.events import ToolCallEvent
 from nagents.events import ToolCallProgressEvent
 from nagents.events import ToolExecutionStartedEvent
 from nagents.events import ToolResultEvent
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import Message
 from tests.agent.test_agent_reliability import ScriptedProvider
-from tests.providers.test_openai_provider import call_item
-from tests.providers.test_openai_provider import completion
-from tests.providers.test_openai_provider import credentials
-from tests.providers.test_openai_provider import endpoint
-from tests.providers.test_openai_provider import sse
-from tests.providers.test_openai_provider import text_item
+from tests.providers.codex.test_openai_provider import call_item
+from tests.providers.codex.test_openai_provider import completion
+from tests.providers.codex.test_openai_provider import credentials
+from tests.providers.codex.test_openai_provider import endpoint
+from tests.providers.codex.test_openai_provider import sse
+from tests.providers.codex.test_openai_provider import text_item
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:

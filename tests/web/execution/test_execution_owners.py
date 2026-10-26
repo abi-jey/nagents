@@ -14,7 +14,7 @@ from nagents.events import ToolCallEvent
 from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.auth import _Tokens
 from nagents.harness.runtime import Harness
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.web.execution.test_web_subscription_lifecycle import until

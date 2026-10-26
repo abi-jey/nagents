@@ -21,17 +21,17 @@ from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
-from nagents.provider.openai import CodexConfigError
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import CodexConfigError
+from nagents.provider.codex.openai import CodexCredentials
 from nagents.web.live.routes import create_agent
 from nagents.web.live.routes import create_login_config
 from nagents.web.live.routes import unavailable_reason
 from nagents.web.live.settings import GlobalVoiceInput
 from nagents.web.live.settings import LiveSettings
 from nagents.web.voice.preferences import VoicePreferences
-from tests.providers.test_openai_local import write_api_key_auth
-from tests.providers.test_openai_local import write_config
-from tests.providers.test_openai_local import write_oauth_auth
+from tests.providers.codex.test_openai_local import write_api_key_auth
+from tests.providers.codex.test_openai_local import write_config
+from tests.providers.codex.test_openai_local import write_oauth_auth
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

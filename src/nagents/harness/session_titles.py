@@ -20,7 +20,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolCallProgressEvent
 from nagents.exceptions import ModelListError
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.session.forks import title_text
 from nagents.types import GenerationConfig
 from nagents.types import Message

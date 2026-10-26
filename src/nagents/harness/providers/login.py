@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from nagents.provider import Provider
-from nagents.provider.openai import USER_AGENT
+from nagents.provider.codex.openai import USER_AGENT
 
 from ..config import DEFAULT_HARNESS_MODEL
 from .credentials import ProviderLoginError

@@ -12,13 +12,13 @@ from nagents.adapters.responses import ResponseAccumulator
 from nagents.events import ErrorEvent
 from nagents.events import ReasoningChunkEvent
 from nagents.events import TextDoneEvent
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import Message
-from tests.providers.test_openai_provider import completion
-from tests.providers.test_openai_provider import credentials
-from tests.providers.test_openai_provider import endpoint
-from tests.providers.test_openai_provider import sse
-from tests.providers.test_openai_provider import text_item
+from tests.providers.codex.test_openai_provider import completion
+from tests.providers.codex.test_openai_provider import credentials
+from tests.providers.codex.test_openai_provider import endpoint
+from tests.providers.codex.test_openai_provider import sse
+from tests.providers.codex.test_openai_provider import text_item
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

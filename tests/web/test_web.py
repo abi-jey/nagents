@@ -25,7 +25,7 @@ from nagents.web import built_assets
 from nagents.web import local_authority
 from nagents.web import serve
 from nagents.web.app import create_app
-from tests.providers.test_openai_provider import endpoint as openai_endpoint
+from tests.providers.codex.test_openai_provider import endpoint as openai_endpoint
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL

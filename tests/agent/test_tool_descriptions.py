@@ -8,7 +8,7 @@ from nagents.adapters import anthropic
 from nagents.adapters import gemini
 from nagents.adapters import openai
 from nagents.adapters import responses
-from nagents.provider.openai import _request_body
+from nagents.provider.codex.openai import _request_body
 from nagents.tools import ToolRegistry
 from nagents.types import Message
 

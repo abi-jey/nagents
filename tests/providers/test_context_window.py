@@ -20,9 +20,9 @@ from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
+from nagents.provider.codex.openai import CodexCredentials
 from nagents.provider.context import ContextWindow
 from nagents.provider.gateway import GatewayHTTPClient
-from nagents.provider.openai import CodexCredentials
 from tests.providers.test_gateway_provider import endpoint
 
 if TYPE_CHECKING:
@@ -280,7 +280,7 @@ def test_fresh_oauth_catalog_replaces_a_pending_older_metadata_snapshot() -> Non
             for limit in (1_000_000, 512_000)
         ]
         with (
-            patch("nagents.provider.openai.catalog_version", AsyncMock(return_value="0.162.0")),
+            patch("nagents.provider.codex.openai.catalog_version", AsyncMock(return_value="0.162.0")),
             patch.object(GatewayHTTPClient, "get_json", AsyncMock(side_effect=responses)),
         ):
             async with OpenAIProvider(credentials, model="alias") as first:

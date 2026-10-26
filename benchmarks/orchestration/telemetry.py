@@ -12,7 +12,7 @@ from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import Usage
 from nagents.harness.providers.factory import HarnessProvider
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import RetryConfig
 
 if TYPE_CHECKING:

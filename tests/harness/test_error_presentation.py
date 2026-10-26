@@ -22,7 +22,7 @@ from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.tools.coding import CodingTools
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import CodexCredentials
 from nagents.tui import NagentsApp
 from nagents.web.settings.provider_setup import provider_error
 from tests.support.config import connection

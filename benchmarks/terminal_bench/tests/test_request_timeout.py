@@ -29,7 +29,7 @@ from nagents.events import TextDoneEvent
 from nagents.harness import Harness
 from nagents.harness.providers import registry as providers
 from nagents.provider import OpenAIProvider
-from nagents.provider.openai import CodexCredentials
+from nagents.provider.codex.openai import CodexCredentials
 from nagents.types import Message
 
 if TYPE_CHECKING:

@@ -15,9 +15,9 @@ from nagents.harness.providers.factory import HarnessProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import _request_body
 from nagents.provider.context import ContextMetadata
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import _request_body
 from nagents.provider.reasoning import catalog_reasoning_efforts
 from nagents.provider.reasoning import reasoning_effort_options
 from nagents.provider.reasoning import validate_reasoning_effort

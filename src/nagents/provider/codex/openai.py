@@ -28,35 +28,35 @@ from typing import cast
 
 import aiohttp
 
-from ..adapters._reasoning import SummaryAccumulator
-from ..adapters._tool_progress import ToolCallProgressTracker
-from ..adapters._validation import ProtocolError
-from ..adapters._validation import json_values_equal
-from ..adapters._validation import list_data
-from ..adapters._validation import tool_arguments
-from ..events import ErrorEvent
-from ..events import FinishReason
-from ..events import ReasoningChunkEvent
-from ..events import TextChunkEvent
-from ..events import TextDoneEvent
-from ..events import ToolCallEvent
-from ..events import Usage
-from ..exceptions import ModelListError
-from ..observation import response_chunk
-from ..observation import trace_config
-from ..types import COMPACTION_SUMMARY_PREFIX
-from ..types import ImageContent
-from ..types import ReasoningEffort
-from ..types import TextContent
-from ._codex_catalog import catalog_version
-from ._diagnostics import FailurePhase
-from ._diagnostics import failure_extra
-from .base import Provider
-from .base import ProviderType
-from .context import ContextMetadata
-from .gateway import GatewayHTTPClient
-from .reasoning import reasoning_effort_options
-from .reasoning import validate_reasoning_choice
+from ...adapters._reasoning import SummaryAccumulator
+from ...adapters._tool_progress import ToolCallProgressTracker
+from ...adapters._validation import ProtocolError
+from ...adapters._validation import json_values_equal
+from ...adapters._validation import list_data
+from ...adapters._validation import tool_arguments
+from ...events import ErrorEvent
+from ...events import FinishReason
+from ...events import ReasoningChunkEvent
+from ...events import TextChunkEvent
+from ...events import TextDoneEvent
+from ...events import ToolCallEvent
+from ...events import Usage
+from ...exceptions import ModelListError
+from ...observation import response_chunk
+from ...observation import trace_config
+from ...types import COMPACTION_SUMMARY_PREFIX
+from ...types import ImageContent
+from ...types import ReasoningEffort
+from ...types import TextContent
+from .._diagnostics import FailurePhase
+from .._diagnostics import failure_extra
+from ..base import Provider
+from ..base import ProviderType
+from ..context import ContextMetadata
+from ..gateway import GatewayHTTPClient
+from ..reasoning import reasoning_effort_options
+from ..reasoning import validate_reasoning_choice
+from ._catalog import catalog_version
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -64,15 +64,15 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
 
-    from ..events import Event
-    from ..live import LiveConfig
-    from ..realtime import RealtimeConfig
-    from ..types import GenerationConfig
-    from ..types import Message
-    from ..types import RetryConfig
-    from ..types import ToolArguments
-    from ..types import ToolDefinition
-    from .auth import BearerTokenProvider
+    from ...events import Event
+    from ...live import LiveConfig
+    from ...realtime import RealtimeConfig
+    from ...types import GenerationConfig
+    from ...types import Message
+    from ...types import RetryConfig
+    from ...types import ToolArguments
+    from ...types import ToolDefinition
+    from ..auth import BearerTokenProvider
 
 DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
 CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"

@@ -17,8 +17,8 @@ from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.session_titles import small_model
 from nagents.harness.session_titles import user_messages
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import ImageContent
 from nagents.types import Message
 from nagents.types import TextContent

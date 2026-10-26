@@ -18,10 +18,10 @@ import pytest
 from aiohttp import web
 
 from nagents.adapters import _validation
-from nagents.provider import _codex_catalog as catalog
-from nagents.provider import openai
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex import _catalog as catalog
+from nagents.provider.codex import openai
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import OpenAIProvider
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:

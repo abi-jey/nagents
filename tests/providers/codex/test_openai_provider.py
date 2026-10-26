@@ -27,11 +27,11 @@ from nagents.exceptions import ModelListError
 from nagents.http import HTTPLogger
 from nagents.provider import Provider
 from nagents.provider import gateway
-from nagents.provider import openai
+from nagents.provider.codex import openai
+from nagents.provider.codex.openai import DEFAULT_CODEX_MODEL
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import OpenAIProvider
 from nagents.provider.gateway import GatewayHTTPClient
-from nagents.provider.openai import DEFAULT_CODEX_MODEL
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import OpenAIProvider
 from nagents.types import AudioContent
 from nagents.types import DocumentContent
 from nagents.types import GenerationConfig

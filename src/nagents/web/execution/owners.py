@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
-from nagents.provider.openai import OpenAIProvider
+from nagents.provider.codex.openai import OpenAIProvider
 
 from .._async import join_owned
 

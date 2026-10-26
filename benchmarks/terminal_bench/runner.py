@@ -35,8 +35,8 @@ from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.types import TranscriptAbandoned
 from nagents.harness.types import TranscriptAnchor
-from nagents.provider.openai import CodexCredentials
-from nagents.provider.openai import _load_config
+from nagents.provider.codex.openai import CodexCredentials
+from nagents.provider.codex.openai import _load_config
 
 if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest

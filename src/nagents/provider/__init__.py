@@ -2,12 +2,12 @@
 
 from .base import Provider
 from .base import ProviderType
+from .codex.openai import DEFAULT_CODEX_MODEL
+from .codex.openai import CodexCredentials
+from .codex.openai import OpenAIProvider
 from .foundry import AsyncTokenCredential
 from .foundry import FoundryProvider
 from .foundry import TokenCredential
-from .openai import DEFAULT_CODEX_MODEL
-from .openai import CodexCredentials
-from .openai import OpenAIProvider
 
 __all__ = [
     "DEFAULT_CODEX_MODEL",
