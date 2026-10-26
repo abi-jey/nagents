@@ -31,10 +31,12 @@ test("fork and rename use explicit local actions and never replay a failed fork"
     return path.endsWith("/fork") ? Response.json({ detail: "Source chat has queued work." }, { status: 409 }) : Response.json(initial);
   });
   await changeSession("token", source.id, "rename", "Named chat");
+  await changeSession("token", source.id, "rename", "");
   await assert.rejects(changeSession("token", source.id, "fork", ""), /queued work/);
   await assert.rejects(changeSession("token", "../source", "fork", ""), /Invalid chat/);
   assert.deepEqual(calls, [
     { path: "/api/sessions/source/rename", body: { title: "Named chat" } },
+    { path: "/api/sessions/source/rename", body: { title: "" } },
     { path: "/api/sessions/source/fork", body: { title: "" } },
   ]);
 });

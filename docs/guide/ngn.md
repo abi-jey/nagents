@@ -114,7 +114,7 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 | `/help` | Show the live command registry. |
 | `/new` | Start a new local conversation. |
 | `/fork [title]` | In the TUI, copy the idle conversation into a new independent root and select it. Omit the title for `<chat title> · fork 1`, `fork 2`, etc. Saved context and attachments are copied; active work and approvals are not. |
-| `/rename <title>` | In the TUI, persist a name of 1–80 printable characters for the current conversation. |
+| `/rename [title]` | In the TUI, save an explicit name of 1–80 printable characters, or omit it to generate a title from the latest 10 user messages using a small model on the same provider connection. |
 | `/sessions` | List and resume this workspace's saved conversations. |
 | `/compact` | Compact active context with the configured strategy. |
 | `/model [model]` | Show or change the runtime conversation model. |
@@ -128,6 +128,13 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 | `/quit` | Close the client and clean up managed work. |
 
 `/help` is the source of truth for commands available in the particular source build you installed.
+
+Title generation reads saved user messages, including those before compaction,
+and caps each of the latest ten at 2,000 characters. Assistant replies, tool
+results, background agent updates, wake-ups, and attachment bytes are excluded.
+The separate request advertises no tools and leaves the conversation model and
+history unchanged. If the connection cannot list a recognized small text model,
+supply an explicit title; ngn does not substitute a larger model or another connection.
 
 Shift+Enter inserts a newline. Ctrl+J and Alt+Enter remain fallbacks for terminals
 that do not transmit Shift+Enter distinctly. Pasted multiline text is never
