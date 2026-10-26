@@ -11,7 +11,7 @@ import pytest
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.agents.subagent_settings import SubagentLimits
-from nagents.harness.followups import RunInput
+from nagents.harness.runtime.followups import RunInput
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.harness.followups import RunTurn
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
+    from nagents.harness.runtime.followups import RunTurn
     from nagents.harness.types import HarnessEvent
     from nagents.types import ContentPart
     from nagents.types import Message

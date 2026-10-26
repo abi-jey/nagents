@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from nagents.extensions import RunContext
     from nagents.types import ContentPart
 
-    from .agents.subagents import SubagentManager
+    from ..agents.subagents import SubagentManager
 
 
 @dataclass(frozen=True)

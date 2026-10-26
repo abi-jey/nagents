@@ -9,7 +9,7 @@ import pytest
 
 from nagents.harness.config import HarnessConfig
 from nagents.harness.default_instructions import load_default_instructions
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -27,20 +27,20 @@ from nagents.events import ToolExecutionStartedEvent
 from nagents.events import ToolResultEvent
 from nagents.extensions import AgentPlugin
 
-from .providers.reasoning import ReasoningPreference
-from .providers.reasoning import resolve_effort
-from .types import Notice
-from .types import RemoteArtifacts
-from .types import ToolOutput
+from ..providers.reasoning import ReasoningPreference
+from ..providers.reasoning import resolve_effort
+from ..types import Notice
+from ..types import RemoteArtifacts
+from ..types import ToolOutput
 
 if TYPE_CHECKING:
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
 
-    from .agents.subagents import SubagentManager
-    from .agents.subagents import TaskInfo
-    from .runtime import Harness
-    from .types import HarnessEvent
+    from ..agents.subagents import SubagentManager
+    from ..agents.subagents import TaskInfo
+    from ..types import HarnessEvent
+    from .core import Harness
 
 MAX_ACTIVITY_TEXT = 32768
 

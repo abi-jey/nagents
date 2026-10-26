@@ -34,62 +34,62 @@ from nagents.types import GenerationConfig
 from nagents.types import ReasoningEffort
 from nagents.types import TextContent
 
-from .agents.behavior import AgentBehavior
-from .agents.behavior import load_behavior
-from .agents.catalog import AgentCatalog
-from .agents.documents import ensure_agent_documents
-from .agents.identity import AgentIdentity
-from .agents.identity import agent_identities
-from .agents.status import AgentStatusResult
-from .agents.subagents import DEFAULT_TASK_OPTIONS
-from .agents.subagents import SubagentManager
+from ..agents.behavior import AgentBehavior
+from ..agents.behavior import load_behavior
+from ..agents.catalog import AgentCatalog
+from ..agents.documents import ensure_agent_documents
+from ..agents.identity import AgentIdentity
+from ..agents.identity import agent_identities
+from ..agents.status import AgentStatusResult
+from ..agents.subagents import DEFAULT_TASK_OPTIONS
+from ..agents.subagents import SubagentManager
+from ..config import AgentProfile
+from ..default_instructions import load_default_instructions
+from ..providers.auth import OpenAIAuth
+from ..providers.connection import build_provider
+from ..providers.credentials import ProviderLogin
+from ..providers.credentials import ProviderLoginStore
+from ..providers.factory import DemoCompaction
+from ..providers.factory import HarnessProvider
+from ..providers.factory import UnavailableModelProvider
+from ..providers.model_bindings import ModelBinding
+from ..providers.model_bindings import ResolvedModelBinding
+from ..providers.model_bindings import resolve_model_binding
+from ..providers.model_catalog import ModelCatalog
+from ..providers.reasoning import ReasoningPreference
+from ..providers.reasoning import resolve_effort
+from ..providers.registry import ProviderProfile
+from ..providers.registry import ProviderRegistry
+from ..providers.registry import ScopedProviderRegistryStore
+from ..remote.tools import RemoteAgentTools
+from ..skills import HarnessSkillDiscoverer
+from ..tools.coding import CodingTools
+from ..tools.coding import HarnessExecutor
+from ..tools.configuration import HarnessToolRegistry
+from ..tools.configuration import WorkspaceTools
+from ..tools.execution import ExecutionBridge
+from ..tools.execution import _is_owned_adapter
+from ..tools.execution import _register_owned_adapter_type
+from ..tools.execution import capture_write
+from ..tools.execution import host_run_id
+from ..tools.execution import observe_host_event
+from ..tools.execution import publish_anchor
+from ..tools.resources import HarnessResources
+from ..types import ApprovalRequest
+from ..types import HarnessEvent
+from ..types import Notice
+from ..types import SessionInfo
+from ..types import TaskActivity
+from ..types import TaskCompleted
+from ..types import TaskMessage
+from ..types import ToolOutput
 from .commands import CommandRegistry
-from .config import AgentProfile
-from .default_instructions import load_default_instructions
 from .followups import FollowupReady
 from .followups import RunInput
 from .followups import RunInputs
 from .followups import RunTurn
-from .providers.auth import OpenAIAuth
-from .providers.connection import build_provider
-from .providers.credentials import ProviderLogin
-from .providers.credentials import ProviderLoginStore
-from .providers.factory import DemoCompaction
-from .providers.factory import HarnessProvider
-from .providers.factory import UnavailableModelProvider
-from .providers.model_bindings import ModelBinding
-from .providers.model_bindings import ResolvedModelBinding
-from .providers.model_bindings import resolve_model_binding
-from .providers.model_catalog import ModelCatalog
-from .providers.reasoning import ReasoningPreference
-from .providers.reasoning import resolve_effort
-from .providers.registry import ProviderProfile
-from .providers.registry import ProviderRegistry
-from .providers.registry import ScopedProviderRegistryStore
-from .remote.tools import RemoteAgentTools
 from .session_titles import generate_title
-from .skills import HarnessSkillDiscoverer
 from .task_activity import TaskOptions
-from .tools.coding import CodingTools
-from .tools.coding import HarnessExecutor
-from .tools.configuration import HarnessToolRegistry
-from .tools.configuration import WorkspaceTools
-from .tools.execution import ExecutionBridge
-from .tools.execution import _is_owned_adapter
-from .tools.execution import _register_owned_adapter_type
-from .tools.execution import capture_write
-from .tools.execution import host_run_id
-from .tools.execution import observe_host_event
-from .tools.execution import publish_anchor
-from .tools.resources import HarnessResources
-from .types import ApprovalRequest
-from .types import HarnessEvent
-from .types import Notice
-from .types import SessionInfo
-from .types import TaskActivity
-from .types import TaskCompleted
-from .types import TaskMessage
-from .types import ToolOutput
 
 if TYPE_CHECKING:
     import sqlite3
@@ -101,12 +101,12 @@ if TYPE_CHECKING:
     from nagents.types import ToolArguments
     from nagents.types import ToolDefinition
 
-    from .config import HarnessConfig
-    from .providers.auth import DeviceAuthorization
-    from .providers.model_catalog import ModelCapabilities
-    from .remote.store import RemoteAgentMetadata
-    from .types import ApprovalHandler
-    from .types import WakeupHandler
+    from ..config import HarnessConfig
+    from ..providers.auth import DeviceAuthorization
+    from ..providers.model_catalog import ModelCapabilities
+    from ..remote.store import RemoteAgentMetadata
+    from ..types import ApprovalHandler
+    from ..types import WakeupHandler
 
 _INHERIT_MODEL = ModelBinding()
 
@@ -915,7 +915,7 @@ class Harness:
 
     async def _generation_events(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
         if self._remote_profile.configured:
-            from .remote.runtime import run_remote
+            from ..remote.runtime import run_remote
 
             if not isinstance(prompt, str):
                 yield ErrorEvent(
@@ -1447,7 +1447,7 @@ class Harness:
     async def save_provider(
         self, name: str, profile: ProviderProfile, revision: str, scope: str = "workspace"
     ) -> ProviderRegistry:
-        from .providers.registry import NAME
+        from ..providers.registry import NAME
 
         with self.operation("save provider"):
             current = self.provider_store.load_scope(scope)

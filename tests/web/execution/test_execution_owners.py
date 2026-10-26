@@ -13,7 +13,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.auth import _Tokens
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.provider.codex.openai import OpenAIProvider
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from benchmarks.orchestration import run as native
 from benchmarks.orchestration.fixtures import grade as grade_saved
 from benchmarks.orchestration.fixtures import parse_answer
-from nagents.harness import runtime
+from nagents.harness.runtime import core as runtime
 
 from .cases import cases
 

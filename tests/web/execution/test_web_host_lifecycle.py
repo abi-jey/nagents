@@ -20,8 +20,8 @@ from nagents.channels.types import ChannelMessage
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.harness import Harness
-from nagents.harness import runtime
 from nagents.harness.config import HarnessConfig
+from nagents.harness.runtime import core as runtime
 from nagents.types import Message
 from nagents.web.channels.catalog import ChannelCatalog
 from nagents.web.execution.subscriptions import Subscriber

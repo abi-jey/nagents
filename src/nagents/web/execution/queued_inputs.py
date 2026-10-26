@@ -12,8 +12,8 @@ from typing import Literal
 
 from fastapi import HTTPException
 
-from nagents.harness.commands import split_command
-from nagents.harness.followups import RunInput
+from nagents.harness.runtime.commands import split_command
+from nagents.harness.runtime.followups import RunInput
 
 from .._async import finish_on_cancel
 from .._async import join_owned

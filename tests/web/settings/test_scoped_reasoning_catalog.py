@@ -189,8 +189,8 @@ def test_catalog_is_not_retained_if_credentials_change_during_discovery(
 def test_save_verifies_choices_after_oauth_refresh_or_for_opaque_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str, advertised_after_refresh: bool
 ) -> None:
-    from nagents.harness import runtime
     from nagents.harness.providers.auth import _Tokens
+    from nagents.harness.runtime import core as runtime
     from nagents.provider import Provider
     from nagents.provider import ProviderType
 

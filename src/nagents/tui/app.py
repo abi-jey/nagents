@@ -39,11 +39,11 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import Harness
-from nagents.harness.commands import BUILTIN_COMMANDS
-from nagents.harness.commands import split_command
-from nagents.harness.followups import RunInput
 from nagents.harness.providers import login as provider_login
 from nagents.harness.providers.credentials import ProviderLogin
+from nagents.harness.runtime.commands import BUILTIN_COMMANDS
+from nagents.harness.runtime.commands import split_command
+from nagents.harness.runtime.followups import RunInput
 from nagents.harness.tools.execution import host_run
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
@@ -94,10 +94,10 @@ if TYPE_CHECKING:
 
     from nagents.channels.delivery_types import DeliveryReceipt
     from nagents.channels.types import ChannelValue
-    from nagents.harness.commands import Command
     from nagents.harness.providers.auth import DeviceAuthorization
     from nagents.harness.providers.login import LoginMethod
     from nagents.harness.providers.registry import ProviderProfile
+    from nagents.harness.runtime.commands import Command
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
 

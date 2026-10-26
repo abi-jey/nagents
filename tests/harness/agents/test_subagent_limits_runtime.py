@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
     from nagents.harness.types import ApprovalRequest
     from nagents.types import Message
 

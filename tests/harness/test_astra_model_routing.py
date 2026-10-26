@@ -13,7 +13,7 @@ from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.provider.codex.openai import CodexCredentials
 from nagents.provider.codex.openai import OpenAIProvider
 from nagents.provider.gateway import GatewayHTTPClient

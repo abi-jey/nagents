@@ -15,8 +15,8 @@ from nagents.harness.agents.updates import WAKEUP_PREFIX
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.providers.registry import ProviderProfile
-from nagents.harness.session_titles import small_model
-from nagents.harness.session_titles import user_messages
+from nagents.harness.runtime.session_titles import small_model
+from nagents.harness.runtime.session_titles import user_messages
 from nagents.provider.codex.openai import CodexCredentials
 from nagents.provider.codex.openai import OpenAIProvider
 from nagents.types import ImageContent

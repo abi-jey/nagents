@@ -611,7 +611,7 @@ async def test_image_publisher_is_unavailable_outside_active_a2a_execution(image
 async def test_harness_a2a_channel_send_requires_approval_and_exports_only_after_approval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, images: dict[str, bytes], approved: bool
 ) -> None:
-    from nagents.harness import runtime as harness_runtime
+    from nagents.harness.runtime import core as harness_runtime
 
     workspace = tmp_path / "harness-workspace"
     workspace.mkdir(mode=0o700)

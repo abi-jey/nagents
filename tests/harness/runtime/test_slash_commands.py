@@ -13,7 +13,7 @@ from textual.widgets import Static
 
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness.commands import CommandResult
+from nagents.harness.runtime.commands import CommandResult
 from nagents.tui import NagentsApp
 from nagents.tui.commands import SlashMenu
 from nagents.tui.screens import ChoiceModal

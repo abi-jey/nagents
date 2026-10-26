@@ -27,8 +27,8 @@ from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
-from nagents.harness import runtime
 from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.runtime import core as runtime
 from nagents.harness.tools.coding import HarnessExecutor
 from nagents.observation import json_default
 from nagents.observation import observer

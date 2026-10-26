@@ -18,12 +18,11 @@ from nagents.events import ErrorEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
-from nagents.harness import Harness
-from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
+from nagents.harness.runtime import core as runtime
 from nagents.web.execution import wakeups
 from nagents.web.execution.wakeups import Chain
 from nagents.web.execution.wakeups import Wakeup
@@ -45,6 +44,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from nagents.events import Event
+    from nagents.harness import Harness
     from nagents.types import Message
     from nagents.web.execution.service import Run
     from tests.support.providers import Script

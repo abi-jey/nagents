@@ -170,3 +170,11 @@ def test_harness_tool_public_imports_refer_to_the_same_definitions() -> None:
 
     for name in tools.__all__:
         assert getattr(tools, name) is getattr(coding, name)
+
+
+def test_harness_runtime_public_imports_refer_to_the_same_definitions() -> None:
+    from nagents.harness import runtime
+    from nagents.harness.runtime import core
+
+    for name in runtime.__all__:
+        assert getattr(runtime, name) is getattr(core, name)

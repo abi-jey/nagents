@@ -9,8 +9,8 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolCallProgressEvent
-from nagents.harness import runtime
 from nagents.harness.agents.subagents import SubagentManager
+from nagents.harness.runtime import core as runtime
 from nagents.harness.tools.coding import CodingTools
 from nagents.harness.types import TaskCompleted
 from tests.support.providers import FakeProvider

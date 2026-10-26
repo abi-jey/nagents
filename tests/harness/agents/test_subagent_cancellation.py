@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.events import ToolCallEvent
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.harness.followups import RunInput
+    from nagents.harness.runtime.followups import RunInput
     from nagents.harness.types import HarnessEvent
     from nagents.harness.types import TaskCompleted
     from nagents.harness.types import TaskMessage

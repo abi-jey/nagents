@@ -865,8 +865,8 @@ and the `skill:` namespace are reserved, and duplicate names are rejected.
 Plugin attribution is automatic while `setup` runs. Async handlers retain full,
 trusted Python access; they are not sandboxed or automatically mediated as tools.
 
-See `examples/harness/commands.py` in the checkout, or launch it with
-`ngn --plugin examples/harness/commands.py:setup` and type `/`.
+See `examples/harness/runtime/commands.py` in the checkout, or launch it with
+`ngn --plugin examples/harness/runtime/commands.py:setup` and type `/`.
 
 ### Change agent behavior
 

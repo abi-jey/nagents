@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from textual.pilot import Pilot
 
-    from nagents.harness.followups import RunInput
+    from nagents.harness.runtime.followups import RunInput
     from nagents.harness.types import HarnessEvent
     from nagents.tui import NagentsApp
 

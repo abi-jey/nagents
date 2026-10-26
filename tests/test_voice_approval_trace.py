@@ -16,7 +16,7 @@ from tests.support.voice_approval_trace import VoiceApprovalTrace
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
     from nagents.web.execution.service import WebState
 
 

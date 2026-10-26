@@ -13,7 +13,7 @@ from nagents.harness.remote.credentials import RemoteCredentials
 if TYPE_CHECKING:
     from nagents.harness.config import AgentProfile
     from nagents.harness.remote.store import RemoteAgentStore
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
 
 logger = logging.getLogger(__name__)
 METADATA_TTL_SECONDS = 60

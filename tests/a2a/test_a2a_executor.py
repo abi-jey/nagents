@@ -47,7 +47,7 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import HarnessConfig
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.session import SessionManager
@@ -443,7 +443,7 @@ async def test_disconnect_retry_does_not_duplicate_generation_and_cancel_stops_p
 async def test_harness_adapter_uses_the_shared_task_executor_and_real_harness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nagents.harness import runtime as harness_runtime
+    from nagents.harness.runtime import core as harness_runtime
 
     workspace = tmp_path / "harness-workspace"
     workspace.mkdir(mode=0o700)
@@ -520,7 +520,7 @@ async def test_harness_adapter_uses_the_shared_task_executor_and_real_harness(
 async def test_nested_harness_approval_stays_on_root_task_and_private_to_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
-    from nagents.harness import runtime as harness_runtime
+    from nagents.harness.runtime import core as harness_runtime
 
     workspace = tmp_path / "nested-harness-workspace"
     workspace.mkdir(mode=0o700)

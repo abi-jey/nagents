@@ -15,7 +15,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness.agents.subagents import SubagentManager
-from nagents.harness.runtime import Harness
+from nagents.harness.runtime.core import Harness
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification

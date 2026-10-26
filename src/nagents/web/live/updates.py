@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from nagents.harness.followups import RunTurn
+from nagents.harness.runtime.followups import RunTurn
 from nagents.live.runtime import result_chunks
 
 from .._async import join_owned

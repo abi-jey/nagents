@@ -12,7 +12,7 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.providers.reasoning import ReasoningPreference
-from nagents.harness.task_activity import TaskOptions
+from nagents.harness.runtime.task_activity import TaskOptions
 
 
 def test_trusted_effort_config_and_native_profile_clear(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,7 +16,7 @@ from nagents._sqlite import database_write
 from nagents._sqlite import database_writes
 from nagents._sqlite import write_database
 from nagents.channels.store import InboxStore
-from nagents.harness.runtime import _HarnessSession
+from nagents.harness.runtime.core import _HarnessSession
 from nagents.harness.session_identity import SessionIdentityStore
 from nagents.session.manager import SessionManager
 from nagents.types import Message

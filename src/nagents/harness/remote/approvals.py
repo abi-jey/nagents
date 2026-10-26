@@ -14,7 +14,7 @@ from ..types import Notice
 if TYPE_CHECKING:
     from nagents.a2a.client.transport import RemoteAgent
 
-    from ..runtime import Harness
+    from ..runtime.core import Harness
 
 logger = logging.getLogger(__name__)
 

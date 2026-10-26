@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from nagents.a2a.client.transport import RemoteAgent
     from nagents.artifacts import ImageArtifact
 
-    from ..runtime import Harness
+    from ..runtime.core import Harness
     from ..types import HarnessEvent
 
 logger = logging.getLogger(__name__)
@@ -206,14 +206,14 @@ async def owned_remote_task(
 
 async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
     """Admit a stable message once; retain identity on failure instead of replaying."""
-    from ..runtime import _HarnessSession
+    from ..runtime.core import _HarnessSession
 
     session_id = harness.session_id
     message = Message(role="user", content=prompt)
     if isinstance(harness.agent.session, _HarnessSession):
         harness.agent.session.prepare_input(session_id, message)
     await harness.agent.session.add_message(session_id, message)
-    from ..task_activity import ChildActivity
+    from ..runtime.task_activity import ChildActivity
 
     for plugin in harness.agent.plugins:
         if isinstance(plugin, ChildActivity):

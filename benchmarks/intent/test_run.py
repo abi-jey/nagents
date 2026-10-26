@@ -73,7 +73,7 @@ def test_tool_free_intent_fails_unnecessary_calls_and_incomplete_usage() -> None
 
 def test_source_protection_covers_native_harness_and_benchmark() -> None:
     hashes = source_hashes()
-    assert "src/nagents/harness/runtime.py" in hashes
+    assert "src/nagents/harness/runtime/core.py" in hashes
     assert "benchmarks/intent/cases.py" in hashes
     assert "benchmarks/orchestration/telemetry.py" in hashes
 
@@ -168,14 +168,14 @@ def test_regrading_saved_verification_requires_read_after_last_edit() -> None:
 def test_source_provenance_follows_imported_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import hashlib
 
-    from nagents.harness import runtime
+    from nagents.harness.runtime import core as runtime
 
     package = tmp_path / "alternate" / "nagents"
     (package / "harness").mkdir(parents=True)
-    (package / "harness/runtime.py").write_text("# alternate runtime\n")
+    (package / "harness/runtime/core.py").write_text("# alternate runtime\n")
     contents = b"# measured alternate agent\n"
     (package / "agent.py").write_bytes(contents)
-    monkeypatch.setattr(runtime, "__file__", str(package / "harness/runtime.py"))
+    monkeypatch.setattr(runtime, "__file__", str(package / "harness/runtime/core.py"))
     hashes = source_hashes()
     assert hashes["src/nagents/agent.py"] == hashlib.sha256(contents).hexdigest()
     assert "src/nagents/provider/codex/openai.py" not in hashes

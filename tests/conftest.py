@@ -37,7 +37,7 @@ def workspace_discovery_only() -> Iterator[None]:
     """Avoid workspace instructions/skills while keeping real harness execution."""
     from unittest.mock import patch
 
-    from nagents.harness.runtime import Harness
+    from nagents.harness.runtime.core import Harness
     from nagents.harness.tools.coding import CodingTools
 
     with (

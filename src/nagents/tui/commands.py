@@ -18,7 +18,7 @@ from textual.widgets.option_list import Option
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
-    from nagents.harness.commands import Command
+    from nagents.harness.runtime.commands import Command
 
 
 class SlashOptions(OptionList):

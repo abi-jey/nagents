@@ -15,7 +15,7 @@ from nagents.events import DoneEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
-from nagents.harness.followups import RunInput
+from nagents.harness.runtime.followups import RunInput
 from nagents.harness.types import Notice
 from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig

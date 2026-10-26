@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from nagents.types import ToolCall
     from nagents.types import ToolDefinition
 
-    from ..runtime import Harness
+    from ..runtime.core import Harness
     from .coding import HarnessExecutor
 
 

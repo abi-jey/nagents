@@ -15,9 +15,9 @@ from nagents.compaction import ModelCompaction
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
-from nagents.harness import runtime
 from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.providers.registry import ProviderProfile
+from nagents.harness.runtime import core as runtime
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
