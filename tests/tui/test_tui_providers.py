@@ -36,6 +36,7 @@ def test_tui_adds_named_connection_with_only_env_reference(tmp_path: Path) -> No
             app.screen.query_one("#provider-env", Input).value = "${TUI_TEST_KEY}"
             assert app.screen.query_one("#provider-request-timeout", Input).value == "120.0"
             app.screen.query_one("#provider-request-timeout", Input).value = "240.5"
+            app.screen.query_one("#provider-session-header", Input).value = "x-opencode-session"
             await pilot.click("#provider-save")
             await idle(app, pilot)
             store = ScopedProviderRegistryStore(tmp_path)
@@ -43,6 +44,7 @@ def test_tui_adds_named_connection_with_only_env_reference(tmp_path: Path) -> No
             assert registry.active == "home"
             assert registry.providers["home"].key_env == "TUI_TEST_KEY"
             assert registry.providers["home"].request_timeout == 240.5
+            assert registry.providers["home"].session_id_header == "x-opencode-session"
             assert app.harness.config.provider == "home"
             assert "TUI_TEST_KEY" in store.workspace_store.path.read_text()
             assert not store.global_store.path.exists()
@@ -55,7 +57,9 @@ def test_tui_preserves_saved_request_timeout_and_rejects_invalid_edits(tmp_path:
     async def check() -> None:
         app = NagentsApp(Harness(HarnessConfig(workspace=tmp_path, demo=True)))
         results: list[tuple[str, ProviderProfile] | None] = []
-        profile = ProviderProfile(kind="openai", auth="api-key", request_timeout=375)
+        profile = ProviderProfile(
+            kind="openai", auth="api-key", request_timeout=375, session_id_header="x-conversation-id"
+        )
         async with app.run_test(size=(100, 45)) as pilot:
             await idle(app, pilot)
             editor = ProviderEditor("existing", profile)
@@ -77,5 +81,6 @@ def test_tui_preserves_saved_request_timeout_and_rejects_invalid_edits(tmp_path:
             )
             assert results[0][1].request_timeout == 375
             assert results[0][1].api_key_env == "UPDATED_ENV"
+            assert results[0][1].session_id_header == "x-conversation-id"
 
     asyncio.run(check())

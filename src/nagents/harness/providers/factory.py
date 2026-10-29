@@ -99,6 +99,7 @@ class HarnessProvider(Provider):
             api_version=config.provider_profile().api_version or None,
             api=api,
             timeout=request_timeout,
+            session_id_header=profile.session_id_header,
         )
         self.configure_context_window(profile.context_window, profile.model_context_windows)
 

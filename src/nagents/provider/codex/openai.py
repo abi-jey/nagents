@@ -484,6 +484,7 @@ class OpenAIProvider(Provider):
         realtime_config: RealtimeConfig | None = None,
         retry_config: RetryConfig | None = None,
         bearer_token_provider: BearerTokenProvider | None = None,
+        session_id_header: str = "",
     ) -> None:
         """Explicit API keys/token providers bypass discovery; otherwise use CODEX_HOME/~/.codex.
 
@@ -520,6 +521,7 @@ class OpenAIProvider(Provider):
                 realtime_config=realtime_config,
                 retry_config=retry_config,
                 bearer_token_provider=bearer_token_provider,
+                session_id_header=session_id_header,
             )
             self._local_api = True
             return
@@ -538,6 +540,7 @@ class OpenAIProvider(Provider):
             model or DEFAULT_CODEX_MODEL,
             timeout=timeout,
             api="responses",
+            session_id_header=session_id_header,
         )
         self.base_url = CODEX_ENDPOINT
         self._credentials = credentials
@@ -723,6 +726,7 @@ class OpenAIProvider(Provider):
             headers["x-openai-internal-codex-residency"] = credentials.residency
         progress = ToolCallProgressTracker()
         try:
+            headers.update(self._session_headers())
             async with (
                 aiohttp.ClientSession(
                     timeout=aiohttp.ClientTimeout(total=self._timeout),

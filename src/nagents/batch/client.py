@@ -132,12 +132,12 @@ class BatchClient:
     def _log_file_request(self, method: str, url: str, headers: dict[str, str], filename: str) -> None:
         """Log a file upload/download request."""
         if self._http._logger:
-            self._http._logger.log_request(method, url, headers, {"file": filename}, self._http._session_id)
+            self._http._logger.log_request(method, url, headers, {"file": filename}, self._http.session_id or None)
 
     def _log_file_response(self, url: str, status: int, body: str, headers: dict[str, str] | None = None) -> None:
         """Log a file upload/download response."""
         if self._http._logger:
-            self._http._logger.log_response(url, status, body, headers, self._http._session_id)
+            self._http._logger.log_response(url, status, body, headers, self._http.session_id or None)
 
     def _get_headers(self, for_file_upload: bool = False) -> dict[str, str]:
         """Get headers for API requests."""

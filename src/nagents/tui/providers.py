@@ -53,6 +53,8 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 yield Static("Model HTTP request timeout (seconds; default 120)", markup=False)
                 yield Input(str(value.request_timeout), id="provider-request-timeout")
                 yield Static("This deadline does not change shell or whole-run limits.", markup=False)
+                yield Static("Session ID header (optional; current conversation ID on model requests)", markup=False)
+                yield Input(value.session_id_header, placeholder="x-opencode-session", id="provider-session-header")
                 yield Static("HTTP API", markup=False)
                 yield Select([(api, api) for api in KINDS[value.kind].apis], value=value.api, id="provider-api")
                 yield Static("API prefix URL", id="provider-url-help", markup=False)
@@ -135,6 +137,7 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 api_version=input_value("provider-version"),
                 scope=input_value("provider-scope"),
                 request_timeout=request_timeout,
+                session_id_header=self.query_one("#provider-session-header", Input).value,
                 context_window=self.profile.context_window,
                 model_context_windows=dict(self.profile.model_context_windows),
             )

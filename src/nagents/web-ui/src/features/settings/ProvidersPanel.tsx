@@ -8,6 +8,7 @@ export type ProviderProfile = {
   kind: string; auth: string; base_url: string; api: string;
   api_key_env: string; api_version: string; scope: string;
   request_timeout?: number;
+  session_id_header?: string;
   context_window?: number;
   model_context_windows?: Record<string, number>;
   key_configured?: boolean; credential_source?: string; effective_endpoint?: string;
@@ -51,6 +52,7 @@ function defaultProfile(kind: string, specs: Record<string, Kind>): ProfileDraft
     kind, auth: specs[kind].auth[0], base_url: "", api: specs[kind].apis[0],
     api_key_env: "", api_version: "", scope: "https://ai.azure.com/.default",
     request_timeout: "120",
+    session_id_header: "",
     context_window: "", model_context_windows: [],
   };
 }
@@ -59,6 +61,7 @@ function editable(profile: ProviderProfile): ProfileDraft {
   return { kind: profile.kind, auth: profile.auth, base_url: profile.base_url,
     api: profile.api, api_key_env: profile.api_key_env, api_version: profile.api_version,
     scope: profile.scope, request_timeout: String(profile.request_timeout ?? 120),
+    session_id_header: profile.session_id_header ?? "",
     context_window: profile.context_window ? String(profile.context_window) : "",
     model_context_windows: Object.entries(profile.model_context_windows || {}).map(([model, tokens]) => ({ model, tokens: String(tokens) })) };
 }
@@ -94,6 +97,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   const timeoutHelpId = useId();
   const timeoutErrorId = useId();
   const contextHelpId = useId();
+  const sessionHeaderHelpId = useId();
 
   const endpoint = `provider-scopes/${scope}/providers`;
   async function refresh() {
@@ -159,6 +163,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   const edit = (change: Partial<ProfileDraft>) => setDraft(current => current && { ...current, ...change });
   const timeout = Number(draft?.request_timeout);
   const timeoutValid = Number.isFinite(timeout) && timeout > 0;
+  const sessionHeaderValid = !draft?.session_id_header || /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/.test(draft.session_id_header);
   const contextWindow = Number(draft?.context_window || 0);
   const connectionWindowValid = Number.isSafeInteger(contextWindow) && contextWindow >= 0 && contextWindow <= 1_000_000_000;
   const contextValid = connectionWindowValid && validWindows(draft?.model_context_windows || []);
@@ -222,7 +227,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
         {openGlobal && <button type="button" disabled={busy || blocked} onClick={openGlobal}>Switch to Global settings</button>}</>}
       <fieldset className="provider-fields" disabled={inherited || busy || blocked}>
       <label>Connection name <input value={name} disabled={editing} autoComplete="off" pattern="[a-z][a-z0-9_-]{0,63}" onChange={event => setName(event.target.value)} /></label>
-       <label>Provider type <select value={draft.kind} onChange={event => edit({ ...defaultProfile(event.target.value, registry.kinds), request_timeout: draft.request_timeout })}>
+       <label>Provider type <select value={draft.kind} onChange={event => edit({ ...defaultProfile(event.target.value, registry.kinds), request_timeout: draft.request_timeout, session_id_header: draft.session_id_header })}>
         {Object.entries(registry.kinds).map(([id, kind]) => <option key={id} value={id}>{kind.label}</option>)}
       </select></label>
       <label>Authentication <select value={draft.auth} onChange={event => edit({ auth: event.target.value, api: draft.kind === "openai" && ["auto", "chatgpt", "codex"].includes(event.target.value) ? "auto" : draft.api, api_key_env: "" })}>
@@ -243,6 +248,16 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
         <small id={timeoutHelpId}>Deadline for each model HTTP request, including ChatGPT/Codex. Default: 120 seconds. Shell commands use their own timeout.</small>
         {!timeoutValid && <small id={timeoutErrorId} className="error-text" role="alert">Enter a finite number of seconds greater than zero.</small>}
       </label>
+      <details>
+        <summary>Advanced</summary>
+        <label>Session ID header
+          <input value={draft.session_id_header} maxLength={128} autoComplete="off" spellCheck={false} placeholder="x-opencode-session"
+            aria-invalid={!sessionHeaderValid} aria-describedby={sessionHeaderHelpId}
+            onInput={event => edit({ session_id_header: event.currentTarget.value })} />
+          <small id={sessionHeaderHelpId}>Optional HTTP header carrying the current conversation ID on model requests. Each conversation has its own ID, stable across tool rounds. Leave empty to disable. Authentication and protocol header names are reserved.</small>
+          {!sessionHeaderValid && <small className="error-text" role="alert">Enter an ASCII HTTP header name without spaces, up to 128 characters.</small>}
+        </label>
+      </details>
       <details className="provider-context-limits">
         <summary>Context window overrides</summary>
         <p id={contextHelpId}>Use the provider&apos;s advertised input limit. Exact model overrides take priority over the connection limit; leave both unset to use discovered metadata. Unknown limits fall back to a labelled guess.</p>
@@ -264,7 +279,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
       </fieldset>
       {login && scope === "workspace" && editing && name === registry.active && name === loginConnection && !connectionDirty && draft.kind === "openai" && ["auto", "chatgpt", "codex"].includes(draft.auth) && <div className="provider-login"><p>Sign in for the active workspace connection, {name}. Credentials stay on the ngn server.</p><button type="button" disabled={busy || blocked} onClick={login}>Sign in with ChatGPT</button></div>}
       <div className="settings-model-controls">
-        {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !contextValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout, context_window: contextWindow,
+        {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !sessionHeaderValid || !contextValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout, context_window: contextWindow,
           model_context_windows: Object.fromEntries(draft.model_context_windows.map(row => [row.model.trim(), Number(row.tokens)])) } }, undefined, "PUT")).json()) as ProviderRegistry, `Saved ${name} to ${scope} settings.`, true)}>Save connection</button>}
         {editing && registry.providers[name] && <>
           {bindingProvider === undefined && <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active) || connectionDirty} onClick={() => activate(name)}>Make active</button>}

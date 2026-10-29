@@ -193,6 +193,21 @@ last longer than one request deadline. There is no top-level Harness JSON field
 or `NGN_REQUEST_TIMEOUT` environment alias. Use the named connection's JSON,
 web provider editor, or TUI `/provider` editor.
 
+An optional `session_id_header` on the named connection sends the current
+conversation ID in that HTTP header on model generation requests. For example,
+add `"session_id_header": "x-opencode-session"` to a LiteLLM connection when its
+upstream needs conversation correlation. The default `""` disables it. Configure
+this in the web connection editor under **Advanced**, the TUI provider editor,
+or the connection's JSON. Global and workspace scopes use the same field.
+
+ngn uses each conversation's actual ID, stable across turns and tool rounds;
+it never saves a shared static ID in the provider profile. Catalog and
+credential requests omit the header. Names are limited to 128 ASCII HTTP token
+characters and cannot override authentication, routing, or protocol headers.
+Values use 1–1024 visible ASCII characters without spaces. This setting applies
+to text generation, including Chat Completions, Responses, and Messages;
+batch uploads and Live/Realtime connection headers are separate.
+
 The UI generates a fresh revision on save and writes indented JSON. Workspace JSON uses the same schema:
 its `active` may reference a global connection, and an empty `active` inherits
 the global default. Other provider types (`openai`,

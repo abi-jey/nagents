@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { ProvidersPanel } from "./ProvidersPanel.js";
 
-async function editor(t: TestContext, auth: string, requestTimeout?: number, limits = { context_window: 0, model_context_windows: {} as Record<string, number> }) {
+async function editor(t: TestContext, auth: string, requestTimeout?: number, limits = { context_window: 0, model_context_windows: {} as Record<string, number> }, sessionHeader?: string) {
   const dom = new JSDOM("<div id='root'></div>");
   const descriptors = Object.getOwnPropertyDescriptors(globalThis);
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
@@ -16,6 +16,7 @@ async function editor(t: TestContext, auth: string, requestTimeout?: number, lim
     api_version: "", scope: "https://ai.azure.com/.default",
     ...limits,
     ...(requestTimeout === undefined ? {} : { request_timeout: requestTimeout }),
+    ...(sessionHeader === undefined ? {} : { session_id_header: sessionHeader }),
   };
   const kinds = {
     openai: { label: "OpenAI", auth: ["auto", "api-key", "chatgpt", "codex"], apis: ["auto", "responses"], env: "OPENAI_API_KEY", endpoint_required: false, version_required: false, live: true },
@@ -164,4 +165,43 @@ test("authentication and provider changes retain timeout while new connections s
   await act(async () => view.button("Add connection").click());
   assert.equal(view.input().value, "120");
   assert.equal(view.input().getAttribute("aria-invalid"), "false");
+});
+
+test("optional conversation header persists through unrelated edits, provider changes, save and clearing", async t => {
+  const view = await editor(t, "api-key", 120, undefined, "x-opencode-session");
+  const field = () => [...view.container.querySelectorAll("label")].find(node => node.textContent?.startsWith("Session ID header"))!.querySelector("input")!;
+  assert.equal(field().value, "x-opencode-session");
+  assert.equal(view.dirty.at(-1), false);
+  assert.match(view.container.textContent!, /current conversation ID/);
+  assert.match(view.container.textContent!, /stable across tool rounds/);
+  await view.type("240");
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved.at(-1)!.session_id_header, "x-opencode-session");
+  assert.equal(view.dirty.at(-1), false);
+  await view.select("Provider type", "anthropic");
+  assert.equal(field().value, "x-opencode-session");
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved.at(-1)!.session_id_header, "x-opencode-session");
+  await view.field("Session ID header", "x-conversation-id");
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved.at(-1)!.session_id_header, "x-conversation-id");
+  assert.equal(field().value, "x-conversation-id");
+  await view.field("Session ID header", "");
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved.at(-1)!.session_id_header, "");
+  assert.equal(view.dirty.at(-1), false);
+});
+
+test("missing conversation header defaults to empty and malformed names prevent saving", async t => {
+  const view = await editor(t, "api-key");
+  const field = () => [...view.container.querySelectorAll("label")].find(node => node.textContent?.startsWith("Session ID header"))!.querySelector("input")!;
+  assert.equal(field().value, "");
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved.at(-1)!.session_id_header, "");
+  for (const value of ["bad name", "bad:name", "x-ümlaut", "x".repeat(129)]) {
+    await view.field("Session ID header", value);
+    assert.equal(field().getAttribute("aria-invalid"), "true", value);
+    assert.equal(view.button("Save connection").disabled, true);
+  }
+  assert.equal(view.saved.length, 1);
 });

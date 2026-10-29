@@ -171,7 +171,7 @@ def test_source_provenance_follows_imported_runtime(tmp_path: Path, monkeypatch:
     from nagents.harness.runtime import core as runtime
 
     package = tmp_path / "alternate" / "nagents"
-    (package / "harness").mkdir(parents=True)
+    (package / "harness/runtime").mkdir(parents=True)
     (package / "harness/runtime/core.py").write_text("# alternate runtime\n")
     contents = b"# measured alternate agent\n"
     (package / "agent.py").write_bytes(contents)
