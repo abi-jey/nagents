@@ -427,7 +427,7 @@ def test_profile_roundtrip_defaults_validation_and_harness_factory(
 
 def test_web_scoped_connection_serializes_session_header_and_inherits(tmp_path: Path) -> None:
     async def scenario() -> None:
-        async with client_app(tmp_path, controlled=False) as (_, client, headers, _):
+        async with client_app(tmp_path) as (_, client, headers, _):
             before = (await client.get("/api/provider-scopes/global/providers", headers=headers)).json()
             saved = await client.put(
                 "/api/provider-scopes/global/providers/gateway",
