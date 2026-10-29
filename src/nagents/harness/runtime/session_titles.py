@@ -175,6 +175,8 @@ async def generate_title(harness: Harness, session_id: str) -> str:
         )
     else:
         provider = build_provider(profile, config, harness.openai_auth)
+    provider.session_id_header = profile.session_id_header
+    provider.set_session_id(session_id)
     try:
         async with asyncio.timeout(30):
             try:

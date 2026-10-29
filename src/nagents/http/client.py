@@ -4,6 +4,8 @@ Async HTTP client for LLM API requests using aiohttp.
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import cast
@@ -14,6 +16,8 @@ from ..observation import response_chunk
 from ..observation import trace_config
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from .logger import HTTPLogger
 
 
@@ -83,11 +87,25 @@ class HTTPClient:
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: aiohttp.ClientSession | None = None
         self._logger = logger
-        self._session_id: str | None = None
+        self._session_id: ContextVar[str] = ContextVar("http_session_id", default="")
 
     def set_session_id(self, session_id: str | None) -> None:
-        """Set the current session ID for logging."""
-        self._session_id = session_id
+        """Set the calling task's session ID for logging and generation correlation."""
+        self._session_id.set(session_id or "")
+
+    @property
+    def session_id(self) -> str:
+        """The explicit conversation ID in the calling execution context."""
+        return self._session_id.get()
+
+    @contextmanager
+    def session_context(self, session_id: str) -> "Iterator[None]":
+        """Restore the caller's context after a conversation finishes or is cancelled."""
+        token = self._session_id.set(session_id)
+        try:
+            yield
+        finally:
+            self._session_id.reset(token)
 
     def set_logger(self, logger: "HTTPLogger | None") -> None:
         """Set the HTTP logger."""
@@ -121,7 +139,7 @@ class HTTPClient:
         """
         # Log request
         if self._logger:
-            self._logger.log_request("POST", url, headers, data, self._session_id)
+            self._logger.log_request("POST", url, headers, data, self.session_id or None)
 
         session = await self._get_session()
         async with session.post(url, json=data, headers=headers) as resp:
@@ -130,7 +148,7 @@ class HTTPClient:
 
             # Log response
             if self._logger:
-                self._logger.log_response(url, resp.status, body, resp_headers, self._session_id)
+                self._logger.log_response(url, resp.status, body, resp_headers, self.session_id or None)
 
             if resp.status >= 400:
                 raise HTTPError(resp.status, resp.reason or "Request failed", body, url, resp_headers)
@@ -156,7 +174,7 @@ class HTTPClient:
         """
         # Log request
         if self._logger:
-            self._logger.log_request("GET", url, headers or {}, None, self._session_id)
+            self._logger.log_request("GET", url, headers or {}, None, self.session_id or None)
 
         session = await self._get_session()
         async with session.get(url, headers=headers or {}) as resp:
@@ -165,7 +183,7 @@ class HTTPClient:
 
             # Log response
             if self._logger:
-                self._logger.log_response(url, resp.status, body, resp_headers, self._session_id)
+                self._logger.log_response(url, resp.status, body, resp_headers, self.session_id or None)
 
             if resp.status >= 400:
                 raise HTTPError(resp.status, resp.reason or "Request failed", body, url, resp_headers)
@@ -193,7 +211,7 @@ class HTTPClient:
         """
         # Log request
         if self._logger:
-            self._logger.log_request("POST", url, headers, data, self._session_id)
+            self._logger.log_request("POST", url, headers, data, self.session_id or None)
 
         session = await self._get_session()
         async with session.post(url, json=data, headers=headers) as resp:
@@ -202,7 +220,7 @@ class HTTPClient:
                 resp_headers = dict(resp.headers)
                 # Log error response
                 if self._logger:
-                    self._logger.log_response(url, resp.status, body, resp_headers, self._session_id)
+                    self._logger.log_response(url, resp.status, body, resp_headers, self.session_id or None)
                 raise HTTPError(resp.status, resp.reason or "Request failed", body, url, resp_headers)
 
             # Read line by line for SSE
@@ -215,7 +233,7 @@ class HTTPClient:
                     response_chunk(chunk_data)
                     # Log SSE chunk
                     if self._logger:
-                        self._logger.log_sse_chunk(url, chunk_data, self._session_id)
+                        self._logger.log_sse_chunk(url, chunk_data, self.session_id or None)
                     yield chunk_data
                 # Some APIs use just "data:" without space
                 elif decoded.startswith("data:"):
@@ -223,7 +241,7 @@ class HTTPClient:
                     response_chunk(chunk_data)
                     # Log SSE chunk
                     if self._logger:
-                        self._logger.log_sse_chunk(url, chunk_data, self._session_id)
+                        self._logger.log_sse_chunk(url, chunk_data, self.session_id or None)
                     yield chunk_data
 
     async def post_stream_ndjson(
@@ -249,7 +267,7 @@ class HTTPClient:
         """
         # Log request
         if self._logger:
-            self._logger.log_request("POST", url, headers, data, self._session_id)
+            self._logger.log_request("POST", url, headers, data, self.session_id or None)
 
         session = await self._get_session()
         async with session.post(url, json=data, headers=headers) as resp:
@@ -258,7 +276,7 @@ class HTTPClient:
                 resp_headers = dict(resp.headers)
                 # Log error response
                 if self._logger:
-                    self._logger.log_response(url, resp.status, body, resp_headers, self._session_id)
+                    self._logger.log_response(url, resp.status, body, resp_headers, self.session_id or None)
                 raise HTTPError(resp.status, resp.reason or "Request failed", body, url, resp_headers)
 
             buffer = ""
@@ -275,7 +293,7 @@ class HTTPClient:
                         response_chunk(buffer[:idx])
                         # Log SSE chunk (NDJSON object)
                         if self._logger:
-                            self._logger.log_sse_chunk(url, json.dumps(obj), self._session_id)
+                            self._logger.log_sse_chunk(url, json.dumps(obj), self.session_id or None)
                         yield obj
                         buffer = buffer[idx:]
                     except json.JSONDecodeError:
@@ -317,7 +335,7 @@ class HTTPClient:
             log_fields = {
                 k: v if isinstance(v, str) else f"<file: {v[0]}, {len(v[1])} bytes>" for k, v in fields.items()
             }
-            self._logger.log_request("POST", url, headers, {"multipart": log_fields}, self._session_id)
+            self._logger.log_request("POST", url, headers, {"multipart": log_fields}, self.session_id or None)
 
         session = await self._get_session()
         async with session.post(url, data=data, headers=headers) as resp:
@@ -326,7 +344,7 @@ class HTTPClient:
 
             # Log response
             if self._logger:
-                self._logger.log_response(url, resp.status, body, resp_headers, self._session_id)
+                self._logger.log_response(url, resp.status, body, resp_headers, self.session_id or None)
 
             if resp.status >= 400:
                 raise HTTPError(resp.status, resp.reason or "Request failed", body, url, resp_headers)

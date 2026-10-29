@@ -89,6 +89,17 @@ coding policy; workspace `AGENTS.md` context and runtime capability/permission
 messages still apply. `live.prompt: |` is the full voice prompt and replaces its
 parent without a hidden prefix. An explicitly empty prompt stays empty.
 
+Named provider connections may set `session_id_header` (default `""`) to a
+custom HTTP header such as `x-opencode-session`. This sends the current
+conversation's ID on text generation requests, stable across turns and tool
+rounds, rather than a static provider-wide value. The web editor exposes it
+under Advanced; JSON and TUI use the same field. Header names are bounded ASCII
+HTTP tokens, excluding authentication/routing/protocol headers. Values are
+1–1024 visible ASCII characters without spaces. Direct library callers use
+`Provider(..., session_id_header=...)` with `set_session_id()` or
+`session_context()`; IDs are task-local. Catalog and credential requests never
+carry the header, and it does not change batch or Live/Realtime connections.
+
 Native properties include `description`, `mode`, `prompt`, atomic
 `model: {provider, id}`, `reasoning_effort`, `tools`, `denied_tools`,
 `allowed_agents`, `user_invocable`, `subagent_available`, `live`, `auto_update`,

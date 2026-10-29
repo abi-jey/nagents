@@ -1555,7 +1555,10 @@ class Harness:
             self._api_model = self.agent.provider.model
         profile = self.provider_store.load().providers.get(self.config.provider) if self.config.provider else None
         replacement = OpenAIProvider(
-            self.openai_auth.credentials, model=self.config.model, timeout=profile.request_timeout if profile else 120.0
+            self.openai_auth.credentials,
+            model=self.config.model,
+            timeout=profile.request_timeout if profile else 120.0,
+            session_id_header=profile.session_id_header if profile else "",
         )
         if profile is not None:
             replacement.configure_context_window(profile.context_window, profile.model_context_windows)

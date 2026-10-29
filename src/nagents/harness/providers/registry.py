@@ -30,6 +30,7 @@ from nagents.provider.auth import validate_prefix
 from nagents.provider.codex.openai import CODEX_ENDPOINT
 from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
+from nagents.provider.session_header import validate_session_id_header
 
 from .model_bindings import AgentModelStore
 from .model_bindings import ModelBinding
@@ -193,6 +194,7 @@ class ProviderProfile:
     api_version: str = ""
     scope: str = "https://ai.azure.com/.default"
     request_timeout: float = 120.0
+    session_id_header: str = ""
     context_window: int = 0
     model_context_windows: dict[str, int] = field(default_factory=dict)
 
@@ -203,6 +205,7 @@ class ProviderProfile:
         ):
             raise ValueError("Provider fields must be strings")
         validate_request_timeout(self.request_timeout)
+        validate_session_id_header(self.session_id_header)
         validate_context_window(self.context_window)
         validate_model_context_windows(self.model_context_windows)
         spec = KINDS.get(self.kind)
@@ -263,6 +266,7 @@ class ProviderProfile:
 
 def validate_provider(profile: ProviderProfile) -> None:
     """Validate a runtime provider profile, including programmatic harness routes."""
+    validate_session_id_header(profile.session_id_header)
     if profile.kind not in PROVIDERS:
         raise ValueError(f"Unknown provider {profile.kind!r}; choose from {', '.join(sorted(PROVIDERS))}")
     if profile.api not in API_NAMES:

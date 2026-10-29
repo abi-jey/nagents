@@ -69,6 +69,7 @@ class FoundryProvider(Provider):
         timeout: float = 120.0,
         retry_config: RetryConfig | None = None,
         live_config: LiveConfig | None = None,
+        session_id_header: str = "",
     ) -> None:
         if credential is not None and api_key:
             raise ValueError("Choose credential or api_key, not both")
@@ -102,6 +103,7 @@ class FoundryProvider(Provider):
             retry_config=retry_config,
             live_config=live_config,
             bearer_token_provider=token if credential is not None else None,
+            session_id_header=session_id_header,
         )
 
     async def auth_headers(self, url: str) -> dict[str, str]:

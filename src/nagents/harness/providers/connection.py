@@ -115,6 +115,7 @@ def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAI
     """Use the connection's routing, credentials, and context settings together."""
     profile.validate()
     provider = _build_provider(profile, config, auth)
+    provider.session_id_header = profile.session_id_header
     provider.configure_context_window(profile.context_window, profile.model_context_windows)
     return provider
 

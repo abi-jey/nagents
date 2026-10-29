@@ -1173,7 +1173,8 @@ class Agent:
         self._close_task = None
         self._active_runs += 1
         try:
-            return await self._compact_session(session_id)
+            with self.provider.session_context(session_id):
+                return await self._compact_session(session_id)
         finally:
             self._active_runs -= 1
 
@@ -1449,10 +1450,17 @@ class Agent:
                 if not isinstance(message, Message):
                     raise TypeError(f"{type(plugin).__name__}.before_run must return Message")
             text_run = self._run_text(message, context, config, plugins, references)
-            async for event in text_run:
-                capture_response(self.session, event)
-                for plugin in plugins:
-                    await plugin.on_event(context, deepcopy(event))
+            while True:
+                # Scope each advance, never the outward yield: callers may stop
+                # or close the stream from another task/context between events.
+                with self.provider.session_context(session_id):
+                    try:
+                        event = await anext(text_run)
+                    except StopAsyncIteration:
+                        break
+                    capture_response(self.session, event)
+                    for plugin in plugins:
+                        await plugin.on_event(context, deepcopy(event))
                 yield event
         finally:
 
@@ -1460,7 +1468,8 @@ class Agent:
                 errors: list[BaseException] = []
                 try:
                     if text_run is not None:
-                        await text_run.aclose()
+                        with self.provider.session_context(session_id):
+                            await text_run.aclose()
                 except BaseException as error:
                     errors.append(error)
                 generation = self._active_generations.get(session_id)
@@ -1540,9 +1549,6 @@ class Agent:
 
         # Add user message to history
         await self.session.add_message(session_id, processed_message)
-
-        # Set session ID for HTTP logging
-        self.provider.set_session_id(session_id)
 
         session_usage = self._session_usage.setdefault(session_id, TokenUsage())
         last_usage = Usage()

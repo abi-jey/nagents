@@ -18,6 +18,40 @@ with the same default for API-key and ChatGPT/Codex authentication. Catalog
 requests retain their 30-second cap, and shell, whole-run, authentication, and
 Live session budgets remain separate. Retry policy is unchanged.
 
+All three constructors also accept `session_id_header=""`. Set it to a custom
+HTTP header name, such as `x-opencode-session`, to send the current conversation
+ID on text generation requests. `Agent.run(..., session_id=...)` supplies the
+same ID across model rounds, tool continuations, and resumed turns. An Agent
+that creates a new session uses that new session's durable ID. Unset headers
+and direct provider calls without an explicit ID send no correlation header.
+
+Direct callers can use a scoped context or the existing setter:
+
+```python
+provider = Provider(
+    ProviderType.LITELLM,
+    api_key="gateway-key",
+    model="gateway/model",
+    base_url="https://gateway.example/v1",
+    session_id_header="x-opencode-session",
+)
+with provider.session_context("conversation-123"):
+    async for event in provider.generate(messages):
+        print(event)
+# Or: provider.set_session_id("conversation-123"); clear with None or "".
+```
+
+The ID is local to the calling asynchronous context, so tasks sharing a provider
+do not overwrite each other's IDs. `session_context` restores the previous ID
+on exit; child tasks inherit their parent's context until they set their own ID.
+Header names must be ASCII HTTP tokens up to 128 characters; authentication,
+routing, and protocol headers are reserved, case insensitively. Session values
+must be 1–1024 visible ASCII characters without spaces; use an opaque ASCII
+identifier when an application's native IDs contain Unicode. Invalid values
+raise before an HTTP request and never appear in validation error text. Model
+catalogs and credential requests do not carry this header. It does not configure
+batch uploads or Live/Realtime connection headers.
+
 ::: nagents.ProviderType
 
 ::: nagents.Provider
@@ -29,6 +63,8 @@ Live session budgets remain separate. Retry policy is unchanged.
         - verify_model
         - context_stats
         - resolve_context_window
+        - set_session_id
+        - session_context
         - close
 
 ## Context accounting

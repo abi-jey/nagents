@@ -108,16 +108,17 @@ class ModelCompaction:
             Message(role="user", content=format_messages_as_text(bounded)),
         ]
         summary = ""
-        async with aclosing(
-            cast("AsyncGenerator[Event, None]", active_provider.generate(prompt_messages, tools=[], stream=False))
-        ) as events:
-            async for event in events:
-                if isinstance(event, (ErrorEvent, ToolCallEvent, ToolCallProgressEvent)):
-                    raise ValueError("Compaction provider returned an error or tool call")
-                if isinstance(event, TextDoneEvent):
-                    if summary or event.finish_reason != FinishReason.STOP:
-                        raise ValueError("Compaction provider did not complete a plain-text summary")
-                    summary = event.text.strip()
+        with active_provider.session_context(request.session_id):
+            async with aclosing(
+                cast("AsyncGenerator[Event, None]", active_provider.generate(prompt_messages, tools=[], stream=False))
+            ) as events:
+                async for event in events:
+                    if isinstance(event, (ErrorEvent, ToolCallEvent, ToolCallProgressEvent)):
+                        raise ValueError("Compaction provider returned an error or tool call")
+                    if isinstance(event, TextDoneEvent):
+                        if summary or event.finish_reason != FinishReason.STOP:
+                            raise ValueError("Compaction provider did not complete a plain-text summary")
+                        summary = event.text.strip()
         if not summary:
             raise ValueError("Compaction provider returned an empty summary")
         return CompactionResult(messages=[Message(role="compaction_summary", content=summary)], summary=summary)

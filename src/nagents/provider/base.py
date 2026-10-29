@@ -14,6 +14,7 @@ import math
 import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from contextlib import contextmanager
 from dataclasses import replace
 from enum import Enum
 from time import monotonic
@@ -69,9 +70,12 @@ from .gateway import GatewayHTTPClient
 from .reasoning import native_openai_api
 from .reasoning import reasoning_effort_options
 from .reasoning import validate_reasoning_choice
+from .session_header import validate_session_header_value
+from .session_header import validate_session_id_header
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from collections.abc import Iterator
     from collections.abc import Sequence
 
     from ..compaction import CompactionSnapshot
@@ -128,6 +132,7 @@ class Provider:
         *,
         bearer_token_provider: BearerTokenProvider | None = None,
         context_window: int = 0,
+        session_id_header: str = "",
     ):
         """
         Initialize the provider.
@@ -155,7 +160,11 @@ class Provider:
                 Mutually exclusive with api_key; supports OpenAI-compatible v1
                 chat/Responses and GPT-Live. Called per request attempt/connection.
                 The caller owns the credential and its cache/refresh/close lifecycle.
+            session_id_header: Optional HTTP header carrying the current conversation ID.
+                Empty disables it. Agent supplies the ID; direct callers use
+                set_session_id() or session_context(). Only generation requests carry it.
         """
+        self.session_id_header = session_id_header
         self.context_window = validate_context_window(context_window)
         self.model_context_windows: dict[str, int] = {}
         self._context_auth_identity = ""
@@ -508,12 +517,36 @@ class Provider:
 
     def set_session_id(self, session_id: str | None) -> None:
         """
-        Set the current session ID for HTTP logging.
+        Set the calling task's conversation ID for logging and the optional header.
 
         Args:
-            session_id: The session ID to include in log entries.
+            session_id: Explicit conversation ID; None or empty clears it. With a
+                session header configured, use 1-1024 visible ASCII characters.
         """
+        if self.session_id_header and session_id:
+            validate_session_header_value(session_id)
         self._http.set_session_id(session_id)
+
+    @property
+    def session_id_header(self) -> str:
+        return self._session_id_header
+
+    @session_id_header.setter
+    def session_id_header(self, value: str) -> None:
+        self._session_id_header = validate_session_id_header(value)
+
+    @contextmanager
+    def session_context(self, session_id: str) -> "Iterator[None]":
+        """Scope an explicit ID to this task, restoring its previous value on exit."""
+        if self.session_id_header and session_id:
+            validate_session_header_value(session_id)
+        with self._http.session_context(session_id):
+            yield
+
+    def _session_headers(self) -> dict[str, str]:
+        if not self.session_id_header or not self._http.session_id:
+            return {}
+        return {self.session_id_header: validate_session_header_value(self._http.session_id)}
 
     async def get_model_list(self) -> list[str]:
         """Fetch model IDs explicitly, without changing the model or verification cache.
@@ -911,6 +944,7 @@ class Provider:
         }
         if self.bearer_token_provider is not None:
             headers.update(await self.auth_headers(url))
+        headers.update(self._session_headers())
 
         body: dict[str, Any] = {
             "model": self.model,
@@ -959,6 +993,7 @@ class Provider:
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/nagents",
         }
+        headers.update(self._session_headers())
 
         body: dict[str, Any] = {
             "model": self.model,
@@ -1041,6 +1076,7 @@ class Provider:
 
         if self.bearer_token_provider is not None:
             headers.update(await self.auth_headers(url))
+        headers.update(self._session_headers())
 
         body: dict[str, Any] = {
             "messages": openai_adapter.format_messages(messages),
@@ -1312,6 +1348,7 @@ class Provider:
             url += "&alt=sse"
 
         headers = {"Content-Type": "application/json"}
+        headers.update(self._session_headers())
 
         body = gemini_adapter.format_request(messages, tools, config)
         if config and config.reasoning_effort:
@@ -1475,6 +1512,7 @@ class Provider:
             url = f"{prefix}/messages"
             headers.pop("x-api-key")
             headers["Authorization"] = f"Bearer {self.api_key}"
+        headers.update(self._session_headers())
 
         # Format messages (extracts system prompt separately)
         system_prompt, formatted_messages = anthropic_adapter.format_messages(messages)
@@ -1764,6 +1802,7 @@ class Provider:
             headers.update(await self.auth_headers(url))
         if self.provider_type == ProviderType.OPENROUTER:
             headers["HTTP-Referer"] = "https://github.com/nagents"
+        headers.update(self._session_headers())
         accumulator = ResponseAccumulator(streaming=stream)
         if stream:
             async with aclosing(
