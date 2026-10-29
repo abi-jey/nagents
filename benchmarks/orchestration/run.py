@@ -66,7 +66,7 @@ def maximum_overlap(intervals: list[tuple[float, float]]) -> int:
 def source_roots() -> dict[str, str]:
     """Identify the imported implementation independently of the benchmark checkout."""
     return {
-        "src/nagents": str(Path(runtime.__file__).resolve().parents[1]),
+        "src/nagents": str(Path(runtime.__file__).resolve().parents[2]),
         "benchmarks/orchestration": str(Path(__file__).resolve().parent),
     }
 

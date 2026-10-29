@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 def source_roots() -> dict[str, str]:
     return {
-        "src/nagents": str(Path(runtime.__file__).resolve().parents[1]),
+        "src/nagents": str(Path(runtime.__file__).resolve().parents[2]),
         "benchmarks/orchestration": str(Path(native.__file__).resolve().parent),
         "benchmarks/intent": str(Path(__file__).resolve().parent),
     }

@@ -171,7 +171,7 @@ def test_provenance_tracks_imported_runtime_outside_benchmark_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     imported_root = tmp_path / "alternate-checkout" / "src" / "nagents"
-    runtime_path = imported_root / "harness" / "runtime.py"
+    runtime_path = imported_root / "harness" / "runtime" / "core.py"
     runtime_path.parent.mkdir(parents=True)
     runtime_path.write_text("# imported runtime\n")
     (imported_root / "agent.py").write_text("# imported agent\n")
