@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import cast
@@ -144,7 +145,7 @@ def test_trace_preserves_custom_connection_factory_and_restores_after_exception(
 
     assert sqlite3.connect is original_connect
     assert aiosqlite.Connection._execute is original_aio_execute
-    with sqlite3.connect(":memory:") as plain_connection:
+    with closing(sqlite3.connect(":memory:")) as plain_connection:
         assert plain_connection.execute("SELECT 1").fetchone() == (1,)
 
 
