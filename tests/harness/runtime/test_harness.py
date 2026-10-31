@@ -184,7 +184,8 @@ def test_config_precedence_origins_profiles_and_xdg(
     assert load_config(config.workspace, project_config).plugins == loaded.plugins
     assert load_config(config.workspace, user / "config.json", trust_project=True).model == "user-model"
     # config_paths records exactly the files that were read, in load order.
-    assert load_config(config.workspace).config_paths == (user / "config.json",)
+    with pytest.warns(UserWarning, match="Ignoring untrusted project config"):
+        assert load_config(config.workspace).config_paths == (user / "config.json",)
     assert load_config(config.workspace, trust_project=True).config_paths == (
         user / "config.json",
         project_config,
