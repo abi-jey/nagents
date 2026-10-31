@@ -29,8 +29,8 @@ export function TeamPane({ team, agents, arrivals, open, close, configure }: {
       {usage.occupied_slots}/{usage.limits.max_concurrent_subagents} slots · {usage.used_executions}/{usage.limits.max_subagent_executions} executions
     </p>}
     <TeamTree agents={agents} profiles={team.profiles} selected={team.selected} inspect={id => { team.select(id); if (narrow) close(); }} configure={configure} arrivals={arrivals} error={team.error} refresh={team.refresh} /></>;
-  if (narrow) return open ? <dialog ref={dialog} className="team-drawer" aria-label="Team conversations" onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === event.currentTarget) close(); }}>{body}</dialog> : null;
-  return open ? <aside className="team-pane" aria-label="Team conversations">{body}</aside> : null;
+  if (narrow) return open ? <dialog ref={dialog} id="team-navigation" className="team-drawer" aria-label="Team conversations" onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === event.currentTarget) close(); }}>{body}</dialog> : null;
+  return open ? <aside id="team-navigation" className="team-pane" aria-label="Team conversations">{body}</aside> : null;
 }
 
 export function AgentConfiguration({ agent, token, sessionId, changed, close, configureDefinition }: { agent: TeamAgent; token: string; sessionId: string; changed: () => void; close: () => void; configureDefinition?: () => void }) {

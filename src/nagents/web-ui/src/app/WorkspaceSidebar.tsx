@@ -8,14 +8,12 @@ import { useChatFolders } from "../features/sessions/useChatFolders.js";
 import { SessionTitleDialog } from "../features/sessions/SessionTitleDialog.js";
 import type { Session } from "../types.js";
 
-export function WorkspaceSidebar({ client, composer, open, close, select, collapsed, toggleCollapsed }: {
+export function WorkspaceSidebar({ client, composer, open, close, select }: {
   client: Client;
   composer: RefObject<HTMLTextAreaElement | null>;
   open: boolean;
   close: () => void;
   select: (id?: string) => Promise<void>;
-  collapsed: boolean;
-  toggleCollapsed: () => void;
 }) {
   const { sessions, available } = client;
   const [renaming, setRenaming] = useState<Session>();
@@ -61,11 +59,5 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
     />
     {renaming && <SessionTitleDialog key={renaming.id} session={renaming} error={client.error}
       close={() => setRenaming(undefined)} save={title => client.renameSession(renaming.id, title)} />}
-    <button type="button" className="sidebar-divider-toggle"
-      aria-label={collapsed ? "Expand sessions sidebar" : "Collapse sessions sidebar"}
-      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      aria-controls="session-navigation" aria-expanded={!collapsed} onClick={toggleCollapsed}>
-      <Icon name="chevron" size={14} />
-    </button>
   </>;
 }

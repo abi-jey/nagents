@@ -283,6 +283,20 @@ while `auto_update` remains `true`. Set it to `false` to retain customizations
 across upgrades. Global assistant saves in the UI set it to `false` and show a
 notice. See the [native format and example](agent-definitions.md#native-format).
 
+### Panel layout
+
+On desktop, drag the divider between Sessions and the conversation to change the
+sidebar width. Above 1100 px, Team also has a resizable divider. The small notch
+collapses or reopens its panel at the previous width. The resize and collapse hit
+areas occupy a dedicated gutter, separate from the panels' scrollbars.
+
+Focus a divider and use Left/Right to resize (Shift moves in larger steps),
+Home/End for its available bounds, and Enter to collapse or expand. Double-click
+resets that panel's width. Escape or pointer cancellation restores the width from
+before the current drag. Widths are saved as browser-local layout preferences;
+temporary viewport fitting preserves the saved widths and keeps room for chat.
+Sessions and Team retain their existing drawers on smaller screens.
+
 ### Conversation Appearance
 
 Open **Settings → Appearance** to choose **Messages only**, **Quiet**,

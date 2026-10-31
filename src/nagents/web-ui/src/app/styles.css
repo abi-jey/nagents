@@ -117,13 +117,9 @@ main {
   min-height: 0;
   overflow: clip;
 }
-.sidebar-divider-toggle { position: absolute; z-index: 0; left: 226px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 14px; min-width: 14px; height: 36px; padding: 0; border: none; border-radius: 0; background: transparent; color: var(--text-secondary); }
-.sidebar-divider-toggle:hover { background: var(--surface-hover); }
 .sidebar .session-row, .sidebar .sidebar-create, .sidebar .sidebar-footer { position: relative; z-index: 1; }
-.sidebar-divider-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
 @media (min-width: 761px) {
   main.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
-  main.sidebar-collapsed > .sidebar-divider-toggle { left: 42px; }
   .sidebar-collapsed .sidebar-header { justify-content: center; padding: 12px 4px; }
   .sidebar-collapsed .nav-brand > span:not(.brand-mark),
   .sidebar-collapsed .session-label, .sidebar-collapsed .session .session-title,
@@ -136,7 +132,6 @@ main {
   .sidebar-collapsed .session, .sidebar-collapsed .new-session,
   .sidebar-collapsed .sidebar-utility, .sidebar-collapsed .workspace-trigger { justify-content: center; padding-inline: 0; }
 }
-@media (max-width: 760px) { .sidebar-divider-toggle { display: none; } }
 .sidebar {
   grid-column: 1;
   grid-row: 1 / 4;

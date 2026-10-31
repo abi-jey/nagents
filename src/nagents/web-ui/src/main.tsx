@@ -12,5 +12,6 @@ import "./features/sessions/folders.css";
 import "./features/tools/tools.css";
 import "./features/context/context.css";
 import "./features/sessions/sessionAgent.css";
+import "./app/panels.css";
 
 createRoot(document.getElementById("root")!).render(<App />);
