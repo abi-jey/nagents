@@ -1,6 +1,6 @@
 [project]
 name = "nagents"
-version = "0.25.3"
+version = "0.25.4"
 description = "A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration"
 readme = "README.md"
 license = "MIT"
