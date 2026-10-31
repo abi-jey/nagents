@@ -1,5 +1,6 @@
 [
   ["nagents.a2a.images", "nagents._async", "finish_on_cancel"],
+  ["nagents.a2a.store", "nagents._async", "finish_on_cancel"],
   ["nagents.agent", "nagents.live", "_LiveUpdates"],
   ["nagents.channels.local_delivery", "nagents._async", "join_owned"],
   ["nagents.channels.store", "nagents._async", "finish_on_cancel"],

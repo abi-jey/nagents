@@ -11,6 +11,7 @@ import os
 import sqlite3
 import sys
 from contextlib import aclosing
+from contextlib import closing
 from dataclasses import asdict
 from dataclasses import replace
 from datetime import datetime
@@ -192,7 +193,7 @@ def _session_in_workspace(db_path: Path, session_id: str) -> bool:
     if not session_id or not db_path.exists():
         return False
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             row = connection.execute(
                 "SELECT 1 FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id WHERE h.id = ?",
                 (session_id,),

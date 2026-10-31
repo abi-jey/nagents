@@ -42,6 +42,7 @@ from a2a.utils.errors import TaskNotFoundError
 from a2a.utils.errors import UnsupportedOperationError
 from a2a.utils.proto_utils import to_stream_response
 
+from .._async import finish_on_cancel
 from .server.auth import Principal
 
 if TYPE_CHECKING:
@@ -146,10 +147,20 @@ class SQLiteTaskStore(VersionedTaskStore):
 
     @asynccontextmanager
     async def connection(self) -> AsyncIterator[aiosqlite.Connection]:
-        async with aiosqlite.connect(self.path, timeout=5) as db:
+        db = aiosqlite.connect(self.path, timeout=5)
+
+        async def connect() -> None:
+            await db
+
+        try:
+            # SSE cancellation can arrive before the worker hands over its
+            # SQLite handle. Own setup and teardown before propagating it.
+            await finish_on_cancel(connect())
             db.row_factory = aiosqlite.Row
             await db.execute("PRAGMA foreign_keys=ON")
             yield db
+        finally:
+            await finish_on_cancel(db.close())
 
     async def initialize(self) -> None:
         private_file(self.path)

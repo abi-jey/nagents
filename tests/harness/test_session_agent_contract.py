@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 from typing import TypeGuard
@@ -200,7 +201,7 @@ def test_native_agent_tools_start_continue_and_report_the_same_session(
                 "Review the second version",
                 "Review the final version",
             ]
-            with sqlite3.connect(harness.agent.session.db_path) as db:
+            with closing(sqlite3.connect(harness.agent.session.db_path)) as db:
                 persisted = db.execute(
                     "SELECT role, content FROM v2_messages WHERE session_id = ? ORDER BY id", (storage_id,)
                 ).fetchall()
@@ -279,7 +280,7 @@ def test_ack_persists_effective_identity_before_child_initialization(
                 "accepted-model",
             )
             assert PUBLIC_SESSION_ID_PATTERN.fullmatch(session_id)
-            with sqlite3.connect(harness.agent.session.db_path) as db:
+            with closing(sqlite3.connect(harness.agent.session.db_path)) as db:
                 row = db.execute(
                     "SELECT root_session_id, storage_id, title FROM nagents_agent_sessions WHERE sequence = 1"
                 ).fetchone()
