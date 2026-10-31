@@ -5,7 +5,7 @@ import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceComposer } from "./WorkspaceComposer";
 import { WorkspaceDialogs } from "./WorkspaceDialogs";
 import { taskAgent, conversationAgent } from "../features/team/model.js";
-import { useAgentArrivals } from "../features/team/TeamTree.js";
+import { useAgentArrivals, TeamIcon } from "../features/team/TeamTree.js";
 import { AgentConfiguration } from "../features/team/TeamPane.js";
 import { AgentNavigator } from "../features/settings/navigator/AgentNavigator.js";
 import type { NavigatorAudio } from "../features/settings/navigator/AgentNavigator.js";
@@ -16,6 +16,8 @@ import { TaskConversation } from "../features/team/TaskConversation.js";
 import { WorkspaceActivity } from "./WorkspaceActivity.js";
 import { useAppearance } from "../features/settings/appearance.js";
 import { useAppViewport } from "./useAppViewport.js";
+import { usePanelLayout } from "./usePanelLayout.js";
+import { PanelDivider } from "./PanelDivider.js";
 import "../features/team/team.css";
 import "../features/team/teamGroups.css";
 import "../features/chat/delegationActivity.css";
@@ -29,6 +31,7 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [teamOpen, setTeamOpen] = useState(() => typeof matchMedia !== "undefined" && matchMedia("(min-width: 1101px)").matches);
+  const panels = usePanelLayout(shell, sidebarCollapsed, teamOpen);
   const [configuredAgent, setConfiguredAgent] = useState("");
   const [navigatorRequest, setNavigatorRequest] = useState<NavigatorRequest>();
   const [navigatorAudio, setNavigatorAudio] = useState<NavigatorAudio>();
@@ -83,12 +86,13 @@ export function App() {
   }
 
   return (
-    <div ref={shell} className={`app-shell${sidebarCollapsed ? " rail-collapsed" : ""}`}>
+    <div ref={shell} className={`app-shell panel-layout-shell${sidebarCollapsed ? " rail-collapsed" : ""}`} style={panels.style} data-resizing={panels.dragging}>
       <a className="skip-link" href="#composer">Skip to prompt</a>
-      <main className={[sidebarCollapsed && "sidebar-collapsed", client.liveOpen && "voice-open", teamOpen && "team-open"].filter(Boolean).join(" ")}>
+      <main className={["panel-layout", sidebarCollapsed && "sidebar-collapsed", client.liveOpen && "voice-open", teamOpen && "team-open"].filter(Boolean).join(" ")}>
         <WorkspaceHeader client={client} navOpen={navOpen} toggleNavigation={() => setNavOpen(!navOpen)} teamOpen={teamOpen} toggleTeam={() => setTeamOpen(value => !value)} />
         <WorkspaceSidebar client={client} composer={composer} open={navOpen} close={closeNavigation}
-          select={select} collapsed={sidebarCollapsed} toggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)} />
+          select={select} />
+        <PanelDivider side="sessions" collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} layout={panels} />
         <WorkspaceActivity sessionId={client.sessions.sessionId}
           task={client.team.selected && <TaskConversation appearance={appearance} team={client.team} agents={agents} arrivals={arrivals} activity={client.chat.taskActivity} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} configureConnection={name => openAgentSettings(name)} back={() => { client.team.select(""); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true })); }} />}
           conversation={{ appearance, agentName: root.name, token: client.sessions.config?.token || "", active: !client.team.selected,
@@ -98,6 +102,11 @@ export function App() {
           composer={<WorkspaceComposer client={client} composer={composer} submit={() => void submit()} select={select}
             configureSettings={() => openAgentSettings(client.sessionAgent.selection?.agent || "assistant", "Voice")} audioChanged={setNavigatorAudio} />}
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />
+        <PanelDivider side="team" collapsed={!teamOpen} setCollapsed={value => setTeamOpen(!value)} layout={panels} />
+        {!teamOpen && <aside className="team-collapsed-rail" id="team-navigation-collapsed" aria-label="Team conversations">
+          <button type="button" aria-label="Expand team panel" title="Expand team panel" onClick={() => setTeamOpen(true)}><TeamIcon size={18} /></button>
+          <span>{agents.length}</span>
+        </aside>}
       </main>
       {configuredAgent && configured && <AgentConfiguration key={`${client.sessions.sessionId}:${configuredAgent}`} agent={configured} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} changed={client.team.refresh} close={() => setConfiguredAgent("")}
         configureDefinition={client.team.profiles.some(profile => profile.id === configured.profile) ? () => { setConfiguredAgent(""); openAgentSettings(configured.profile); } : undefined} />}

@@ -51,8 +51,8 @@ for (const outcome of ["success", "failure", "rename"] as const) {
     });
     function Probe() {
       const [open, setOpen] = useState(true);
-      return createElement(WorkspaceSidebar, { client, composer, open, collapsed: false,
-        close: () => { closed++; setOpen(false); }, select: async () => {}, toggleCollapsed() {} });
+      return createElement(WorkspaceSidebar, { client, composer, open,
+        close: () => { closed++; setOpen(false); }, select: async () => {} });
     }
     async function click(selector: string) {
       const button = document.querySelector<HTMLButtonElement>(selector);
