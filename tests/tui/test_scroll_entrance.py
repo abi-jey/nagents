@@ -71,7 +71,9 @@ def test_draw_exception_restores_cursor(monkeypatch: pytest.MonkeyPatch) -> None
 def test_small_terminal_skips_redraw(monkeypatch: pytest.MonkeyPatch, size: tuple[int, int]) -> None:
     output = io.StringIO()
     monkeypatch.setattr("sys.stdout", output)
-    monkeypatch.setattr("nagents.tui.entrance.shutil.get_terminal_size", lambda: os.terminal_size(size))
+    monkeypatch.setattr(
+        "nagents.tui.entrance.shutil.get_terminal_size", lambda fallback=(80, 24): os.terminal_size(size)
+    )
     assert asyncio.run(_draw(lambda: ""))
     assert not output.getvalue()
 
