@@ -19,11 +19,10 @@ def test_private_runtime_paths_are_ignored() -> None:
         "tool-images/image.png",
     ]
     result = subprocess.run(
-        ["git", "check-ignore", "--no-index", "--stdin"],
-        input="\n".join(paths) + "\n",
+        ["git", "check-ignore", "--no-index", "-z", "--stdin"],
+        input=("\0".join(paths) + "\0").encode(),
         cwd=root,
         capture_output=True,
-        text=True,
         check=True,
     )
-    assert set(result.stdout.splitlines()) == set(paths)
+    assert set(result.stdout.decode().rstrip("\0").split("\0")) == set(paths)

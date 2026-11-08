@@ -3,8 +3,8 @@
 import base64
 import os
 from pathlib import Path
-from urllib.parse import unquote
 from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from nagents.tools.output import ToolOutput
 from nagents.types import ImageContent
@@ -18,7 +18,7 @@ def test_image_file_link(tmp_path: Path) -> None:
     uri = text.splitlines()[-1].split("] ", 1)[1]
     assert uri.startswith("file:///")
     assert "%20" in uri
-    path = Path(unquote(urlsplit(uri).path))
+    path = Path(url2pathname(urlsplit(uri).path))
     assert path.parent == tmp_path / "folder with spaces"
     assert path.read_bytes() == data
     if os.name == "posix":

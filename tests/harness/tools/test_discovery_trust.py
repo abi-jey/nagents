@@ -10,6 +10,8 @@ from nagents.events import TextDoneEvent
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
 
+pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
@@ -29,6 +31,7 @@ async def test_import_side_effects_obey_trust_and_permissions(
     home.mkdir()
     workspace.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     for root, label in ((home, "personal"), (workspace, "project")):
         directory = root / ".agents/tools"
         directory.mkdir(parents=True)

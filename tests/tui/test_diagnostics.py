@@ -34,7 +34,8 @@ def test_runtime_log_is_private_timestamped_metadata_and_restores_loggers(tmp_pa
             raise ValueError("PRIVATE-EXCEPTION")
         except ValueError:
             logging.getLogger("nagents.tui.app").exception("PRIVATE-MESSAGE %s", "PRIVATE-ARGUMENT")
-    assert os.stat(path).st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert os.stat(path).st_mode & 0o777 == 0o600
     assert tui_logger.level == old_level and tui_logger.propagate == old_propagate
     assert tuple(tui_logger.handlers) == old_handlers
     assert tuple(root_logger.handlers) == root_handlers

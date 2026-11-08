@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import os
 import time
 from threading import Event
 
 import pytest
 from textual._xterm_parser import XTermParser
-from textual.drivers.linux_driver import LinuxDriver
 from textual.events import Paste
 
 from nagents.tui.terminal_colors import QUERY_COLORS
 from nagents.tui.terminal_colors import ColorReplies
 from nagents.tui.terminal_colors import TerminalColors
-from nagents.tui.terminal_driver import TerminalDriver
+
+if os.name == "posix":
+    from textual.drivers.linux_driver import LinuxDriver
+
+    from nagents.tui.terminal_driver import TerminalDriver
 
 
 @pytest.mark.parametrize(
@@ -117,6 +121,7 @@ def test_incomplete_sequences_expire_without_losing_input(sequence: str) -> None
     assert replies.expire(4.1) == ""
 
 
+@pytest.mark.requires_posix
 def test_driver_only_issues_read_only_color_queries(monkeypatch: pytest.MonkeyPatch) -> None:
     writes: list[str] = []
     flushes: list[bool] = []
@@ -162,6 +167,7 @@ def test_driver_only_issues_read_only_color_queries(monkeypatch: pytest.MonkeyPa
     assert all(marker not in writes[0] for marker in ("1049h", "?25l", "10;#", "11;#"))
 
 
+@pytest.mark.requires_posix
 def test_driver_skips_queries_when_input_is_not_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     writes: list[str] = []
     driver = TerminalDriver.__new__(TerminalDriver)

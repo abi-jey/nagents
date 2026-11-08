@@ -7,6 +7,7 @@ import json
 from io import StringIO
 from typing import TYPE_CHECKING
 
+import pytest
 from aiohttp import web
 from rich.console import Console
 
@@ -14,6 +15,8 @@ from nagents.harness.wire_log import WireLog
 from nagents.observation import observe
 from nagents.observation import observer
 from nagents.tui.exit_summary import print_exit_summary
+
+pytestmark = pytest.mark.requires_posix
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

@@ -19,6 +19,17 @@ from tests.support.providers import FakeProvider
 from tests.support.providers import collect
 from tests.support.providers import setup_harness as _setup_harness
 
+
+@pytest.fixture(autouse=True)
+def discovery_without_guarded_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nagents.harness.runtime.core import Harness
+    from nagents.harness.tools.coding import CodingTools
+
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+    monkeypatch.setattr(CodingTools, "instructions", lambda self, path: "")
+    monkeypatch.setattr(CodingTools, "discover_skills", lambda self: None)
+
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
@@ -281,6 +292,7 @@ async def test_workspace_tool_module_overrides_personal_module_with_same_filenam
     workspace.mkdir()
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     personal = home / ".agents" / "tools"
     personal.mkdir(parents=True)
     (personal / "weather.py").write_text(
@@ -488,6 +500,7 @@ async def test_failed_module_retains_last_version_while_other_modules_update_and
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_posix
 async def test_builtin_name_collision_and_child_scope_do_not_replace_or_inherit_workspace_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

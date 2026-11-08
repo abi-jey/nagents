@@ -193,6 +193,7 @@ def test_real_tui_wakeup_waits_for_human_queue_then_uses_harness_wake(
         await harness.close()
 
 
+@pytest.mark.usefixtures("workspace_discovery_only")
 def test_pending_timer_stays_owned_by_source_across_tui_fork(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from nagents.events import TextDoneEvent
     from nagents.events import ToolCallEvent

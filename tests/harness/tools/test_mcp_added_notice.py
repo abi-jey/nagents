@@ -12,6 +12,8 @@ from tests.harness.tools.test_resource_reload import server
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
 
+pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
