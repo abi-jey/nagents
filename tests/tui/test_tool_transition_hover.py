@@ -66,7 +66,11 @@ async def test_hover_first_frame_after_scenario_ends(option: int, monkeypatch: p
 @pytest.mark.asyncio
 @pytest.mark.parametrize("option", [0, 1, 2])
 @pytest.mark.parametrize("width", [48, 120])
-async def test_pilot_hover_preserves_geometry_and_preview(option: int, width: int) -> None:
+async def test_pilot_hover_preserves_geometry_and_preview(
+    option: int, width: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(tui_tool_transitions, "monotonic", lambda: now[0])
     app = TransitionStudy()
     async with app.run_test(size=(width, 60)) as pilot:
         app.elapsed = 26
@@ -84,6 +88,7 @@ async def test_pilot_hover_preserves_geometry_and_preview(option: int, width: in
         regions = [item.region for item in rows]
         assert_hover_style(row, option, hovered=False)
         await pilot.hover(row.query_one("CollapsibleTitle"))
+        now[0] += 0.3
         await pilot.pause(0.3)
         assert row.hover_level > 0.9
         assert_hover_style(row, option, hovered=True)
@@ -97,6 +102,7 @@ async def test_pilot_hover_preserves_geometry_and_preview(option: int, width: in
         assert [item.region for item in rows] == regions
         assert all(item.collapsed for item in rows)
         snapshot = row.title
+        now[0] += 0.45
         await pilot.pause(0.45)
         assert row.title != snapshot  # Existing name shimmer is independent of the option.
         assert_hover_style(row, option, hovered=True)

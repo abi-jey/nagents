@@ -227,6 +227,7 @@ class TaskScreen(Screen[tuple[str, str] | None]):
                 yield AgentTree(id="task-options")
             with Vertical(id="task-compose-area"):
                 composer = Composer(lambda _: False, id="task-followup")
+                composer.cursor_blink = self.app.animation_level != "none"
                 composer.load_text(self._drafts.get(self.selected_session_id, ""))
                 composer.placeholder = "Message this agent…"
                 yield composer
