@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import closing
 from typing import TYPE_CHECKING
 from typing import Literal
 
@@ -32,7 +33,7 @@ pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
 
 def _external_global_write(path: Path, limits: SubagentLimits, revision: str) -> None:
     """Emulate another web process updating the shared defaults database."""
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute(
             "CREATE TABLE IF NOT EXISTS ngn_web_global_settings ("
             "id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL, "

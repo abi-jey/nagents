@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import cast
@@ -191,7 +192,7 @@ def test_referenced_images_rejects_forged_foreign_root_and_orphan_paths(
     with site(tmp_path, monkeypatch) as app:
         assert app.client.portal is not None
         _, root = add_image_history(app, expected)
-        with sqlite3.connect(app.state.history.db_path) as db:
+        with closing(sqlite3.connect(app.state.history.db_path)) as db, db:
             db.execute("CREATE TABLE IF NOT EXISTS nagents_agent_sessions (storage_id TEXT, root_session_id TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS harness_sessions (id TEXT)")
 

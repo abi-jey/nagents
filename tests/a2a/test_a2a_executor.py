@@ -59,6 +59,7 @@ from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from pathlib import Path
 
     from nagents.a2a.agent.runtime import AgentContext
@@ -221,17 +222,20 @@ async def collect_to_state(stream: AsyncIterator[Event], state: TaskState) -> li
     raise AssertionError(f"A2A stream ended before {TaskState.Name(state)}")
 
 
-async def drain_terminal(stream: AsyncIterator[Event]) -> list[Event]:
+async def drain_terminal(stream: AsyncGenerator[Event, None]) -> list[Event]:
     events: list[Event] = []
-    async for event in stream:
-        events.append(event)
-        if isinstance(event, TaskStatusUpdateEvent) and event.status.state in {
-            TaskState.TASK_STATE_COMPLETED,
-            TaskState.TASK_STATE_REJECTED,
-            TaskState.TASK_STATE_FAILED,
-            TaskState.TASK_STATE_CANCELED,
-        }:
-            return events
+    # A terminal yield still leaves the handler's database cleanup pending.
+    # Finish it here, before pytest starts closing the test's event loop.
+    async with aclosing(stream):
+        async for event in stream:
+            events.append(event)
+            if isinstance(event, TaskStatusUpdateEvent) and event.status.state in {
+                TaskState.TASK_STATE_COMPLETED,
+                TaskState.TASK_STATE_REJECTED,
+                TaskState.TASK_STATE_FAILED,
+                TaskState.TASK_STATE_CANCELED,
+            }:
+                return events
     return events
 
 

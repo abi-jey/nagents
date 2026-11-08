@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import aiosqlite
@@ -14,7 +15,7 @@ from nagents.session.manager import SessionManager
 
 
 def database_snapshot(path: Path) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         schema = db.execute("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name").fetchall()
         versions = db.execute(
             "SELECT version, description, rollback_sql FROM schema_migrations ORDER BY version"
@@ -28,7 +29,7 @@ async def test_atomic_sessions_match_legacy_schema_and_metadata(tmp_path: Path) 
     await MigrationManager(legacy, migrations=migrations).initialize()
     await SessionManager(atomic).initialize()
     assert database_snapshot(atomic) == database_snapshot(legacy)
-    with sqlite3.connect(atomic) as db:
+    with closing(sqlite3.connect(atomic)) as db:
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert db.execute("PRAGMA synchronous").fetchone()[0] == 2
 
@@ -37,11 +38,11 @@ async def test_atomic_sessions_match_legacy_schema_and_metadata(tmp_path: Path) 
 async def test_atomic_upgrade_preserves_existing_messages(tmp_path: Path) -> None:
     path = tmp_path / "upgrade.db"
     await MigrationManager(path, migrations=migrations[:1]).initialize()
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute("INSERT INTO v2_sessions (id,user_id) VALUES ('session','user')")
         db.execute("INSERT INTO v2_messages (session_id,role,content) VALUES ('session','user','keep me')")
     await SessionManager(path).initialize()
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         assert db.execute("SELECT content FROM v2_messages").fetchall() == [("keep me",)]
         assert db.execute("SELECT compacted_at_message_id FROM v2_sessions").fetchone() == (None,)
         assert db.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall() == [
@@ -59,7 +60,7 @@ async def test_atomic_upgrade_preserves_existing_messages(tmp_path: Path) -> Non
 async def test_fork_counter_upgrade_seeds_existing_children_and_cleans_only_deleted_parent(tmp_path: Path) -> None:
     path = tmp_path / "forks-v5.db"
     await MigrationManager(path, migrations=migrations[:5]).initialize()
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.executemany(
             "INSERT INTO v2_sessions (id, user_id) VALUES (?, 'harness')",
             [(name,) for name in ("root", "first", "second", "grandchild", "orphan")],
@@ -69,7 +70,7 @@ async def test_fork_counter_upgrade_seeds_existing_children_and_cleans_only_dele
             [("first", "root"), ("second", "root"), ("grandchild", "first"), ("orphan", "")],
         )
     await SessionManager(path).initialize()
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         assert db.execute("SELECT * FROM ngn_session_fork_counters ORDER BY session_id").fetchall() == [
             ("first", 1),
             ("root", 2),
@@ -94,7 +95,7 @@ async def test_failed_atomic_upgrade_leaves_prior_schema_data_and_versions(tmp_p
         await manager.initialize()
     assert not manager._initialized
     assert database_snapshot(path) == snapshot
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         assert db.execute("SELECT * FROM original").fetchall() == [("keep",)]
     manager.migrations = [initial, upgrade]
     await manager.initialize()
@@ -108,7 +109,7 @@ async def test_independent_session_initializers_serialize_fresh_and_upgrade(tmp_
         if version:
             await MigrationManager(path, migrations=migrations[:version]).initialize()
         await asyncio.gather(*(SessionManager(path).initialize() for _ in range(8)))
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db:
             assert db.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall() == [
                 (1,),
                 (2,),
@@ -136,7 +137,7 @@ async def test_atomic_script_preserves_trigger_bodies_and_quoted_semicolons(tmp_
         INSERT INTO source VALUES ('no final terminator')
     """
     await MigrationManager(path, migrations=[Migration(1, "trigger", script)], atomic=True).initialize()
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         assert db.execute("SELECT value FROM audit").fetchall() == [
             ("literal;semicolon",),
             ("input;value",),
@@ -150,7 +151,7 @@ async def test_default_custom_scripts_retain_transaction_control(tmp_path: Path)
     path = tmp_path / "custom.db"
     script = "BEGIN; CREATE TABLE custom (value TEXT); COMMIT; VACUUM;"
     await MigrationManager(path, migrations=[Migration(1, "custom", script)]).initialize()
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         assert db.execute("SELECT * FROM custom").fetchall() == []
 
 
@@ -174,7 +175,7 @@ async def test_cancelled_atomic_initialization_rolls_back_and_releases_writer(tm
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not manager._initialized
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db:
         assert db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == []
     await asyncio.wait_for(SessionManager(path).initialize(), timeout=10)
 
@@ -189,7 +190,7 @@ async def test_targeted_migration_persists_versions_independently_of_atomic_init
     for version in (1, 4, 5, 6, 7, 5, 1, 7):
         await manager.migrate_to(version)
         assert await manager.get_version() == version
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db:
             assert db.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall() == [
                 (number,) for number in range(1, version + 1)
             ]

@@ -1,6 +1,8 @@
 """CLI contracts, without API credentials or a real terminal."""
 
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from nagents.cli import _event_record
 from nagents.cli import _parser
 from nagents.cli import _plain
+from nagents.cli import _session_in_workspace
 from nagents.cli import main
 from nagents.events import TextChunkEvent
 from nagents.harness import TaskMessage
@@ -15,6 +18,31 @@ from nagents.harness.types import ApprovalRequest
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
+
+
+@pytest.mark.parametrize("session_id", ["known", "missing", "broken-schema"])
+def test_session_lookup_closes_its_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session_id: str) -> None:
+    database = tmp_path / "sessions.db"
+    with closing(sqlite3.connect(database)) as db, db:
+        if session_id != "broken-schema":
+            db.execute("CREATE TABLE harness_sessions (id TEXT)")
+            db.execute("CREATE TABLE v2_sessions (id TEXT)")
+            db.execute("INSERT INTO harness_sessions VALUES ('known')")
+            db.execute("INSERT INTO v2_sessions VALUES ('known')")
+
+    connect = sqlite3.connect
+    opened: list[sqlite3.Connection] = []
+
+    def track_connection(path: Path) -> sqlite3.Connection:
+        connection = connect(path)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", track_connection)
+    assert _session_in_workspace(database, session_id) is (session_id == "known")
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        opened[0].execute("SELECT 1")
 
 
 def test_options_work_before_and_after_subcommand() -> None:
