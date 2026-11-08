@@ -28,6 +28,8 @@ function compatible(saved: Entry, previous: Entry): boolean {
   if (saved.activationOmission || previous.activationOmission) return saved.kind === "status" && previous.kind === "status" &&
     !!saved.activationOmission && saved.activationOmission.sessionId === previous.activationOmission?.sessionId;
   if (saved.kind === "live_caption" || previous.kind === "live_caption") return sameLiveCaption(saved, previous);
+  if (saved.kind === "tool_change" || previous.kind === "tool_change") return saved.kind === previous.kind &&
+    !!saved.historyId && saved.historyId === previous.historyId && (saved.taskId || "") === (previous.taskId || "");
   if (saved.delivery || previous.delivery) return !!saved.delivery && saved.delivery.delivery_id === previous.delivery?.delivery_id;
   if (saved.abandoned || previous.abandoned) return false;
   if (saved.toolProgress || previous.toolProgress || saved.unattributed || previous.unattributed) return false;
@@ -126,7 +128,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot & { root_
     // history authoritative over unbound assistant stream copies. Never assign
     // those copies to a row by text, run order, or a stale history baseline.
     if (entry.kind === "assistant" && !entry.taskId && !entry.historyId && canonicalRuns.has(entry.runId || "")) return;
-    const freshCaption = ["live_caption", "agent_change"].includes(entry.kind) && !knownHistory?.some((row) => row.history_id === entry.historyId);
+    const freshCaption = ["live_caption", "agent_change", "tool_change"].includes(entry.kind) && !knownHistory?.some((row) => row.history_id === entry.historyId);
     const owner = oldOwners.get(entry);
     const observed = preserveObserved && !entry.recorded && (!rowIds(entry).length || rowIds(entry).some(id =>
       !knownHistory?.some(row => row.history_id === id))) && (!owner || roots.some(saved => sameTurn(owner, saved)));
@@ -136,7 +138,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot & { root_
     const index = matches[position];
     if (index < 0) {
       const activity = (entry.origin || entry.liveCaption) && announceNewUsers ? [...previous, ...next].reduce((latest, item) => Math.max(latest, item.activity || 0), 0) + 1 : entry.activity;
-      next.push({ ...entry, id: entry.delivery || entry.kind === "live_caption" ? entry.id : id(), activity }); continue;
+      next.push({ ...entry, id: entry.delivery || ["live_caption", "tool_change"].includes(entry.kind) ? entry.id : id(), activity }); continue;
     }
     for (let i = after; i < index; i++) keep(previous[i]);
     const old = previous[index];
@@ -220,12 +222,13 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
       // A complete replay identifies every response slot within its own user
       // turn, including a row committed before that slot's final event arrived.
       // Truncated snapshots never enter this replay path.
-      const old = scoped || entries.find((item, i) => !claimed.has(item.id) && !item.runId && compatible(entry, item) &&
+      const identified = entry.kind === "tool_change" ? entries.find(item => !claimed.has(item.id) && compatible(entry, item)) : undefined;
+      const old = identified || scoped || entries.find((item, i) => !claimed.has(item.id) && !item.runId && compatible(entry, item) &&
         (entry.kind === "user" ? sameTranscriptUser(entry, item)
           : !!owner && i > (positions.get(owner) ?? -1) &&
             !conflictingRows(entry, item) && sameTurn(owner, oldOwners.get(item))));
       if (old) { claimed.add(old.id); if (owner) positions.set(owner, entries.indexOf(old)); }
-      const stableId = old?.id || (entry.kind === "live_caption" ? entry.id : `run:${run.id}:${index}`);
+      const stableId = old?.id || (["live_caption", "tool_change"].includes(entry.kind) ? entry.id : `run:${run.id}:${index}`);
       replayIds.set(entry.id, stableId);
       return { ...entry, id: stableId,
         ...artifactState(entry.artifacts, old?.artifacts), artifactError: entry.artifactError || old?.artifactError,

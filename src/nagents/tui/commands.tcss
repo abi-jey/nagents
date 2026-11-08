@@ -15,4 +15,4 @@
 }
 #slash-options > .option-list--option-hover { background: $ngn-hover; }
 #slash-hint { height: 1; color: $ngn-muted; text-overflow: ellipsis; }
-#queue-status { display: none; height: 1; color: $ngn-warning; text-overflow: ellipsis; }
+#queue-status { display: none; height: auto; color: $ngn-warning; text-wrap: nowrap; text-overflow: ellipsis; }

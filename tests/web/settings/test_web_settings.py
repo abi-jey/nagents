@@ -381,7 +381,7 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
                 "shell_timeout": 600,
                 "max_output": 1048576,
                 "max_file_bytes": 4194304,
-                "max_tool_rounds": 1000,
+                "max_tool_rounds": 3000,
                 "max_subagent_depth": 0,
             }
             response = await client.post("/api/settings", json=settings_request(before, values), headers=headers)
@@ -399,7 +399,7 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
             assert harness.approval_handler is approval and harness.session_id == session_id
             assert harness.tools.read_hashes == {"kept.txt": "old-read"}
             assert (await harness.history())[0].content == "keep history"
-            assert harness.agent.max_tool_rounds == 1000 and not harness.can_delegate
+            assert harness.agent.max_tool_rounds == 3000 and not harness.can_delegate
             assert "Trusted review rules" in (harness.agent.system_prompt or "")
             assert "cannot delegate" in (harness.agent.system_prompt or "")
             with pytest.raises(PermissionError):
@@ -455,7 +455,7 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
         ("max_file_bytes", False),
         ("max_file_bytes", 2048.5),
         ("max_tool_rounds", 0),
-        ("max_tool_rounds", 1001),
+        ("max_tool_rounds", 3001),
         ("max_tool_rounds", True),
         ("max_tool_rounds", 2.0),
         ("max_subagent_depth", -1),

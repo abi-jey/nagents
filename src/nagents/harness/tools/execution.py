@@ -263,6 +263,23 @@ async def publish_anchor(adapter: "SessionManager", session_id: str, block: _Blo
 
 
 @contextmanager
+def bind_channel_list(harness: "Harness", definition: "ToolDefinition") -> Iterator[None]:
+    """Bind host discovery to its registered identity, callable and schema."""
+    if definition.name != "channel_list" or harness.agent.tool_registry.get(definition.name) is not definition:
+        raise ValueError("Bind the registered channel_list definition")
+    previous = harness._channel_list_definition
+    previous_binding = harness._channel_list_binding
+    harness._channel_list_definition = definition
+    harness._channel_list_binding = copy.copy(definition)
+    harness._channel_list_binding.parameters = copy.deepcopy(definition.parameters)
+    try:
+        yield
+    finally:
+        harness._channel_list_definition = previous
+        harness._channel_list_binding = previous_binding
+
+
+@contextmanager
 def bind_channel_send(harness: "Harness", definition: "ToolDefinition") -> Iterator[None]:
     """Host-only registration binding; tool names alone never authorize a sink."""
     if definition.name != "channel_send" or harness.agent.tool_registry.get(definition.name) is not definition:

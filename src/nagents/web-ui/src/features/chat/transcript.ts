@@ -61,6 +61,7 @@ export type Entry = {
     | "delivery"
     | "live_caption"
     | "agent_change"
+    | "tool_change"
     | "retained_tasks";
   delivery?: LocalDelivery;
   uploads?: Snapshot["history"][number]["uploads"];
@@ -274,6 +275,13 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
   const scope = { runId, taskId, activation, followup,
     ...(historyTurn === undefined ? {} : { historyTurn, historyIndex: typeof event.history_index === "number" ? event.history_index : undefined }),
   };
+  if (event.event === "tool_added") {
+    if (!historyId) return entries;
+    const index = entries.findIndex(entry => entry.kind === "tool_change" && entry.historyId === historyId && (entry.taskId || "") === taskId);
+    const entry: Entry = { id: `tool-added:${taskId}:${historyId}`, kind: "tool_change", text: text(event, "text"),
+      ...scope, historyId, recorded: event.saved === true };
+    return index < 0 ? [...entries, entry] : entries.map((previous, i) => i === index ? { ...previous, ...entry, id: previous.id } : previous);
+  }
   const actor = (entry: Entry) =>
     (entry.runId || "") === runId && (entry.taskId || "") === taskId &&
     (historyTurn === undefined || entry.historyTurn === historyTurn);
@@ -1069,6 +1077,11 @@ export function fromHistory({
     }
     if (message.role === "local_delivery") {
       for (const delivery of message.deliveries || []) deliver(delivery);
+      continue;
+    }
+    if (message.role === "user" && message.name === "ngn_tools_added") {
+      entries = appendEvent(entries, { event: "tool_added", text: message.content, history_id: message.history_id,
+        history_index: historyIndex, history_turn: historyTurn, saved: true });
       continue;
     }
     if (message.role === "user") historyTurn = historyIndex;

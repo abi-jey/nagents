@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING
+from typing import ClassVar
 
 import pytest
 from textual import on
 from textual.app import App
+from textual.binding import Binding
+from textual.containers import Vertical
 from textual.containers import VerticalScroll
 from textual.widgets import Button
 from textual.widgets import Static
@@ -18,7 +21,12 @@ from nagents.session import SessionManager
 from nagents.tui.tasks import AgentTree
 from nagents.tui.tasks import TaskScreen
 from nagents.tui.themes import configure_theme
+from nagents.tui.widgets import Composer
+from nagents.tui.widgets import ConversationMarkdown
+from nagents.tui.widgets import ToolCard
+from nagents.tui.widgets import Turn
 from nagents.types import Message
+from nagents.types import ToolCall
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
@@ -27,6 +35,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from textual.app import ComposeResult
+    from textual.binding import BindingType
+
+
+def history_text(history: Vertical) -> str:
+    """Read shared turn bodies rather than the container's renderable."""
+    return "\n".join(
+        (turn.body.source or "") if isinstance(turn.body, ConversationMarkdown) else str(turn.body.render())
+        for turn in history.query(Turn)
+    )
 
 
 class InspectorApp(App[None]):
@@ -87,34 +104,38 @@ def test_pending_history_cannot_update_a_removed_or_replaced_view(tmp_path: Path
             # Selection can cancel an earlier exclusive history worker. Wait
             # for this view's rendered data, rather than every global worker.
             async with asyncio.timeout(HANG_GUARD):
-                while "Saved answer for s1" not in str(screen.query_one("#task-history", Static).render()):
+                while "Saved answer for s1" not in history_text(screen.query_one("#task-history", Vertical)):
                     await pilot.pause()
+            # Make this pending read differ from the already-rendered snapshot.
+            await manager.add_message("s1", Message(role="user", content="New saved question"))
             hold = True
             worker = screen.load_history("s1")
             async with asyncio.timeout(HANG_GUARD):
                 await started.wait()
-            original = screen.query_one("#task-history", Static)
+            original = screen.query_one("#task-history", Vertical)
             scroll = screen.query_one("#task-history-scroll", VerticalScroll)
             await original.remove()
             assert screen.is_mounted and screen.is_attached
-            replacement = Static("Replacement view has no history yet", id="task-history", markup=False)
+            sentinel = Static("Replacement view has no history yet", markup=False)
+            replacement = Vertical(sentinel, id="task-history")
             if replace_target:
                 await scroll.mount(replacement)
             release.set()
             await worker.wait()
             if replace_target:
-                assert str(replacement.render()) == "Replacement view has no history yet"
+                assert list(replacement.children) == [sentinel]
+                assert not replacement.query(Turn)
                 fresh = screen.load_history("s1")
                 await fresh.wait()
-                assert "Saved answer for s1" in str(replacement.render())
+                assert "Saved answer for s1" in history_text(replacement)
             await app.pop_screen()
             reopened = TaskScreen(lambda: tasks, manager.get_history, parents=lambda: {}, selected_session_id="s2")
             await app.push_screen(reopened)
             await pilot.pause()
             async with asyncio.timeout(HANG_GUARD):
-                while "Saved answer for s2" not in str(reopened.query_one("#task-history", Static).render()):
+                while "Saved answer for s2" not in history_text(reopened.query_one("#task-history", Vertical)):
                     await pilot.pause()
-            text = str(reopened.query_one("#task-history", Static).render())
+            text = history_text(reopened.query_one("#task-history", Vertical))
             assert "Saved answer for s2" in text and "Saved answer for s1" not in text
 
     asyncio.run(scenario())
@@ -131,7 +152,8 @@ def test_inspector_arrows_show_history_and_send_explicit_followup() -> None:
             screen = app.screen
             assert isinstance(screen, TaskScreen)
             assert screen.selected_session_id == "s2"
-            assert "Question for s2" in str(screen.query_one("#task-history", Static).render())
+            assert "Question for s2" in history_text(screen.query_one("#task-history", Vertical))
+            assert isinstance(screen.query_one("#task-followup", TextArea), Composer)
             await pilot.press("enter")
             assert screen.query_one("#task-followup", TextArea).has_focus
             await pilot.press("m", "o", "r", "e")
@@ -183,6 +205,154 @@ def test_inspector_drafts_are_per_agent() -> None:
             options.focus()
             await pilot.press("up")
             assert composer.text == "Follow up one"
+
+    asyncio.run(scenario())
+
+
+def test_inspector_uses_shared_markdown_turns_and_tool_cards() -> None:
+    async def scenario() -> None:
+        markdown = "## Answer\n\n**Bold** and `code`\n\n```python\nprint('ok')\n```"
+        messages = [
+            Message(role="user", content="Literal [brackets]"),
+            Message(
+                role="assistant",
+                content=markdown,
+                tool_calls=[ToolCall(id="call-1", name="read_file", arguments={"path": "README.md"})],
+            ),
+            Message(role="tool", content="File contents", tool_call_id="call-1", name="read_file"),
+        ]
+
+        async def history(session_id: str) -> list[Message]:
+            assert session_id == "s1"
+            return messages
+
+        tasks = [TaskInfo("s1", "", status="completed")]
+        app = HistoryInspectorApp(lambda: tasks, history)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, TaskScreen)
+            history_view = screen.query_one("#task-history", Vertical)
+            async with asyncio.timeout(HANG_GUARD):
+                while not any(card.output_text == "File contents" for card in history_view.query(ToolCard)):
+                    await pilot.pause()
+            turns = list(history_view.query(Turn))
+            assert [turn.role for turn in turns] == ["user", "assistant"]
+            assert isinstance(turns[0].body, Static)
+            assert str(turns[0].body.render()) == "Literal [brackets]"
+            assert isinstance(turns[1].body, ConversationMarkdown)
+            assert turns[1].body.source == markdown
+            cards = list(history_view.query(ToolCard))
+            assert len(cards) == 1
+            card = cards[0]
+            assert card.call_id == "call-1" and card.tool == "read_file"
+            assert card.output_text == "File contents"
+            assert card.collapsed
+            card.collapsed = False
+            messages.append(Message(role="assistant", content="Updated response"))
+            await screen.load_history("s1").wait()
+            refreshed = history_view.query_one(ToolCard)
+            assert refreshed is not card
+            assert not refreshed.collapsed
+            assert refreshed.output_text == "File contents"
+
+    asyncio.run(scenario())
+
+
+class ParentDraftApp(App[None]):
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("f6", "parent_pane", show=False, priority=True)]
+
+    def __init__(self) -> None:
+        super().__init__()
+        configure_theme(self, "ocean")
+        self.parent_pane_calls = 0
+        self.drafts: dict[str, str] = {}
+        self.result: tuple[str, str] | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Composer(lambda _: False)
+
+    def action_parent_pane(self) -> None:
+        # Mirror NagentsApp's priority binding delegation to its active view.
+        if isinstance(self.screen, TaskScreen):
+            self.screen.action_focus_pane()
+            return
+        self.parent_pane_calls += 1
+
+    def finished(self, result: tuple[str, str] | None) -> None:
+        self.result = result
+
+    def open_inspector(self) -> TaskScreen:
+        async def history(session_id: str) -> list[Message]:
+            return [Message(role="assistant", content=f"Answer for {session_id}")]
+
+        screen = TaskScreen(
+            lambda: [TaskInfo("s1", "", status="completed")],
+            history,
+            parents=lambda: {},
+            selected_session_id="s1",
+            drafts=self.drafts,
+        )
+        self.push_screen(screen, self.finished)
+        return screen
+
+
+@pytest.mark.parametrize("back_key", ["escape", "alt+left", "button"])
+def test_fullscreen_back_retains_parent_and_agent_drafts(back_key: str) -> None:
+    async def scenario() -> None:
+        app = ParentDraftApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            parent_screen = app.screen
+            parent = app.query_one("#composer", Composer)
+            parent.load_text("Unsent parent draft")
+            screen = app.open_inspector()
+            await pilot.pause()
+            assert screen.region == parent_screen.region
+            assert screen.query_one("#task-dialog", Vertical).region == screen.region
+            screen.query_one("#task-followup", Composer).load_text("Unsent child draft")
+            if back_key == "button":
+                await pilot.click("#task-close")
+            else:
+                await pilot.press(back_key)
+            await pilot.pause()
+            assert app.screen is parent_screen
+            assert parent.text == "Unsent parent draft"
+            assert app.result is None
+            assert app.drafts == {"s1": "Unsent child draft"}
+            reopened = app.open_inspector()
+            await pilot.pause()
+            assert reopened.query_one("#task-followup", Composer).text == "Unsent child draft"
+            assert parent.text == "Unsent parent draft"
+
+    asyncio.run(scenario())
+
+
+def test_f6_focus_is_scoped_to_task_screen() -> None:
+    async def scenario() -> None:
+        app = ParentDraftApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            parent = app.query_one("#composer", Composer)
+            parent.load_text("Parent draft")
+            parent.focus()
+            await pilot.press("f6")
+            assert app.parent_pane_calls == 1
+            screen = app.open_inspector()
+            await pilot.pause()
+            composer = screen.query_one("#task-followup", Composer)
+            scroll = screen.query_one("#task-history-scroll", VerticalScroll)
+            assert screen.query_one(AgentTree).has_focus
+            await pilot.press("f6")
+            assert composer.has_focus
+            await pilot.press("f6")
+            assert scroll.has_focus
+            await pilot.press("f6")
+            assert composer.has_focus
+            assert app.parent_pane_calls == 1
+            assert parent.text == "Parent draft"
+            await pilot.press("escape")
+            parent.focus()
+            await pilot.press("f6")
+            assert app.parent_pane_calls == 2
 
     asyncio.run(scenario())
 

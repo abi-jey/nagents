@@ -21,6 +21,7 @@ from nagents.channels.types import ChannelRenderCapabilities
 from nagents.channels.types import ChannelSendCapabilities
 from nagents.extensions import AgentPlugin
 from nagents.harness.runtime.core import _HarnessSession
+from nagents.harness.tools.execution import bind_channel_list
 from nagents.harness.tools.execution import bind_channel_send
 from nagents.harness.tools.execution import delivery_origin
 from nagents.session.deliveries import DeliveryJournal
@@ -100,6 +101,9 @@ class TuiChannelHost:
         dispatcher = ChannelDispatcher((self.channel,), workspace=self.harness.workspace)
         with ExitStack() as owned:
             definitions = owned.enter_context(dispatcher.register_tools(agent.tool_registry))
+            owned.enter_context(
+                bind_channel_list(self.harness, next(tool for tool in definitions if tool.name == "channel_list"))
+            )
             definition = next(tool for tool in definitions if tool.name == "channel_send")
             owned.enter_context(bind_channel_send(self.harness, definition))
             instructions = _Instructions()

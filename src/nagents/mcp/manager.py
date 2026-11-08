@@ -14,14 +14,15 @@ from typing import Any
 from typing import cast
 
 from .._async import finish_on_cancel
+from ..tools.output import ToolOutput
 from ..types import JsonSchema
 from ..types import ToolCall
 from ..types import ToolDefinition
 from .client import MCPClient
 from .client import MCPError
 from .client import MCPServerConfig
-from .client import _extract_text_content
 from .client import _failure_category
+from .content import parse_tool_content
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +375,7 @@ class MCPManager:
 
         return registry.get_all()
 
-    async def execute_tool(self, tool_call: ToolCall) -> str:
+    async def execute_tool(self, tool_call: ToolCall) -> str | ToolOutput:
         """Execute an MCP tool call directly.
 
         This is the internal dispatch used by the wrapper functions.
@@ -404,7 +405,7 @@ class MCPManager:
             )
 
         content = await client.call_tool(tool_info.tool_name, tool_call.arguments)
-        return _extract_text_content(content)
+        return parse_tool_content(content)
 
     def _create_tool_wrapper(self, qualified_name: str, tool_info: "_MCPToolInfo") -> Callable[..., Any]:
         """Create an async wrapper function for an MCP tool with proper signature.
@@ -449,7 +450,7 @@ class MCPManager:
             # No properties defined — keep a generic **kwargs signature
             pass
 
-        async def wrapper(**kwargs: Any) -> str:
+        async def wrapper(**kwargs: Any) -> str | ToolOutput:
             """Execute an MCP tool.
 
             This is a wrapper for an MCP tool. Arguments are passed

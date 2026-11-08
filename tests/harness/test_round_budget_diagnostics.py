@@ -34,6 +34,30 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_default_round_budget_construction_and_child_inheritance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.agent import Agent
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield DoneEvent()
+
+    harness, providers = setup_harness(tmp_path, monkeypatch, script)
+    child = harness.tasks._create_child("assistant")
+    try:
+        assert harness.config.max_tool_rounds == harness.agent.max_tool_rounds == 3000
+        assert child.config.max_tool_rounds == child.agent.max_tool_rounds == 3000
+        assert Agent(providers[0], harness.agent.session).max_tool_rounds == 3000
+        assert not any(provider.requests for provider in providers)
+        with pytest.raises(ValueError, match="between 1 and 3000"):
+            HarnessConfig(workspace=tmp_path, max_tool_rounds=3001)
+    finally:
+        await child.close()
+        await harness.close()
+
+
+@pytest.mark.requires_posix
 @pytest.mark.parametrize(
     ("limit", "calls", "metadata"),
     [(2, 2, {"max_tool_rounds": 2}), (True, 1, {}), (False, 0, {}), (0, 0, {}), (-1, 0, {})],
@@ -68,7 +92,7 @@ def test_actual_harness_budget_code_preserves_counts_usage_and_terminal_behavior
             assert done.usage.total_tokens == (10 if calls else 0)
             assert len(providers[0].requests) == calls
             assert len([event for event in events if isinstance(event, ToolResultEvent)]) == calls
-            assert harness.config.max_tool_rounds == 30
+            assert harness.config.max_tool_rounds == 3000
             assert len([message for message in await harness.history() if message.role == "tool"]) == calls
         finally:
             await harness.close()
@@ -142,8 +166,9 @@ def test_actual_web_stream_reports_budget_failure_without_an_extra_model_turn(
 
 @pytest.mark.requires_posix
 @pytest.mark.parametrize("cause", ["budget", "other"])
+@pytest.mark.parametrize("round_limit", [100, 6, 150])
 def test_child_budget_explanation_keeps_failed_lifecycle_and_retained_history(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cause: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cause: str, round_limit: int
 ) -> None:
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         assert provider.index == 1, "A child failure must not start a parent model turn on its own"
@@ -154,6 +179,8 @@ def test_child_budget_explanation_keeps_failed_lifecycle_and_retained_history(
 
     async def scenario() -> None:
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
+        assert harness.config.max_tool_rounds == 3000
+        harness.config.max_tool_rounds = round_limit
         await harness.initialize()
         harness.tasks.begin(harness.session_id)
         try:
@@ -168,13 +195,13 @@ def test_child_budget_explanation_keeps_failed_lifecycle_and_retained_history(
             )
             assert info.followups == info.activation == 0 and "SECRET" not in info.error
             assert not providers[0].requests
-            assert len(providers[1].requests) == (12 if cause == "budget" else 1)
+            assert len(providers[1].requests) == (round_limit if cause == "budget" else 1)
             child = harness.tasks._children[info.session_id]
-            assert harness.config.max_tool_rounds == 30 and child.agent.max_tool_rounds == 12
+            assert harness.config.max_tool_rounds == round_limit and child.agent.max_tool_rounds == round_limit
             assert providers[1].closed and child._closed
-            history = await harness.task_history(info.session_id)
+            history = await harness.task_history(info.session_id, limit=200)
             assert history and len([message for message in history if message.role == "tool"]) == (
-                12 if cause == "budget" else 0
+                min(round_limit, 100) if cause == "budget" else 0
             )
             assert all(task.done() for task in harness.tasks._workers.values())
         finally:

@@ -71,7 +71,11 @@ async def test_zero_servers_logs_every_reload_and_never_reads_foreign_or_untrust
         summaries = [record.getMessage() for record in caplog.records if "ngn MCP discovery:" in record.getMessage()]
         assert len(summaries) == 3
         assert "phase=startup" in summaries[0] and all('"configured_servers": 0' in text for text in summaries)
-        assert sum("Ignoring foreign MCP configuration" in record.getMessage() for record in caplog.records) == 2
+        foreign_records = [
+            record for record in caplog.records if "Ignoring foreign MCP configuration" in record.getMessage()
+        ]
+        assert len(foreign_records) == 2
+        assert all(record.levelno == logging.INFO for record in foreign_records)
         public = json.dumps(diagnostics.snapshot()) + harness.describe() + caplog.text
         assert "PRIVATE_SECRET" not in public and "PRIVATE_COMMAND" not in public
         assert all(str(path) in harness.describe() for path in foreign)
@@ -88,6 +92,8 @@ async def test_counts_follow_loaded_tools_and_retain_previous_source_after_faile
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     configured = server(tmp_path)
+    foreign = tmp_path / "opencode.json"
+    foreign.write_text("PRIVATE_FOREIGN_CONTENT")
     user = user_config()
     user.write_text(
         json.dumps(
@@ -105,9 +111,15 @@ async def test_counts_follow_loaded_tools_and_retain_previous_source_after_faile
     )
     harness = Harness(load_config(tmp_path))
     try:
-        with caplog.at_level(logging.INFO, logger="nagents.harness.tools.resources"):
+        # Match the CLI's default logging threshold during startup: a foreign
+        # file must not produce stderr warnings even with a global MCP enabled.
+        with caplog.at_level(logging.WARNING):
             await harness.initialize(create_session=False)
+        assert not any("Ignoring foreign MCP configuration" in record.getMessage() for record in caplog.records)
+        with caplog.at_level(logging.INFO, logger="nagents.harness.tools.resources"):
             loaded = harness.resources.mcp_diagnostics()
+            assert loaded.ignored_configs == (str(foreign),)
+            assert str(foreign) in harness.describe()
             assert loaded.configured_servers == loaded.connected_servers == 1
             assert loaded.registered_tools == loaded.advertised_tools == 1
             assert loaded.effective_source == str(user)
@@ -126,6 +138,8 @@ async def test_counts_follow_loaded_tools_and_retain_previous_source_after_faile
         public = caplog.text + json.dumps(loaded.snapshot()) + json.dumps(retained.snapshot())
         assert "PRIVATE_MCP_VALUE" not in public and "PRIVATE_INVALID_VALUE" not in public
         assert configured.command not in public and configured.args[-1] not in public
+        assert "PRIVATE_FOREIGN_CONTENT" not in public
+        assert any(record.levelno >= logging.WARNING for record in caplog.records)
     finally:
         await harness.close()
 

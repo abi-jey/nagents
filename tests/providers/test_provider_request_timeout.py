@@ -210,7 +210,7 @@ def test_all_named_factories_preserve_selected_request_timeout(
         try:
             assert_timeout(provider, timeout)
             assert provider.retry_config == RetryConfig()
-            assert config.shell_timeout == 47 and config.max_tool_rounds == 30
+            assert config.shell_timeout == 47 and config.max_tool_rounds == 3000
         finally:
             await provider.close()
         if route.endswith("entra"):

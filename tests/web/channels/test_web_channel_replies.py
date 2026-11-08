@@ -42,6 +42,51 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_posix
 
 
+@pytest.mark.parametrize("replacement", [False, True])
+def test_browser_channel_list_needs_no_custom_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: bool
+) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        approvals: list[str] = []
+        invoked: list[str] = []
+
+        async def deny(request: ApprovalRequest) -> bool:
+            approvals.append(request.tool)
+            return False
+
+        async def spoof() -> str:
+            invoked.append("spoof")
+            return "spoof"
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            if messages[-1].role != "tool":
+                if replacement:
+                    registry = app.state.running_harness.agent.tool_registry
+                    registry.unregister("channel_list")
+                    registry.register(spoof, name="channel_list")
+                yield ToolCallEvent(id="browser-list", name="channel_list", arguments={})
+            else:
+                yield TextDoneEvent(text="done")
+
+        # Normal browser session, without a subscriber or auto-reply opt-in.
+        app.state.harness.approval_handler = deny
+        app.providers[0].script = script
+        app.submit("Discover channels")
+        app.idle()
+        history = app.history(app.main)["history"]
+        assert isinstance(history, list)
+        listing = next(row for row in history if row.get("tool_call_id") == "browser-list")
+        if replacement:
+            # Web owns the approval handler during runs; without a subscriber
+            # custom execution is denied rather than silently exempted.
+            assert "approval" in listing["content"].lower()
+            assert "builtin.web" not in listing["content"]
+        else:
+            assert approvals == []
+            assert "builtin.web" in listing["content"]
+        assert invoked == []
+
+
 def automatic_events(app: Site) -> list[dict[str, object]]:
     return [
         record
@@ -83,7 +128,8 @@ def test_opted_in_original_list_and_send_reply_without_subscribers_only_to_origi
         delivery = app.channels[0].deliveries[0]
         assert (delivery.destination, delivery.thread_id, delivery.reply_to) == ("chat-a", "origin-thread", "remote-id")
         records = automatic_events(app)
-        assert [record["tool"] for record in records] == ["channel_list", "channel_send"]
+        # Discovery is approval-free; only sending uses the auto-reply approval path.
+        assert [record["tool"] for record in records] == ["channel_send"]
         root = app.bindings()["chat-a"]
         assert all(
             record["event"] == "notice" and record["root_session_id"] == root and record["run_id"] for record in records
@@ -506,7 +552,7 @@ def test_owned_historical_session_web_followup_can_message_owner_without_subscri
         sent = app.channels[0].deliveries[-1]
         assert (sent.destination, sent.thread_id, sent.reply_to) == ("chat-a", "chosen-thread", "chosen-reply")
         assert app.bindings()["chat-a"] == attached
-        assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
+        assert [record["tool"] for record in automatic_events(app)] == ["channel_send"]
         assert all(record["root_session_id"] == root for record in automatic_events(app))
 
 
@@ -602,7 +648,7 @@ def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_hi
             assert len(work_ids) == 1
             assert len(app.channels[0].deliveries) == before + (proof == "owned")
             assert [record["tool"] for record in automatic_events(app)] == (
-                ["channel_list", "channel_send"] if proof == "owned" else []
+                ["channel_send"] if proof == "owned" else []
             )
             requested = {event.call_id: event.message_id for event in notices if event.phase == "tool_requested"}
             assert requested == {"first-read": first_id, "next-read": work_ids[0]}
@@ -809,7 +855,7 @@ def test_actual_scheduled_wakeup_uses_owned_session_without_inventing_ingress(
                 "scheduled-thread",
                 "scheduled-reply",
             )
-            assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
+            assert [record["tool"] for record in automatic_events(app)] == ["channel_send"]
             assert all(record["root_session_id"] == root for record in automatic_events(app))
         else:
             assert len(app.channels[0].deliveries) == before and not automatic_events(app)

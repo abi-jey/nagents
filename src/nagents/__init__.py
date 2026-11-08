@@ -234,6 +234,7 @@ from .stt import STTService
 from .stt import TranscriptionResult
 from .tools import ToolExecutor
 from .tools import ToolRegistry
+from .tools.decorators import tool
 from .tools.docker import docker_run
 from .types import AudioContent
 from .types import ContentPart
@@ -407,6 +408,7 @@ __all__ = [
     "load_channel",
     "parse_skill_metadata",
     "render_skill_manifest",
+    "tool",
     "transcode_audio_to_wav",
     "truncate_tool_results",
 ]

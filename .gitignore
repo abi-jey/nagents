@@ -13,8 +13,19 @@ logs
 .agents/chrome-context
 .agents/skills
 .local
-./deployments/private
-
+/deployments/private/
+# Runtime data and local secrets (keep checked-in examples explicit).
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm
+.env.*
+!.env-example
+!.env.example
+credentials.json
+/wire-*.jsonl
+/tool-images/
+.archify
 # Machine-local files
 /.local/
 /deployment/private/

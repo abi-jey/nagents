@@ -58,6 +58,13 @@ jobs:
       - name: Run pre-commit
         run: pre-commit run --all-files
 
+      - name: Validate release modes
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PUBLISH_DEV: ${{ inputs.publish_dev }}
+          BUMP: ${{ inputs.version_bump }}
+        run: test "$PUBLISH_DEV" != true || test "$BUMP" = none
+
       - name: Validate alpha release request
         if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
         env:
@@ -211,11 +218,13 @@ jobs:
       needs.test-windows.result == 'success'
     outputs:
       version: ${{ steps.bump.outputs.version }}
+      commit: ${{ steps.commit.outputs.sha }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -236,8 +245,12 @@ jobs:
 
           bump_type = "${{ inputs.version_bump }}"
 
-          # Pull latest before bumping to avoid conflicts
-          subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
+          # Never release untested changes from a moving branch tip.
+          subprocess.run(["git", "fetch", "origin", "main"], check=True)
+          candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          remote = subprocess.check_output(["git", "rev-parse", "origin/main"], text=True).strip()
+          if os.environ["GITHUB_REF"] != "refs/heads/main" or candidate != remote:
+              raise SystemExit("Stable bumps require the tested main SHA; rerun CI on current main.")
 
           with open('pyproject.toml', 'r') as f:
               config = toml.load(f)
@@ -279,13 +292,14 @@ jobs:
         shell: python
 
       - name: Commit and push version bump
+        id: commit
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git pull --rebase origin main || true
           git add pyproject.toml
           git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
-          git push
+          git push origin HEAD:refs/heads/main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   # =============================================================================
   # BUILD DISTRIBUTION
@@ -293,6 +307,9 @@ jobs:
   build:
     name: Build Distribution
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.candidate.outputs.sha }}
+      version: ${{ steps.candidate.outputs.version }}
     needs: [lint, bump-version, test-linux, test-macos, test-windows]
     if: |
       always() &&
@@ -308,7 +325,9 @@ jobs:
 
       - name: Fetch successful version bump
         if: needs.bump-version.result == 'success'
-        run: git fetch origin "${GITHUB_REF}" && git checkout --detach FETCH_HEAD
+        env:
+          RELEASE_SHA: ${{ needs.bump-version.outputs.commit }}
+        run: git fetch origin "$RELEASE_SHA" && git checkout --detach "$RELEASE_SHA"
 
       - uses: actions/setup-node@v4
         with:
@@ -353,8 +372,45 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
         run: python .github/scripts/alpha_version.py
 
+      - name: Stamp dev version
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_dev
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+          path = Path('pyproject.toml')
+          text = path.read_text()
+          suffix = f".dev{os.environ['GITHUB_RUN_NUMBER']}{int(os.environ['GITHUB_RUN_ATTEMPT']):03d}"
+          text, count = re.subn(r'(?m)^version = "([^"]+)"$', lambda match: f'version = "{match[1]}{suffix}"', text)
+          assert count == 1
+          path.write_text(text)
+          PY
+
+      - name: Record immutable candidate
+        id: candidate
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          ref = os.environ['GITHUB_REF']
+          if ref.startswith('refs/tags/'):
+              assert ref == f'refs/tags/v{version}', 'Release tag must match artifact version'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
+
       - name: Build wheel and sdist
         run: python -m build
+
+      - name: Bind artifacts to candidate
+        env:
+          RELEASE_SHA: ${{ steps.candidate.outputs.sha }}
+          RELEASE_VERSION: ${{ steps.candidate.outputs.version }}
+        run: python .github/scripts/release_artifacts.py create --dist dist --manifest release-manifest.json --sha "$RELEASE_SHA" --version "$RELEASE_VERSION"
 
       - name: Verify bundled web assets, skills, and instructions
         shell: python
@@ -435,6 +491,11 @@ jobs:
           name: dist
           path: dist/
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: release-manifest.json
+
   # =============================================================================
   # DOCKER BUILD & PUSH
   # =============================================================================
@@ -458,9 +519,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Pull latest changes (for bump workflow)
+      - name: Fetch exact version bump
         if: github.event_name == 'workflow_dispatch' && needs.bump-version.result == 'success'
-        run: git fetch origin main && git checkout --detach FETCH_HEAD
+        env:
+          RELEASE_SHA: ${{ needs.bump-version.outputs.commit }}
+        run: git fetch origin "$RELEASE_SHA" && git checkout --detach "$RELEASE_SHA"
 
       - uses: actions/setup-python@v5
         if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
@@ -487,11 +550,16 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,format=short
+            type=raw,value=sha-${{ needs.build.outputs.sha }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=alpha-${{ github.run_number }}-${{ github.run_attempt }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish_alpha }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=v${{ needs.bump-version.outputs.version }},enable=${{ needs.bump-version.result == 'success' }}
+
+      - name: Verify Docker candidate
+        env:
+          RELEASE_SHA: ${{ needs.build.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -527,8 +595,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Pull latest changes
-        run: git pull --rebase origin ${{ github.ref_name }} || true
+      - name: Checkout exact release candidate
+        env:
+          RELEASE_SHA: ${{ needs.bump-version.outputs.commit || github.sha }}
+        run: git fetch origin "$RELEASE_SHA" && git checkout --detach "$RELEASE_SHA"
 
       - uses: actions/setup-python@v5
         with:
@@ -539,19 +609,19 @@ jobs:
 
       - name: Get version
         id: version
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
         run: |
-          import toml
+          import tomllib
           import os
-
-          with open('pyproject.toml', 'r') as f:
-              config = toml.load(f)
-
-          version = config['project']['version']
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={version}\n")
-
-          print(f"Version: {version}")
+          from pathlib import Path
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          assert version == os.environ['EXPECTED_VERSION']
+          ref = os.environ['GITHUB_REF']
+          if ref.startswith('refs/tags/'):
+              assert ref == f'refs/tags/v{version}', 'Release tag must match artifact version'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
         shell: python
 
       - name: Download artifacts
@@ -560,19 +630,30 @@ jobs:
           name: dist
           path: dist
 
-      - name: List artifacts
-        run: ls -la dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-manifest
+          path: provenance
+
+      - name: Verify release artifacts
+        env:
+          RELEASE_SHA: ${{ needs.build.outputs.sha }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          python .github/scripts/release_artifacts.py verify --dist dist --manifest provenance/release-manifest.json --sha "$RELEASE_SHA" --version "$RELEASE_VERSION"
+          TAG_SHA=$(git rev-parse -q --verify "refs/tags/v${RELEASE_VERSION}^{commit}" || true)
+          test -z "$TAG_SHA" || test "$TAG_SHA" = "$RELEASE_SHA"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-          skip-existing: true
 
       - name: Get previous stable tag
         id: prev_tag
         run: |
-          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -2 | tail -1)
+          PREV_TAG=$(git tag --merged HEAD -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx 'v${{ steps.version.outputs.version }}' | head -1 || true)
           if [ -z "$PREV_TAG" ]; then
             PREV_TAG=$(git rev-list --max-parents=0 HEAD)
           fi
@@ -600,6 +681,7 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ needs.bump-version.outputs.commit || github.sha }}
           body_path: release_notes.md
           files: dist/*
 
@@ -618,10 +700,27 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-manifest
+          path: provenance
+      - name: Verify release artifacts
+        env:
+          RELEASE_SHA: ${{ needs.build.outputs.sha }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          python .github/scripts/release_artifacts.py verify --dist dist --manifest provenance/release-manifest.json --sha "$RELEASE_SHA" --version "$RELEASE_VERSION"
 
       - name: Publish tested alpha artifacts
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -645,71 +744,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.build.outputs.sha }}
           fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.20.0'
-          cache: npm
-          cache-dependency-path: src/nagents/web-ui/package-lock.json
-
-      - name: Install web dependencies
-        working-directory: src/nagents/web-ui
-        run: npm ci
-
-      - name: Build web assets
-        working-directory: src/nagents/web-ui
-        run: npm run build
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
-        run: pip install toml build
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
 
-      - name: Generate dev version
-        id: version
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-manifest
+          path: provenance
+
+      - name: Verify release artifacts
+        env:
+          RELEASE_SHA: ${{ needs.build.outputs.sha }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
         run: |
-          import toml
-          import os
-          from datetime import datetime
-
-          with open('pyproject.toml', 'r') as f:
-              config = toml.load(f)
-
-          base_version = config['project']['version']
-          timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-
-          dev_version = f"{base_version}.dev{timestamp}"
-
-          config['project']['version'] = dev_version
-          with open('pyproject.toml', 'w') as f:
-              toml.dump(config, f)
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={dev_version}\n")
-
-          print(f"Dev version: {dev_version}")
-        shell: python
-
-      - name: Build wheel and sdist
-        run: python -m build
-
-      - name: List artifacts
-        run: ls -la dist/
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          python .github/scripts/release_artifacts.py verify --dist dist --manifest provenance/release-manifest.json --sha "$RELEASE_SHA" --version "$RELEASE_VERSION"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-          skip-existing: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Dev v${{ steps.version.outputs.version }}
+          tag_name: v${{ needs.build.outputs.version }}
+          name: Dev v${{ needs.build.outputs.version }}
+          target_commitish: ${{ needs.build.outputs.sha }}
           prerelease: true
           generate_release_notes: true
           files: dist/*

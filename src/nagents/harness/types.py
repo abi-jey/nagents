@@ -61,6 +61,13 @@ class Notice:
 
 
 @dataclass
+class ToolAddedNotice(Notice):
+    """A compact tool-availability line anchored to its saved user-role message."""
+
+    history_id: str = ""
+
+
+@dataclass
 class SessionInfo:
     id: str
     title: str

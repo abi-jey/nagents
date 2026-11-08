@@ -61,7 +61,25 @@ def observe(kind: str, **data: object) -> None:
 
 
 def headers(values: Mapping[str, str]) -> dict[str, str]:
-    allowed = {"content-type", "content-length", "accept", "user-agent", "retry-after", "x-request-id"}
+    # Unknown headers may carry credentials under arbitrary names. Preserve only
+    # explicitly supported transport/routing diagnostics, never name heuristics.
+    allowed = {
+        "content-type",
+        "content-length",
+        "accept",
+        "user-agent",
+        "retry-after",
+        "x-request-id",
+        "session-id",
+        "thread-id",
+        "x-session-id",
+        "chatgpt-account-id",
+        "x-openai-internal-codex-residency",
+        "openai-beta",
+        "originator",
+        "traceparent",
+        "cache-control",
+    }
     return {name: value if name.lower() in allowed else "[redacted]" for name, value in values.items()}
 
 

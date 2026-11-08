@@ -12,6 +12,7 @@ from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import aclosing
 from contextlib import contextmanager
+from contextlib import nullcontext
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -231,6 +232,8 @@ class Harness:
         self._activation = 0
         self._delivery_definition: ToolDefinition | None = None
         self._delivery_binding: ToolDefinition | None = None
+        self._channel_list_definition: ToolDefinition | None = None
+        self._channel_list_binding: ToolDefinition | None = None
         self._permission_ceiling = "reviewer" if config.read_only else "build"
         self._permission_parents: tuple[Harness, ...] = ()
         self._inherited_tool_profiles: tuple[AgentProfile, ...] = ()
@@ -283,6 +286,9 @@ class Harness:
         self._queue: asyncio.Queue[HarnessEvent | RunTurn] | None = None
         self._worker: asyncio.Task[None] | None = None
         self._closing: asyncio.Task[None] | None = None
+        from ..wire_log import WireLog
+
+        self.wire_log = WireLog(config.data_dir) if config.wire_log else None
         self.tools = CodingTools(self)
         self.tool_settings = WorkspaceTools(self.workspace)
         self.agent = Agent(
@@ -798,6 +804,7 @@ class Harness:
             if create_session and not self._session_created:
                 await self.create_session(self.session_id)
                 self._session_created = True
+                await self.resources.announce_added_tools(self.session_id, baseline=True)
 
     async def load_plugin(self, reference: str) -> None:
         """Add an explicitly trusted extension through the same staged loader."""
@@ -914,6 +921,13 @@ class Harness:
                 yield event
 
     async def _generation_events(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
+        capture = self.wire_log.capture(self.session_id) if self.wire_log is not None else nullcontext()
+        with capture:
+            async with aclosing(self._observed_generation_events(prompt)) as events:
+                async for event in events:
+                    yield event
+
+    async def _observed_generation_events(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
         if self._remote_profile.configured:
             from ..remote.runtime import run_remote
 
@@ -1268,6 +1282,7 @@ class Harness:
                 raise ValueError(f"Session {id!r} does not exist in this workspace")
             self.session_id = id
             self._session_created = True
+            await self.resources.announce_added_tools(id, baseline=True)
             self.tools.read_hashes.clear()
 
     async def new_session(self) -> str:
@@ -1277,6 +1292,7 @@ class Harness:
             await self.create_session(session_id)
             self.session_id = session_id
             self._session_created = True
+            await self.resources.announce_added_tools(session_id, baseline=True)
             self.tools.read_hashes.clear()
             return session_id
 
@@ -1730,7 +1746,7 @@ class Harness:
                 f"Endpoint: {self.agent.provider.base_url}",
                 f"Authentication: {self.auth_status()}",
                 f"Theme: {self.config.theme}; background: {self.config.theme_background}; animations: {self.config.animations}",
-                f"Composer: submit_mode={self.config.submit_mode}; tab_action={self.config.tab_action}",
+                f"Composer: submit_mode={self.config.submit_mode}",
                 f"Agent: {self.config.agent} ({self.mode}); profiles: {', '.join(self.config.profile_names)}",
                 f"Subagents: {self.tasks.usage()}",
                 f"Project configuration trusted: {self.config.trust_project}",

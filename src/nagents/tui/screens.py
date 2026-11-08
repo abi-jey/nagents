@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 from typing import ClassVar
+from typing import Literal
 
 from rich.text import Text
 from textual import on
@@ -30,16 +31,19 @@ if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest
 
 
-class ApprovalModal(ModalScreen[bool]):
+class ApprovalModal(ModalScreen[bool | Literal["always"]]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "deny", show=False, priority=True),
         Binding("pageup", "page_preview(False)", show=False, priority=True),
         Binding("pagedown", "page_preview(True)", show=False, priority=True),
     ]
 
-    def __init__(self, request: ApprovalRequest) -> None:
+    def __init__(self, request: ApprovalRequest, *, workspace: str = "", persistent: bool = True) -> None:
         super().__init__()
         self.request = request
+        self.workspace = workspace
+        self.persistent = persistent
+        self.can_allow_always = bool(workspace) and not request.mandatory
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog approval-dialog"):
@@ -54,19 +58,39 @@ class ApprovalModal(ModalScreen[bool]):
                     )
                     yield Static(f"Agent: {label}", markup=False)
                 yield Static(self.request.description, markup=False)
+                if self.can_allow_always:
+                    lifetime = (
+                        "Saved for future sessions."
+                        if self.persistent
+                        else "This extension asks again after it is reloaded."
+                    )
+                    yield Static(
+                        f"Always allow: all arguments to {self.request.tool} in workspace {self.workspace}. "
+                        f"{lifetime} Mandatory requests still require approval.",
+                        classes="approval-scope",
+                        markup=False,
+                    )
+                elif self.request.mandatory:
+                    yield Static(
+                        "Mandatory approval: only this request can be allowed.",
+                        classes="approval-scope",
+                        markup=False,
+                    )
                 yield Static("EXACT ARGUMENTS", classes="section-label", markup=False)
                 yield Static(highlight(format_value(self.request.arguments), language="json", theme=CodeTheme))
                 if self.request.preview:
                     yield Static("PROPOSED CHANGE / PREVIEW", classes="section-label", markup=False)
                     yield Static(highlight(self.request.preview, language="diff", theme=CodeTheme))
             yield Static(
-                "PgUp/PgDn scroll · Tab decisions · Esc deny\nOnly this request. Nothing is allowed by default.",
+                "PgUp/PgDn scroll · Tab decisions · Esc deny\nAllow once applies only to this request.",
                 classes="dialog-hint",
                 markup=False,
             )
             with Horizontal(classes="dialog-actions"):
                 yield Button("Deny", id="deny")
                 yield Button("Allow once", id="allow", variant="warning")
+                if self.can_allow_always:
+                    yield Button("Always allow", id="always", variant="warning")
 
     def on_mount(self) -> None:
         self.query_one("#deny", Button).focus()
@@ -83,7 +107,10 @@ class ApprovalModal(ModalScreen[bool]):
 
     @on(Button.Pressed)
     def decide(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "allow")
+        if event.button.id == "always" and self.can_allow_always:
+            self.dismiss("always")
+        else:
+            self.dismiss(event.button.id == "allow")
 
 
 class ChoiceModal(ModalScreen[str]):

@@ -8,6 +8,8 @@ from collections.abc import AsyncIterator
 
 import aiohttp
 
+from ..adapters._additional_tools import AdditionalToolsUnsupported
+from ..adapters._additional_tools import rejects_additional_tools
 from ..adapters._validation import ProtocolError
 from ..adapters._validation import load_object
 from ..http import HTTPClient
@@ -40,9 +42,32 @@ class GatewayHTTPClient(HTTPClient):
                 headers["Retry-After"] = delay
             raise HTTPError(response.status, "Provider request failed", headers=headers)
 
+    @staticmethod
+    async def _check_additional_tools(response: aiohttp.ClientResponse, data: object) -> None:
+        # Parse only a bounded rejection, and retain no upstream message/credentials.
+        if response.status not in {400, 422} or not isinstance(data, dict):
+            return
+        inputs = data.get("input", [])
+        if not isinstance(inputs, list) or not any(
+            isinstance(item, dict) and item.get("type") == "additional_tools" for item in inputs
+        ):
+            return
+        raw = bytearray()
+        async for chunk in response.content.iter_chunked(4096):
+            raw.extend(chunk)
+            if len(raw) > 16384:
+                return
+        try:
+            error = load_object(raw.decode("utf-8")).get("error")
+        except (UnicodeError, ProtocolError):
+            return
+        if rejects_additional_tools(error):
+            raise AdditionalToolsUnsupported()
+
     async def _json(self, method: str, url: str, data: object, headers: dict[str, str]) -> dict[str, object]:
         session = await self._get_session()
         async with session.request(method, url, json=data, headers=headers, allow_redirects=False) as response:
+            await self._check_additional_tools(response, data)
             self._check_status(response)
             body = bytearray()
             async for chunk in response.content.iter_chunked(8192):
@@ -64,6 +89,7 @@ class GatewayHTTPClient(HTTPClient):
     async def post_stream(self, url: str, data: dict[str, object], headers: dict[str, str]) -> AsyncIterator[str]:
         session = await self._get_session()
         async with session.post(url, json=data, headers=headers, allow_redirects=False) as response:
+            await self._check_additional_tools(response, data)
             self._check_status(response)
             if response.content_type != "text/event-stream":
                 raise ProtocolError("Provider did not return an event stream.")

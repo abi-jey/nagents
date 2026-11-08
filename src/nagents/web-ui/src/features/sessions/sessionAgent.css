@@ -65,6 +65,8 @@
 .entry.agent_change { padding-block: 6px; margin-block: 5px; }
 .agent-change-marker { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; }
 .agent-change-marker svg { flex-shrink: 0; }
+.entry.tool_change { padding-block: 0; margin-block: 4px; }
+.tool-added-line { color: var(--text-secondary); font-size: 11px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 700px) {
   .conversation-agent-trigger { margin: 0; max-width: 100%; padding: 3px 0; font-size: 10px; }
 }

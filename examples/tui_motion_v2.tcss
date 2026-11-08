@@ -1,0 +1,26 @@
+Screen { background: $ngn-background; color: $ngn-text; layers: base overlay; }
+#brand { height: 1; padding: 0 2; margin-top: 1; color: $ngn-muted; }
+#effects { height: 1; margin: 0 2 1 2; }
+#effects Button { min-width: 0; height: 1; width: auto; margin-right: 3; padding: 0; border: none; background: transparent; color: $ngn-muted; }
+#effects Button.-primary { color: $ngn-assistant; text-style: bold; }
+#effects Button:hover, #effects Button:focus { text-style: $ngn-focus-style; background: $ngn-hover; }
+#conversation { height: 1fr; padding: 0 3; scrollbar-size: 1 1; }
+.byline { color: $ngn-assistant; text-style: bold; height: 1; margin-top: 1; }
+.prose { height: auto; margin: 0 0 1 0; max-width: 90; }
+#delegation { height: 1; color: $ngn-muted; padding-left: 1; margin-top: 1; }
+#agent-details { height: auto; margin-top: 1; padding: 1; border-left: solid $ngn-border; color: $ngn-muted; }
+#details, #timing-lines { height: auto; }
+#timings { height: auto; margin-top: 1; padding-top: 1; border-top: solid $ngn-border; color: $ngn-muted; }
+.muted { height: auto; color: $ngn-muted; }
+#message { height: 3; margin: 0 2; border: round $ngn-border; border-title-color: $ngn-muted; background: $ngn-message-background; color: $ngn-message-muted; padding: 0 1; }
+#status-area { height: 4; padding: 0 3; }
+#status-area Static { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+.main-status { color: $ngn-assistant; }
+.child-status { color: $ngn-tool; }
+.wake-status { color: $ngn-warning; }
+#provider-model { color: $ngn-muted; }
+#help { height: 2; margin: 0 3; color: $ngn-muted; text-wrap: nowrap; text-overflow: ellipsis; }
+#intro { layer: overlay; position: absolute; width: 100%; height: 100%; background: $ngn-background; align: center middle; }
+#intro-field { width: 36; height: 3; content-align: center middle; color: $ngn-assistant; }
+#intro-name { width: 36; height: 3; content-align: center middle; text-style: bold; color: $ngn-heading; }
+#intro-copy { width: 36; height: 2; content-align: center middle; color: $ngn-muted; }

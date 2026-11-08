@@ -243,7 +243,11 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Site]:
                 },
             )
         elif content == "approval" and messages[-1].role != "tool":
-            yield ToolCallEvent(id="inspect", name="channel_list", arguments={})
+            yield ToolCallEvent(
+                id="inspect",
+                name="channel_action",
+                arguments={"channel": "fixture", "action": "inspect", "arguments": {}},
+            )
         else:
             yield TextChunkEvent(chunk="answer")
             yield TextDoneEvent(text="answer")

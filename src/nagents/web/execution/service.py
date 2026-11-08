@@ -28,6 +28,7 @@ from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness.runtime.core import _HarnessSession
+from nagents.harness.tools.execution import bind_channel_list
 from nagents.harness.tools.execution import bind_channel_send
 from nagents.harness.tools.execution import host_run
 from nagents.harness.types import TaskDeliveryWarning
@@ -749,6 +750,13 @@ class WebState:
                 else nullcontext()
             )
 
+            list_definition = self.running_harness.agent.tool_registry.get("channel_list")
+            list_binding = (
+                bind_channel_list(self.running_harness, list_definition)
+                if list_definition is not None and any(list_definition is tool for tool in self.channels.tools)
+                else nullcontext()
+            )
+
             def turn_started(turn: RunTurn) -> None:
                 notices.turn(turn)
                 self.observe_run(
@@ -757,6 +765,7 @@ class WebState:
 
             with (
                 binding,
+                list_binding,
                 host_run(self.running_harness, run.id),
                 observe_responses(lambda adapter, event: self.responses.capture(run, adapter, event)),
                 self.running_harness.followups.source(

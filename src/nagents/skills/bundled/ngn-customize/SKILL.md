@@ -22,6 +22,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Provider/model/protocol/retries | `Provider`, `ProviderType`, `RetryConfig`, `GenerationConfig`, `OpenAIProvider` | `provider/`, `types.py`, `http/` |
 | Persistent conversation and active context | `SessionManager`, `Message`, `Agent.session` | `session/manager.py`, `types.py` |
 | Model-callable Python functions | `Agent.register_tool`, `ToolRegistry.register` | `tools/registry.py` |
+| Automatically discovered Python tools | `@tool` in `.agents/tools/<module>.py` | `tools/decorators.py`, `harness/tools/discovery.py` |
 | MCP server processes and tool wrappers | `MCPServerConfig`, `MCPClient`, `MCPManager` | `mcp/` |
 | Tool authorization/execution | `ToolExecutor.execute`, `HarnessExecutor` | `tools/executor.py`, `harness/tools/coding.py` |
 | Ordered lifecycle transformations | `AgentPlugin`, `RunContext`, `ModelRequest` | `extensions.py` |
@@ -54,7 +55,7 @@ then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
   "providers": "./providers.json",
   "model": "gpt-6-luna",
   "agent": "audit",
-  "max_tool_rounds": 30,
+  "max_tool_rounds": 3000,
   "max_subagent_depth": 2,
   "max_concurrent_subagents": 3,
   "max_subagent_executions": 8,
@@ -85,7 +86,7 @@ frontmatter enclosed by `---`; text after the closing delimiter is rejected.
 `name` defaults to the filename, or the directory name for `<name>/agent.md`;
 `description` is optional.
 Use canonical `prompt: |` for the full authored prompt. It replaces the packaged
-coding policy; workspace `AGENTS.md` context and runtime capability/permission
+assistant prompt; workspace `AGENTS.md` context and runtime capability/permission
 messages still apply. `live.prompt: |` is the full voice prompt and replaces its
 parent without a hidden prefix. An explicitly empty prompt stays empty.
 
@@ -259,7 +260,7 @@ named environment variable, never literal JSON values.
 
 Other configuration groups: `shell_timeout`, `max_output` (bytes),
 `max_file_bytes`, and `max_tool_rounds`; `theme`, `theme_background`, `animations`,
-`submit_mode`, `tab_action`. Use the complete
+`submit_mode`. Use the complete
 configuration guide for accepted types and bounds rather than inventing keys.
 
 `AGENTS.md` supplies project task context, including nested instructions as
@@ -268,7 +269,82 @@ assembled by `Harness.refresh_instructions()`. A plugin that needs request-local
 changes should use `before_model` rather than repeatedly appending text to
 `agent.system_prompt`, which the Harness regenerates.
 
+## Add automatically discovered Python tools
+
+For a custom tool, create `.agents/tools/<module>.py` in the workspace. No JSON
+declaration, `--plugin`, or `--config` is required. Workspace imports require
+`--trust-project`: import-time Python runs before invocation approval. Read-only
+agents never import discovered modules. Personal modules in `~/.agents/tools/`
+are user-installed trusted code and load first; a trusted workspace file
+with the same module filename replaces the personal module. Discovery is flat,
+alphabetical by module name, and ignores underscore-prefixed helper files. Other
+project settings and their existing trust rules are unchanged.
+
+```python
+# .agents/tools/weather.py
+from nagents import tool
+
+
+def _format(city: str) -> str:
+    return city.strip()
+
+
+@tool
+def forecast(city: str) -> str:
+    """Return a demonstration forecast for the given city."""
+    return f"Forecast for {_format(city)}: sunny."
+
+
+@tool(description="Return the supported forecast units.")
+async def units() -> list[str]:
+    return ["celsius", "fahrenheit"]
+```
+
+This exposes `weather_forecast` and `weather_units`. Only functions **defined
+in the module and decorated with `@tool`** are exported; helpers and imported
+decorated functions are not tools. Sync and async functions retain their normal
+signatures. Type hints and docstrings supply argument schemas/descriptions.
+`@tool(name="lookup", description="...")` selects the function-name portion;
+the module prefix remains, so this example would be `weather_lookup`. Qualified
+names use ASCII letters, digits, underscores or hyphens and fit 64 characters.
+Existing host, configured plugin and MCP tool names are preserved on collision;
+the discovered export is skipped with a diagnostic.
+Use relative imports such as `from ._helpers import format_city` for shared
+helpers whose edits must refresh with the module. No setup function is needed.
+
+Tool files are executable Python loaded by the host. Existing invocation
+approvals, agent tool allowlists and `.ngn/tools.yaml` restrictions still apply.
+Inspect the Tools catalog or advertised schema before claiming availability.
+The shared Harness checks modules and owned helper sources before **every model
+generation**, including rounds within one user turn. Additions, changes and
+deletions become available to the next model request without restarting.
+Newly available tools produce one short line, such as `Tool added: weather_forecast`
+or `Tools added: weather_forecast, weather_units`. The same line is saved as a
+named user-role message for model compatibility, not a human-authored prompt.
+Initial local and MCP tools are saved when the session is initialized, before
+its first user message. The TUI renders these as distinct Tools capability notices,
+including restored history. Runtime additions are announced at the next safe model
+generation boundary. Unchanged reloads do not repeat it; helpers, failed exports
+and unavailable tools are not announced.
+Already issued calls keep their accepted definition. These rules cover the
+TUI, web UI and headless Harness. Offline demo mode does not import tool files;
+existing reviewer and child-runtime permission restrictions still apply.
+
+A malformed module does not stop ngn or other modules from updating. Its last
+working version is retained when available; otherwise it is skipped. Errors
+are reported as source-specific diagnostics and notices, and fixing the file
+allows automatic recovery. A bad individual export is skipped independently.
+Tool exceptions return tool errors, including an accidental `SystemExit`;
+cancellation still propagates normally. Do not claim a broken module loaded.
+
+For direct library use, `agent.register_tool(function)` and
+`agent.tool_registry.register(...)` remain available; `@tool` metadata is honored
+there too. A standalone Agent does not scan the filesystem automatically.
+
 ## Register behavior, tools, and commands
+
+Use configured Python extensions for lifecycle hooks, commands and other setup.
+Simple function tools use the automatically discovered modules above.
 
 A trusted Python extension exports sync or async `setup(harness)`, loaded with
 `ngn --plugin extensions.py:setup` or `installed.module:setup`. It can configure
@@ -548,8 +624,10 @@ global defaults. Accepted work keeps its captured connection. Parent plugins/cus
 tools are not automatically inherited. Execution handles are process-local.
 
 The web host supplies `Harness.wakeup_handler` for
-`schedule_wakeup(minutes=5, reason="Check the result.")`. A custom host must own timer lifecycle, serialization, and
-cleanup before acknowledging timers. Ordinary CLI/TUI reject unavailable timers.
+`schedule_wakeup(minutes=5, reason="Check the result.")`. The TUI also owns
+process-local timers and displays them in the agent pane. A custom host must own
+timer lifecycle, serialization, and cleanup before acknowledging timers.
+Headless CLI runs reject unavailable timers.
 Wakeups target the original root or retained child, wait for an idle boundary,
 and disappear on restart. Durable channel admission is a different mechanism.
 

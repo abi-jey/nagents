@@ -107,7 +107,7 @@ class _SettingsValuesV1(BaseModel):
     shell_timeout: float = Field(gt=0, le=600)
     max_output: int = Field(ge=1024, le=1048576)
     max_file_bytes: int = Field(ge=1024, le=4194304)
-    max_tool_rounds: int = Field(ge=1, le=1000)
+    max_tool_rounds: int = Field(ge=1, le=3000)
     max_subagent_depth: int = Field(ge=0, le=8)
 
     @field_validator("model", mode="before")

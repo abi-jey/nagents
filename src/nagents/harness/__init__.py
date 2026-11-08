@@ -24,6 +24,7 @@ from .types import TaskCompleted
 from .types import TaskMessage
 from .types import TaskNotification
 from .types import TaskStarted
+from .types import ToolAddedNotice
 from .types import ToolOutput
 from .types import WakeupHandler
 
@@ -51,6 +52,7 @@ __all__ = [
     "TaskMessage",
     "TaskNotification",
     "TaskStarted",
+    "ToolAddedNotice",
     "ToolOutput",
     "WakeupHandler",
     "load_config",

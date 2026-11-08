@@ -117,8 +117,8 @@ async def test_root_and_native_child_only_change_http_deadline(tmp_path: Path, m
                 assert await provider._credentials() == credentials
                 events = [event async for event in provider.generate([Message(role="user", content="offline probe")])]
                 assert not any(isinstance(event, ErrorEvent) for event in events)
-            assert harness.config.max_tool_rounds == 30 and child.config.max_tool_rounds == 12
-            assert harness.config.shell_timeout == child.config.shell_timeout == 60
+            assert harness.config.max_tool_rounds == child.config.max_tool_rounds == 3000
+            assert harness.config.shell_timeout == child.config.shell_timeout == 600
         finally:
             for child in children:
                 await child.close()

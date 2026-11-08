@@ -1,0 +1,4 @@
+Screen { background: ansi_default; color: ansi_default; height: 5; padding: 0 2; }
+Static { background: ansi_default; color: ansi_default; }
+#startup-title, #startup-tagline, #startup-hint { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+#startup-field { height: 2; }

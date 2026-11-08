@@ -133,7 +133,7 @@ async def main():
     provider = Provider(
         provider_type=ProviderType.OPENAI_COMPATIBLE,
         api_key="your-api-key",
-        model="gpt-4o-mini",
+        model="gpt-6-luna",
     )
 
     # Create an agent
@@ -156,13 +156,20 @@ asyncio.run(main())
 
 ## Providers
 
-nagents supports three provider types:
+nagents integrates with OpenAI, Anthropic, and Google Gemini, alongside
+OpenAI-compatible services. Current text and tool-use model examples, verified
+against the official catalogs on **November 6, 2026**:
 
-| Provider | Type | Models |
+| Provider (official model catalog) | Type | Example model IDs |
 |----------|------|--------|
-| OpenAI | `ProviderType.OPENAI_COMPATIBLE` | gpt-4o, gpt-4o-mini, etc. |
-| Anthropic | `ProviderType.ANTHROPIC` | claude-3-5-sonnet, claude-3-opus, etc. |
-| Google | `ProviderType.GEMINI_NATIVE` | gemini-2.0-flash, gemini-1.5-pro, etc. |
+| [OpenAI](https://developers.openai.com/api/docs/models) | `ProviderType.OPENAI_COMPATIBLE` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna` |
+| [Anthropic](https://platform.claude.com/docs/en/models/overview) | `ProviderType.ANTHROPIC` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` |
+| [Google Gemini](https://aistudio.google.com/docs/models) | `ProviderType.GEMINI_NATIVE` | `gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.5-flash-lite` |
+
+Pass the exact model ID as `model`; these examples are not an exhaustive list.
+Availability depends on your account and endpoint. For OpenAI-compatible
+connections, `await provider.get_model_list()` discovers the endpoint's catalog;
+see [model discovery and provider-specific limits](docs/guide/providers.md#discover-model-ids).
 
 ## With Tools
 

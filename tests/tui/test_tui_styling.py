@@ -69,10 +69,10 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
         async with app.run_test(size=size) as pilot:
             await idle(app, pilot)
             variables = app.get_css_variables()
-            panel = Color.parse(variables["ngn-panel"])
             border = Color.parse(variables["ngn-border"])
-            accent = Color.parse(variables["ngn-accent"])
             message_background = Color.parse(variables["ngn-message-background"])
+            composer_background = Color.parse(variables["ngn-composer-background"])
+            composer_text = Color.parse(variables["ngn-composer-text"])
 
             def check_visible(*selectors: str, painted: bool = False) -> None:
                 assert app.screen.max_scroll_x == app.screen.max_scroll_y == 0
@@ -85,7 +85,8 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
                     assert_readable(widget.visual_style.rich_style, native=native and not painted)
 
             check_visible("#conversation")
-            check_visible("#compose-area", "#composer", "#footer", "#status", painted=True)
+            check_visible("#compose-area", "#footer", "#status", painted=not native)
+            check_visible("#composer", painted=not native)
             assert app.query_one(Composer).styles.border_top[0] in {"", "none"}
             for selector, section_title in (
                 ("#conversation", "Conversation / F6"),
@@ -93,10 +94,22 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
             ):
                 section = app.query_one(selector)
                 assert section.border_title == section_title
-                assert section.styles.border_top == ("round", border)
-                assert section.styles.border_right == ("round", border)
-                assert section.styles.border_bottom == ("round", border)
-                assert section.styles.border_left == ("round", border)
+                if selector == "#conversation":
+                    for side in ("border_top", "border_right", "border_bottom", "border_left"):
+                        assert getattr(section.styles, side)[0] in {"", "none"}, side
+                else:
+                    assert section.styles.border_top == ("round", border)
+                    assert section.styles.border_right == ("round", border)
+                    assert section.styles.border_bottom == ("round", border)
+                    assert section.styles.border_left == ("round", border)
+            conversation = app.query_one("#conversation")
+            await pilot.press("f6")
+            await pilot.pause()
+            assert conversation.has_focus
+            for side in ("border_top", "border_right", "border_bottom", "border_left"):
+                assert getattr(conversation.styles, side)[0] in {"", "none"}, side
+            await pilot.press("f6")
+            await pilot.pause()
             compose_area = app.query_one("#compose-area")
             footer = app.query_one("#footer")
             # The status box is merged into the message box: no separate round
@@ -108,10 +121,15 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
             for selector in (".user", ".assistant"):
                 assert app.query_one(selector).styles.border_left[0] == ""
             user = app.query_one(".user")
-            assert user.styles.background == message_background
-            assert user.children and all(child.styles.background == message_background for child in user.children)
-            for selector in ("#compose-area", "#composer", "#footer"):
+            assert user.styles.background == composer_background
+            assert user.children and all(child.styles.background == composer_background for child in user.children)
+            assert user.query_one(Static).styles.color == composer_text
+            assert not user.query(".turn-label")
+            for selector in ("#compose-area", "#footer"):
                 assert app.query_one(selector).styles.background == message_background
+            assert app.query_one("#composer").styles.background == composer_background
+            assert app.query_one("#composer").styles.color == composer_text
+            assert_readable(app.query_one("#composer").visual_style.rich_style, native=native)
             # Conversation left inset is halved; user/assistant indents match it.
             # Compact layouts collapse the right inset as well.
             conversation = app.query_one("#conversation")
@@ -150,8 +168,8 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
                 assert app.query_one("#rail-details").styles.background_tint.a == 0
 
             for state, token in (
-                ("running", "tool"),
-                ("complete", "success"),
+                ("running", "muted"),
+                ("complete", "muted"),
                 ("failed", "error"),
                 ("cancelled", "warning"),
             ):
@@ -167,16 +185,23 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
                 card.query_one("CollapsibleTitle").focus()
                 await pilot.pause()
                 assert card.styles.background_tint.a == 0
-                assert card.styles.border_left[1] == Color.parse(variables[f"ngn-{token}"])
+                assert card.styles.background.a == 0
+                for side in ("border_top", "border_right", "border_bottom", "border_left"):
+                    assert getattr(card.styles, side)[0] in {"", "none"}, side
+                title = card.query_one("CollapsibleTitle")
+                assert title.styles.color == Color.parse(variables[f"ngn-{token}"])
+                assert title.styles.text_style.underline
                 for selector in ("CollapsibleTitle", ".tool-arguments", ".tool-output"):
-                    assert_readable(card.query_one(selector).visual_style.rich_style, native=native)
-                assert card.query_one(".tool-output").visual_style.rich_style.bgcolor == panel.rich_color
+                    widget = card.query_one(selector)
+                    assert widget.styles.background.a == 0
+                    assert_readable(widget.visual_style.rich_style, native=native)
                 await card.remove()
 
             await send(app, pilot, "wait")
             await send(app, pilot, "Inspect tests next.")
             await pilot.pause()
-            check_visible("#composer", "#status", painted=True)
+            check_visible("#status", painted=not native)
+            check_visible("#composer", painted=not native)
             assert backend.prompts == ["wait"]
             assert "1 queued (waiting)" in str(app.query_one("#queue-status", Static).content)
             assert app.query_one("#queue-status").styles.background.a == 0
@@ -223,15 +248,16 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
             ):
                 await app.push_screen(modal)
                 await pilot.pause()
-                assert modal.query_one(dialog_id).styles.border_top[1] == border
+                assert modal.size == app.size
+                assert modal.query_one(dialog_id).styles.border_top[0] in {"", "none"}
                 editor = modal.query_one(editor_id, TextArea)
-                assert editor.styles.border_top[1] == border
+                assert editor.styles.border_top[0] in {"", "none"}
                 editor.load_text("An editable follow-up.")
                 editor.focus()
                 editor.action_select_all()
                 await pilot.pause()
                 check_visible(editor_id, *buttons)
-                assert editor.styles.border_top[1] == accent
+                assert editor.styles.border_top[0] in {"", "none"}
                 assert not editor.cursor_blink
                 for component in ("text-area--cursor", "text-area--selection"):
                     style = editor.get_component_rich_style(component)

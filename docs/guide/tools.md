@@ -2,6 +2,110 @@
 
 Tools allow your agent to call Python functions during conversations, enabling it to perform actions, fetch data, and interact with external systems.
 
+## Automatic tools in ngn
+
+Put Python modules in `.agents/tools/` and mark exported functions with `@tool`:
+
+```python title=".agents/tools/numbers.py"
+from nagents import tool
+
+
+def _check(value: int) -> int:
+    return value
+
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """Multiply two integers."""
+    return _check(a) * _check(b)
+
+
+@tool(description="Return the square of an integer.")
+async def square(value: int) -> int:
+    return value * value
+```
+
+Run `ngn --trust-project` (or `ngn serve --trust-project`) after reviewing the
+workspace's Python code. The assistant sees `numbers_multiply` and
+`numbers_square`; `_check` is a normal helper. No JSON declaration, plugin flag,
+or setup function is needed. Workspace modules require explicit project trust;
+invocation approvals do not protect against import-time code execution.
+Personal modules in `~/.agents/tools/` are user-installed trusted code and do not
+require project trust (unless the workspace is that same home directory).
+Read-only agents and offline demos do not import discovered modules. Existing
+agent tool selections and invocation approvals continue to apply.
+
+Personal modules in `~/.agents/tools/` load first; workspace modules with the
+same filename replace them. Discovery is alphabetical and nonrecursive.
+Underscore-prefixed module files are helpers. Only decorated functions defined
+in a discovered module are exported, including sync and async functions; imported
+decorated functions are not re-exported. The name is `<module>_<function>`, or
+`<module>_<name>` for `@tool(name="...")`, within 64 ASCII letters, digits,
+underscores or hyphens. A collision with an existing host, configured plugin or
+MCP tool is reported and the discovered export is skipped. Use package-relative helper imports such as
+`from ._helpers import format_value` to include helper edits in reload checks.
+
+The shared Harness checks files before every model generation, including tool
+rounds within one turn. Added, edited or removed tools reach the next model call;
+newly available tools show one compact `Tool added: numbers_multiply` line
+(or a comma-separated `Tools added: ...` line). This is also saved as a user-role
+message before the next model call. Ordinary reloads do not repeat the notice.
+Issued calls keep their accepted version. A broken module is reported and keeps
+its previous working version when available. Other modules continue to load,
+and fixing the source recovers automatically. Invalid individual exports are
+skipped independently. Tool execution errors return as `ToolResultEvent.error`.
+Offline demos skip Python imports; reviewer/child permission ceilings still apply.
+
+These files are Python code executed in the ngn host process. A standalone library
+`Agent` retains explicit registration; it does not scan directories automatically.
+
+## Dynamic tools and OpenAI prompt caching
+
+The tool-availability notice and the callable schema are separate: a `Tool added`
+message announces the change, while the provider serializes its actual schema.
+New MCP tools also receive this notice before the next model request.
+
+On supported OpenAI Responses routes, the library preserves the initial `tools`
+list and introduces additive schemas with chronological developer-role
+`additional_tools` input items. Later requests replay those items at the same
+positions, so earlier conversation input remains an unchanged prefix. This works
+at the library provider boundary, including explicitly registered `Agent` tools;
+it does not depend on parsing the notice text.
+
+Removing a tool, changing its schema or description, editing/compacting history,
+or recreating the provider rebases the request to the complete current tool list.
+That prioritizes correct availability over retaining an obsolete cached prefix.
+Unsupported APIs/models use ordinary full-tool requests. An explicit rejection
+of `additional_tools` permits one safe fallback before any response stream has
+started; unrelated errors do not trigger speculative retries.
+
+Codex OAuth requests send the conversation ID in `session-id`, `thread-id`,
+and `prompt_cache_key`. ChatGPT uses the session header for cache affinity;
+setting only a JSON cache key is not equivalent. `Agent` supplies its session ID
+automatically. Direct provider callers should use `provider.session_context(id)`
+or `provider.set_session_id(id)` for related requests. Different conversations
+must use different IDs. Custom gateway correlation headers remain independent.
+
+`provider.conversation_cache_snapshot()` returns immutable per-conversation
+snapshots keyed by endpoint, model, and conversation ID. The tracker in
+`nagents.provider.cache` records completed-request counts, cumulative and latest
+input/cached tokens, and whether input usage was actually reported. It emits a
+`conversation_cache_usage` observation after each validated successful request,
+not once per output event. Unscoped calls are not combined into an anonymous
+conversation; failed requests do not inflate completed-request counts. The
+provider retains at most 128 conversation entries, without prompts or credentials.
+These counters reset on process restart; they describe reported usage rather
+than storing, inspecting, or controlling OpenAI's server-side cache.
+
+Timelines are bounded in-memory optimizations, not persisted conversation state.
+They do not guarantee server-side cache hits: availability, routing, retention,
+and endpoint behavior still matter. The opt-in integration test
+`NGN_LIVE_TOOL_CACHE=1 python -m pytest -s tests/providers/test_live_tool_cache.py`
+uses the current Codex connection and synthetic long input, records private
+wire logs, and checks both schema placement and actual cached-token usage. It
+reports an inconclusive cache measurement if unchanged warm-up requests also
+report zero cache hits rather than claiming cache savings.
+
 ## Defining Tools
 
 Any Python function can be used as a tool. The function's **docstring** and **type hints** are used to generate the tool schema automatically:

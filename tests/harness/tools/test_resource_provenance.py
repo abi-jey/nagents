@@ -67,7 +67,9 @@ async def test_configmap_rotation_updates_next_request_and_retains_old_called_se
             shutil.rmtree(volume / "..generation-one")
             yield ToolCallEvent(id="old", name="mcp__before__echo", arguments={})
         else:
-            assert messages[-1].content == "one:{}"
+            assert messages[-2].content == "one:{}"
+            assert messages[-1].name == "ngn_tools_added"
+            assert messages[-1].content == "Tool added: mcp__after__echo"
             assert "mcp__after__echo" in provider.schemas[-1]
             assert "mcp__before__echo" not in provider.schemas[-1]
             yield TextDoneEvent(text="done")
