@@ -20,10 +20,13 @@ def test_live_timer_updates_and_stops(outcome: str) -> None:
         card = ToolCard("live", "shell", {"command": "check", "timeout": 30}, default_timeout=600)
         async with app.run_test(size=(80, 24)) as pilot:
             await app.mount(card)
-            await pilot.pause(0.25)
-            assert card._duration != "0.00s"
+            async with asyncio.timeout(10):
+                while card._duration in {"", "0ms", "0.00s"}:
+                    await pilot.pause()
             first_duration = card._duration
-            await pilot.pause(0.25)
+            async with asyncio.timeout(10):
+                while card._duration == first_duration:
+                    await pilot.pause()
             assert card._duration != first_duration
             assert card.title.rstrip().endswith(" / 30s")
             assert "running" in card.title

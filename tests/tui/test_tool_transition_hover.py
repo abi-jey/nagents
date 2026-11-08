@@ -77,6 +77,8 @@ async def test_pilot_hover_preserves_geometry_and_preview(option: int, width: in
         rows = list(app.query(LiveRow))
         assert all(row.collapsed and row.size.height == 1 for row in rows)
         row = rows[3]
+        # Newly revealed rows need their allocated geometry before a snapshot.
+        app.draw_frame()
         preview = row.preview.content
         before = Text.from_markup(row.title)
         regions = [item.region for item in rows]
