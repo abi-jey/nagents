@@ -82,9 +82,12 @@ def _region(widget: Widget) -> tuple[int, int, int, int]:
 
 
 @pytest.mark.parametrize("size", [(60, 20), (80, 24), (132, 38)])
-def test_enabled_entrance_replay_close_and_fixed_layout(size: tuple[int, int]) -> None:
+def test_enabled_entrance_replay_close_and_fixed_layout(size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         app = StateFieldDemo(motion=True, intro=False)
+        # Transitions below are advanced explicitly; wall time under CI load
+        # must not finish a close while pilot.press is processing the key.
+        monkeypatch.setattr(app, "set_interval", lambda *args, **kwargs: None)
         async with app.run_test(size=size) as pilot:
             await pilot.pause(0.1)
             assert str(app.lifecycle.phase) == "opening"

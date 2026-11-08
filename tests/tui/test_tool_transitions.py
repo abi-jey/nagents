@@ -145,8 +145,10 @@ def test_terminal_clock_freezes() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("width", [48, 120])
-async def test_live_rows_keep_identity_and_format_outputs(width: int) -> None:
+async def test_live_rows_keep_identity_and_format_outputs(width: int, monkeypatch: pytest.MonkeyPatch) -> None:
     app = TransitionStudy()
+    # This test drives every frame explicitly, including restart at zero.
+    monkeypatch.setattr(app, "set_interval", lambda *args, **kwargs: None)
     async with app.run_test(size=(width, 36)) as pilot:
         app.playing = False
         row = app.query_one(LiveRow)

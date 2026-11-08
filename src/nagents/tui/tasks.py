@@ -262,7 +262,10 @@ class TaskScreen(Screen[tuple[str, str] | None]):
             for info in infos
         )
         if signature == self._signature:
-            if self.selected_session_id:
+            # Polling must not repeatedly cancel a history render that takes
+            # longer than the refresh interval on a busy terminal.
+            loading = any(worker.node is self and worker.group == "task-history" for worker in self.workers)
+            if self.selected_session_id and not loading:
                 self.load_history(self.selected_session_id)
             return
         self._signature = signature
@@ -296,7 +299,8 @@ class TaskScreen(Screen[tuple[str, str] | None]):
 
     def show_task(self, session_id: str) -> None:
         composer = self.query_one("#task-followup", TextArea)
-        if session_id != self.selected_session_id:
+        changed = session_id != self.selected_session_id
+        if changed:
             if self.selected_session_id:
                 self._drafts[self.selected_session_id] = composer.text
             self.selected_session_id = session_id
@@ -313,7 +317,9 @@ class TaskScreen(Screen[tuple[str, str] | None]):
             if info.status == "running"
             else "Tab to write. Ctrl+Enter or Continue Agent sends to this agent and notifies the parent."
         )
-        self.load_history(session_id)
+        loading = any(worker.node is self and worker.group == "task-history" for worker in self.workers)
+        if changed or not loading:
+            self.load_history(session_id)
 
     @work(exclusive=True, group="task-history")
     async def load_history(self, session_id: str) -> None:

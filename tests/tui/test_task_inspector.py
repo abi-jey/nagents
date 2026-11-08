@@ -141,6 +141,33 @@ def test_pending_history_cannot_update_a_removed_or_replaced_view(tmp_path: Path
     asyncio.run(scenario())
 
 
+def test_polling_does_not_cancel_pending_history() -> None:
+    async def scenario() -> None:
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def history(session_id: str) -> list[Message]:
+            started.set()
+            await release.wait()
+            return [Message(role="assistant", content="Slow saved history")]
+
+        tasks = [TaskInfo("slow", "", status="completed")]
+        app = HistoryInspectorApp(lambda: tasks, history)
+        async with app.run_test() as pilot:
+            await started.wait()
+            screen = app.screen
+            assert isinstance(screen, TaskScreen)
+            workers = tuple(screen.workers)
+            for _ in range(3):
+                screen.refresh_tasks()
+            assert tuple(screen.workers) == workers
+            release.set()
+            async with asyncio.timeout(HANG_GUARD):
+                while "Slow saved history" not in history_text(screen.query_one("#task-history", Vertical)):
+                    await pilot.pause()
+
+    asyncio.run(scenario())
+
+
 def test_inspector_arrows_show_history_and_send_explicit_followup() -> None:
     async def scenario() -> None:
         tasks = [TaskInfo("s1", "", status="completed"), TaskInfo("s2", "", status="completed")]
