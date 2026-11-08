@@ -162,7 +162,11 @@ def test_skip_during_loading_does_not_restart_or_lose_prompt(tmp_path: Path, mon
             assert backend.create_session_calls == [True]
             assert not backend.prompts
             release.set()
-            await pilot.pause()
+            from tests.support.hang_guard import HANG_GUARD
+
+            async with asyncio.timeout(HANG_GUARD):
+                while not backend.prompts:
+                    await pilot.pause()
             assert backend.prompts == ["hi"]
             assert backend.create_session_calls == [True]
 

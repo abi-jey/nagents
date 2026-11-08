@@ -84,6 +84,8 @@ def _region(widget: Widget) -> tuple[int, int, int, int]:
 @pytest.mark.parametrize("size", [(60, 20), (80, 24), (132, 38)])
 def test_enabled_entrance_replay_close_and_fixed_layout(size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
+        now = [monotonic()]
+        monkeypatch.setattr("examples.tui_state_field.monotonic", lambda: now[0])
         app = StateFieldDemo(motion=True, intro=False)
         # Transitions below are advanced explicitly; wall time under CI load
         # must not finish a close while pilot.press is processing the key.
@@ -95,18 +97,19 @@ def test_enabled_entrance_replay_close_and_fixed_layout(size: tuple[int, int], m
                 selector: _region(app.query_one(selector)) for selector in ("#main-row", "#provider-model", "#message")
             }
 
-            before = (app.lifecycle.visibility(monotonic()), app.lifecycle.aperture(monotonic()))
+            now[0] += 0.1
+            before = (app.lifecycle.visibility(now[0]), app.lifecycle.aperture(now[0]))
             await pilot.press("f2")
             assert str(app.lifecycle.phase) == "closing" and app.lifecycle.replay
             assert app.lifecycle.transition == "stagger"
             assert isclose(app.lifecycle.origin_visibility, before[0], abs_tol=0.05)
             assert isclose(app.lifecycle.origin_aperture, before[1], abs_tol=0.05)
 
-            app.lifecycle.since = monotonic() - app.lifecycle.seconds - 0.01
+            now[0] += app.lifecycle.seconds + 0.01
             app._tick()
             assert app.lifecycle.phase == "opening"
             assert app.is_running
-            app.lifecycle.since = monotonic() - app.lifecycle.seconds - 0.01
+            now[0] += app.lifecycle.seconds + 0.01
             app._tick()
             await pilot.pause(0.05)
             assert str(app.lifecycle.phase) == "ready"
@@ -127,7 +130,7 @@ def test_enabled_entrance_replay_close_and_fixed_layout(size: tuple[int, int], m
 
             await pilot.press("q")
             assert str(app.lifecycle.phase) == "closing" and app.is_running
-            app.lifecycle.since = monotonic() - app.lifecycle.seconds - 0.01
+            now[0] += app.lifecycle.seconds + 0.01
             app._tick()
             await pilot.pause(0.05)
             assert str(app.lifecycle.phase) == "closed"

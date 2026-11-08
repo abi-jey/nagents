@@ -10,6 +10,7 @@ from textual.widgets import Static
 from nagents.tui.performance import PerformancePanel
 from nagents.tui.screens import DetailModal
 from nagents.tui.widgets import Composer
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.tui import FakeHarness
 from tests.support.tui import idle
 from tests.support.tui import make_app
@@ -31,7 +32,9 @@ def test_performance_panel_and_persistent_commands(tmp_path: Path, monkeypatch: 
             await idle(app, pilot)
             panel = app.query_one(PerformancePanel)
             assert panel.display
-            await pilot.pause(0.3)
+            async with asyncio.timeout(HANG_GUARD):
+                while not app._performance.snapshot().sample_count:
+                    await pilot.pause()
             assert app._performance.snapshot().sample_count > 0
             assert "PERFORMANCE" in panel.render().plain.upper()
             app.command("/perf hide")
