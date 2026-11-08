@@ -1000,6 +1000,9 @@ class NagentsApp(App[None]):
                 self._refresh_tasks()
             self._active = None
             if not self._shutting_down:
+                # Final status was painted while this task still counted as busy.
+                # Repaint now, rather than leave elapsed time until the next tick.
+                self._animate_activity()
                 self._update_queue()
                 self.call_later(self._drain_queue)
 

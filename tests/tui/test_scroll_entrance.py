@@ -111,6 +111,17 @@ def test_terminal_handoff_and_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
         master, slave = pty.openpty()
         stream = os.fdopen(os.dup(slave), "w")
         before = termios.tcgetattr(slave)
+
+        def assert_restored() -> None:
+            current = termios.tcgetattr(slave)
+            # macOS sets PENDIN after input arrives while switching modes. It
+            # is kernel input-queue state, not a mode changed by the prelude.
+            pending = getattr(termios, "PENDIN", 0)
+            current[3] &= ~pending
+            expected = before.copy()
+            expected[3] &= ~pending
+            assert current == expected
+
         backend = FakeHarness(tmp_path)
         app = NagentsApp(cast("Harness", backend))
         owner = asyncio.get_running_loop()
@@ -137,7 +148,7 @@ def test_terminal_handoff_and_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
         async def run_async() -> None:
             assert asyncio.get_running_loop() is owner
-            assert termios.tcgetattr(slave) == before
+            assert_restored()
             assert app.startup_opened
             assert app._entrance_text == "hé"
             assert app._startup_complete.is_set()
@@ -157,7 +168,7 @@ def test_terminal_handoff_and_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyP
             assert backend.create_session_calls == [True]
             assert backend.closed
             assert cleaned.is_set()
-            assert termios.tcgetattr(slave) == before
+            assert_restored()
         finally:
             stream.close()
             os.close(master)
