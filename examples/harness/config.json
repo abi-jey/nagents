@@ -5,9 +5,9 @@
   },
   "model": "gpt-6-luna",
   "agent": "assistant",
-  "max_tool_rounds": 30,
+  "max_tool_rounds": 3000,
   "max_subagent_depth": 2,
-  "shell_timeout": 60.0,
+  "shell_timeout": 600.0,
   "max_output": 32768,
   "max_file_bytes": 262144,
   "demo": false,
@@ -15,7 +15,6 @@
   "theme_background": "auto",
   "animations": true,
   "submit_mode": "queue",
-  "tab_action": "agent",
   "plugins": [],
   "profiles": {
     "audit": {

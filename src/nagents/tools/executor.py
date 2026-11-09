@@ -93,7 +93,7 @@ class ToolExecutor:
                 duration_ms=duration,
             )
 
-        except Exception as e:
+        except (Exception, SystemExit) as e:
             duration = (time.monotonic() - start) * 1000
             if tool_call.name.startswith("mcp__"):
                 # MCP error text is untrusted response data and may contain credentials.
@@ -104,6 +104,6 @@ class ToolExecutor:
             return ToolResultEvent(
                 id=tool_call.id,
                 name=tool_call.name,
-                error=str(e),
+                error="Tool exited before returning a result." if isinstance(e, SystemExit) else str(e),
                 duration_ms=duration,
             )

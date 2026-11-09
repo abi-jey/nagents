@@ -16,6 +16,7 @@ from typing import get_type_hints
 from ..types import JsonSchema
 from ..types import JsonSchemaProperty
 from ..types import ToolDefinition
+from .decorators import tool_options
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,8 @@ class ToolRegistry:
         Returns:
             The created ToolDefinition
         """
-        tool_name = name or func.__name__
+        options = tool_options(func)
+        tool_name = name or (options.name if options is not None else "") or func.__name__
 
         # Use provided schema or extract from type hints
         param_schema = parameters if parameters is not None else self._extract_parameters(func)
@@ -75,7 +77,7 @@ class ToolRegistry:
         # caller (including MCP metadata), not docstrings to summarize.
         # Keep the existing empty-string fallback while preserving all explicit
         # paragraphs, hard line breaks and Markdown whitespace.
-        tool_description = description
+        tool_description = description or (options.description if options is not None else "")
         if not tool_description:
             docstring = func.__doc__ or f"Call {tool_name}"
             tool_description = docstring.strip().split("\n\n")[0].strip()

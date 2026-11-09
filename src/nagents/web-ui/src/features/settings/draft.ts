@@ -35,8 +35,8 @@ export const executionLimits = [
     label: "Tool rounds",
     unit: "rounds",
     min: 1,
-    max: 1000,
-    help: "1 to 1,000 tool rounds per run.",
+    max: 3000,
+    help: "1 to 3,000 tool rounds per run.",
   },
   {
     key: "max_subagent_depth",

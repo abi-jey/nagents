@@ -103,10 +103,21 @@ def load_plugin(reference: str, workspace: Path) -> PluginModule:
     module_name, separator, entry = reference.rpartition(":")
     if not separator or not module_name or not entry.isidentifier():
         raise ValueError("Invalid plugin reference; expected path.py:setup or installed.module:setup")
+    return _load_module(module_name, workspace, entry)
+
+
+def load_tool_module(path: Path) -> PluginModule:
+    """Load a discovered tool file with owned package-relative helper imports."""
+    return _load_module(str(path.resolve()), path.parent, "", package=True)
+
+
+def _load_module(module_name: str, workspace: Path, entry: str, *, package: bool = False) -> PluginModule:
     suffix = ""
     if module_name.endswith(".py"):
         path = (workspace / Path(module_name).expanduser()).resolve()
-        root = importlib.util.spec_from_file_location("ngn_source", path)
+        root = importlib.util.spec_from_file_location(
+            "ngn_source", path, submodule_search_locations=[str(path.parent)] if package else None
+        )
         selected = root
     else:
         root_name, _, suffix = module_name.partition(".")

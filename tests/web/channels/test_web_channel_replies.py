@@ -36,10 +36,56 @@ if TYPE_CHECKING:
     from nagents.live.delegation import LiveAppendKind
     from nagents.types import Message
     from nagents.web.http.routing import ChatOwner
+    from nagents.web.http.routing import Work
     from tests.support.channels import FakeChannel
     from tests.support.channels import Site
 
 pytestmark = pytest.mark.requires_posix
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_browser_channel_list_needs_no_custom_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: bool
+) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        approvals: list[str] = []
+        invoked: list[str] = []
+
+        async def deny(request: ApprovalRequest) -> bool:
+            approvals.append(request.tool)
+            return False
+
+        async def spoof() -> str:
+            invoked.append("spoof")
+            return "spoof"
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            if messages[-1].role != "tool":
+                if replacement:
+                    registry = app.state.running_harness.agent.tool_registry
+                    registry.unregister("channel_list")
+                    registry.register(spoof, name="channel_list")
+                yield ToolCallEvent(id="browser-list", name="channel_list", arguments={})
+            else:
+                yield TextDoneEvent(text="done")
+
+        # Normal browser session, without a subscriber or auto-reply opt-in.
+        app.state.harness.approval_handler = deny
+        app.providers[0].script = script
+        app.submit("Discover channels")
+        app.idle()
+        history = app.history(app.main)["history"]
+        assert isinstance(history, list)
+        listing = next(row for row in history if row.get("tool_call_id") == "browser-list")
+        if replacement:
+            # Web owns the approval handler during runs; without a subscriber
+            # custom execution is denied rather than silently exempted.
+            assert "approval" in listing["content"].lower()
+            assert "builtin.web" not in listing["content"]
+        else:
+            assert approvals == []
+            assert "builtin.web" in listing["content"]
+        assert invoked == []
 
 
 def automatic_events(app: Site) -> list[dict[str, object]]:
@@ -83,7 +129,8 @@ def test_opted_in_original_list_and_send_reply_without_subscribers_only_to_origi
         delivery = app.channels[0].deliveries[0]
         assert (delivery.destination, delivery.thread_id, delivery.reply_to) == ("chat-a", "origin-thread", "remote-id")
         records = automatic_events(app)
-        assert [record["tool"] for record in records] == ["channel_list", "channel_send"]
+        # Discovery is approval-free; only sending uses the auto-reply approval path.
+        assert [record["tool"] for record in records] == ["channel_send"]
         root = app.bindings()["chat-a"]
         assert all(
             record["event"] == "notice" and record["root_session_id"] == root and record["run_id"] for record in records
@@ -126,6 +173,7 @@ def test_auto_reply_never_grants_outside_verified_source_or_original_callable(
         app.configure(auto_reply=case != "opt-out")
         app.configure("other-connection", auto_reply=True)
         invoked: list[str] = []
+        attempts: list[Run] = []
 
         async def replacement(
             channel: str, destination: str, text: str, thread_id: str = "", reply_to: str = ""
@@ -140,6 +188,7 @@ def test_auto_reply_never_grants_outside_verified_source_or_original_callable(
             state = app.state
             active = state.active
             assert active is not None
+            attempts.append(active)
             arguments = {"channel": "fixture", "destination": "chat-a", "text": "reply", "thread_id": "origin-thread"}
             tool = "channel_send"
             if case == "disabled":
@@ -206,6 +255,102 @@ def test_auto_reply_never_grants_outside_verified_source_or_original_callable(
         app.idle()
         assert not automatic_events(app)
         assert not invoked and all(not channel.deliveries for channel in app.channels)
+        assert len(attempts) == 1  # A startup failure must not masquerade as approval denial.
+        run = attempts[0]
+        assert run.finished and run.task.done() and run.pending is None
+        assert run.harness is not None and run.harness._worker is None and run.harness._queue is None
+        assert not app.state.executions.runs
+        assert not app.state.channels.work_tasks and not app.state.channels.work_cleanup
+        assert not app.state.channels.activities.sources and not app.state.channels.activities.current
+        if case == "conflicted":
+            # The denied tool result is persisted, then before_model rejects the
+            # now-quarantined root. That exception must settle the durable claim.
+            assert run.outcome == "failed"
+            assert run.work is not None
+            work_id = run.work.id
+            assert app.client.portal is not None
+            rows = app.client.portal.call(
+                app.state.channels.store._transaction,
+                lambda db: db.execute("SELECT status FROM ngn_web_inbox WHERE id = ?", (work_id,)).fetchall(),
+            )
+            assert rows == [("failed",)]
+            assert all(not task.done() for task in app.state.channels.tasks)
+
+
+@pytest.mark.parametrize("conflict_after_validation", [False, True])
+def test_conflict_during_claim_startup_settles_reserved_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conflict_after_validation: bool
+) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        app.configure(auto_reply=True)
+        store = app.state.channels.store
+        validate = store.validate_work
+        reserved: list[Run] = []
+
+        async def conflicting_validation(work: Work) -> None:
+            run = app.state.run_for(work.session_id)
+            assert run is not None
+            reserved.append(run)
+            if conflict_after_validation:
+                await validate(work)
+            await store._transaction(
+                lambda db: db.execute(
+                    "UPDATE ngn_web_session_owners SET conflicted = 1 WHERE session_id = ?", (work.session_id,)
+                ).close()
+            )
+            if not conflict_after_validation:
+                await validate(work)
+
+        async def unexpected_model(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            pytest.fail("A conflicted root must be rejected before provider execution")
+            yield TextDoneEvent(text="unreachable")
+
+        execute_claim = app.state.channels.execute_claim
+        allow_return = asyncio.Event()
+        claims: list[asyncio.Task[None]] = []
+
+        async def delayed_return(work: Work, started: asyncio.Event) -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            claims.append(task)
+            await execute_claim(work, started)
+            # Make the CI scheduling window deterministic: lane cleanup can be
+            # visible before the owning task has returned from its final join.
+            async with asyncio.timeout(HANG_GUARD):
+                await allow_return.wait()
+
+        monkeypatch.setattr(store, "validate_work", conflicting_validation)
+        monkeypatch.setattr(app.state.channels, "execute_claim", delayed_return)
+        app.providers[0].script = unexpected_model
+        app.emit("Conflict at startup")
+        app.idle()  # Durable/lane idle is not an owning-task completion barrier.
+        assert len(reserved) == 1
+        run = reserved[0]
+        assert run.finished and run.outcome == "failed"
+        assert len(claims) == 1
+        claim = claims[0]
+        assert not claim.done()
+
+        async def join_claim() -> None:
+            allow_return.set()
+            async with asyncio.timeout(HANG_GUARD):
+                # execute_work may replace run.task with its producer task;
+                # the outer claim owns the durable finalizer in both cases.
+                await asyncio.shield(claim)
+
+        assert app.client.portal is not None
+        app.client.portal.call(join_claim)
+        assert claim.done() and run.task.done()
+        assert not app.state.executions.runs
+        assert not app.state.channels.work_tasks and not app.state.channels.work_cleanup
+        assert not app.state.channels.activities.sources and not app.state.channels.activities.current
+        assert not automatic_events(app) and not app.channels[0].deliveries
+        assert app.client.portal is not None
+        rows = app.client.portal.call(
+            store._transaction, lambda db: db.execute("SELECT status FROM ngn_web_inbox").fetchall()
+        )
+        assert rows == [("failed",)]
+        assert all(not task.done() for task in app.state.channels.tasks)
 
 
 def test_owned_session_web_turn_with_spoofed_source_text_cannot_send_to_foreign_chat(
@@ -506,7 +651,7 @@ def test_owned_historical_session_web_followup_can_message_owner_without_subscri
         sent = app.channels[0].deliveries[-1]
         assert (sent.destination, sent.thread_id, sent.reply_to) == ("chat-a", "chosen-thread", "chosen-reply")
         assert app.bindings()["chat-a"] == attached
-        assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
+        assert [record["tool"] for record in automatic_events(app)] == ["channel_send"]
         assert all(record["root_session_id"] == root for record in automatic_events(app))
 
 
@@ -602,7 +747,7 @@ def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_hi
             assert len(work_ids) == 1
             assert len(app.channels[0].deliveries) == before + (proof == "owned")
             assert [record["tool"] for record in automatic_events(app)] == (
-                ["channel_list", "channel_send"] if proof == "owned" else []
+                ["channel_send"] if proof == "owned" else []
             )
             requested = {event.call_id: event.message_id for event in notices if event.phase == "tool_requested"}
             assert requested == {"first-read": first_id, "next-read": work_ids[0]}
@@ -809,7 +954,7 @@ def test_actual_scheduled_wakeup_uses_owned_session_without_inventing_ingress(
                 "scheduled-thread",
                 "scheduled-reply",
             )
-            assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
+            assert [record["tool"] for record in automatic_events(app)] == ["channel_send"]
             assert all(record["root_session_id"] == root for record in automatic_events(app))
         else:
             assert len(app.channels[0].deliveries) == before and not automatic_events(app)

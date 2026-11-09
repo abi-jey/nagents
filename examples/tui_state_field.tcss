@@ -1,0 +1,20 @@
+Screen { background: ansi_default; color: ansi_default; height: auto; max-height: 100%; padding: 0 2; }
+Static, Vertical, Horizontal { background: ansi_default; color: ansi_default; }
+#workspace { height: auto; }
+#launch { height: 5; }
+#launch-title, #launch-tagline, #launch-hint { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+#launch-field { height: 2; }
+#brand { height: 1; }
+#controls { height: 4; min-height: 0; overflow: hidden hidden; }
+.state-options { height: 1; }
+.state-options Button { width: auto; height: 1; min-width: 0; min-height: 1; padding: 0; margin-right: 2; border: none; background: ansi_default; color: ansi_default; background-tint: transparent; }
+.state-options Button.selected { text-style: bold underline; }
+.state-options Button:hover, .state-options Button:focus { text-style: underline; background: ansi_default; background-tint: transparent; tint: transparent; }
+#mode { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+#conversation { height: 5; min-height: 0; overflow: hidden hidden; }
+#conversation Static { height: 5; }
+#message { height: 2; min-height: 0; overflow: hidden hidden; }
+#message Static { height: 1; }
+#main-row, #main-detail, #child-row, #provider-model { height: 1; min-height: 0; text-wrap: nowrap; text-overflow: ellipsis; }
+#help { height: 3; min-height: 0; overflow: hidden hidden; }
+#timings { height: auto; max-height: 6; }

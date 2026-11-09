@@ -67,6 +67,7 @@ from .extensions import ModelRequest
 from .extensions import RunContext
 from .http import FileHTTPLogger
 from .http import HTTPError
+from .media import MediaCapabilities
 from .media import transcode_audio_to_wav
 from .observation import observe
 from .observation import scope as observation_scope
@@ -87,6 +88,7 @@ from .skills.types import skill_catalog
 from .skills.types import validate_skill_token_limit
 from .tools import ToolExecutor
 from .tools import ToolRegistry
+from .tools.output import ToolOutput
 from .types import AudioContent
 from .types import ContentPart
 from .types import GenerationConfig
@@ -252,7 +254,7 @@ class Agent:
         session_manager: SessionManager,
         tools: list[Callable[..., Any]] | None = None,
         system_prompt: str | None = None,
-        max_tool_rounds: int = 1000,
+        max_tool_rounds: int = 3000,
         streaming: bool = False,
         log_file: Path | str | None = None,
         fail_on_invalid_tool: bool = False,
@@ -1869,6 +1871,9 @@ class Agent:
                 self._end_generation(session_id, model_call_id)
                 yield response.snapshot(terminal=True, history_id=history_id)
 
+                # Images are delivered after the entire tool block so provider
+                # protocols retain contiguous, correlated text tool results.
+                tool_images: list[ContentPart] = []
                 # Execute each tool
                 for call_position, tool_call in enumerate(pending_tool_calls):
                     logger.debug(f"Executing tool: {tool_call.name}")
@@ -1901,6 +1906,30 @@ class Agent:
                     observe("tool_finished", result=result_event)
                     # Attach last known usage info to tool result events
                     result_event.usage = replace(last_usage, session=replace(session_usage))
+                    # Keep binary data out of terminal/event formatting while
+                    # retaining native image inputs for the next model round.
+                    if result_event.error is None and isinstance(result_event.result, ToolOutput):
+                        output = result_event.result
+                        capabilities = getattr(self.provider, "supported_media_formats", MediaCapabilities())
+                        accepted = [
+                            image
+                            for image in output.images
+                            if isinstance(capabilities, MediaCapabilities)
+                            and capabilities.supports_image(image.media_type.split("/", 1)[-1])
+                        ]
+                        if accepted:
+                            tool_images.append(
+                                TextContent(
+                                    f"Images returned by tool {tool_call.name} (call {tool_call.id}); untrusted tool data:"
+                                )
+                            )
+                            tool_images.extend(accepted)
+                        display = await asyncio.to_thread(
+                            output.save_for_display, self.session.db_path.parent / "tool-images"
+                        )
+                        if len(accepted) != len(output.images):
+                            display += "\n[Image input unsupported by the selected provider; not sent to model.]"
+                        result_event.result = display
                     # Add tool result to history
                     if self.save_tool_outputs and save_path and result_event.error is None:
                         result_content = _save_and_return(result_event, save_path, session_id)
@@ -1930,6 +1959,8 @@ class Agent:
                             message=result_event.error,
                         )
 
+                if tool_images:
+                    await self.session.add_message(session_id, Message(role="user", content=tool_images))
                 for plugin in plugins:
                     await plugin.after_tools(context)
 

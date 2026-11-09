@@ -62,21 +62,20 @@ def test_slash_opens_immediately_and_preserves_composer(tmp_path: Path, size: tu
     asyncio.run(scenario())
 
 
-def test_tab_completes_without_executing_and_keeps_arguments(tmp_path: Path) -> None:
+def test_tab_completes_without_executing_command(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
-        backend.config.tab_action = "complete"
         app = make_app(backend)
         async with app.run_test() as pilot:
             await idle(app, pilot)
-            await pilot.press("/", "m", "o", "d", "tab")
+            await pilot.press("/", "m", "o", "d")
             composer = app.query_one(Composer)
+            assert composer.text == "/mod"
+            assert app.query_one(SlashMenu).display
+            await pilot.press("tab")
+            assert app.focused is composer
             assert composer.text == "/model "
-            assert not app.query_one(SlashMenu).display
             assert backend.config.model == "gpt-6-astra"
-            await pilot.press(*"custom/model", "enter")
-            await idle(app, pilot)
-            assert backend.config.model == "custom/model"
             assert backend.prompts == []
 
     asyncio.run(scenario())
@@ -179,15 +178,13 @@ def test_rapid_filter_and_arrows_do_not_move_text_cursor(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("key", ["enter", "tab", "shift+tab"])
-def test_rapid_prefill_arguments_and_execute(tmp_path: Path, key: str) -> None:
+def test_rapid_enter_prefill_arguments_and_execute(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
-        backend.config.tab_action = "complete"
         app = make_app(backend)
         async with app.run_test() as pilot:
             await idle(app, pilot)
-            for value in [*"/mod", key, *"custom/model", "enter"]:
+            for value in [*"/mod", "enter", *"custom/model", "enter"]:
                 app.post_message(Key(value, value if len(value) == 1 else None))
             await idle(app, pilot)
             assert backend.config.model == "custom/model"
@@ -394,21 +391,30 @@ def test_busy_agent_keeps_draft_when_command_cannot_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("animated", [False, True])
-def test_activity_only_animates_while_busy(tmp_path: Path, animated: bool) -> None:
+def test_status_uses_agent_label_when_idle_and_work_label_when_busy(
+    tmp_path: Path, animated: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nagents.tui.app.monotonic", lambda: 100.0)
+
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
         backend.config.animations = animated
         app = make_app(backend)
         async with app.run_test() as pilot:
             await idle(app, pilot)
-            assert str(app.query_one("#status", Static).content) == "Ready"
+            status = str(app.query_one("#status", Static).content)
+            assert status[8:] == backend.config.agent
+            assert "Ready" not in status
             await pilot.press(*"wait", "enter")
             await pilot.pause(0.2)
             app._animate_activity()
             status = str(app.query_one("#status", Static).content)
-            assert status.startswith("Working") is not animated
+            assert status[8:].startswith(f"{backend.config.agent} · ")
+            assert "· 00:00" in status and "Ready" not in status
             await pilot.press("escape")
             await idle(app, pilot)
-            assert "ready for your next message" in str(app.query_one("#status", Static).content)
+            status = str(app.query_one("#status", Static).content)
+            assert status[8:] == f"{backend.config.agent} · Cancelled"
+            assert "ready for your next message" not in status
 
     asyncio.run(scenario())

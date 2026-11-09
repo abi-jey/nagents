@@ -151,7 +151,7 @@ test("shell timeout rejects zero, out-of-range, and malformed numeric input", ()
 for (const [key, min, max] of [
   ["max_output", 1024, 1048576],
   ["max_file_bytes", 1024, 4194304],
-  ["max_tool_rounds", 1, 1000],
+  ["max_tool_rounds", 1, 3000],
   ["max_subagent_depth", 0, 8],
   ["max_concurrent_subagents", 1, 64],
   ["max_subagent_executions", 1, 4096],

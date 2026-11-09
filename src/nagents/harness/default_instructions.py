@@ -1,8 +1,8 @@
-"""Read the shipped coding policy independently of workspace instruction discovery."""
+"""Read the shipped assistant policy independently of workspace instruction discovery."""
 
 
 def load_default_instructions() -> str:
-    """Use the Markdown resource as the sole source of the default coding policy."""
+    """Use the Markdown resource as the sole source of the default assistant policy."""
     from .agents.documents import bundled_assistant
 
     try:

@@ -25,6 +25,9 @@ from urllib.parse import quote
 from urllib.parse import urlsplit
 
 from ..adapters import openai as openai_adapter
+from ..adapters._additional_tools import AdditionalToolsUnsupported
+from ..adapters._additional_tools import ToolTimeline
+from ..adapters._additional_tools import rejects_additional_tools
 from ..adapters._reasoning import anthropic_summary_model
 from ..adapters._reasoning import gemini_summary_model
 from ..adapters._reasoning import openai_summary_model
@@ -61,6 +64,9 @@ from .auth import BearerTokenProvider
 from .auth import bearer_headers
 from .auth import validate_endpoint
 from .auth import validate_prefix
+from .cache import ConversationCacheKey
+from .cache import ConversationCacheSnapshot
+from .cache import ConversationCacheTracker
 from .context import ContextMetadata
 from .context import ContextWindow
 from .context import fetch_context_metadata
@@ -167,6 +173,9 @@ class Provider:
         self.session_id_header = session_id_header
         self.context_window = validate_context_window(context_window)
         self.model_context_windows: dict[str, int] = {}
+        self._conversation_cache = ConversationCacheTracker()
+        self._responses_tool_timelines: dict[tuple[str, str, str], ToolTimeline] = {}
+        self._responses_tools_unsupported: set[tuple[str, str]] = set()
         self._context_auth_identity = ""
         self._context_metadata = ContextMetadata()
         self._context_metadata_candidate = ContextMetadata()
@@ -542,6 +551,22 @@ class Provider:
             validate_session_header_value(session_id)
         with self._http.session_context(session_id):
             yield
+
+    def conversation_cache_snapshot(self) -> tuple[ConversationCacheSnapshot, ...]:
+        """Inspect bounded Responses/Codex telemetry across explicit conversations.
+
+        Snapshots contain only route/identity metadata and reported usage, never
+        prompts or credentials. They describe observed cache use, not server
+        cache contents or a guarantee of future hits. Unscoped calls are omitted.
+        """
+        return self._conversation_cache.snapshot()
+
+    def _record_conversation_cache(self, key: ConversationCacheKey, usage: Usage) -> None:
+        from ..observation import observe
+
+        snapshot = self._conversation_cache.record(key, usage)
+        if snapshot is not None:
+            observe("conversation_cache_usage", snapshot=snapshot)
 
     def _session_headers(self) -> dict[str, str]:
         if not self.session_id_header or not self._http.session_id:
@@ -1784,6 +1809,7 @@ class Provider:
         from ..adapters.responses import format_request
 
         body = format_request(self.model, messages, tools, config, stream)
+        cache_key = ConversationCacheTracker.key(f"{self._api_prefix()}/responses", self.model, self._http.session_id)
         if (
             config
             and config.reasoning_summary == "auto"
@@ -1803,25 +1829,72 @@ class Provider:
         if self.provider_type == ProviderType.OPENROUTER:
             headers["HTTP-Referer"] = "https://github.com/nagents"
         headers.update(self._session_headers())
-        accumulator = ResponseAccumulator(streaming=stream)
-        if stream:
-            async with aclosing(
-                cast("AsyncGenerator[str, None]", self._http.post_stream(url, body, headers))
-            ) as chunks:
-                async for data in chunks:
-                    if data == "[DONE]":
+        route = (self.base_url, self.model)
+        key = (*route, self._http.session_id)
+        # Compatible endpoints and unknown models must not be probed speculatively.
+        model = self.model.removesuffix("-latest")
+        eligible = (
+            self.provider_type == ProviderType.OPENAI_COMPATIBLE
+            and urlsplit(self.base_url).hostname == "api.openai.com"
+            and model in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"}
+            and route not in self._responses_tools_unsupported
+        )
+        fallback_body = dict(body)
+        if eligible:
+            if key not in self._responses_tool_timelines:
+                # Bound optimization memory for long-lived shared providers.
+                if len(self._responses_tool_timelines) >= 128:
+                    self._responses_tool_timelines.pop(next(iter(self._responses_tool_timelines)))
+                self._responses_tool_timelines[key] = ToolTimeline()
+            self._responses_tool_timelines[key].apply(body)
+        for attempt in range(2):
+            accumulator = ResponseAccumulator(streaming=stream)
+            received = False
+            try:
+                if stream:
+                    async with aclosing(
+                        cast("AsyncGenerator[str, None]", self._http.post_stream(url, body, headers))
+                    ) as chunks:
+                        async for data in chunks:
+                            if data == "[DONE]":
+                                received = True
+                                break
+                            frame = load_object(data)
+                            # An explicit first-frame rejection is safe to replay;
+                            # even a prior non-visible protocol frame is not.
+                            if (
+                                not received
+                                and frame.get("type") == "error"
+                                and rejects_additional_tools(frame.get("error", frame))
+                            ):
+                                raise AdditionalToolsUnsupported()
+                            received = True
+                            events = accumulator.add(frame)
+                            if accumulator.completed:
+                                break
+                            for event in events:
+                                yield event
+                    if not accumulator.completed:
+                        raise ProtocolError("Responses stream ended before completion; no tools were released.")
+                else:
+                    result = await self._http.post_json(url, body, headers)
+                    events = accumulator.finish(result)
+                # Terminal events repeat usage on text and each tool; count only
+                # the validated request, before the caller can stop consuming.
+                for terminal in events:
+                    if isinstance(terminal, TextDoneEvent):
+                        if terminal.finish_reason in {FinishReason.STOP, FinishReason.TOOL_CALLS}:
+                            self._record_conversation_cache(cache_key, terminal.usage)
                         break
-                    events = accumulator.add(load_object(data))
-                    if accumulator.completed:
-                        break
-                    for event in events:
-                        yield event
-            if not accumulator.completed:
-                raise ProtocolError("Responses stream ended before completion; no tools were released.")
-        else:
-            events = accumulator.finish(await self._http.post_json(url, body, headers))
-        for event in events:
-            yield event
+                for event in events:
+                    yield event
+                return
+            except AdditionalToolsUnsupported:
+                if received or attempt or body == fallback_body:
+                    raise
+                self._responses_tools_unsupported.add(route)
+                self._responses_tool_timelines.pop(key, None)
+                body = fallback_body
 
     async def close(self) -> None:
         """Close the provider and release resources."""

@@ -1,18 +1,19 @@
-TaskScreen {
-    align: center middle;
-    background: $ngn-overlay;
-}
+TaskScreen { background: $ngn-background; }
 
 #task-dialog {
-    width: 96;
-    max-width: 96%;
-    height: 92%;
-    min-height: 16;
-    padding: 1 2;
-    border: round $ngn-border;
-    background: $ngn-panel;
+    width: 100%;
+    height: 100%;
+    padding: 0 1;
+    border: none;
+    background: transparent;
     color: $ngn-text;
 }
+#task-navigation { height: 3; }
+#task-navigation #task-heading { width: 1fr; margin: 1 1 0 1; }
+#task-close { min-width: 10; margin: 0; }
+#task-compose-area { height: auto; background: $ngn-composer-background; }
+#task-history .turn { width: 100%; }
+TaskScreen.narrow #task-options { display: none; }
 
 #task-caption, #task-hint {
     color: $ngn-muted;
@@ -27,7 +28,7 @@ TaskScreen {
 }
 
 #task-options {
-    width: 32%;
+    width: 30;
     min-width: 21;
     height: 1fr;
     border: none;
@@ -39,7 +40,7 @@ TaskScreen {
 
 #task-detail {
     width: 1fr;
-    padding-left: 2;
+    padding-right: 1;
 }
 
 #task-heading {
@@ -58,19 +59,21 @@ TaskScreen {
 
 #task-followup {
     height: 3;
-    border: tall $ngn-border;
-    background: $ngn-background;
-    color: $ngn-text;
+    border: none;
+    background: $ngn-composer-background;
+    color: $ngn-composer-text;
 }
 
 #task-followup:focus {
-    border: tall $ngn-accent;
+    border: none;
 }
 
 TaskScreen .dialog-actions {
     height: 3;
     align-horizontal: right;
 }
+TaskScreen #task-caption { width: 1fr; margin-top: 1; }
+TaskScreen #task-send { width: 20; }
 
 TaskScreen Button {
     margin-left: 1;

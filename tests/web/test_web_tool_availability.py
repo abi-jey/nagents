@@ -29,6 +29,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def advertised_tools(body: dict[str, object]) -> set[str]:
+    """Read both baseline schemas and chronological Responses additions."""
+    tools = body.get("tools", [])
+    inputs = body.get("input", [])
+    assert isinstance(tools, list) and isinstance(inputs, list)
+    names = {tool["name"] for tool in tools}
+    for item in inputs:
+        if isinstance(item, dict) and item.get("type") == "additional_tools":
+            names.update(tool["name"] for tool in item["tools"])
+    return names
+
+
 def custom_read() -> str:
     """A custom tool is not a builtin merely because its description says read-only."""
     raise AssertionError("Only fixture text should be generated")
@@ -75,15 +87,20 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                 assert len(requests) == count + 1
                 tools = requests[-1]["tools"]
                 assert isinstance(tools, list)
-                wire = {tool["name"] for tool in tools}
+                wire = advertised_tools(requests[-1])
+                effective = app.state.web.harness_for(harness.session_id)
                 if not shadowed:
                     assert harness.agent.tool_registry.get("schedule_wakeup") is definitions["schedule_wakeup"]
                 catalog = (await client.get("/api/tools", headers=headers)).json()
                 assert {tool["name"] for tool in catalog["tools"]} == set(definitions)
                 assert all(harness.agent.tool_registry.get(name) is tool for name, tool in definitions.items())
                 assert {"edit", "write", "shell", "to_agent", "schedule_wakeup"} <= set(definitions)
-                assert ("to_agent" in wire) == (harness.can_delegate and not (shadowed and harness.mode == "reviewer"))
-                if harness.mode == "reviewer":
+                assert ("to_agent" in wire) == (
+                    effective.can_delegate
+                    and effective.tool_enabled("to_agent")
+                    and not (shadowed and effective.mode == "reviewer")
+                )
+                if effective.mode == "reviewer":
                     assert not {"edit", "write", "shell", "custom_read"} & wire
                     assert not any(name.startswith("channel_") for name in wire)
                 else:
@@ -214,7 +231,7 @@ def test_setup_plugin_instructions_survive_runs_and_scheduler_changes(
                 assert str(requests[-1]["instructions"]).count(marker) == 1
                 tools = requests[-1]["tools"]
                 assert isinstance(tools, list)
-                advertised = {tool["name"] for tool in tools}
+                advertised = advertised_tools(requests[-1])
                 assert ("schedule_wakeup" in advertised) == (callback is not None)
                 assert harness.agent.tool_registry.get("schedule_wakeup") is not None
                 if not replace_prompt:

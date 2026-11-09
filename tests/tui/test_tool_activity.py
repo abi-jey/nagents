@@ -65,7 +65,8 @@ def test_structured_command_outcomes_preserve_inspection_and_raw_evidence(
             await app._event(ToolOutput("outcome", name, "Original streamed output\n"))
             await app._event(ToolResultEvent(id="outcome", name=name, result=result, error=error, duration_ms=1250))
             await pilot.pause()
-            assert f"/  {label}  1.25s" in str(title.content)
+            expected_timing = f"1.25s / {backend.config.shell_timeout:g}s" if name == "shell" else "1.25s"
+            assert str(title.content).split("check", 1)[1].split() == [*label.split(), *expected_timing.split()]
             assert card.has_class("failed") is failed
             assert card.has_class("complete") is not failed
             assert not card.collapsed
@@ -78,6 +79,41 @@ def test_structured_command_outcomes_preserve_inspection_and_raw_evidence(
             else:
                 assert format_value(result) in card.output_text
             assert not backend.running and not backend.cancelled
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("size", [(48, 24), (80, 24), (120, 32)])
+def test_tool_rows_are_adjacent_and_success_stays_subdued(tmp_path: Path, size: tuple[int, int]) -> None:
+    async def scenario() -> None:
+        app = make_app(FakeHarness(tmp_path))
+        async with app.run_test(size=size) as pilot:
+            await idle(app, pilot)
+            for call_id in ("first", "second"):
+                await app._event(ToolCallEvent(id=call_id, name="read_file", arguments={"path": "long/path/" * 30}))
+            await pilot.pause()
+            first, second = list(app.query(ToolCard))
+            title = first.query_one("CollapsibleTitle", Static)
+            running_color = title.styles.color
+            running_border = first.styles.border_left
+            assert first.region.height == second.region.height == 1
+            assert first.region.bottom == second.region.y
+            assert first.styles.margin.bottom == second.styles.margin.bottom == 0
+            composer = app.query_one(Composer)
+            assert second.region.bottom <= composer.region.y
+            await app._event(ToolResultEvent(id="first", name="read_file", result="ok"))
+            await pilot.pause()
+            assert title.styles.color == running_color
+            assert first.styles.border_left == running_border
+            assert first.region.bottom == second.region.y
+            await app._event(ToolResultEvent(id="second", name="read_file", error="Missing file"))
+            await pilot.pause()
+            assert second.query_one("CollapsibleTitle", Static).styles.color != running_color
+            assert second.region.bottom <= composer.region.y
+            first.collapsed = False
+            await pilot.pause()
+            assert first.region.height > 1
+            assert first.arguments.display
 
     asyncio.run(scenario())
 
@@ -162,7 +198,6 @@ def test_tool_lifecycle_preserves_user_choice(tmp_path: Path, outcome: str, expa
 def test_restored_tool_history_is_compact_and_inspectable(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
-        backend.config.tab_action = "focus"
         backend.messages = [
             Message(
                 role="assistant", tool_calls=[ToolCall(id="ok", name="read_file", arguments={"path": "src/main.py"})]
@@ -179,7 +214,10 @@ def test_restored_tool_history_is_compact_and_inspectable(tmp_path: Path) -> Non
             assert cards[1].has_class("failed")
             assert "src/main.py" in str(cards[0].query_one("CollapsibleTitle", Static).content)
             assert app.focused is app.query_one(Composer)
-            # Reach a header through ordinary keyboard traversal, then inspect.
+            # F6 enters the conversation; composer Tab retains completion behavior.
+            await pilot.press("f6")
+            assert app.focused is app.query_one("#conversation")
+            # Reach a restored header through conversation keyboard traversal.
             for _ in range(8):
                 await pilot.press("tab")
                 if app.focused is cards[1].query_one("CollapsibleTitle"):
@@ -209,7 +247,7 @@ def test_long_unicode_and_markup_summary_keeps_outcome_on_screen(tmp_path: Path)
                 await pilot.pause()
                 title = card.query_one("CollapsibleTitle", Static)
                 rendered = title.render_line(0).text
-                assert "failed  1.25s" in rendered
+                assert rendered.rstrip().endswith(f"{'failed':<10}{'1.25s':>10}")
                 assert "…" in rendered
                 assert "[red]" in rendered
                 assert card.region.height == title.region.height == 1
@@ -272,16 +310,18 @@ def test_escape_cancellation_preserves_tool_expansion(tmp_path: Path, expanded: 
 
 
 @pytest.mark.parametrize("size", [(80, 24), (140, 40)])
-@pytest.mark.parametrize("tab_action", ["agent", "complete", "focus"])
-def test_pane_focus_and_tool_keyboard_navigation(tmp_path: Path, size: tuple[int, int], tab_action: str) -> None:
+def test_pane_focus_and_tool_keyboard_navigation(tmp_path: Path, size: tuple[int, int]) -> None:
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
-        backend.config.tab_action = tab_action
         app = make_app(backend)
         async with app.run_test(size=size) as pilot:
             await idle(app, pilot)
-            for index in range(30):
+            # Compact one-row cards need enough entries to overflow tall viewports.
+            for index in range(60):
                 await app._event(ToolCallEvent(id=str(index), name="read_file", arguments={"path": f"file{index}"}))
+                # Navigation needs overflow and stable cards, not sixty live
+                # shimmer/timer loops. Dedicated tests cover live animation.
+                await app._event(ToolResultEvent(id=str(index), name="read_file", result="saved contents"))
             await pilot.pause()
             composer = app.query_one(Composer)
             composer.load_text("unsent draft")
@@ -317,7 +357,6 @@ def test_pane_focus_and_tool_keyboard_navigation(tmp_path: Path, size: tuple[int
             assert app.focused is composer
             assert composer.text == "unsent draft"
             assert not backend.prompts
-            assert backend.config.tab_action == tab_action
 
     asyncio.run(scenario())
 

@@ -46,7 +46,13 @@ def test_parallel_chat_decisions_keep_exact_owner_run_and_call(
                 yield TextDoneEvent(text=f"Finished {messages[-1].tool_call_id}")
             else:
                 room = "room-a" if "request A" in str(messages[-1].content) else "room-b"
-                yield ToolCallEvent(id=f"inspect-{room}", name="channel_list", arguments={})
+                # Host channel listing is approval-free; use a gated custom tool
+                # so both runs genuinely wait for their owning chat's decision.
+                yield ToolCallEvent(
+                    id=f"inspect-{room}",
+                    name="channel_action",
+                    arguments={"channel": "fixture", "action": "inspect", "arguments": {}},
+                )
 
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, _):
             host = state.channels

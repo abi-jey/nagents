@@ -89,7 +89,11 @@ message replied to, not the target for replying to that source message.
 
 Tools use the normal registry/executor/plugin hooks. Existing names are not
 overwritten; listener-owned tools/instructions are removed on cleanup. Loading
-this skill alone installs no connector.
+this skill alone installs no connector. The TUI and web host's original
+`channel_list` discovery tool is allowed without a custom-tool approval prompt
+by default. Explicit agent/tool restrictions still apply; a replacement tool
+with the same name does not inherit that exemption. This does not grant sends,
+actions, or connector configuration permission.
 
 `ChannelSend` describes destination/text and optional thread/reply/attachments/
 metadata. Successful `send()` returns `ChannelDelivery.message_ids`, a tuple of

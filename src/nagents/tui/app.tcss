@@ -2,18 +2,20 @@ Screen {
     background: $ngn-background;
     color: $ngn-text;
 }
+#app-shell { height: 1fr; }
+#app-shell.startup-shell { border: round $ngn-border; overflow: hidden hidden; }
 Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text-style: $ngn-selection-style; }
 
 #mode { height: 1; padding: 0 2; color: $ngn-muted; text-overflow: ellipsis; }
 #mode.demo { color: $ngn-warning; }
 #main { height: 1fr; }
-#conversation, #rail {
+#rail {
     border: round $ngn-border;
     border-title-color: $ngn-heading;
     border-title-style: bold;
 }
-#conversation { width: 1fr; padding: 1 2 1 1; scrollbar-size: 1 1; }
-#conversation:focus { border: round $ngn-accent; }
+#conversation { width: 1fr; padding: 1 2 1 1; scrollbar-size: 1 1; border: none; }
+#conversation:focus { border: none; }
 #welcome { height: auto; margin: 1 0; max-width: 72; }
 #welcome-subtitle { color: $ngn-muted; height: auto; margin-bottom: 1; }
 .suggestion {
@@ -44,7 +46,8 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 #rail-auth { color: $ngn-info; }
 #rail-session { color: $ngn-assistant; }
 #rail-activity { color: $ngn-info; }
-#rail-note { color: $ngn-muted; margin-top: 1; }
+#performance-panel { height: auto; max-height: 16; margin-top: 1; border-top: solid $ngn-border; color: $ngn-info; }
+#performance-panel.warning { color: $ngn-warning; }
 #compose-area { height: auto; padding: 0 1; border: none; }
 #compose-area { border-title-color: $ngn-message-user; background: $ngn-message-background; color: $ngn-message-text; }
 #queue-status { color: $ngn-message-muted; }
@@ -53,14 +56,16 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
     height: 3;
     border: none;
     padding: 0 1;
-    background: $ngn-message-background;
-    color: $ngn-message-text;
+    background: $ngn-composer-background;
+    color: $ngn-composer-text;
 }
 #composer:focus { border: none; }
-#composer > .text-area--cursor { background: $input-cursor-background; color: $input-cursor-foreground; text-style: $input-cursor-text-style; }
-#composer > .text-area--selection { background: $ngn-selection; color: $ngn-text; text-style: $ngn-selection-style; }
-#composer > .text-area--placeholder { color: $ngn-message-muted; }
-#status { height: 1; color: $ngn-message-info; text-overflow: ellipsis; }
+#composer > .text-area--cursor { background: $ngn-composer-accent; color: $ngn-composer-cursor-text; text-style: $ngn-composer-cursor-style; }
+#composer > .text-area--selection { background: $ngn-composer-selection; color: $ngn-composer-text; text-style: $ngn-selection-style; }
+#composer > .text-area--placeholder { color: $ngn-composer-muted; }
+#status { height: 1; color: $ngn-message-info; text-wrap: nowrap; text-overflow: ellipsis; }
+#background-status { height: auto; max-height: 3; color: $ngn-message-muted; text-wrap: nowrap; text-overflow: ellipsis; }
+#provider-model { height: 1; color: $ngn-message-muted; text-wrap: nowrap; text-overflow: ellipsis; }
 #status.working { color: $ngn-message-tool; }
 #rail-activity.working { color: $ngn-tool; }
 #status.ready { color: $ngn-message-success; }
@@ -69,12 +74,15 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 #rail-activity.warning { color: $ngn-warning; }
 .turn { height: auto; margin: 0 0 1 0; }
 .turn-label { height: 1; color: $ngn-assistant; text-style: bold; margin-bottom: 1; }
-.turn.user { background: $ngn-message-background; padding: 0 2 0 1; }
-.turn.user > Static { background: $ngn-message-background; color: $ngn-message-text; }
-.turn.user > .turn-label { color: $ngn-message-user; }
+.turn.user { background: $ngn-composer-background; padding: 0 2 0 1; }
+.turn.user > Static { background: $ngn-composer-background; color: $ngn-composer-text; }
 .assistant { padding-left: 1; }
 .turn Static { height: auto; }
 .turn Markdown { background: transparent; padding: 0; margin: 0; }
+.saved-context { height: auto; border: none; padding: 0; margin: 0 0 1 0; background: transparent; }
+.saved-context > CollapsibleTitle { padding: 0 1; color: $ngn-muted; }
+.saved-context > Contents { padding: 0 1; }
+.saved-context Static { height: auto; color: $ngn-muted; }
 MarkdownH1, MarkdownH2, MarkdownH3, MarkdownH4, MarkdownH5, MarkdownH6 { color: $ngn-heading; border: none; background: transparent; margin: 0 0 1 0; padding: 0; }
 MarkdownH3, MarkdownH4, MarkdownH5, MarkdownH6 { color: $ngn-info; }
 MarkdownFence { background: $ngn-panel; color: $ngn-text; border-left: solid $ngn-code; }
@@ -85,18 +93,19 @@ MarkdownBullet { color: $ngn-assistant; }
 .notice { height: auto; margin: 0 0 1 0; color: $ngn-info; border-left: solid $ngn-info; padding-left: 1; }
 .notice.warning { color: $ngn-warning; border-left: solid $ngn-warning; }
 .notice.error { border-left: solid $ngn-error; }
+.notice.tool-added { height: 1; margin: 0; border: none; padding: 0 1; background: transparent; color: $ngn-tool; text-wrap: nowrap; text-overflow: ellipsis; }
 .error, #rail-activity.error { color: $ngn-error; }
 #status.error { color: $ngn-message-error; }
-.tool-card { height: auto; padding: 0; margin: 0 0 1 0; border: none; border-left: solid $ngn-tool; background: $ngn-panel; }
-.tool-card > CollapsibleTitle { color: $ngn-tool; background: transparent; padding: 0 1; width: 1fr; height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
-.tool-card > CollapsibleTitle:hover, .tool-card > CollapsibleTitle:focus { background: $ngn-hover; color: $ngn-text; text-style: $ngn-focus-style; }
+.tool-card { height: auto; padding: 0; margin: 0; border: none; background: transparent; }
+.tool-card > CollapsibleTitle { color: $ngn-muted; background: transparent; padding: 0 1; width: 1fr; height: 1; text-wrap: nowrap; text-overflow: ellipsis; text-style: none; }
+.tool-card > CollapsibleTitle:hover { background: transparent; text-style: bold; }
+.tool-card > CollapsibleTitle:focus { background: transparent; text-style: underline; }
+.tool-card > CollapsibleTitle:hover:focus { text-style: bold underline; }
 .tool-card:focus-within, #rail-details:focus-within { background-tint: transparent; }
 .tool-card > Contents { padding: 1; }
-.tool-card.failed { border-left: solid $ngn-error; }
+.tool-card.failed { border: none; }
 .tool-card.failed > CollapsibleTitle { color: $ngn-error; }
-.tool-card.complete { border-left: solid $ngn-success; }
-.tool-card.complete > CollapsibleTitle { color: $ngn-success; }
-.tool-card.cancelled { border-left: solid $ngn-warning; }
+.tool-card.cancelled { border: none; }
 .tool-card.cancelled > CollapsibleTitle { color: $ngn-warning; }
 .tool-arguments, .tool-output, .tool-diff { height: auto; }
 .tool-name { height: auto; margin-bottom: 1; }
@@ -111,6 +120,11 @@ ModalScreen { align: center middle; background: $ngn-overlay; }
 .approval-content { height: 1fr; scrollbar-size: 1 1; }
 .approval-content Static { height: auto; }
 .approval-tool { text-style: bold; color: $ngn-tool; margin-bottom: 1; }
+.approval-dialog .approval-scope { color: $ngn-warning; margin-top: 1; }
+.approval-dialog .dialog-actions Button { width: 1fr; min-width: 0; margin-left: 1; padding: 0; }
+.approval-dialog .dialog-actions #deny { margin-left: 0; }
+.approval-dialog #always { color: $ngn-warning; border: tall $ngn-warning; }
+.approval-dialog #always:focus { color: $ngn-text; }
 .dialog-actions { height: 3; margin-top: 1; align-horizontal: right; }
 .dialog-actions Button { margin-left: 2; min-width: 14; }
 Button { background: $ngn-panel; color: $ngn-text; border: tall $ngn-border; }

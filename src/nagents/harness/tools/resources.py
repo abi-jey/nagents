@@ -43,6 +43,14 @@ from ..integrations.plugin_loader import PluginModule
 from ..integrations.plugin_loader import load_plugin
 from ..runtime.commands import CommandRegistry
 from ..types import Notice
+from ..types import ToolAddedNotice
+from .discovery import TOOL_ADDED_MESSAGE_NAME
+from .discovery import DiscoveredToolModule
+from .discovery import ToolDiagnostic
+from .discovery import ToolSources
+from .discovery import added_tool_names
+from .discovery import discover_tool_sources
+from .discovery import load_discovered_module
 from .resource_config import ResourceConfigError
 from .resource_config import ResourceConfiguration
 from .resource_config import ignored_project
@@ -156,6 +164,8 @@ class _Generation:
     owned_names: set[str] = field(default_factory=set)
     approval_identities: dict[str, str] = field(default_factory=dict)
     server_origins: dict[str, str] = field(default_factory=dict)
+    tool_modules: dict[str, DiscoveredToolModule] = field(default_factory=dict)
+    tool_diagnostics: list[ToolDiagnostic] = field(default_factory=list)
 
     async def close(self) -> None:
         if self.closed:
@@ -173,6 +183,8 @@ class _Generation:
             errors.append(error)
         for module in self.module_owners:
             module.close()
+        for discovered in self.tool_modules.values():
+            discovered.close()
         if errors:
             raise BaseExceptionGroup("Extension generation cleanup failed", errors)
 
@@ -271,6 +283,12 @@ class HarnessResources(AgentPlugin):
         self._failed_servers: dict[str, _FailedServer] = {}
         self._ignored_source = ""
         self._ignored_foreign: tuple[str, ...] = ()
+        self._tool_messages: set[str] = set()
+        self._tool_notices_pending: set[str] = set()
+        self._known_discovered_tools: set[str] = set()
+        self._added_tools_pending: set[str] = set()
+        self._initial_added_tools: set[str] = set()
+        self._tool_scan_seen = False
         self._configuration = ResourceConfiguration(
             harness.config.plugins,
             harness.config.mcp_servers,
@@ -393,6 +411,98 @@ class HarnessResources(AgentPlugin):
             except Exception as error:
                 await finish_on_cancel(fresh.manager.remove_server(server.name))
                 await self._mcp_failure(server.name, origin, error, initial=initial, stage=stage)
+
+    def _tool_sources(self) -> ToolSources:
+        return discover_tool_sources(
+            self.harness.workspace,
+            trust_project=self.harness.config.trust_project,
+            read_only=self.harness.config.read_only
+            or self.harness.mode == "reviewer"
+            or self.harness._permission_ceiling == "reviewer",
+        )
+
+    def _load_discovered_tools(self, fresh: _Generation) -> None:
+        sources = self._tool_sources()
+        fresh.tool_diagnostics.extend(sources.diagnostics)
+        for source in sources.modules:
+            try:
+                module = load_discovered_module(source)
+            except (Exception, SystemExit) as error:
+                previous = self.current.tool_modules.get(source.prefix)
+                retained = previous is not None and previous.source.path == source.path
+                if retained and previous is not None:
+                    fresh.tool_modules[source.prefix] = previous.retain()
+                fresh.tool_diagnostics.append(
+                    ToolDiagnostic(
+                        source.path,
+                        type(error).__name__,
+                        (f"Syntax error at line {error.lineno}. " if isinstance(error, SyntaxError) else "")
+                        + (
+                            "Using this module's last working version. Other modules remain available."
+                            if retained
+                            else "This module was skipped. Other modules remain available."
+                        ),
+                    )
+                )
+            else:
+                fresh.tool_modules[source.prefix] = module
+        for prefix, previous in self.current.tool_modules.items():
+            if prefix not in fresh.tool_modules and previous.source.path.parent in sources.failed_directories:
+                fresh.tool_modules[prefix] = previous.retain()
+        for module in fresh.tool_modules.values():
+            fresh.tool_diagnostics.extend(module.diagnostics)
+            for definition in module.definitions:
+                if fresh.registry.get(definition.name) is not None:
+                    fresh.tool_diagnostics.append(
+                        ToolDiagnostic(
+                            module.source.path,
+                            "NameCollision",
+                            "An existing tool already owns this name; the discovered export was skipped.",
+                            definition.name,
+                        )
+                    )
+                    continue
+                fresh.registry._tools[definition.name] = definition
+                fresh.approval_identities[definition.name] = _fingerprint(
+                    {
+                        "kind": "discovered_python",
+                        "source": str(module.source.path),
+                        "sources": module.owner.sources,
+                        "tool": definition.name,
+                        "description": definition.description,
+                        "parameters": definition.parameters,
+                        "implementation": _callable_origin(definition, module.owner.sources),
+                    }
+                )
+
+    def _discovered_tools_changed(self) -> bool:
+        sources = self._tool_sources()
+        current = {prefix: module.source for prefix, module in self.current.tool_modules.items()}
+        if {source.prefix: source for source in sources.modules} != current:
+            return True
+        return bool(sources.diagnostics) or any(not module.unchanged() for module in self.current.tool_modules.values())
+
+    async def _report_discovered_tools(self, generation: _Generation, *, initial: bool) -> None:
+        messages = {
+            f"Python tool discovery: source={json.dumps(str(issue.path))}"
+            + (f", tool={json.dumps(issue.tool)}" if issue.tool else "")
+            + f", error={issue.error_type}. {issue.message}"
+            for issue in generation.tool_diagnostics
+        }
+        for message in self._tool_messages - messages:
+            if message in self.harness.diagnostics:
+                self.harness.diagnostics.remove(message)
+        for message in sorted(messages):
+            if message not in self._tool_messages:
+                self.logger.warning("%s", message)
+                self.harness.diagnostics.append(message)
+                if initial:
+                    self._tool_notices_pending.add(message)
+            if not initial and (message not in self._tool_messages or message in self._tool_notices_pending):
+                await self.harness.emit(Notice(message, "warning"))
+                self._tool_notices_pending.discard(message)
+        self._tool_messages = messages
+        self._tool_notices_pending.intersection_update(messages)
 
     def definition(self, name: str) -> ToolDefinition | None:
         if self._running and self._snapshot_ready:
@@ -557,6 +667,8 @@ class HarnessResources(AgentPlugin):
                 raise PermissionError("Read-only agents cannot start MCP subprocesses")
             stage, source = "mcp_start", configured.mcp_source
             await self._load_mcp(fresh, servers, initial=initial)
+            stage, source = "tool_discovery", str(harness.workspace / ".agents/tools")
+            self._load_discovered_tools(fresh)
             stage, source, server_name = "validation", configured.plugin_source, ""
             if any(not isinstance(hook, AgentPlugin) for hook in fresh.hooks):
                 raise TypeError("Plugin hooks must be AgentPlugin instances")
@@ -566,9 +678,9 @@ class HarnessResources(AgentPlugin):
             if "system_prompt" in fresh.settings and not isinstance(fresh.settings["system_prompt"], str | type(None)):
                 raise ValueError("Plugin system_prompt must be text or None")
             if "max_tool_rounds" in fresh.settings and (
-                type(fresh.settings["max_tool_rounds"]) is not int or not 1 <= fresh.settings["max_tool_rounds"] <= 1000
+                type(fresh.settings["max_tool_rounds"]) is not int or not 1 <= fresh.settings["max_tool_rounds"] <= 3000
             ):
-                raise ValueError("Plugin max_tool_rounds must be an integer between 1 and 1000")
+                raise ValueError("Plugin max_tool_rounds must be an integer between 1 and 3000")
         except BaseException as error:
             if stage == "mcp_start" and server_name in fresh.manager._clients:
                 stage = "mcp_discover"
@@ -674,6 +786,19 @@ class HarnessResources(AgentPlugin):
         self._config_round_limit = harness.config.max_tool_rounds
         object.__setattr__(agent_scope, "_ready", True)
         self.current = fresh
+        discovered_names = {
+            tool.name
+            for module in fresh.tool_modules.values()
+            for tool in module.definitions
+            if fresh.registry.get(tool.name) is tool
+        } | {name for name in fresh.mcp_names if fresh.registry.get(name) is not None}
+        self._added_tools_pending.intersection_update(discovered_names)
+        self._initial_added_tools.intersection_update(discovered_names)
+        self._added_tools_pending.update(discovered_names - self._known_discovered_tools)
+        if not self._tool_scan_seen:
+            self._initial_added_tools.update(discovered_names)
+            self._tool_scan_seen = True
+        self._known_discovered_tools = discovered_names
         harness.loaded_plugins[:] = references
         harness.config.plugins = references
         if initial:
@@ -686,6 +811,7 @@ class HarnessResources(AgentPlugin):
             harness.refresh_instructions()
         self._configuration = configured
         self._mcp_status = "partial" if self._failed_servers else "loaded"
+        await self._report_discovered_tools(fresh, initial=initial)
         self._report_mcp(initial=initial)
 
     async def _report_project_trust(self) -> None:
@@ -707,11 +833,14 @@ class HarnessResources(AgentPlugin):
         ignored = ignored_foreign_configs(self.harness.config)
         for path in ignored:
             if path not in self._ignored_foreign:
+                # Other clients' files are normal workspace contents, not a
+                # configuration failure. Keep discovery inspectable without
+                # writing an unsolicited warning over the default TUI splash.
                 message = (
                     f"Ignoring foreign MCP configuration {json.dumps(path)}. ngn does not import this file; "
-                    "configure mcp_servers in an ngn configuration you explicitly trust."
+                    "MCP servers are loaded only from trusted ngn configuration."
                 )
-                self.logger.warning("%s", message)
+                self.logger.info("%s", message)
         self._ignored_foreign = ignored
 
     def mcp_diagnostics(self) -> MCPDiagnostics:
@@ -801,6 +930,61 @@ class HarnessResources(AgentPlugin):
                 await hook.before_run(context, copy.deepcopy(self._message))
         for hook in self.active.hooks:
             await hook.before_generation(context)
+        # Recheck modules and owned helper sources before every model request.
+        # Existing response/batch boundaries already rebuild generations. Issued
+        # calls keep the exact definitions advertised with their response.
+        if (
+            not (harness._is_subagent and not harness.supports_child_custom_tools)
+            and not harness.config.demo
+            and self._discovered_tools_changed()
+        ):
+            await self.reload()
+        await self.announce_added_tools(context.session_id)
+
+    async def announce_added_tools(self, session_id: str, *, baseline: bool = False) -> None:
+        """Persist capability notices at startup or a safe generation boundary."""
+        if baseline:
+            self._added_tools_pending.update(self._known_discovered_tools)
+            self._initial_added_tools.update(self._known_discovered_tools)
+        if not self._added_tools_pending:
+            return
+        available = {tool.name for tool in self.harness.agent.tool_registry.get_all()}
+        names = self._added_tools_pending & available
+        if not names:
+            return
+        # A resumed conversation already knows baseline tools announced by a
+        # previous process. Runtime remove/re-add transitions still notify.
+        if names & self._initial_added_tools:
+            history = await self.harness.agent.session.get_history(session_id)
+            known: set[str] = set()
+            for message in history:
+                if (
+                    message.role == "user"
+                    and message.name == TOOL_ADDED_MESSAGE_NAME
+                    and isinstance(message.content, str)
+                ):
+                    known.update(added_tool_names(message.content))
+            repeated = names & self._initial_added_tools & known
+            self._added_tools_pending.difference_update(repeated)
+            self._initial_added_tools.difference_update(repeated)
+            names -= repeated
+        if not names:
+            return
+        line = ("Tool added: " if len(names) == 1 else "Tools added: ") + ", ".join(sorted(names))
+
+        async def persist() -> int:
+            row_id = await self.harness.agent.session.add_message(
+                session_id, Message(role="user", content=line, name=TOOL_ADDED_MESSAGE_NAME)
+            )
+            self._added_tools_pending.difference_update(names)
+            self._initial_added_tools.difference_update(names)
+            return row_id
+
+        # Persist and consume the queue together even if the requesting run is
+        # cancelled during SQLite I/O. Never insert between an assistant's calls
+        # and their results: this hook runs at the next generation boundary.
+        row_id = await finish_on_cancel(persist())
+        await self.harness.emit(ToolAddedNotice(line, history_id=str(row_id)))
 
     async def after_model(self, context: RunContext) -> None:
         for hook in self.active.hooks:

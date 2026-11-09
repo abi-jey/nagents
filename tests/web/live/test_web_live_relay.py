@@ -364,7 +364,8 @@ def test_local_provider_peer_exchanges_real_encoded_audio_and_quiet_keeps_peer_a
                     # checks. Retain real UDP/STUN/DTLS/audio in this fixture.
                     transport = provider.getTransceivers()[0].receiver.transport.transport
                     ice = transport._connection
-                    monkeypatch.setattr(ice, "check_periodic", lambda: not ice._check_list_done)
+                    periodic = "_check_periodic" if hasattr(ice, "_check_periodic") else "check_periodic"
+                    monkeypatch.setattr(ice, periodic, lambda: not ice._check_list_done)
                 await provider.setLocalDescription(await provider.createAnswer())
                 assert provider.localDescription is not None
                 answer = provider.localDescription.sdp

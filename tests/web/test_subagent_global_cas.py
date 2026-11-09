@@ -189,7 +189,8 @@ def test_unrelated_settings_edit_preserves_omitted_approved_limits(
             values = dict(before["values"])
             for name in ("max_concurrent_subagents", "max_subagent_executions"):
                 values.pop(name)
-            values["max_tool_rounds"] += 1
+            # The default may already be the maximum permitted round budget.
+            values["max_tool_rounds"] = 2 if values["max_tool_rounds"] == 1 else 1
             response = await client.post(
                 path,
                 headers=headers,

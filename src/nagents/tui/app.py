@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sqlite3
 from collections import deque
 from contextlib import aclosing
+from contextlib import nullcontext
 from contextlib import suppress
 from time import monotonic
+from time import time
 from typing import TYPE_CHECKING
 from typing import ClassVar
 from uuid import uuid4
 
+from rich.style import Style
+from rich.text import Text
 from textual import on
 from textual.app import App
 from textual.binding import Binding
+from textual.color import Color
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.containers import VerticalScroll
@@ -27,6 +34,7 @@ from textual.widgets import Static
 from textual.widgets import TextArea
 
 from nagents._async import join_owned
+from nagents._version import framework_version
 from nagents.error_presentation import transport_error_message
 from nagents.events import CompactionDoneEvent
 from nagents.events import CompactionStartedEvent
@@ -37,67 +45,97 @@ from nagents.events import ReasoningChunkEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.events import ToolCallProgressEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import Harness
+from nagents.harness.config import save_tui_performance
 from nagents.harness.providers import login as provider_login
 from nagents.harness.providers.credentials import ProviderLogin
 from nagents.harness.runtime.commands import BUILTIN_COMMANDS
+from nagents.harness.runtime.commands import Command
 from nagents.harness.runtime.commands import split_command
 from nagents.harness.runtime.followups import RunInput
+from nagents.harness.tools.discovery import TOOL_ADDED_MESSAGE_NAME
 from nagents.harness.tools.execution import host_run
 from nagents.harness.types import Notice
+from nagents.harness.types import TaskActivity
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskDeliveryWarning
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskStarted
+from nagents.harness.types import ToolAddedNotice
 from nagents.harness.types import ToolOutput
 from nagents.harness.types import TranscriptAbandoned
 from nagents.harness.types import TranscriptAnchor
+from nagents.session import forks
 from nagents.types import TextContent
+from nagents.web.execution.approvals import ToolApprovals
 
+from .activity import ACTIVITY_FPS
+from .activity import STATES
+from .activity import StateField
+from .activity import StateName
+from .activity import duration
 from .channel import TuiChannelHost
 from .clipboard import copy_native
 from .commands import SlashMenu
 from .delivery import DeliveryWidget
+from .diagnostics import logger
+from .lifecycle import Lifecycle
 from .login import DeviceLoginModal
 from .login import LoginMethodModal
 from .login import OpenRouterLoginModal
 from .login import ProviderKeyModal
+from .performance import PerformanceMonitor
+from .performance import PerformancePanel
 from .providers import ProviderEditor
 from .screens import ApprovalModal
 from .screens import ChoiceModal
 from .screens import DetailModal
 from .screens import ModelModal
+from .sweep import MOTION_STYLE
+from .sweep import Sweep
 from .tasks import AgentTree
 from .tasks import TaskScreen
-from .themes import ACTIVITY_FPS
-from .themes import activity_frame
+from .terminal_colors import TerminalColorReported
+from .terminal_colors import TerminalColors
 from .themes import configure_theme
+from .wakeups import Wakeup
+from .wakeups import Wakeups
 from .widgets import Composer
+from .widgets import SavedContext
 from .widgets import ToolCard
+from .widgets import ToolNotice
 from .widgets import Turn
+from .widgets import saved_context_title
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
+    from collections.abc import Sequence
     from pathlib import PurePath
 
     from textual.app import ComposeResult
     from textual.binding import BindingType
+    from textual.driver import Driver
     from textual.events import Click
     from textual.events import DescendantFocus
+    from textual.events import Key
     from textual.events import MouseDown
+    from textual.events import Paste
     from textual.events import Resize
     from textual.events import TextSelected
+    from textual.filter import LineFilter
+    from textual.timer import Timer
     from textual.widget import Widget
     from textual.worker import Worker
 
     from nagents.channels.delivery_types import DeliveryReceipt
     from nagents.channels.types import ChannelValue
+    from nagents.harness.agents.subagents import TaskInfo
     from nagents.harness.providers.auth import DeviceAuthorization
     from nagents.harness.providers.login import LoginMethod
     from nagents.harness.providers.registry import ProviderProfile
-    from nagents.harness.runtime.commands import Command
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
 
@@ -106,7 +144,8 @@ Enter                 Send (never sends a multiline paste)
 Shift+Enter           Insert a newline (Ctrl+J / Alt+Enter fallback)
 Up / Down             Prompt history at start / end of text
 While / menu is open  Up/Down select; Enter prefills; then Enter runs
-Tab / Shift+Tab       Next / previous agent (configurable)
+Tab                   Complete selected slash command in the message editor
+Shift+Tab             Keep focus in the message editor
 F6                    Switch between message and conversation
 In conversation       Tab/Shift+Tab navigate; PgUp/PgDn scroll
 Esc                   Cancel work; deny an approval
@@ -125,6 +164,18 @@ following the response; return to the bottom to follow again.
 """
 
 
+class _AppLifecycle(Lifecycle):
+    """Keep the production entrance brief without changing the motion studies."""
+
+    @property
+    def seconds(self) -> float:
+        if self.phase == "intro":
+            return 0.25
+        if self.phase == "opening":
+            return 0.5
+        return super().seconds
+
+
 class NagentsApp(App[None]):
     """Textual front end; the harness owns tools, credentials and persistence."""
 
@@ -132,10 +183,12 @@ class NagentsApp(App[None]):
     CSS_PATH: ClassVar[list[str | PurePath]] = ["app.tcss", "commands.tcss"]
     ENABLE_COMMAND_PALETTE = False
     BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter,space", "startup_continue", "Continue", priority=True, show=False),
         Binding("ctrl+p", "commands", "Commands", priority=True),
         Binding("ctrl+n", "new_session", "New", priority=True),
         Binding("ctrl+l", "sessions", "Sessions", priority=True),
         Binding("ctrl+t", "tasks", "Agents", priority=True),
+        Binding("ctrl+s", "send_queue", "Send queued", priority=True, show=False),
         Binding("f6", "focus_pane", "Message / conversation", priority=True),
         Binding("escape", "cancel", "Cancel", priority=True),
         Binding("ctrl+c", "interrupt", "Cancel / exit", priority=True),
@@ -150,14 +203,30 @@ class NagentsApp(App[None]):
         resume_session: str = "",
         continue_session: bool = False,
         pick_session: bool = False,
+        startup: bool = False,
     ) -> None:
         if sum(bool(value) for value in (resume_session, continue_session, pick_session)) > 1:
             raise ValueError("Choose one of resume_session, continue_session, or pick_session.")
-        super().__init__()
+        self._startup_pending = startup and harness.config.animations
+        self.startup_opened = not self._startup_pending
+        self._startup_complete = asyncio.Event()
+        if not self._startup_pending:
+            self._startup_complete.set()
+        self._sweep = Sweep(
+            0.0 if harness.config.animations else 1.0,
+            enabled=harness.config.animations,
+            frame=self._startup_pending,
+        )
+        # NO_COLOR must use native defaults, rather than guessed RGB black.
+        # Once the theme is registered below, return ANSI mode to theme control.
+        super().__init__(ansi_color=True)
         self.harness = harness
+        self._tool_approvals: ToolApprovals | None = None
         if not harness.config.animations:
             self.animation_level = "none"
+        self._terminal_colors = TerminalColors()
         configure_theme(self, harness.config.theme, background=harness.config.theme_background)
+        self.ansi_color = None
         self._resume_session = resume_session
         self._continue_session = continue_session
         self._pick_session = pick_session
@@ -165,6 +234,8 @@ class NagentsApp(App[None]):
         self._skill_completion_worker: Worker[None] | None = None
         self._skill_commands_enabled = False
         self._backend_ready = False
+        self._preinitialized: asyncio.Task[None] | None = None
+        self._entrance_text = ""
         self._shutting_down = False
         self._last_error = ""
         self._compacting = False
@@ -181,8 +252,32 @@ class NagentsApp(App[None]):
         self._status_text = "Starting..."
         self._status_error = False
         self._activity_started = monotonic()
+        self.started_at = self._activity_started
+        self.exit_session_id = ""
+        self.exit_session_saved = False
+        self._motion_tick = monotonic()
+        self._motion = StateField()
+        self._motion_lifecycle = (_AppLifecycle if self._startup_pending else Lifecycle)(
+            "sweep",
+            "intro" if self._startup_pending else "opening" if harness.config.animations else "ready",
+            self._motion_tick,
+        )
+        self._rendered_status = Text()
+        self._closing_requested = False
+        self._done_at = 0.0
+        self._task_fields: dict[str, StateField] = {}
+        self._task_states: dict[str, StateName] = {}
+        self._task_tools: dict[str, str] = {}
+        self._visible_task_ids: set[str] = set()
+        self._activity_tasks: list[TaskInfo] = []
+        self._recent_task_id = ""
+        self._recent_task_until = 0.0
+        self._wakeups = Wakeups()
+        self._wake_field = StateField("sleeping", offset=3.4)
+        self._owns_wakeups = False
         self._queued_prompts: deque[str] = deque()
         self._queue_paused = False
+        self._queue_send_armed = False
         self._task_drafts: dict[str, str] = {}
         self._pending_task_notes: dict[tuple[str, str], tuple[str, str]] = {}
         self._task_note_run = ""
@@ -194,14 +289,48 @@ class NagentsApp(App[None]):
         self._delivery_anchors: dict[tuple[int, int], Widget] = {}
         self._unanchored_tools: dict[int, tuple[ToolCallEvent, ToolCard]] = {}
         self._called_tools: set[str] = set()
+        self._tool_previews: dict[tuple[str, int], ToolCard] = {}
         self._delivery_dirty = False
         self._delivery_session = ""
+        self._performance = PerformanceMonitor(interval=0.25, max_samples=240)
+        self._performance_enabled = harness.config.tui_performance
+        self._performance_visible = self._performance_enabled
+        self._performance_last_log = monotonic()
+        self._performance_last_render = 0.0
+        self._performance_timer: Timer | None = None
 
     @property
     def busy(self) -> bool:
         return self._active is not None and not self._active.done()
 
+    def get_driver_class(self) -> type[Driver]:
+        driver = super().get_driver_class()
+        if os.name == "posix":
+            from textual.drivers.linux_driver import LinuxDriver
+
+            from .terminal_driver import TerminalDriver
+
+            if driver is LinuxDriver:
+                return TerminalDriver
+        return driver
+
+    def on_terminal_color_reported(self, event: TerminalColorReported) -> None:
+        if self._shutting_down or self._terminal_colors == event.colors:
+            return
+        self._terminal_colors = event.colors
+        configure_theme(
+            self,
+            self.harness.config.theme,
+            background=self.harness.config.theme_background,
+            terminal=event.colors,
+        )
+        self.refresh(layout=False)
+
     def compose(self) -> ComposeResult:
+        with Vertical(id="app-shell"):
+            yield from self._compose_workspace()
+
+    def _compose_workspace(self) -> ComposeResult:
         yield Static(id="mode", markup=False)
         with Horizontal(id="main"):
             with VerticalScroll(id="conversation", can_focus=True) as conversation, Vertical(id="welcome"):
@@ -218,7 +347,8 @@ class NagentsApp(App[None]):
                 )
             with Vertical(id="rail") as rail:
                 rail.border_title = "Agents / Ctrl+T"
-                yield AgentTree()
+                yield AgentTree(compact=True)
+                yield Static(id="background-status", markup=False)
                 with (
                     Collapsible(title="Workspace & context", collapsed=True, id="rail-details"),
                     VerticalScroll(id="rail-metadata"),
@@ -232,7 +362,7 @@ class NagentsApp(App[None]):
                     yield Static("AUTHENTICATION", classes="section-label", markup=False)
                     yield Static(id="rail-auth", markup=False)
                 yield Static(id="rail-activity", markup=False)
-                yield Static("Arrows navigate\nEnter inspect / follow up", id="rail-note", markup=False)
+                yield PerformancePanel(self._performance, id="performance-panel")
         with Vertical(id="compose-area") as compose_area:
             compose_area.border_title = "Message"
             yield SlashMenu()
@@ -240,16 +370,157 @@ class NagentsApp(App[None]):
             yield Composer(self.complete)
             with Vertical(id="footer"):
                 yield Static("Starting...", id="status", markup=False)
+                yield Static(id="provider-model", markup=False)
+
+    def _complete_inline_entrance(self) -> None:
+        """Prepare a fully visible first frame before Textual mounts.
+
+        The normal-screen prelude already supplied startup motion. Do not run
+        another foreground sweep (or a collapsed startup shell) on handoff.
+        """
+        self._startup_pending = False
+        self.startup_opened = True
+        self._startup_complete.set()
+        self._motion_lifecycle.phase = "ready"
+        self._sweep = Sweep()
 
     def on_mount(self) -> None:
         self.harness.approval_handler = self.request_approval
+        if isinstance(self.harness, Harness) and self.harness.wakeup_handler is None:
+            self.harness.wakeup_handler = self._schedule_wakeup
+            self._owns_wakeups = True
+        self._motion_lifecycle.since = self._motion_tick = monotonic()
+        self.query_one("#background-status").display = False
         self._refresh_context()
         self._resize_layout(self.size.width, self.size.height)
         self.query_one(Composer).focus()
         self.set_interval(0.075, self._flush_stream)
         self.set_interval(1 / ACTIVITY_FPS, self._animate_activity)
         self.set_interval(0.5, self._refresh_tasks)
+        self._set_performance(self._performance_enabled)
+        if self._startup_pending:
+            self.query_one("#app-shell").add_class("startup-shell")
+            self.query_one("#app-shell").border_title = f"ngn {framework_version()}"
+            self.query_one("#app-shell").border_subtitle = "Enter / Space to continue · Esc to exit"
+            self.query_one("#app-shell").disabled = True
+            self.set_focus(None)
+            self._animate_activity()
+        if self._entrance_text:
+            self.query_one(Composer).insert(self._entrance_text)
+            self._entrance_text = ""
         self._launch(self._initialize, "Opening workspace...")
+
+    def _finish_startup(self) -> None:
+        if not self._startup_pending or self._shutting_down or self._closing_requested:
+            return
+        self._startup_pending = False
+        self.startup_opened = True
+        self.query_one("#app-shell").styles.height = "100%"
+        self.query_one("#app-shell").disabled = False
+        self.query_one("#app-shell").border_subtitle = ""
+        self.query_one(Composer).focus()
+        self._motion_lifecycle.phase = "ready"
+        self._sweep = Sweep()
+        self.screen.refresh(layout=True)
+        self._startup_complete.set()
+
+    def action_startup_continue(self) -> None:
+        self._finish_startup()
+
+    def on_key(self, event: Key) -> None:
+        if self._startup_pending and event.is_printable:
+            self._finish_startup()
+            if self.startup_opened:
+                self.query_one(Composer).insert(event.character or "")
+                event.stop()
+                event.prevent_default()
+
+    def on_paste(self, event: Paste) -> None:
+        if self._startup_pending:
+            self._finish_startup()
+            if self.startup_opened:
+                self.query_one(Composer).insert(event.text)
+                event.stop()
+                event.prevent_default()
+
+    def _set_performance(self, enabled: bool) -> None:
+        self._performance_enabled = enabled
+        self._performance.enabled = enabled
+        if self._performance_timer is not None:
+            self._performance_timer.stop()
+            self._performance_timer = None
+        if enabled:
+            self._performance_timer = self.set_interval(self._performance.interval, self._sample_performance)
+        self.query_one("#performance-panel").display = enabled and self._performance_visible
+
+    def _sample_performance(self) -> None:
+        if self._shutting_down or not self._performance_enabled:
+            return
+        counters = {
+            "running_tools": len(self._running_tools),
+            "running_agents": sum(task.status == "running" for task in self._activity_tasks),
+            "queued_prompts": len(self._queued_prompts),
+            "backlog_chars": sum(map(len, self._pending)),
+        }
+        self._performance.tick(counters)
+        now = monotonic()
+        if now - self._performance_last_render >= 1:
+            self._performance_last_render = now
+            self.query_one("#performance-panel", PerformancePanel).refresh_metrics()
+        if now - self._performance_last_log >= 30:
+            self._performance_last_log = now
+            snapshot = self._performance.snapshot()
+            logger.info(
+                "Performance summary",
+                extra={
+                    "phase": "performance",
+                    "session_id": self.harness.session_id,
+                    "lag_max_ms": snapshot.loop_lag.max_ms,
+                    "cpu_percent": snapshot.cpu_percent,
+                    **counters,
+                },
+            )
+
+    def _performance_command(self, argument: str) -> None:
+        parts = argument.split()
+        action = parts[0] if parts else "detail"
+        if action in {"on", "off"} and len(parts) <= 2:
+            scope = parts[1] if len(parts) == 2 else "local"
+            if scope not in {"global", "local"}:
+                self._status("Usage: /perf on|off [global|local]", error=True)
+                return
+            try:
+                path = save_tui_performance(
+                    self.harness.config, action == "on", "global" if scope == "global" else "local"
+                )
+            except (OSError, ValueError) as exc:
+                self._status(f"Could not save performance setting: {exc}", error=True)
+                return
+            self._performance_visible = action == "on"
+            self._set_performance(action == "on")
+            self._status(f"Performance {action}; saved {scope}: {path}")
+        elif action == "hide" and len(parts) == 1:
+            self._performance_visible = False
+            self.query_one("#performance-panel").display = False
+        elif action == "detail" and len(parts) <= 1:
+            panel = self.query_one("#performance-panel", PerformancePanel)
+            self.push_screen(DetailModal("PERFORMANCE / process-local", panel.render().plain))
+        else:
+            self._status("Usage: /perf [on|off [global|local]|hide|detail]", error=True)
+
+    def on_unmount(self) -> None:
+        if self._performance_timer is not None:
+            self._performance_timer.stop()
+            self._performance_timer = None
+        self._performance.enabled = False
+
+    def get_line_filters(self) -> Sequence[LineFilter]:
+        filters = super().get_line_filters()
+        return [self._sweep, *filters] if self._sweep.enabled else filters
+
+    def _motion_state(self, state: StateName) -> None:
+        if self._motion.state != state:
+            self._motion.select(state, immediate=not self.harness.config.animations or self.animation_level == "none")
 
     def on_resize(self, event: Resize) -> None:
         if self.query("#composer"):
@@ -277,12 +548,40 @@ class NagentsApp(App[None]):
         self._refresh_completions()
 
     def _refresh_tasks(self) -> None:
+        with self._performance.measure("task refresh") if self._performance_enabled else nullcontext():
+            self._refresh_task_content()
+
+    def _refresh_task_content(self) -> None:
         if self._shutting_down:
             return
         tasks = self.harness.tasks.list()
+        self._activity_tasks = [task for task in tasks if task.depth == 1]
         self.default_screen.query_one("#agent-tree", AgentTree).update_tasks(
             tasks, {task.session_id: task.parent_session_id for task in tasks}
         )
+        if (
+            self._owns_wakeups
+            and self._backend_ready
+            and not self.busy
+            and not self._queued_prompts
+            and not self._closing_requested
+        ):
+            due = self._wakeups.claim(self.harness.session_id)
+            if due:
+                self._launch(lambda: self._wake(due[0]), "Waking up...")
+                self._motion_state("waking")
+            if self._wakeups.error:
+                self._status(self._wakeups.error, error=True)
+                self._wakeups.error = ""
+
+    async def _schedule_wakeup(self, session_id: str, delay: float, reason: str) -> dict[str, str]:
+        if self._shutting_down or self._closing_requested or not self.busy:
+            raise RuntimeError("Wake-ups require an active TUI run")
+        return self._wakeups.schedule(self.harness.session_id, session_id, delay, reason)
+
+    async def _wake(self, wakeup: Wakeup) -> None:
+        await self._notice(f"Wake-up: {wakeup.reason}")
+        await self._send(wakeup.reason, session_id=wakeup.session_id, wakeup=True)
 
     @on(TextArea.SelectionChanged, "#composer")
     def composer_selection_changed(self) -> None:
@@ -411,6 +710,13 @@ class NagentsApp(App[None]):
             command
             for command in self.harness.commands.list()
             if command.source != "skill" or self._skill_commands_enabled
+        ] + [
+            Command(
+                "perf",
+                "TUI/runtime performance diagnostics",
+                source="tui",
+                argument_hint="[on|off|hide|detail] [global|local]",
+            )
         ]
 
     def _hide_completions(self) -> None:
@@ -421,8 +727,6 @@ class NagentsApp(App[None]):
     def complete(self, action: str) -> bool:
         # Resolve against current text and prefill before the next composer key.
         # Changed/Chosen messages can lag behind an entire terminal input burst.
-        if action == "tab" and self.harness.config.tab_action != "complete":
-            return False
         self._refresh_completions()
         menu = self.query_one(SlashMenu)
         if not menu.display:
@@ -447,24 +751,10 @@ class NagentsApp(App[None]):
         self._hide_completions()
         composer.focus()
 
-    @on(Composer.TabPressed)
-    def tab_pressed(self, event: Composer.TabPressed) -> None:
-        action = self.harness.config.tab_action
-        if action in {"complete", "focus"}:
-            if event.reverse:
-                self.screen.focus_previous()
-            else:
-                self.screen.focus_next()
-        elif self.busy:
-            self._status("Finish or stop the current run before switching agents. Your draft is kept.")
-        else:
-            profiles = list(self.harness.config.selectable_profile_names)
-            current = profiles.index(self.harness.config.agent) if self.harness.config.agent in profiles else 0
-            name = profiles[(current + (-1 if event.reverse else 1)) % len(profiles)]
-            self._hide_completions()
-            self._launch(lambda: self._change("/agent", name), f"Switching to {name}...")
-
     def action_focus_pane(self) -> None:
+        if isinstance(self.screen, TaskScreen):
+            self.screen.action_focus_pane()
+            return
         if self.screen is not self.default_screen:
             return
         composer = self.query_one(Composer)
@@ -485,24 +775,156 @@ class NagentsApp(App[None]):
             self._last_error = text
         self._status_text = text
         self._status_error = error
+        if error:
+            self._motion_state("error")
+        elif state == "ready":
+            self._motion_state("done")
+            self._done_at = monotonic()
+        elif state == "working":
+            self._motion_state("working" if self._backend_ready else "starting")
+        logger.info("TUI status: %s", text, extra={"session_id": self.harness.session_id, "phase": self._motion.state})
         for selector in ("#status", "#rail-activity"):
             status = self.query_one(selector, Static)
-            status.update(text)
+            if selector == "#status":
+                field = self._motion.render(aperture=self._motion_lifecycle.aperture(monotonic()))
+                field.stylize(MOTION_STYLE)
+                field.append(" " + self._status_label(monotonic()))
+                status.update(field, layout=False)
+                self._rendered_status = field
+            else:
+                status.update(text)
             status.remove_class("error", "working", "ready", "warning")
             status.add_class("error" if error else state or ("working" if self.busy else "ready"))
 
     def _animate_activity(self) -> None:
-        if self._shutting_down:
+        if self._shutting_down or not self.is_running:
             return
-        animated = (
-            self.busy and self.harness.config.animations and self.animation_level != "none" and not self._status_error
-        )
-        frame = (
-            activity_frame(self.harness.config.theme, monotonic() - self._activity_started) + " " if animated else ""
-        )
-        self.query_one("#status", Static).update(frame + self._status_text)
+        now = monotonic()
+        animated = self.harness.config.animations and self.animation_level != "none"
+        if self._startup_pending:
+            self.query_one("#app-shell").border_subtitle = Text(
+                f"{self._status_label(now)} · Enter to skip · Esc to exit", style=MOTION_STYLE
+            )
+            if not animated:
+                self._finish_startup()
+            else:
+                from .lifecycle import ease
+
+                progress = self._motion_lifecycle.progress(now)
+                if self._motion_lifecycle.phase == "intro":
+                    self.query_one("#app-shell").styles.height = max(2, round(self.size.height * ease(progress)))
+        if not animated and self._motion_lifecycle.phase == "opening":
+            self._motion_lifecycle.phase = "ready"
+        if self._motion_lifecycle.advance(now):
+            self.exit()
+            return
+        if self._motion_lifecycle.phase == "closed":
+            return
+        if self._startup_pending and self._motion_lifecycle.phase == "ready":
+            self._finish_startup()
+        if self._motion.state == "done" and not self.busy and now - self._done_at >= 2:
+            self._motion_state("idle")
+        if animated:
+            self._motion.advance(now - self._motion_tick)
+            for identifier in self._visible_task_ids:
+                self._task_fields[identifier].advance(now - self._motion_tick)
+            self._wake_field.advance(now - self._motion_tick)
+        self._motion_tick = now
+        field = self._motion.render(aperture=self._motion_lifecycle.aperture(now))
+        field.stylize(MOTION_STYLE)
+        field.append(" " + self._status_label(now))
+        if field != self._rendered_status:
+            self.default_screen.query_one("#status", Static).update(field, layout=False)
+            self._rendered_status = field
+        self._render_background_activity(now)
+        was_sweeping = self._sweep.enabled
+        sweeping = animated and self._motion_lifecycle.phase in {"intro", "opening", "closing"}
+        if sweeping:
+            self._sweep = Sweep(
+                self._motion_lifecycle.visibility(now),
+                accent=self._motion.stops[1],
+                enabled=True,
+                frame=self._startup_pending,
+            )
+        elif was_sweeping:
+            self._sweep = Sweep()
+        if sweeping or was_sweeping:
+            self.screen.refresh()
         if self.query_one(SlashMenu).display:
             self._refresh_completions()
+
+    def _status_label(self, now: float) -> str:
+        elapsed = f" · {duration(now - self._activity_started)}" if self.busy and not self._status_error else ""
+        detail = f" · {self._status_text}{elapsed}" if self._status_text else ""
+        return self.harness.config.agent + detail
+
+    def _render_background_activity(self, now: float) -> None:
+        running = [task for task in self._activity_tasks if task.status == "running"]
+        pending = self._wakeups.upcoming(self.harness.session_id)
+        shown = running[: 2 if pending else 3] or [
+            task
+            for task in self._activity_tasks
+            if task.session_id == self._recent_task_id and now < self._recent_task_until
+        ]
+        content = Text()
+        self._visible_task_ids = {task.session_id for task in shown}
+        phases: dict[str, StateName] = {
+            "starting": "starting",
+            "tool": "tool",
+            "tool_call": "tool",
+            "reasoning": "working",
+            "responding": "responding",
+            "waiting": "delegated",
+            "approval": "approval",
+        }
+        for index, task in enumerate(shown):
+            if index:
+                content.append("\n")
+            state: StateName = (
+                "error"
+                if task.status == "failed"
+                else "idle"
+                if task.status == "cancelled"
+                else "done"
+                if task.status != "running"
+                else self._task_states.get(task.session_id, phases.get(task.phase, "working"))
+            )
+            if task.session_id not in self._task_fields:
+                self._task_fields[task.session_id] = StateField(state, offset=index + 1.7)
+            field = self._task_fields[task.session_id]
+            field.select(state, immediate=not self.harness.config.animations or self.animation_level == "none")
+            dots = field.render(aperture=self._motion_lifecycle.aperture(now))
+            dots.stylize(MOTION_STYLE)
+            content.append_text(dots)
+            detail = (
+                "Cancelled"
+                if task.status == "cancelled"
+                else self._task_tools.get(task.session_id)
+                if state == "tool"
+                else STATES[state].label
+            )
+            end = time() if task.status == "running" else task.completed_at or task.updated_at
+            elapsed = f" · {duration(max(0, end - task.started_at))}" if task.started_at > 0 else ""
+            content.append(self._inline(f" {task.profile} · {task.label} · {detail or STATES[state].label}") + elapsed)
+        if pending:
+            if shown:
+                content.append("\n")
+            dots = self._wake_field.render(aperture=self._motion_lifecycle.aperture(now))
+            dots.stylize(MOTION_STYLE)
+            content.append_text(dots)
+            nearest = pending[0]
+            remaining = nearest.deadline - now
+            when = f"in {duration(remaining + 0.99)}" if remaining > 0 else "due · waiting for the current turn"
+            content.append(self._inline(f" Wake-up {when} · {nearest.reason}"))
+        widget = self.default_screen.query_one("#background-status", Static)
+        widget.display = bool(shown or pending)
+        widget.tooltip = Text("\n".join(self._inline(f"{item.due_at} · {item.reason}") for item in pending))
+        if widget.content != content:
+            widget.update(content)
+
+    @staticmethod
+    def _inline(text: str) -> str:
+        return "".join(character if character.isprintable() else " " for character in text)[:240]
 
     def _refresh_context(self) -> None:
         config = self.harness.config
@@ -514,6 +936,7 @@ class NagentsApp(App[None]):
         self.query_one("#rail-workspace", Static).update(str(self.harness.workspace))
         self.query_one("#rail-session", Static).update(self.harness.session_id or "New session")
         self.query_one("#rail-auth", Static).update(auth_status)
+        self._refresh_model()
         self.query_one("#rail-config", Static).update(
             f"{config.provider_profile().kind}\n{config.model}\nProfile: {config.agent}\n"
             f"Plugins: {', '.join(config.plugins) or 'none'}\n"
@@ -521,8 +944,23 @@ class NagentsApp(App[None]):
         )
         self._refresh_completions()
 
+    def _refresh_model(self) -> None:
+        config = self.harness.config
+        provider = config.provider or config.provider_profile().kind
+        model = self.harness.agent.provider.model if isinstance(self.harness, Harness) else config.model
+        variables = self.get_css_variables()
+        text = Text(self._inline(provider), style=Style(color=Color.parse(variables["ngn-info"]).rich_color))
+        text.append(" · ", style="dim")
+        text.append(
+            self._inline(model or config.model),
+            style=Style(color=Color.parse(variables["ngn-assistant"]).rich_color, bold=True),
+        )
+        widget = self.query_one("#provider-model", Static)
+        if widget.content != text:
+            widget.update(text, layout=False)
+
     def _launch(self, operation: Callable[[], Awaitable[None]], status: str) -> None:
-        if self._shutting_down:
+        if self._shutting_down or self._closing_requested:
             return
         if self.busy:
             self._status("Already working. Esc cancels; your draft is kept.")
@@ -539,14 +977,15 @@ class NagentsApp(App[None]):
             if self._last_error:
                 self._status(self._last_error, error=True)
             else:
-                self._status("Ready" + (f"  /  {self._usage}" if self._usage else ""), state="ready")
+                self._status(self._usage, state="ready")
         except asyncio.CancelledError:
             if not self._shutting_down:
                 await self._flush_stream()
                 for call_id in self._running_tools:
                     self._tools[call_id].cancel()
                 await self._notice("Cancelled. You can send another message.")
-                self._status("Cancelled  /  ready for your next message", state="warning")
+                self._status("Cancelled", state="warning")
+                self._motion_state("idle")
         except Exception as exc:
             self._queue_paused = True
             if not self._shutting_down:
@@ -554,12 +993,16 @@ class NagentsApp(App[None]):
                 await self._notice(str(exc) or type(exc).__name__, error=True)
         finally:
             self._compacting = False
+            self._cancel_tool_previews()
             self._running_tools.clear()
             if not self._shutting_down:
                 self._refresh_context()
                 self._refresh_tasks()
             self._active = None
             if not self._shutting_down:
+                # Final status was painted while this task still counted as busy.
+                # Repaint now, rather than leave elapsed time until the next tick.
+                self._animate_activity()
                 self._update_queue()
                 self.call_later(self._drain_queue)
 
@@ -570,7 +1013,10 @@ class NagentsApp(App[None]):
         continue_session, self._continue_session = self._continue_session, False
         pick, self._pick_session = self._pick_session, False
         # Resuming or choosing must not first register an empty session for this run.
-        await self.harness.initialize(create_session=not (resume or continue_session or pick))
+        if self._preinitialized is None:
+            await self.harness.initialize(create_session=not (resume or continue_session or pick))
+        else:
+            await self._preinitialized
         if self._channel_host is None and isinstance(self.harness, Harness):
             host = TuiChannelHost(self.harness, self._delivery_notice)
             host.open()
@@ -587,6 +1033,7 @@ class NagentsApp(App[None]):
             await self._sessions()
 
     async def _load_history(self) -> None:
+        self._cancel_tool_previews()
         self._delivery_ids.clear()
         self._delivery_anchors.clear()
         self._unanchored_tools.clear()
@@ -602,7 +1049,35 @@ class NagentsApp(App[None]):
                 await self._earlier_deliveries(snapshot.deliveries.earlier)
         else:
             rows = tuple((0, message) for message in await self.harness.history())
-        for row_id, message in rows:
+        # Build the saved transcript off-DOM. Mounting each row separately causes
+        # repeated layout of the growing conversation and replays live tool effects.
+        widgets: list[Widget] = []
+        composer = self.query_one(Composer)
+        receipts: dict[tuple[int, int], list[DeliveryReceipt]] = {}
+        for receipt in deliveries:
+            key = (receipt.origin.anchor_message_id, receipt.origin.call_position)
+            receipts.setdefault(key, []).append(receipt)
+
+        def tool(call_id: str, name: str, arguments: object = None) -> ToolCard:
+            if call_id not in self._tools:
+                card = ToolCard(
+                    call_id,
+                    name,
+                    arguments,
+                    default_timeout=self.harness.config.shell_timeout if name == "shell" else 0,
+                    restored=True,
+                )
+                self._tools[call_id] = card
+                widgets.append(card)
+            return self._tools[call_id]
+
+        for index, (row_id, message) in enumerate(rows):
+            if index % 32 == 0:
+                # Let input and shutdown run while constructing large histories,
+                # without paying for an intermediate conversation layout.
+                await asyncio.sleep(0)
+                if self._shutting_down:
+                    return
             content = message.content
             text = (
                 content
@@ -610,26 +1085,43 @@ class NagentsApp(App[None]):
                 else "\n".join(part.text for part in content or [] if isinstance(part, TextContent))
             )
             if message.role in ("user", "assistant"):
+                if message.role == "user" and message.name == TOOL_ADDED_MESSAGE_NAME:
+                    widgets.append(ToolNotice(text))
+                    continue
+                context_title = saved_context_title(text) if message.role == "user" else ""
                 if text:
-                    await self._add(Turn(message.role, text))
-                if message.role == "user":
-                    self.query_one(Composer).remember(text)
+                    widgets.append(SavedContext(context_title, text) if context_title else Turn(message.role, text))
+                if message.role == "user" and not context_title:
+                    composer.remember(text)
                 for position, call in enumerate(message.tool_calls):
                     self._tools.pop(call.id, None)
-                    card = await self._tool(call.id, call.name, call.arguments)
-                    self._delivery_anchors[row_id, position] = card
-                    for receipt in deliveries:
-                        if (receipt.origin.anchor_message_id, receipt.origin.call_position) == (row_id, position):
-                            await self._delivery(receipt)
+                    card = tool(call.id, call.name, call.arguments)
+                    key = (row_id, position)
+                    self._delivery_anchors[key] = card
+                    for receipt in receipts.get(key, ()):
+                        if receipt.delivery_id not in self._delivery_ids:
+                            widget = DeliveryWidget(receipt)
+                            widgets.append(widget)
+                            self._delivery_anchors[key] = widget
+                            self._delivery_ids.add(receipt.delivery_id)
             elif message.role == "tool":
-                card = await self._tool(message.tool_call_id or "", message.name or "tool")
+                card = tool(message.tool_call_id or "", message.name or "tool")
                 # Core history persists tool failures with this literal prefix.
                 if text.startswith("Error:"):
                     card.finish(None, text, 0)
                 else:
                     card.finish(text, None, 0)
             elif message.role == "compaction_summary":
-                await self._notice("Earlier context was compacted.")
+                widgets.append(Static("Earlier context was compacted.", markup=False, classes="notice"))
+
+        if widgets:
+            conversation = self.query_one("#conversation", VerticalScroll)
+            with self.batch_update():
+                conversation.anchor()
+                welcome = conversation.query("#welcome")
+                if welcome:
+                    welcome.first().display = False
+                await conversation.mount(*widgets)
 
     async def _delivery_notice(self, notice: dict[str, ChannelValue]) -> None:
         # Observer tasks never mutate widgets or route sends through selection.
@@ -714,7 +1206,7 @@ class NagentsApp(App[None]):
     @on(Composer.Submitted)
     def submit(self, event: Composer.Submitted) -> None:
         command = event.text.strip()
-        if self._shutting_down:
+        if self._shutting_down or self._closing_requested:
             return
         if not command:
             if self._queued_prompts and not self.busy:
@@ -725,12 +1217,14 @@ class NagentsApp(App[None]):
         name = command.split(maxsplit=1)[0]
         if is_command:
             name = "/" + self.harness.commands.canonical_name(name[1:])
-        custom_command = is_command and name != "/" and all(builtin.name != name[1:] for builtin in BUILTIN_COMMANDS)
+        custom_command = (
+            is_command and name not in {"/", "/perf"} and all(builtin.name != name[1:] for builtin in BUILTIN_COMMANDS)
+        )
         if (
             self.busy
             and is_command
             and not custom_command
-            and name not in {"/", "/help", "/context", "/plugins", "/tasks", "/queue", "/quit"}
+            and name not in {"/", "/help", "/context", "/plugins", "/tasks", "/queue", "/quit", "/perf"}
         ):
             self._status("Already working. Esc cancels; your draft is kept.")
             return
@@ -744,12 +1238,14 @@ class NagentsApp(App[None]):
             composer.remember(event.text)
             composer.clear()
             self._queued_prompts.append(event.text)
+            self._queue_send_armed = False
             self._queue_paused = False
             self._update_queue()
             if self.busy:
                 if self.harness.config.submit_mode == "interrupt" and self._backend_ready:
                     self._status("Stopping current work before running the new prompt...")
                     if self._active is not None and not self._active.cancelling():
+                        self._wakeups.cancel_turn()
                         self._active.cancel()
                 else:
                     self._status(f"Queued prompt {len(self._queued_prompts)}  /  current work continues")
@@ -765,18 +1261,48 @@ class NagentsApp(App[None]):
         else:
             self._launch(lambda: self._send(event.text), "Working  /  Esc to cancel")
 
+    def action_send_queue(self) -> None:
+        # Never act through a modal (especially an approval dialog), or submit
+        # the composer draft: this shortcut operates only on accepted prompts.
+        if self.screen is not self.default_screen or self._shutting_down or self._closing_requested:
+            return
+        if not self._queued_prompts:
+            self._queue_send_armed = False
+            return
+        interrupt = self._queue_send_armed and not self._queue_paused
+        self._queue_paused = False
+        self._queue_send_armed = True
+        if self.busy:
+            if interrupt and self._active is not None and not self._active.cancelling():
+                self._status("Stopping current work before sending queued messages...")
+                self._wakeups.cancel_turn()
+                self._active.cancel()
+            else:
+                self._status("Queued messages will run next  /  Ctrl+S again to interrupt and send")
+            self._update_queue()
+        else:
+            self._drain_queue()
+
     def _update_queue(self) -> None:
+        if not self._queued_prompts or self._queue_paused:
+            self._queue_send_armed = False
         label = self.query_one("#queue-status", Static)
         label.display = bool(self._queued_prompts)
         if self._queued_prompts:
             state = "paused; empty Enter resumes" if self._queue_paused else "waiting"
-            preview = " ".join(self._queued_prompts[0].split())[:70]
-            label.update(f"{len(self._queued_prompts)} queued ({state})  /  {preview}")
+            hint = "Ctrl+S again: interrupt & send" if self._queue_send_armed else "Ctrl+S: send next"
+            lines = []
+            for index, prompt in enumerate(self._queued_prompts, start=1):
+                preview = " ".join(prompt.split())
+                prefix = f"{len(self._queued_prompts)} queued ({state})  /  {hint}  /  " if index == 1 else ""
+                lines.append(f"{prefix}{index}. {preview}")
+            label.update(Text("\n".join(lines), no_wrap=True, overflow="ellipsis"))
 
     def _drain_queue(self) -> None:
         if self._shutting_down or self.busy or self._queue_paused or not self._queued_prompts:
             return
         prompt = self._queued_prompts.popleft()
+        self._queue_send_armed = False
         self._update_queue()
         if prompt.lstrip().startswith("/"):
             self.command(prompt)
@@ -786,11 +1312,14 @@ class NagentsApp(App[None]):
         else:
             self._launch(lambda: self._send(prompt), "Working on queued prompt  /  Esc to stop")
 
-    async def _send(self, text: str, *, display_text: str = "", session_id: str = "") -> None:
+    async def _send(self, text: str, *, display_text: str = "", session_id: str = "", wakeup: bool = False) -> None:
         if not self._backend_ready:
             await self._initialize()
+        if not wakeup:
+            self._wakeups.human_turn()
         run_id = uuid4().hex
         self._task_note_run = run_id
+        self._cancel_tool_previews()
         self._answer = None
         self._answer_text = ""
         self._run_text = ""
@@ -800,11 +1329,16 @@ class NagentsApp(App[None]):
         self._called_tools.clear()
         self._delivery_session = self.harness.session_id
         self._usage = ""
-        if not session_id:
+        if not session_id and not wakeup:
+            # A new human submission resumes live following even if inspecting
+            # the previous tool card released the conversation's bottom anchor.
+            self.query_one("#conversation", VerticalScroll).anchor()
             await self._add(Turn("user", display_text or text))
         # Close the producer even if cancellation happens while rendering an event.
         stream = (
-            self.harness.continue_task(session_id, text, message=self._task_input(session_id, text))
+            self.harness.wake(text, session_id=session_id)
+            if wakeup
+            else self.harness.continue_task(session_id, text, message=self._task_input(session_id, text))
             if session_id
             else self.harness.run(text)
         )
@@ -889,12 +1423,47 @@ class NagentsApp(App[None]):
                 conversation.anchor()
             await self._answer.append(fragment)
 
+    def _cancel_tool_previews(self) -> None:
+        for card in self._tool_previews.values():
+            card.cancel()
+        self._tool_previews.clear()
+
+    async def _tool_progress(self, event: ToolCallProgressEvent) -> None:
+        key = (event.generation_id, event.index)
+        if event.status == "abandoned":
+            card = self._tool_previews.pop(key, None)
+            if card is not None:
+                card.cancel()
+            return
+        card = self._tool_previews.get(key)
+        if card is None:
+            await self._flush_stream()
+            self._answer = None
+            self._answer_text = ""
+            card = ToolCard("", event.name or "...", preview=True, animations=self.harness.config.animations)
+            self._tool_previews[key] = card
+            await self._add(card)
+        card.set_preview(
+            event.name or "...",
+            event.arguments_text,
+            ready=event.status == "ready",
+            truncated=event.arguments_truncated,
+        )
+        self._motion_state("working")
+        self._status(f"Preparing {event.name or 'tool call'}  /  Esc to cancel")
+
     async def _tool(self, call_id: str, tool: str, arguments: object = None) -> ToolCard:
         if call_id not in self._tools:
             await self._flush_stream()
             self._answer = None
             self._answer_text = ""
-            card = ToolCard(call_id, tool, arguments)
+            card = ToolCard(
+                call_id,
+                tool,
+                arguments,
+                default_timeout=self.harness.config.shell_timeout if tool == "shell" else 0,
+                animations=self.harness.config.animations,
+            )
             self._tools[call_id] = card
             await self._add(card)
         elif arguments is not None:
@@ -902,6 +1471,48 @@ class NagentsApp(App[None]):
         return self._tools[call_id]
 
     async def _event(self, event: HarnessEvent) -> None:
+        if isinstance(event, TaskActivity):
+            if event.depth == 1:
+                kind = event.payload.get("type")
+                if not isinstance(kind, str):
+                    return
+                phase = event.payload.get("phase")
+                if kind in {"tool_call", "tool_call_progress", "tool_execution_started", "tool_output"}:
+                    self._task_states[event.session_id] = "tool"
+                    name = event.payload.get("name")
+                    if isinstance(name, str):
+                        self._task_tools[event.session_id] = name
+                elif kind in {"text_chunk", "text_done"}:
+                    self._task_states[event.session_id] = "responding"
+                elif kind == "tool_result":
+                    self._task_states[event.session_id] = "error" if event.payload.get("error") else "working"
+                elif kind == "status" and isinstance(phase, str):
+                    phase_states: dict[str, StateName] = {
+                        "waiting": "delegated",
+                        "failed": "error",
+                        "starting": "starting",
+                    }
+                    self._task_states[event.session_id] = phase_states.get(phase, "working")
+            return
+        if isinstance(event, (ReasoningChunkEvent, TextChunkEvent, ToolCallEvent, DoneEvent)):
+            self._refresh_model()
+        if isinstance(event, ToolCallEvent | ToolResultEvent):
+            logger.info(
+                "Tool call" if isinstance(event, ToolCallEvent) else "Tool result",
+                extra={
+                    "session_id": self.harness.session_id,
+                    "tool": event.name,
+                    "duration_ms": event.duration_ms if isinstance(event, ToolResultEvent) else 0,
+                    "status": ("failed" if event.error else "completed")
+                    if isinstance(event, ToolResultEvent)
+                    else "started",
+                },
+            )
+        elif isinstance(event, TaskStarted | TaskCompleted):
+            logger.info(
+                type(event).__name__,
+                extra={"session_id": event.session_id, "provider": event.provider, "model": event.model},
+            )
         if isinstance(event, TranscriptAbandoned):
             if event.session_id == self._delivery_session:
                 for call in event.calls:
@@ -930,6 +1541,7 @@ class NagentsApp(App[None]):
         if isinstance(event, (TextChunkEvent, TextDoneEvent, ToolResultEvent, DoneEvent)):
             await self._reconcile_deliveries(force=not isinstance(event, TextChunkEvent))
         if isinstance(event, TaskStarted):
+            self._motion_state("waking" if event.trigger == "wakeup" else "delegating")
             key = f"session:{event.session_id}" + (f":{event.followup}" if event.followup else "")
             label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
             await self._tool(
@@ -949,6 +1561,8 @@ class NagentsApp(App[None]):
             await self._add(Turn("user", f"Follow-up to {label}:\n\n{prompt}"))
             self._refresh_tasks()
         elif isinstance(event, TaskCompleted):
+            self._motion_state("returned")
+            self._recent_task_id, self._recent_task_until = event.session_id, monotonic() + 2
             key = f"session:{event.session_id}" + (f":{event.followup}" if event.followup else "")
             label = f"{event.title} [{event.session_id}]" if event.title else event.session_id
             card = await self._tool(key, f"agent / {label} ({event.profile})")
@@ -966,6 +1580,7 @@ class NagentsApp(App[None]):
             self._run_text = ""
             self._status(f"{label} responded  /  parent continuing")
         elif isinstance(event, CompactionStartedEvent):
+            self._motion_state("working")
             self._compacting = True
             self._status("Compacting context...")
         elif isinstance(event, CompactionDoneEvent):
@@ -977,8 +1592,11 @@ class NagentsApp(App[None]):
         elif self._compacting and isinstance(event, (TextChunkEvent, TextDoneEvent, ReasoningChunkEvent, DoneEvent)):
             return
         elif isinstance(event, TextChunkEvent):
+            self._response_activity()
             await self._text(event.chunk)
         elif isinstance(event, TextDoneEvent):
+            if event.text:
+                self._response_activity()
             if not event.text or event.text == self._run_text:
                 pass
             elif self._run_text and event.text.startswith(self._run_text):
@@ -994,11 +1612,29 @@ class NagentsApp(App[None]):
                 await self._answer.update(event.text)
             await self._flush_stream()
         elif isinstance(event, ReasoningChunkEvent):
+            self._motion_state("working")
             self._status("Thinking  /  Esc to cancel")
+        elif isinstance(event, ToolCallProgressEvent):
+            await self._tool_progress(event)
         elif isinstance(event, ToolCallEvent):
+            self._motion_state("delegating" if event.name == "delegate" else "tool")
             if event.id in self._called_tools:
                 self._tools.pop(event.id, None)
             self._called_tools.add(event.id)
+            generation = event.extra.get("generation_id")
+            index = event.extra.get("index")
+            preview = (
+                self._tool_previews.pop((generation, index), None)
+                if isinstance(generation, str) and isinstance(index, int)
+                else None
+            )
+            if preview is not None:
+                await self._flush_stream()
+                self._answer = None
+                self._answer_text = ""
+                preview._default_timeout = self.harness.config.shell_timeout if event.name == "shell" else 0
+                preview.start_call(event.id, event.name, event.arguments)
+                self._tools[event.id] = preview
             card = await self._tool(event.id, event.name, event.arguments)
             self._unanchored_tools[id(event)] = (event, card)
             self._running_tools.add(event.id)
@@ -1010,9 +1646,13 @@ class NagentsApp(App[None]):
         elif isinstance(event, ToolResultEvent):
             card = await self._tool(event.id, event.name)
             card.finish(event.result, event.error, event.duration_ms)
+            if self._performance_enabled:
+                self._performance.record_tool_duration(event.name, max(0, event.duration_ms) / 1000)
             self._running_tools.discard(event.id)
-            if event.error:
-                self._status("Tool failed  /  expand its card for details", error=True)
+            if not self._running_tools and self._motion.state == "tool":
+                self._motion_state("working")
+        elif isinstance(event, ToolAddedNotice):
+            await self._add(ToolNotice(event.text))
         elif isinstance(event, Notice):
             await self._notice(event.text, error=event.level == "error", warning=event.level == "warning")
         elif isinstance(event, TaskDeliveryWarning):
@@ -1027,6 +1667,19 @@ class NagentsApp(App[None]):
                 state="warning",
             )
         elif isinstance(event, DoneEvent):
+            logger.info(
+                "Response completed",
+                extra={
+                    "session_id": self.harness.session_id,
+                    "provider": self.harness.config.provider,
+                    "model": self.harness.agent.provider.model
+                    if isinstance(self.harness, Harness)
+                    else self.harness.config.model,
+                },
+            )
+            if not self._status_error and any(task.status == "running" for task in self._activity_tasks):
+                self._motion_state("delegated")
+                self._status("Waiting for agents  /  Esc to cancel")
             if event.usage.has_usage():
                 if event.usage.prompt_tokens or event.usage.completion_tokens:
                     self._usage = f"{event.usage.prompt_tokens:,} in / {event.usage.completion_tokens:,} out tokens"
@@ -1034,19 +1687,80 @@ class NagentsApp(App[None]):
                     self._usage = f"{event.usage.total_tokens:,} tokens"
             await self._flush_stream()
 
+    def _response_activity(self) -> None:
+        if not self._status_error and self._motion.state != "responding":
+            self._motion_state("responding")
+            self._status("Responding  /  Esc to cancel")
+
     async def request_approval(self, request: ApprovalRequest) -> bool:
         if self._shutting_down:
             return False
+        # Lightweight/fake harnesses still support one-shot decisions, but cannot
+        # establish the resource identity required for a workspace grant.
+        approvals = self._tool_approvals
+        if approvals is None and isinstance(self.harness, Harness) and not request.mandatory:
+            candidate = ToolApprovals(
+                self.harness.agent.session.db_path.with_name("tool-approvals.db"), self.harness.workspace
+            )
+            try:
+                candidate.initialize()
+            except (OSError, sqlite3.Error):
+                logger.exception("Could not initialize workspace tool permissions")
+            else:
+                approvals = self._tool_approvals = candidate
+        binding = None if approvals is None or request.mandatory else approvals.requested_binding(self.harness, request)
+        task = asyncio.current_task()
+
+        def live() -> bool:
+            return not self._shutting_down and task is not None and not task.done() and not task.cancelling()
+
+        if binding is not None and approvals is not None:
+            try:
+                allowed = await approvals.check_allowed(binding)
+            except sqlite3.Error:
+                allowed = False  # An unreadable saved policy requires an explicit decision.
+            if not live() or approvals.requested_binding(self.harness, request) != binding:
+                return False
+            if allowed:
+                return True
         previous_screen = self.screen
         previous_focus = previous_screen.focused
         self._hide_completions()
         result: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-        modal = ApprovalModal(request)
+        modal = ApprovalModal(
+            request,
+            workspace=approvals.workspace if approvals is not None and binding is not None else "",
+            persistent=binding.persistent if binding is not None else False,
+        )
 
-        def decide(allowed: bool | None) -> None:
-            if not result.done():
-                result.set_result(allowed is True)
+        def decide(allowed: bool | str | None) -> None:
+            if result.done():
+                return
+            accepted = allowed is True and live()
+            if (
+                allowed == "always"
+                and live()
+                and not request.mandatory
+                and approvals is not None
+                and binding is not None
+            ):
+                # No await between live definition validation, commit and answer.
+                # A changed definition or cancelled worker must never save a grant.
+                if approvals.requested_binding(self.harness, request) == binding:
+                    try:
+                        approvals.grant(binding)
+                    except sqlite3.Error:
+                        logger.exception("Could not save workspace tool permission; request denied")
+                        self.notify(
+                            "Could not save permission. Nothing was approved; retry or allow once.", severity="error"
+                        )
+                    else:
+                        accepted = True
+                else:
+                    self.notify("Tool definition or permissions changed. Request denied; retry.", severity="warning")
+            result.set_result(accepted)
 
+        self._motion_state("approval")
         self._status(f"Approval needed: {request.tool}", state="warning")
         try:
             await self.push_screen(modal, decide)
@@ -1055,6 +1769,7 @@ class NagentsApp(App[None]):
             if not self._shutting_down:
                 if modal in self.screen_stack:
                     modal.dismiss(False)
+                self._motion_state("working")
                 self._status("Working  /  Esc to cancel")
                 if (
                     previous_focus is not None
@@ -1066,6 +1781,12 @@ class NagentsApp(App[None]):
                     self.query_one(Composer).focus(scroll_visible=False)
 
     def action_cancel(self) -> None:
+        if self._startup_pending:
+            self._request_quit()
+            return
+        if self._closing_requested:
+            self.exit()
+            return
         if isinstance(self.screen, TaskScreen):
             self.screen.action_close()
         elif isinstance(self.screen, DeviceLoginModal):
@@ -1082,9 +1803,13 @@ class NagentsApp(App[None]):
             self._queue_paused = True
             self._update_queue()
             self._status("Cancelling...")
+            self._wakeups.cancel_turn()
             self._active.cancel()
 
     def action_interrupt(self) -> None:
+        if self._startup_pending:
+            self._request_quit()
+            return
         if self._copy_selection():
             return
         if isinstance(self.screen, DeviceLoginModal):
@@ -1097,18 +1822,53 @@ class NagentsApp(App[None]):
             self._queue_paused = True
             self._update_queue()
             if self._active is not None and not self._active.cancelling():
+                self._wakeups.cancel_turn()
                 self._active.cancel()
             return
         now = monotonic()
         if now - self._interrupt_at < 2:
-            self.exit()
+            self._request_quit()
         else:
             self._interrupt_at = now
             self._status("Press Ctrl+C again to exit, or Ctrl+Q to quit.")
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "startup_continue":
+            return self._startup_pending
+        return not (self._startup_pending and action not in {"cancel", "interrupt", "quit"})
+
+    async def action_quit(self) -> None:
+        self._request_quit()
+
+    def _request_quit(self) -> None:
+        if (
+            self._startup_pending
+            or self._closing_requested
+            or not self.harness.config.animations
+            or self.animation_level == "none"
+        ):
+            self._closing_requested = True
+            if self._active is not None and not self._active.done():
+                self._active.cancel()
+            self.exit()
+            return
+        self._closing_requested = True
+        self.query_one(Composer).disabled = True
+        self._queued_prompts.clear()
+        self._queue_paused = True
+        if self._active is not None and not self._active.done():
+            self._active.cancel()
+        self._motion_lifecycle.begin("closing", monotonic())
+        self._animate_activity()
+
     async def _shutdown(self) -> None:
         # Callbacks use mounted widgets: stop the backend before Textual tears them down.
         self._shutting_down = True
+        self.exit_session_id = self.harness.session_id
+        self.exit_session_saved = isinstance(self.harness, Harness) and self.harness._session_created
+        self._wakeups.close()
+        if self._owns_wakeups and self.harness.wakeup_handler == self._schedule_wakeup:
+            self.harness.wakeup_handler = None
         self._queued_prompts.clear()
         try:
             if self.screen_stack and isinstance(self.screen, DeviceLoginModal):
@@ -1117,9 +1877,20 @@ class NagentsApp(App[None]):
                 if not self._active.cancelling():
                     self._active.cancel()
                 await asyncio.gather(self._active, return_exceptions=True)
+            if self._preinitialized is not None:
+                if not self._preinitialized.done():
+                    self._preinitialized.cancel()
+                await asyncio.gather(self._preinitialized, return_exceptions=True)
             if self._channel_host is not None:
                 self._channel_host.close()
             await self.harness.close()
+            logger.info(
+                "TUI stopped",
+                extra={
+                    "session_id": self.exit_session_id,
+                    "duration_ms": round((monotonic() - self.started_at) * 1000, 3),
+                },
+            )
         finally:
             try:
                 if self._clipboard_task is not None:
@@ -1151,6 +1922,9 @@ class NagentsApp(App[None]):
             self.command("/sessions")
 
     def action_tasks(self) -> None:
+        if isinstance(self.screen, TaskScreen):
+            self.screen.action_focus_pane()
+            return
         if isinstance(self.screen, ModalScreen):
             return
         self._hide_completions()
@@ -1170,6 +1944,10 @@ class NagentsApp(App[None]):
         self._show_tasks(event.session_id)
 
     def _show_tasks(self, selected_session_id: str = "") -> None:
+        if isinstance(self.screen, TaskScreen):
+            if selected_session_id in self.screen.infos:
+                self.screen.show_task(selected_session_id)
+            return
         if isinstance(self.screen, ModalScreen):
             return
         self._hide_completions()
@@ -1219,6 +1997,8 @@ class NagentsApp(App[None]):
                 self._pending_task_notes.pop((session_id, message.message_id), None)
 
     def command(self, text: str) -> None:
+        if self._closing_requested:
+            return
         self._hide_completions()
         if text.strip() in {"", "/"}:
             name, command_name, raw_argument = "/", "", ""
@@ -1233,7 +2013,7 @@ class NagentsApp(App[None]):
         if name == "/":
             self.action_commands()
         elif name == "/quit":
-            self.exit()
+            self._request_quit()
         elif name == "/help":
             commands = "\n".join(
                 f"/{command.name} {command.argument_hint}\n  {command.description} [{command.source}]"
@@ -1245,6 +2025,8 @@ class NagentsApp(App[None]):
                 self.push_screen(DetailModal(name[1:].upper(), self.harness.describe()))
             except Exception as exc:
                 self._status(str(exc), error=True)
+        elif name == "/perf":
+            self._performance_command(argument)
         elif name == "/tasks":
             self._show_tasks()
         elif name == "/queue":
@@ -1672,6 +2454,7 @@ class NagentsApp(App[None]):
             )
 
     async def _clear_conversation(self) -> None:
+        self._cancel_tool_previews()
         await self._flush_stream()
         self._answer = None
         self._answer_text = ""
@@ -1695,7 +2478,7 @@ class NagentsApp(App[None]):
         elif name == "/fork":
             if self._queued_prompts:
                 raise ValueError("Finish or clear queued prompts before forking this conversation.")
-            await self.harness.fork_session(argument)
+            await self._fork_session(argument)
             await self._clear_conversation()
             await self._load_history()
             await self._notice("Forked conversation. New messages are independent of the original chat.")
@@ -1713,6 +2496,27 @@ class NagentsApp(App[None]):
                 self.harness.provider_store.model_store("workspace").save(argument)
             await self._notice(f"Model changed to {self.harness.config.model}.")
 
+    async def _fork_session(self, title: str) -> str:
+        if not self._owns_wakeups:
+            return await self.harness.fork_session(title)
+        with self.harness.operation("fork session"):
+            await self.harness.initialize()
+            if any(not task.done() for task in self.harness.tasks.root._workers.values()):
+                raise forks.SessionForkError("Finish descendant work before forking this conversation.")
+            source = self.harness.session_id
+
+            async def change() -> str:
+                target = await forks.transaction(
+                    self.harness.agent.session.db_path, lambda db: forks.fork_in(db, source, title)
+                )
+                self.harness.session_id = target
+                self.harness._session_created = True
+                self.harness.tools.read_hashes.clear()
+                # Timers retain their originating root; the copy acquires none.
+                return target
+
+            return await join_owned(asyncio.create_task(change(), name="ngn-tui-fork"))
+
     async def _sessions(self) -> None:
         sessions = await self.harness.list_sessions()
         choices = [("__new__", "+ New session")]
@@ -1720,7 +2524,10 @@ class NagentsApp(App[None]):
             (session.id, f"{session.title or 'Untitled'}  /  {session.updated_at}  /  {session.id[:8]}")
             for session in sessions
         )
-        self.push_screen(ChoiceModal("SESSIONS", choices), self._chosen_session)
+        # Fetch while the entrance runs, but never put a modal over its shell.
+        await self._startup_complete.wait()
+        if not self._shutting_down and not self._closing_requested:
+            self.push_screen(ChoiceModal("SESSIONS", choices), self._chosen_session)
 
     def _chosen_session(self, session_id: str | None) -> None:
         if session_id is None:

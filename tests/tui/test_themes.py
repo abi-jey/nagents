@@ -20,6 +20,7 @@ from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.containers import VerticalScroll
 from textual.content import Content
+from textual.filter import NoColor
 from textual.widgets import Button
 from textual.widgets import Collapsible
 from textual.widgets import Input
@@ -33,14 +34,19 @@ from nagents.harness.config import THEME_NAMES
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.types import ApprovalRequest
+from nagents.tui import NagentsApp
 from nagents.tui import themes
+from nagents.tui.activity import StateField
 from nagents.tui.login import DeviceLoginModal
 from nagents.tui.login import LoginMethodModal
 from nagents.tui.screens import ApprovalModal
 from nagents.tui.screens import ChoiceModal
+from nagents.tui.startup import StartupApp
+from nagents.tui.terminal_colors import TerminalColors
 from nagents.tui.widgets import CodeFence
 from nagents.tui.widgets import ToolCard
 from nagents.tui.widgets import Turn
+from tests.support.tui import FakeHarness
 from tests.support.tui import contrast_ratio
 
 if TYPE_CHECKING:
@@ -49,14 +55,20 @@ if TYPE_CHECKING:
     from nagents.harness import Harness
 
 CSS_PATH = Path(themes.__file__).with_name("app.tcss")
+DEFAULT_TERMINAL_COLORS = TerminalColors()
 
 
 class ThemePreview(App[None]):
     """Exercise the shared stylesheet without depending on NagentsApp callbacks."""
 
-    def __init__(self, name: str, background: str = "auto") -> None:
+    def __init__(
+        self,
+        name: str,
+        background: str = "auto",
+        terminal: TerminalColors = DEFAULT_TERMINAL_COLORS,
+    ) -> None:
         super().__init__(css_path=CSS_PATH)
-        themes.configure_theme(self, name, background=background)
+        themes.configure_theme(self, name, background=background, terminal=terminal)
 
     def compose(self) -> ComposeResult:
         yield Static("THEME PREVIEW / no network", id="mode", markup=False)
@@ -84,9 +96,9 @@ class ThemePreview(App[None]):
                 yield Static("Preview only", id="rail-activity", markup=False)
         with Vertical(id="compose-area") as compose_area:
             compose_area.border_title = "Message"
-            yield TextArea(id="composer", placeholder="Ask anything, or / for commands", highlight_cursor_line=False)
+            yield TextArea(id="composer", highlight_cursor_line=False)
             with Vertical(id="footer"):
-                yield Static(f"{themes.activity_frame(self.theme, 0)} Preview only", id="status", markup=False)
+                yield Static(StateField("idle").render(width=7), id="status", markup=False)
 
     def on_mount(self) -> None:
         self.query_one("#rail").display = self.size.width > 110
@@ -313,17 +325,17 @@ def test_theme_css_renders_native_defaults_and_modal_states(
             assert app.query_one("#rail").display is (size[0] > 110)
             panel = Color.parse(variables["ngn-panel"])
             message_background = Color.parse(variables["ngn-message-background"])
+            composer_background = Color.parse(variables["ngn-composer-background"])
+            composer_text = Color.parse(variables["ngn-composer-text"])
             assert app.query_one("#rail").styles.background == panel
-            # Message surfaces, including the outer compose panel, stay painted
-            # even on a native terminal.
+            # User turns share the composer's paired surface. The conversation
+            # itself keeps the terminal's native background in native mode.
             user = app.query_one(".user")
-            assert user.styles.background == message_background
-            # The user turn's direct Static children carry the same panel fill and
-            # its paired painted foregrounds (label vs body).
-            assert user.children and all(child.styles.background == message_background for child in user.children)
-            assert app.query_one(".user .turn-label").styles.color == Color.parse(variables["ngn-message-user"])
-            body = next(child for child in user.children if "turn-label" not in child.classes)
-            assert body.styles.color == Color.parse(variables["ngn-message-text"])
+            assert user.styles.background == composer_background
+            assert user.children and all(child.styles.background == composer_background for child in user.children)
+            assert not user.query(".turn-label")
+            body = user.children[0]
+            assert body.styles.color == composer_text
             # The status line pairs its painted info foreground with that surface.
             assert app.query_one("#status").styles.color == Color.parse(variables["ngn-message-info"])
             # Conversation left inset is halved; assistant/user indents match.
@@ -343,7 +355,13 @@ def test_theme_css_renders_native_defaults_and_modal_states(
             assert app.query_one(".assistant").styles.padding.left == 1
             compose_area = app.query_one("#compose-area")
             footer = app.query_one("#footer")
-            assert app.query_one("#composer").styles.background == message_background
+            assert app.query_one("#composer").styles.background == composer_background
+            assert app.query_one("#composer").styles.color == composer_text
+            if app.native_ansi_color:
+                assert composer_background.ansi == -1
+                assert composer_text.ansi == -1
+            else:
+                assert contrast_ratio(composer_text.rgb, composer_background.rgb) >= 4.5
             # The status box is nested inside the message box and shares its fill,
             # with no separate inner border/frame.
             assert footer.parent is compose_area and app.query_one("#status").parent is footer
@@ -355,9 +373,10 @@ def test_theme_css_renders_native_defaults_and_modal_states(
             for selector in (".user", ".assistant", "#composer"):
                 assert app.query_one(selector).styles.border_left[0] == ""
                 assert app.query_one(selector).styles.border_top[0] == ""
-            for selector in ("#conversation", "#rail"):
-                assert app.query_one(selector).styles.border_left[0] == "round"
-                assert app.query_one(selector).styles.border_left[1] == Color.parse(variables["ngn-border"])
+            for side in ("border_top", "border_right", "border_bottom", "border_left"):
+                assert getattr(app.query_one("#conversation").styles, side)[0] in {"", "none"}, side
+            assert app.query_one("#rail").styles.border_left[0] == "round"
+            assert app.query_one("#rail").styles.border_left[1] == Color.parse(variables["ngn-border"])
             assert app.query_one("#compose-area").styles.border_title_color == Color.parse(
                 variables["ngn-message-user"]
             )
@@ -369,8 +388,8 @@ def test_theme_css_renders_native_defaults_and_modal_states(
                 with console.capture() as output:
                     console.print("native defaults", style=body_style, end="")
                 assert "\x1b[39;49m" in output.get()
-            assert app.query_one("#composer").styles.color == Color.parse(variables["ngn-message-text"])
-            assert app.query_one("#composer").styles.background == message_background
+            assert app.query_one("#composer").styles.color == composer_text
+            assert app.query_one("#composer").styles.background == composer_background
             assert ElementTree.fromstring(app.export_screenshot()).tag.endswith("svg")
 
             approval = ApprovalModal(
@@ -454,8 +473,8 @@ def test_painted_semantic_text_has_contrast_on_all_surfaces(name: str) -> None:
                 Color.parse(variables[f"ngn-{token}"]).rgb, Color.parse(variables[f"ngn-{surface}"]).rgb
             )
             assert ratio >= 4.5, (name, token, surface)
-    # Painted message surfaces are deliberately real colors even on native
-    # terminals, so they must satisfy the same contrast guarantee.
+    # Painted presets guarantee contrast; native mode deliberately defers to
+    # the terminal's user-selected ANSI colors.
     for session_surface in ("ngn-message-background", "ngn-panel"):
         for token in (
             "text",
@@ -474,21 +493,116 @@ def test_painted_semantic_text_has_contrast_on_all_surfaces(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", THEME_NAMES)
-def test_native_message_surfaces_stay_painted_and_readable(name: str) -> None:
+def test_native_message_surfaces_use_terminal_defaults(name: str) -> None:
     app: App[None] = App()
     themes.configure_theme(app, name, background="terminal")
     variables = app.get_css_variables()
     background = Color.parse(variables["ngn-message-background"])
-    # Message surfaces and their paired foregrounds are real RGB even on a native
-    # terminal, so their contrast can be validated directly.
-    assert background.ansi is None
+    assert background.ansi == -1
     for token in ("text", "muted", "user", "info", "tool", "success", "warning", "error"):
         foreground = Color.parse(variables[f"ngn-message-{token}"])
-        assert foreground.ansi is None, (name, token)
-        assert contrast_ratio(foreground.rgb, background.rgb) >= 4.5, (name, token)
-    # Outside the message surfaces the native palette is untouched.
+        assert foreground.ansi == -1 or (foreground.ansi is not None and 0 <= foreground.ansi <= 15), (name, token)
+    # All large surfaces retain ANSI default backgrounds.
     assert Color.parse(variables["ngn-background"]).ansi == -1
     assert Color.parse(variables["ngn-panel"]).ansi == -1
+    assert Color.parse(variables["ngn-composer-background"]).ansi == -1
+    assert Color.parse(variables["ngn-composer-text"]).ansi == -1
+
+
+@pytest.mark.parametrize(
+    "foreground,background",
+    [("#e0e0e0", "#101010"), ("#101010", "#f4f4f4")],
+)
+def test_reported_native_colors_shade_composer_and_user_bubble_without_relayout(
+    foreground: str, background: str
+) -> None:
+    async def scenario() -> None:
+        app = ThemePreview("terminal", "terminal")
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            composer = app.query_one("#composer", TextArea)
+            composer.load_text("preserve this selected draft")
+            composer.select_all()
+            selected_text = composer.selected_text
+            selection = composer.selection
+            regions = tuple(
+                app.query_one(selector).region
+                for selector in ("#conversation", "#composer", ".user", "#footer", "#status")
+            )
+
+            themes.configure_theme(
+                app,
+                "terminal",
+                background="terminal",
+                terminal=TerminalColors(foreground=foreground, background=background),
+            )
+            await pilot.pause()
+
+            base = Color.parse(background)
+            target = Color(255, 255, 255) if base.brightness < 0.5 else Color(0, 0, 0)
+            expected_shade = base.blend(target, 0.07)
+            variables = app.get_css_variables()
+            composer_background = Color.parse(variables["ngn-composer-background"])
+            composer_text = Color.parse(variables["ngn-composer-text"])
+            assert composer_background == expected_shade
+            assert composer_text == Color.parse(foreground)
+            assert app.query_one("#composer").styles.background == composer_background
+            assert app.query_one("#composer").styles.color == composer_text
+            assert app.query_one(".user").styles.background == composer_background
+            assert app.query_one(".user > Static").styles.background == composer_background
+            assert app.query_one(".user > Static").styles.color == composer_text
+            assert app.screen.styles.background.ansi == -1
+            assert app.query_one("#conversation").styles.background.a == 0
+            assert app.get_css_variables()["ngn-selection-style"] == "reverse"
+            assert app.get_css_variables()["ngn-composer-cursor-style"] == "reverse"
+            assert composer.text == "preserve this selected draft"
+            assert composer.selected_text == selected_text
+            assert composer.selection == selection
+            assert (
+                tuple(
+                    app.query_one(selector).region
+                    for selector in ("#conversation", "#composer", ".user", "#footer", "#status")
+                )
+                == regions
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("startup", [True, False])
+def test_no_color_native_theme_keeps_terminal_defaults_during_motion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup: bool
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("NO_COLOR", "1")
+        backend = FakeHarness(tmp_path)
+        backend.config.theme = "terminal"
+        app = StartupApp() if startup else NagentsApp(cast("Harness", backend))
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.05)
+            assert app.native_ansi_color
+            assert any(isinstance(line_filter, NoColor) for line_filter in app.get_line_filters())
+            assert app.screen.styles.background.ansi == -1
+            if not startup:
+                variables = app.get_css_variables()
+                assert variables["ngn-composer-background"] == "ansi_default"
+                assert variables["ngn-composer-text"] == "ansi_default"
+                assert app.query_one("#composer").styles.background.ansi == -1
+                assert app.query_one("#composer").styles.color.ansi == -1
+
+            renderable = app.screen._compositor.render_update(
+                full=True,
+                screen_stack=app._background_screens,
+            )
+            console = Console(width=80, height=24, force_terminal=True, color_system="truecolor", no_color=False)
+            with console.capture() as output:
+                console.print(renderable, end="")
+            ansi = output.get()
+            color_codes = {38, 48, *range(30, 38), *range(40, 48), *range(90, 98), *range(100, 108)}
+            for sequence in re.findall(r"\x1b\[([0-9;]*)m", ansi):
+                assert not color_codes.intersection(int(code) for code in sequence.split(";") if code)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("name", THEME_NAMES)
@@ -500,14 +614,15 @@ def test_semantic_colors_reach_real_widgets_and_syntax(name: str, background: st
             await pilot.pause()
             variables = app.get_css_variables()
             for selector, token in (
-                (".user .turn-label", "message-user"),
                 (".assistant .turn-label", "assistant"),
                 ("MarkdownH2", "heading"),
                 ("#status", "message-info"),
-                (".tool-card.complete > CollapsibleTitle", "success"),
+                (".tool-card.complete > CollapsibleTitle", "muted"),
                 (".notice.error", "error"),
             ):
                 assert app.query_one(selector).styles.color == Color.parse(variables[f"ngn-{token}"])
+            assert app.query_one(".user > Static").styles.color == Color.parse(variables["ngn-composer-text"])
+            assert app.query_one(".user").styles.background == Color.parse(variables["ngn-composer-background"])
             assert app.query_one("#compose-area").styles.border_title_color == Color.parse(
                 variables["ngn-message-user"]
             )
@@ -523,16 +638,24 @@ def test_semantic_colors_reach_real_widgets_and_syntax(name: str, background: st
             # Export resolves the CSS spans: colors must be painted, not just defined.
             svg = app.export_screenshot()
             if background == "theme":
-                for token in ("user", "assistant", "heading", "info", "code", "success", "error", "warning"):
+                for token in ("assistant", "heading", "info", "code", "success", "error", "warning"):
                     assert variables[f"ngn-{token}"] in svg
             else:
                 assert all(
                     value.startswith("ansi_")
                     for key, value in variables.items()
-                    if key.startswith("ngn-") and not key.endswith("style") and not key.startswith("ngn-message-")
+                    if key.startswith("ngn-")
+                    and not key.endswith("style")
+                    and not key.startswith(("ngn-message-", "ngn-composer-"))
                 )
                 messages = [value for key, value in variables.items() if key.startswith("ngn-message-")]
-                assert messages and all(value.startswith("#") for value in messages)
+                assert messages and all(value.startswith("ansi_") for value in messages)
+                composer_colors = [
+                    value
+                    for key, value in variables.items()
+                    if key.startswith("ngn-composer-") and not key.endswith("style")
+                ]
+                assert composer_colors and all(value.startswith("ansi_") for value in composer_colors)
 
     asyncio.run(scenario())
 
@@ -555,16 +678,20 @@ def test_configuring_in_on_load_precedes_custom_css_parsing() -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("name", THEME_NAMES)
-def test_activity_frames_are_fixed_width_and_time_driven(name: str) -> None:
-    frames = [themes.activity_frame(name, tick / themes.ACTIVITY_FPS) for tick in range(20)]
-    assert len(set(frames)) > 1
-    assert all(frame.isascii() and len(frame) == 3 and not any(ord(char) < 32 for char in frame) for frame in frames)
-    assert themes.activity_frame(name, 0) != themes.activity_frame(name, 1 / themes.ACTIVITY_FPS)
-    assert themes.activity_frame(name, 0) == themes.activity_frame(name, 0.01)
-    for elapsed in (-1.0, float("inf"), float("nan"), 1e308):
-        assert len(themes.activity_frame(name, elapsed)) == 3
-    assert themes.activity_frame(name, -1) == themes.activity_frame(name, 0)
+def test_state_field_motion_is_continuous_and_uses_fixed_cell_geometry() -> None:
+    field = StateField("working")
+    first = field.render(width=7, height=1)
+    field.advance(0.04)
+    moved = field.render(width=7, height=1)
+    assert len(str(first)) == len(str(moved)) == 7
+    assert moved != first
+    phase = field.phase
+    field.select("tool")
+    assert field.phase == phase
+    before = field.stops
+    field.advance(0.04)
+    assert field.phase > phase
+    assert field.stops != before
 
 
 def test_unknown_theme_does_not_mutate_app() -> None:
@@ -576,5 +703,3 @@ def test_unknown_theme_does_not_mutate_app() -> None:
     with pytest.raises(ValueError, match="Unknown theme background"):
         themes.configure_theme(app, "terminal", background="unknown")
     assert app.theme == before
-    with pytest.raises(ValueError, match="Unknown theme"):
-        themes.activity_frame("unknown", 0)

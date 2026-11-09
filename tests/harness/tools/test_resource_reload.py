@@ -715,7 +715,32 @@ async def test_installed_submodule_refreshes_same_size_relative_helper_without_e
 
 @pytest.mark.requires_posix
 @pytest.mark.asyncio
-@pytest.mark.parametrize("host_value", [7, 17])
+@pytest.mark.parametrize("plugin_limit", [3000, 3001])
+async def test_plugin_round_limit_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plugin_limit: int) -> None:
+    extension = tmp_path / "round_limit.py"
+    extension.write_text(f"def setup(harness):\n    harness.agent.max_tool_rounds = {plugin_limit}\n")
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness.config.plugins = (str(extension) + ":setup",)
+    try:
+        if plugin_limit == 3001:
+            with pytest.raises(RuntimeError, match="Plugin max_tool_rounds must be an integer between 1 and 3000"):
+                await harness.initialize()
+            assert harness.resources.last_error
+        else:
+            await harness.initialize()
+            assert not harness.resources.last_error
+        assert harness.agent.max_tool_rounds == 3000
+    finally:
+        await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_value", [7, 17, 3000])
 async def test_removed_plugin_override_restores_current_host_limit_and_generated_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host_value: int
 ) -> None:

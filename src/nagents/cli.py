@@ -8,6 +8,7 @@ import getpass
 import json
 import logging
 import os
+import shlex
 import sqlite3
 import sys
 from contextlib import aclosing
@@ -16,10 +17,11 @@ from dataclasses import asdict
 from dataclasses import replace
 from datetime import datetime
 from enum import Enum
-from importlib.metadata import version
 from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING
 
+from ._version import framework_version
 from .error_presentation import transport_error_message
 from .events import CompactionDoneEvent
 from .events import CompactionStartedEvent
@@ -49,6 +51,7 @@ from .harness.types import TaskDeliveryWarning
 from .harness.types import TaskMessage
 from .harness.types import TaskNotification
 from .harness.types import TaskStarted
+from .harness.types import ToolAddedNotice
 from .harness.types import ToolOutput
 from .harness.types import TranscriptAbandoned
 from .harness.types import TranscriptAnchor
@@ -88,17 +91,22 @@ def _parser() -> argparse.ArgumentParser:
     )
     common.add_argument("--no-animations", action="store_false", dest="animations", help="Disable activity animation")
     common.add_argument(
+        "--tui-performance",
+        action=argparse.BooleanOptionalAction,
+        help="Show the TUI performance panel for this invocation (default: disabled)",
+    )
+    common.add_argument(
+        "--wire-log",
+        action=argparse.BooleanOptionalAction,
+        help="Log sensitive provider wire traffic to data_dir/logs/wire-<unique>.jsonl (default: disabled)",
+    )
+    common.add_argument(
         "--theme-background",
         choices=THEME_BACKGROUNDS,
         help="Use preset background (theme), inherited terminal background (terminal), or preset default (auto)",
     )
     common.add_argument(
         "--submit-mode", choices=("queue", "interrupt"), help="New prompts while working: queue or interrupt-and-send"
-    )
-    common.add_argument(
-        "--tab-action",
-        choices=("agent", "complete", "focus"),
-        help="Tab cycles agents (default), completes commands, or moves focus",
     )
     common.add_argument("--plugin", action="append", help="Explicitly trust and load a Python path.py:setup extension")
     common.add_argument(
@@ -118,7 +126,7 @@ def _parser() -> argparse.ArgumentParser:
         epilog="Run without a subcommand for the TUI. Try ngn --demo without API credentials.",
         parents=[common, session_flags],
     )
-    parser.add_argument("--version", action="version", version=f"ngn (nagents {version('nagents')})")
+    parser.add_argument("--version", action="version", version=f"ngn (nagents {framework_version()})")
     commands = parser.add_subparsers(dest="command")
     run = commands.add_parser(
         "run", parents=[common, session_flags], help="Run a prompt without the full-screen interface"
@@ -222,6 +230,7 @@ def _event_record(event: HarnessEvent) -> dict[str, object]:
         record["event"] = {
             ToolOutput: "tool_output",
             Notice: "notice",
+            ToolAddedNotice: "tool_added",
             RemoteArtifacts: "remote_artifacts",
             TaskActivity: "task_activity",
             TaskStarted: "task_started",
@@ -556,8 +565,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "demo",
                 "theme",
                 "animations",
+                "tui_performance",
+                "wire_log",
                 "submit_mode",
-                "tab_action",
                 "max_subagent_depth",
                 "max_concurrent_subagents",
                 "max_subagent_executions",
@@ -667,9 +677,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             resume_session=resume_session,
             continue_session=continue_session,
             pick_session=pick_session,
+            startup=False,
         )
+        from .tui.activity import duration
+        from .tui.diagnostics import RuntimeLog
+        from .tui.diagnostics import logger as tui_logger
+
         logging.basicConfig(level=logging.WARNING)
-        app.run()
+        with RuntimeLog(config.data_dir) as runtime_log:
+            tui_logger.info(
+                "TUI starting",
+                extra={"version": framework_version(), "provider": config.provider, "model": config.model},
+            )
+            from .tui.entrance import run_tui
+
+            asyncio.run(run_tui(app))
+            opened = app.startup_opened
+            if not opened:
+                tui_logger.info("Startup cancelled before opening a session")
+        from .tui.exit_summary import print_exit_summary
+
+        resume_command = ""
+        if app.exit_session_saved:
+            resume = ["ngn", "-C", str(harness.workspace), "--resume", app.exit_session_id]
+            if config.demo:
+                resume.append("--demo")
+            if getattr(args, "config", None):
+                resume.extend(("--config", str(args.config)))
+            if config.trust_project:
+                resume.append("--trust-project")
+            resume_command = _plain(shlex.join(resume))
+        print_exit_summary(
+            duration(monotonic() - app.started_at),
+            _plain(app.exit_session_id),
+            resume_command,
+            _plain(str(runtime_log.path)),
+            opened=bool(opened),
+            wire_log=_plain(str(harness.wire_log.path)) if harness.wire_log is not None else "",
+        )
         return 0
     except KeyboardInterrupt:
         print("\nInterrupted. Completed actions are not rolled back.", file=sys.stderr)

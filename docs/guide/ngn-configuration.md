@@ -40,6 +40,72 @@ without provider calls, run from the repository root:
 poetry run ngn --config examples/harness/config.json --demo
 ```
 
+## Provider wire logging
+
+Wire logging currently requires POSIX ownership and no-follow filesystem
+protections. On unsupported platforms (including Windows), enabling it fails
+before creating files; leave `wire_log` disabled. Unknown HTTP headers are
+redacted by default; only explicit transport/routing diagnostics are retained.
+
+`wire_log` is a strict boolean (default `false`) in `HarnessConfig` and harness
+JSON, for example `{"wire_log": true}`. Set `NGN_WIRE_LOG=true|false|1|0` for an
+environment default. `--wire-log` enables it and `--no-wire-log` disables it for
+one invocation, without saving the setting. Flags work before or after a
+subcommand; when repeated, the last flag wins. An omitted flag preserves the
+loaded value. Precedence is built-ins < environment < user JSON < trusted project
+JSON < explicit JSON < explicit CLI flags, as described below.
+
+Wire logs are sensitive diagnostic data: provider requests and responses can
+contain prompts, model output, tool arguments/results, workspace contents, and
+other private information. Enable only when needed; protect the files and review
+them before sharing. The log location is `logs/wire-<unique>.jsonl` under
+`data_dir` (by default `$XDG_DATA_HOME/ngn`, or `~/.local/share/ngn`). Files are
+created with owner-only permissions (`0600`), and the TUI exit summary shows the
+path when enabled. Transport authentication/cookie headers are redacted, but
+application payloads are not. This captures traced provider HTTP traffic during
+agent turns, including streaming responses; it is not an MCP protocol, realtime
+WebSocket, or approval-decision log. There is no automatic rotation or retention
+cleanup: disable logging and remove sensitive logs when no longer needed.
+
+## TUI performance preference
+
+`tui_performance` is a strict boolean (default `false`) in harness JSON. It is
+also available as `NGN_TUI_PERFORMANCE=true|false|1|0`. The CLI flags
+`--tui-performance` and `--no-tui-performance` override the loaded value for one
+invocation without saving anything. This is a terminal-client preference; it
+adds no telemetry or configuration to the core Agent library.
+
+Terminal integrations can persist the user's explicit global/local selection:
+
+```python
+from nagents.harness.config import save_tui_performance
+
+path = save_tui_performance(config, enabled=True, scope="global")
+# scope="local" saves only for config.workspace.
+```
+
+The exact signature is
+`save_tui_performance(config: HarnessConfig, enabled: bool, scope: Literal["global", "local"]) -> Path`.
+It saves atomically and updates `config.tui_performance` only after success.
+Global preferences live in `$XDG_CONFIG_HOME/ngn/tui.json`; local preferences
+live in `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/tui.json`, using the
+same workspace identity as the other scoped settings. With no `XDG_CONFIG_HOME`,
+`~/.config` is used. Local preferences override global preferences; both override
+JSON/environment defaults, and explicit CLI flags remain highest priority.
+A saved global change updates the current config immediately, but an existing
+local preference still wins on the next load.
+
+Saving preserves unrelated fields in the preference document and never edits
+project JSON, grants project trust, or changes provider/assistant settings.
+Storage is cross-platform, atomic, bounded non-secret JSON, not a credential
+store. Ordinary owned directories (including mode 755 on POSIX) and regular
+files (including mode 644) are accepted; existing directory permissions are never
+changed. Symlink directories/files and hard-linked files are rejected. POSIX
+checks additionally reject foreign-owned files and directories writable by other
+users (apart from root-owned sticky temporary ancestors). Malformed or unsafe
+existing preferences raise an error rather than being silently replaced. Only
+save when the user explicitly chooses a scope; startup does not create these files.
+
 ## Precedence
 
 The order is **lowest to highest priority**:
@@ -383,10 +449,10 @@ credentials.
 | --- | --- | --- | --- |
 | `agent` | string | `"assistant"` | The built-in `"assistant"` or an explicitly configured profile name. |
 | `read_only` | boolean | `false` | Enforce read-only operation for the assistant and child agents. |
-| `shell_timeout` | integer or float | `60.0` | Seconds, strictly greater than `0` and at most `600`. Booleans are not numbers here. |
+| `shell_timeout` | integer or float | `600.0` (10 minutes) | Seconds, strictly greater than `0` and at most `600`. Booleans are not numbers here. |
 | `max_output` | integer | `32768` | `1024` through `1048576`, inclusive; bounds tool output in bytes. |
 | `max_file_bytes` | integer | `262144` | `1024` through `4194304`, inclusive; file-size limit in bytes for guarded file operations. |
-| `max_tool_rounds` | integer | `30` | `1` through `1000`, inclusive; maximum model/tool rounds in the agent loop. This is not the subagent count. |
+| `max_tool_rounds` | integer | `3000` | `1` through `3000`, inclusive; maximum model/tool rounds in the agent loop. This is not the subagent count. |
 | `max_subagent_depth` | integer | `2` | `0` through `8`, inclusive. Root depth is `0`, child depth `1`, grandchild depth `2`. `0` disables delegation; the default allows children and grandchildren, not great-grandchildren. |
 | `demo` | boolean | `false` | Offline scripted provider, no workspace mutations or shell execution, and no plugin imports. Local demo conversations are still saved. |
 
@@ -413,7 +479,6 @@ the operation.
 | `theme_background` | string | `"auto"` | `"auto"`, `"terminal"`, or `"theme"`. Automatic preset behavior, terminal-native background, or the theme's background. Separate from palette selection. |
 | `animations` | boolean | `true` | Enable motion; `false` disables the busy animation, animated scrolling, and cursor blinking. `TEXTUAL_ANIMATIONS=none` also disables them; brief button feedback remains. |
 | `submit_mode` | string | `"queue"` | `"queue"` or `"interrupt"`: queue new prompts during work, or cancel/await current work before sending the new prompt. |
-| `tab_action` | string | `"agent"` | `"agent"`, `"complete"`, or `"focus"`: cycle profiles, complete slash commands, or navigate widgets. |
 
 These are ngn settings, not arbitrary Textual theme names or CSS tables. Preset
 colors can evolve; there is no user-defined palette table in this schema.
@@ -471,7 +536,7 @@ customizable; other agents come from JSON `profiles` or
 
 Native Markdown contains only a YAML header enclosed by `---`; body text is rejected.
 `name` defaults to the filename, and missing fields inherit. The canonical
-`prompt: |` field replaces the packaged coding policy; `live.prompt: |` replaces
+`prompt: |` field replaces the packaged assistant policy; `live.prompt: |` replaces
 the complete voice prompt. Explicit empty prompts remain empty. Project
 `AGENTS.md` context and runtime capability/permission messages still apply.
 Use `model: {provider: connection-name, id: exact-model-id}` for one complete model
@@ -682,6 +747,11 @@ are discovered only at the trusted paths selected at startup. Changes to those
 host settings still use their existing settings/restart mechanisms.
 
 ## Plugins
+
+Function tools can use `.agents/tools/<module>.py` with `@tool`, without a
+`plugins` entry. Workspace code requires `--trust-project` before imports;
+read-only agents do not import these modules. See [automatic tools](tools.md#automatic-tools-in-ngn).
+The declarations below configure broader behavior extensions and lifecycle hooks.
 
 ```json
 {"plugins": ["./extension.py:setup", "team_extensions.review:setup"]}

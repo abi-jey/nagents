@@ -1339,7 +1339,7 @@ class SubagentManager:
                     else {}
                 ),
             },
-            max_tool_rounds=min(parent.config.max_tool_rounds, 12),
+            max_tool_rounds=parent.config.max_tool_rounds,
             max_subagent_depth=min(parent.config.max_subagent_depth, self.root.harness.config.max_subagent_depth),
         )
         ceiling = (

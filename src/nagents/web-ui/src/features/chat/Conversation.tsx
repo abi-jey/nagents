@@ -216,7 +216,7 @@ export function TranscriptItems({
         data-run-id={entry.runId}
         tabIndex={-1}
       >
-        {entry.delegation ? <DelegationActivity item={entry.delegation} open={disclosures.get(entry.id) ?? expanded} toggle={open => toggle(entry.id, open)} inspect={inspectTask} /> : entry.kind === "agent_change" ? <div className="agent-change-marker" title={entry.title}><TeamIcon size={13} /><span>{entry.text}</span></div> : entry.liveCaption ? <>
+        {entry.kind === "tool_change" ? <div className="tool-added-line" title={entry.text}>{entry.text}</div> : entry.delegation ? <DelegationActivity item={entry.delegation} open={disclosures.get(entry.id) ?? expanded} toggle={open => toggle(entry.id, open)} inspect={inspectTask} /> : entry.kind === "agent_change" ? <div className="agent-change-marker" title={entry.title}><TeamIcon size={13} /><span>{entry.text}</span></div> : entry.liveCaption ? <>
           <div className="entry-label chat-live-caption-label">
             <span hidden={entry.liveCaption.speaker === "assistant" && !bylines.has(entry.id)}>{entry.liveCaption.speaker === "user" ? "You" : bylines.get(entry.id)}</span>
             <span className="chat-live-badge"><Icon name="wave" size={12} />Live</span>

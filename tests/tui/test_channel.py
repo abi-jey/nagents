@@ -124,7 +124,14 @@ def test_live_reload_identical_sends_and_reused_call_ids(
             await app._clear_conversation()
             await app._load_history()
             assert entries(app) == expected
-            assert [w.receipt.delivery_id for w in app.query(DeliveryWidget)] == ids
+            restored_widgets = list(app.query(DeliveryWidget))
+            assert [w.receipt.delivery_id for w in restored_widgets] == ids
+            assert app._delivery_anchors == {
+                (widget.receipt.origin.anchor_message_id, widget.receipt.origin.call_position): widget
+                for widget in restored_widgets
+            }
+            await app._reconcile_deliveries(force=True)
+            assert list(app.query(DeliveryWidget)) == restored_widgets
         assert harness.agent.tool_registry.get("channel_send") is None
         assert harness._delivery_definition is None
 

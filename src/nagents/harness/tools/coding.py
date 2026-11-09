@@ -200,6 +200,31 @@ class HarnessExecutor(ToolExecutor):
             and call.arguments.get("destination") == self.harness.session_id
         )
 
+    def _host_channel_list(self, tool: ToolDefinition, call: ToolCall) -> bool:
+        """Exempt only discovery installed and bound by the first-party host."""
+        binding = self.harness._channel_list_binding
+        if (
+            call.name != "channel_list"
+            or tool is not self.harness._channel_list_definition
+            or binding is None
+            or binding.func is not tool.func
+            or binding.parameters != tool.parameters
+            or not isinstance(tool.func, MethodType)
+        ):
+            return False
+        from nagents.channels.dispatcher import ChannelDispatcher
+        from nagents.web.channels.host import ChannelHost
+
+        function = tool.func
+        owner = function.__self__
+        if type(owner) is ChannelHost:
+            return (
+                function.__func__ is ChannelHost.channel_list
+                and owner.state.running_harness is self.harness
+                and any(saved is tool for saved in owner.tools)
+            )
+        return type(owner) is ChannelDispatcher and function.__func__ is ChannelDispatcher.channel_list
+
     async def _execute_guarded(self, tool_call: ToolCall, bridge: "ExecutionBridge | None") -> ToolResultEvent:
         started = time.monotonic()
         call = copy.deepcopy(tool_call)
@@ -241,7 +266,7 @@ class HarnessExecutor(ToolExecutor):
             if not builtin:
                 function = tool.func if tool is not None else None
                 parameters = copy.deepcopy(tool.parameters) if tool is not None else {}
-                if not self._host_channel_send(tool, call, bridge):
+                if not (self._host_channel_list(tool, call) or self._host_channel_send(tool, call, bridge)):
                     await self.harness.approve(
                         call.name,
                         call.arguments,

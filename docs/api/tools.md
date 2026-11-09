@@ -3,7 +3,8 @@
 Pass Python callables to `Agent(tools=[...])`. `ToolRegistry` extracts schemas
 and supports explicit name, description, and parameter overrides. Nonempty explicit
 `description` strings are preserved verbatim, including paragraphs and hard line
-breaks. `None` or an empty string uses the first docstring paragraph; a function
+breaks. With no explicit description, `@tool` metadata is used first, then the
+first docstring paragraph; a function
 without a docstring falls back to `Call <tool name>`. Parameter schemas are
 unchanged by description overrides. Its
 `register()` method returns a `ToolDefinition`, not a wrapper to pass back into
@@ -13,6 +14,15 @@ Schema extraction is not runtime input validation or a security sandbox.
 Validate inputs inside the callable, constrain side effects, and inspect
 `ToolResultEvent.error` for execution failures. A custom executor must use a
 registry matching the agent's tools.
+
+`from nagents import tool` marks functions for automatic discovery by the ngn
+Harness in `.agents/tools/<module>.py`. Both `@tool` and
+`@tool(name="alias", description="...")` preserve function identity, annotations
+and sync/async behavior. The metadata is also honored by explicit library
+registration. See [automatic tools](../guide/tools.md#automatic-tools-in-ngn)
+for scope and reload rules; standalone Agents do not scan directories.
+
+::: nagents.tool
 
 ::: nagents.ToolRegistry
     options:

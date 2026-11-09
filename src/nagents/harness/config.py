@@ -147,10 +147,10 @@ class HarnessConfig:
     trust_project: bool = False
     demo: bool = False
     data_dir: Path = field(default_factory=_data_dir)
-    shell_timeout: float = 60.0
+    shell_timeout: float = 600.0
     max_output: int = 32768
     max_file_bytes: int = 262144
-    max_tool_rounds: int = 30
+    max_tool_rounds: int = 3000
     profiles: dict[str, AgentProfile] = field(default_factory=dict)
     diagnostics: tuple[str, ...] = ()
     agent_diagnostics: tuple[str, ...] = ()
@@ -164,10 +164,11 @@ class HarnessConfig:
     provider_paths: dict[str, Path] = field(default_factory=dict)
     theme: str = "terminal"
     animations: bool = True
+    tui_performance: bool = False
+    wire_log: bool = False
     reasoning_summaries: bool = True
     reasoning_effort: ReasoningEffort = ""
     submit_mode: Literal["queue", "interrupt"] = "queue"
-    tab_action: str = "agent"
     max_subagent_depth: int = 2
     max_concurrent_subagents: int = 3
     max_subagent_executions: int = 8
@@ -203,14 +204,16 @@ class HarnessConfig:
             raise ValueError(f"theme must be one of: {', '.join(THEME_NAMES)}")
         if self.theme_background not in THEME_BACKGROUNDS:
             raise ValueError(f"theme_background must be one of: {', '.join(THEME_BACKGROUNDS)}")
+        if type(self.wire_log) is not bool:
+            raise ValueError("wire_log must be a boolean")
+        if type(self.tui_performance) is not bool:
+            raise ValueError("tui_performance must be a boolean")
         if type(self.animations) is not bool:
             raise ValueError("animations must be a boolean")
         if type(self.reasoning_summaries) is not bool:
             raise ValueError("reasoning_summaries must be a boolean")
         if self.submit_mode not in {"queue", "interrupt"}:
             raise ValueError("submit_mode must be queue or interrupt")
-        if self.tab_action not in {"agent", "complete", "focus"}:
-            raise ValueError("tab_action must be agent, complete, or focus")
         validate_provider(self.provider_profile())
         if not self.model.strip():
             raise ValueError("model must not be empty")
@@ -229,8 +232,8 @@ class HarnessConfig:
             raise ValueError("max_file_bytes must be between 1024 and 4194304 bytes")
         if type(self.skill_token_limit) is not int or not 1 <= self.skill_token_limit <= 100000:
             raise ValueError("skill_token_limit must be an integer between 1 and 100000")
-        if not 1 <= self.max_tool_rounds <= 1000:
-            raise ValueError("max_tool_rounds must be between 1 and 1000")
+        if not 1 <= self.max_tool_rounds <= 3000:
+            raise ValueError("max_tool_rounds must be between 1 and 3000")
         if type(self.max_subagent_depth) is not int or not 0 <= self.max_subagent_depth <= 8:
             raise ValueError("max_subagent_depth must be an integer between 0 and 8 (root depth is 0)")
         for name, maximum in (("max_concurrent_subagents", 64), ("max_subagent_executions", 4096)):
@@ -526,7 +529,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "agent",
         "theme",
         "submit_mode",
-        "tab_action",
         "theme_background",
         "reasoning_effort",
     }
@@ -539,7 +541,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "max_subagent_executions",
         "max_subagent_depth",
     }
-    booleans = {"demo", "animations", "read_only", "reasoning_summaries"}
+    booleans = {"demo", "animations", "read_only", "reasoning_summaries", "tui_performance", "wire_log"}
     allowed = (
         strings
         | integers
@@ -730,5 +732,37 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         config.model_explicit or model_overridden or bool(os.environ.get("NGN_MODEL") or store.model())
     )
     config.model_config_explicit = os.environ.get("NGN_MODEL") is not None or model_overridden
+    from .tui_preferences import TuiPreferenceStore
+
+    # UI saves override startup defaults; CLI flags remain the final layer.
+    for scope in ("global", "workspace"):
+        preference_path = store.model_store(scope).path.parent / "tui.json"
+        preferences = TuiPreferenceStore(preference_path).load()
+        if "tui_performance" in preferences:
+            enabled = preferences["tui_performance"]
+            assert isinstance(enabled, bool)  # The preference store validates JSON types.
+            config.tui_performance = enabled
     config.__post_init__()
     return config
+
+
+def save_tui_performance(config: HarnessConfig, enabled: bool, scope: Literal["global", "local"]) -> Path:
+    """Persist a TUI preference and update the current config after a successful save.
+
+    ``local`` means this workspace's user-owned settings, never project JSON.
+    Saved UI preferences override environment/trusted JSON defaults on loading;
+    local overrides global. CLI flags can override either for one invocation.
+    No project trust, provider routing, or unrelated settings are changed.
+    Returns the preference file path; filesystem/validation errors propagate.
+    """
+    from .tui_preferences import TuiPreferenceStore
+
+    if type(enabled) is not bool:
+        raise ValueError("tui_performance must be a boolean")
+    if scope not in {"global", "local"}:
+        raise ValueError("TUI preference scope must be global or local")
+    store = ScopedProviderRegistryStore(config.workspace)
+    path = store.model_store("workspace" if scope == "local" else "global").path.parent / "tui.json"
+    TuiPreferenceStore(path).save_performance(enabled)
+    config.tui_performance = enabled
+    return path

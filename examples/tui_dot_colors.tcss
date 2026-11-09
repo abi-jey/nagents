@@ -1,0 +1,9 @@
+#workspace-shell { width: 100%; height: 100%; }
+#effects { margin-bottom: 0; }
+#effects Button { margin-right: 3; }
+#color-mode { height: 1; margin: 0 3; color: $ngn-muted; }
+.main-status, .child-status { color: $ngn-muted; }
+#intro { position: absolute; offset: 2 1; width: 26; height: 5; border: round $ngn-border; }
+#intro-field { width: 100%; height: 3; }
+#intro-name { width: 100%; height: 1; }
+#intro-copy { width: 100%; height: 1; }

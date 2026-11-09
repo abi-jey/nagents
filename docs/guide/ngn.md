@@ -1,6 +1,6 @@
 # ngn: the terminal harness
 
-`ngn` puts a terminal interface on top of the nagents library. The same coding
+`ngn` puts a terminal interface on top of the nagents library. The same assistant
 harness powers interactive and headless use. Python extensions change the agent's
 behavior, not just its appearance.
 
@@ -13,6 +13,39 @@ using it on important workspaces, and check
 Related pages: [installation and environment choices](ngn-installation.md),
 [complete configuration schema and recipes](ngn-configuration.md), and the
 [local web client](ngn-web.md), available with the `web` extra and bundled assets.
+
+## Performance diagnostics
+
+The optional performance panel belongs to the terminal client, not the core
+Agent library. `/perf on` enables collection and remembers it for the current
+workspace; `/perf on global` sets a global default. `/perf off [local|global]`
+disables and saves the chosen scope. Workspace preferences override global ones.
+`/perf hide` hides the panel without stopping collection (session-only), and
+`/perf detail` opens a snapshot, useful when the right rail is hidden on narrow
+terminals. These commands work during active runs. Use `/perf on` to reveal a
+hidden panel again.
+
+Sampling runs every 250 ms with bounded recent samples; the right-hand display
+refreshes once a second. It shows event-loop scheduling lag, synchronous task
+refresh cost, process CPU, process-lifetime **peak** RSS where supported, and
+runtime counters for running tools/agents, queued prompts, and pending streamed
+characters. CPU is scoped to this process, not remote agents or shell children.
+Slow tools or asynchronous provider waits are not treated as blocked UI callbacks.
+Sustained lag/callback warnings and recovery transitions enter the private runtime
+JSONL log, with periodic numeric summaries and no conversation payloads. A fully
+blocked event loop can report a stall only after it resumes. This is a lightweight
+health monitor, not a stack profiler or measurement of actual terminal frame rate.
+
+Runtime JSONL diagnostics use a closed metadata schema: timestamps, fixed severity
+and phase/status/metric categories, bounded finite numeric timings and resource
+measurements, and bounded integer counters. Session IDs and provider, model, tool,
+and version labels are omitted rather than redacted or hashed. Messages, arguments,
+tracebacks, arbitrary logger names, and exception text are never rendered. Only
+explicitly allowlisted built-in exception identities retain their fixed type label;
+other exception classes are recorded as `other`. Unknown extras and invalid values
+are dropped. Root/provider warnings are not captured by this runtime log. This policy
+applies to the runtime JSONL file, not the richer on-screen performance snapshot or
+separately enabled wire logging.
 
 ## Shared provider connections
 
@@ -56,6 +89,51 @@ here, or select a published CLI release as described in the installation guide.
 Textual is optional: importing `nagents`, using `Agent`, or running the headless
 client does not import Textual.
 
+### Terminal activity and launch
+
+With animation enabled, ngn first shows a compact versioned introduction in the
+existing terminal, then sweeps into the interface. Enter skips the introduction.
+The same particle field changes its gradient and motion for model work, tool
+calls, delegation, approvals, responses and completion. Direct child agents and
+the nearest scheduled wake-up have independent activity rows in the agent pane.
+The assistant activity and colored provider/model lines stay below the message
+box. Native themes retain the terminal's background. When a POSIX terminal
+reports its default colors, user messages and the composer use a subtle shade
+of that background; otherwise they retain the native default. No terminal
+palette is changed. Multiplexers such as tmux may not forward color reports.
+Painted presets remain available through `--theme-background theme`.
+
+Assistant Markdown links and plain web URLs are clickable. Clicking opens
+HTTP(S) links in your normal browser; streaming or displaying a link never
+opens it automatically.
+
+When reopening a conversation, saved agent and wake-up context is folded into
+an expandable row. The original text remains available for inspection and is
+kept out of the message box's prompt history.
+
+`--no-animations` skips the introduction and sweep and keeps activity fields
+static. Ctrl+Q and `/quit` gather the field and close the interface; pressing
+Ctrl+Q again skips the closing animation. Ctrl+C still copies selected text or
+cancels active work first, and a second idle Ctrl+C exits. Closing always awaits
+the backend and its owned tasks before restoring the terminal.
+
+After exit, ngn prints the selected session, a resume command when the session
+was saved, and its runtime-log path. Runtime logs are private JSON Lines files
+under the configured data directory's `logs/` folder (normally
+`~/.local/share/ngn/logs/`), with UTC timestamps and elapsed milliseconds. They
+record allowlisted TUI lifecycle/performance metadata and exception types, not
+rendered messages, exception text, tracebacks, or third-party warnings. The
+terminal client does not enable request/response payload logging by default;
+wire logging requires an explicit opt-in.
+
+The TUI owns process-local `schedule_wakeup` timers. A due timer waits for its
+originating conversation to be selected and idle, after queued user prompts.
+Its reason and countdown remain visible while pending, and execution uses the
+harness's wake-up path with ordinary tools and approvals. Timers disappear on
+exit. There are at most 32 pending timers and eight automatic activations per
+human-turn chain. Cancelling active work also cancels that chain's pending
+timers.
+
 The offline demo needs no API key and does not execute shell commands, change
 workspace files, or contact a model. It also skips Python plugins, since even
 trusted setup code could perform I/O. It does save demo conversations locally.
@@ -82,6 +160,21 @@ Use `api: auto` for provider-native defaults, or choose `chat_completions`,
 LiteLLM requires an explicit `base_url` and an API-key reference such as
 `api_key_env: LITELLM_API_KEY`; it does not use ChatGPT OAuth or require a
 gateway SDK in ngn. See [provider recipes](ngn-configuration.md#provider-recipes).
+
+## Subagent conversations
+
+Open an agent from the Agents tree (Ctrl+T focuses it on wide terminals, or opens
+the agent view on narrow terminals). The child conversation uses the same
+full-screen Markdown turns, compact selectable tool cards, themes and composer
+as the main conversation, rather than a plain-text transcript dialog.
+
+Click **← Back**, press **Esc**, or **Alt+Left** to return to the parent without
+closing its work. The parent conversation and draft remain mounted. **F6** moves
+between the child message editor and conversation. Enter sends a follow-up to the
+selected finished agent; Shift+Enter inserts a newline. Running agents allow
+per-agent drafts but cannot accept a follow-up until finished. The usual
+continuation and parent-notification rules still apply. History refreshes while
+the view is open; saved tool results use the same expandable output widgets.
 
 ## Explicit text deliveries
 
@@ -146,21 +239,28 @@ by default. `--submit-mode interrupt` instead cancels and awaits the current run
 and its children before starting the new input. Ordinary configuration commands
 are not deferred behind an active run.
 
+When messages are queued, **Ctrl+S** confirms they should run next without stopping
+current work. Press **Ctrl+S again** during that same run to interrupt streaming
+output or tool execution, await cancellation and cleanup, then send the queue in
+FIFO order. The queue shows a hint for the next shortcut action. Adding another
+queued message, pausing or clearing the queue, or starting the next turn resets
+the shortcut to its first step. It never submits an unsent composer draft or acts
+through a modal dialog. Completed file or shell actions are not rolled back.
+
 Escape stops current work and pauses the queue without discarding it. Empty Enter
 or `/queue resume` resumes queued input; `/queue` inspects it and `/queue clear`
 explicitly discards it. The queue is bounded to 20 inputs and is not persisted
 across application exit. Completed file or shell actions are never rolled back.
 
 ```bash
-ngn --submit-mode queue --tab-action agent
-ngn --submit-mode interrupt --tab-action complete
-ngn --tab-action focus
+ngn --submit-mode queue
+ngn --submit-mode interrupt
 ```
 
-The equivalent JSON settings are `"submit_mode": "queue"` and
-`"tab_action": "agent"`. Tab alternatives are `complete` for command completion
-and `focus` for ordinary widget navigation. They also accept `NGN_SUBMIT_MODE`
-and `NGN_TAB_ACTION` environment defaults.
+The equivalent JSON setting is `"submit_mode": "queue"`; `NGN_SUBMIT_MODE`
+sets its environment default. Tab and Shift+Tab use ordinary widget navigation.
+They do not select agents or complete commands. Use `/agent` to select a profile
+and arrows plus Enter to choose a command.
 
 `/resume` is a synonym for `/sessions` and opens the session picker. Aliases are
 resolved by the command registry before native dispatch, so they appear in
@@ -199,7 +299,20 @@ Tool cards start collapsed, including restored history and failed tools. Their
 single-line header shows the tool name, a short command or target hint when
 available, and a running, complete, failed, or cancelled label. Completed calls
 show their reported duration when available. Long names and hints are shortened
-to keep the outcome visible on narrow terminals.
+to keep the outcome visible on narrow terminals. Status and timer columns reserve
+space so normal duration updates do not shift the target. Rows have no painted
+background or state-dependent border. Hover makes the entire header **bold**
+immediately, including completed and restored calls, without a background tint.
+Keyboard focus retains an underline. Preparing, ready, and running tool headers
+carry a smooth teal/lavender foreground shimmer across the entire line, including
+the target, status, and timing text, without shifting their positions. The shimmer
+continues between streamed argument updates; execution timing starts only when
+the tool runs. The shimmer stops on completion/cancellation. Successful completion runs one
+1.25-second left-to-right green pass and leaves the header muted green. Failure,
+nonzero-exit, timeout and cancelled headers do not receive the success tint.
+With `--no-animations`, success applies its final tint immediately; elapsed time
+still updates when motion is disabled. Tool execution and approval semantics are
+unchanged; this does not simulate queue or argument-streaming phases.
 
 Native shell results with a nonzero exit code or timeout show **exit 7** (with
 the actual code) or **timed out** in the card and headless text output. This
@@ -401,7 +514,7 @@ and `max_subagent_executions` defaults to `8` (range `1`–`4096`). These limits
 are shared across the descendant tree, including accepted human follow-ups and
 continued sessions. A quota-full `to_agent` call fails immediately. A parent
 working or waiting for children occupies a slot. Other bounds include at most
-`min(max_tool_rounds, 12)` rounds per child, a 16,000-character prompt, 12,000
+the parent's configured `max_tool_rounds` per child (default `3000`), a 16,000-character prompt, 12,000
 characters per result, 64 retained child identities per root lifetime, and
 8 combined human and agent follow-ups per child.
 
@@ -678,7 +791,6 @@ after the subcommand; prefer supplying each option only once.
 | `--theme-background auto\|terminal\|theme` | Choose preset-default, terminal-native, or preset background behavior. |
 | `--no-animations` | Disable the busy indicator's motion, animated scrolling, and cursor blinking; brief button feedback remains. |
 | `--submit-mode queue\|interrupt` | Control prompts submitted while work is active. |
-| `--tab-action agent\|complete\|focus` | Select composer Tab behavior. |
 | `--plugin REFERENCE` | Explicitly trust and append a Python extension; repeatable. |
 | `--demo` | Use the offline demo. |
 | `--continue`, `-c` | Resume the latest session in this workspace, if any. |
@@ -725,7 +837,7 @@ location need not be `.ngn/config.json`. Settings are top-level JSON with no
   "providers": "./providers.json",
   "model": "gpt-6-luna",
   "agent": "assistant",
-  "shell_timeout": 60.0,
+  "shell_timeout": 600.0,
   "max_subagent_depth": 2,
   "max_concurrent_subagents": 3,
   "max_subagent_executions": 8,
@@ -804,7 +916,28 @@ context and executes no scripts; referenced resources require separate permitted
 access. See [Skills](skills.md) for authoring, library discoverers, loading results,
 and batch/realtime limitations.
 
+## Automatically discovered tools
+
+Create `.agents/tools/<module>.py`, import `tool` from `nagents`, and decorate
+each exported function with `@tool`. One module can expose multiple tools;
+`weather.py` with `@tool def forecast(...)` becomes `weather_forecast`.
+Undecorated helpers remain ordinary functions. No JSON registration is required.
+Workspace imports require `--trust-project`; review their code first because
+imports run before invocation approval. Read-only agents do not import discovered
+tools. Personal `~/.agents/tools/` modules are user-installed trusted code and load
+before trusted workspace modules, which override the same module filename.
+
+The Harness rechecks tools before every model call. Changes appear in the next
+round without restarting; accepted calls retain their original implementation.
+Broken modules report diagnostics while other modules remain available, retaining
+the module's last working version until it is fixed. Existing tool permissions
+and the Tools screen still apply. See [Tools](tools.md#automatic-tools-in-ngn)
+for the complete file format, precedence and failure behavior.
+
 ## Python behavior extensions
+
+Use these extensions for lifecycle hooks and commands. Plain function tools can
+use `.agents/tools/` directly, without a setup function or configured plugin.
 
 ### Reloadable setup contract
 

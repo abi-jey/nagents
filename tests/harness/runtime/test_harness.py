@@ -846,6 +846,59 @@ def test_shell_always_asks_and_default_denies(config: HarnessConfig) -> None:
     asyncio.run(scenario())
 
 
+def test_shell_timeout_default_and_configuration_boundaries(config: HarnessConfig) -> None:
+    assert config.shell_timeout == 600.0
+    assert replace(config, shell_timeout=600.0).shell_timeout == 600.0
+    assert replace(config, shell_timeout=0.5).shell_timeout == 0.5
+    for invalid in (0.0, -1.0, 600.01, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="shell_timeout"):
+            replace(config, shell_timeout=invalid)
+
+
+@pytest.mark.requires_posix
+@pytest.mark.parametrize(
+    "arguments, expected", [({}, 600.0), ({"timeout": 0}, 600.0), ({"timeout": 600}, 600.0), ({"timeout": 0.5}, 0.5)]
+)
+def test_shell_default_deadline_and_advertised_contract(
+    config: HarnessConfig, monkeypatch: pytest.MonkeyPatch, arguments: dict[str, float], expected: float
+) -> None:
+    async def scenario() -> None:
+        harness = Harness(config)
+        requests: list[ApprovalRequest] = []
+        deadlines: list[float] = []
+        original_timeout = asyncio.timeout
+
+        def capture_timeout(delay: float) -> asyncio.Timeout:
+            deadlines.append(delay)
+            return original_timeout(delay)
+
+        async def allow(request: ApprovalRequest) -> bool:
+            requests.append(request)
+            return True
+
+        harness.approval_handler = allow
+        try:
+            await harness.initialize()
+            definition = harness.agent.tool_registry.get("shell")
+            assert definition is not None
+            assert "Default and maximum execution time: 600 seconds" in definition.description
+            help_text = definition.parameters["properties"]["timeout"]["description"]
+            assert "default of 600" in help_text and "cannot exceed 600" in help_text
+            monkeypatch.setattr(asyncio, "timeout", capture_timeout)
+            result = await harness.tools.shell("printf completed", **arguments)
+            assert result["output"] == "completed" and not result["timed_out"]
+            assert deadlines == [expected]
+            assert requests[0].arguments["timeout"] == expected
+            for invalid in (600.01, -1.0, float("inf"), float("nan")):
+                with pytest.raises(ValueError, match="No command was started"):
+                    await harness.tools.shell("true", timeout=invalid)
+            assert len(requests) == 1
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.requires_posix
 def test_shell_streams_bounded_output_and_timeout(config: HarnessConfig) -> None:
     command = (
@@ -853,7 +906,10 @@ def test_shell_streams_bounded_output_and_timeout(config: HarnessConfig) -> None
     )
 
     async def scenario() -> None:
-        harness = Harness(replace(config, max_output=1024, shell_timeout=1.0))
+        # Output truncation must not depend on starting a fresh Python process
+        # within one second on a loaded runner. Test the short deadline below
+        # with an explicit timeout, separately from successful output streaming.
+        harness = Harness(replace(config, max_output=1024, shell_timeout=30.0))
         harness.approval_handler = approve
         harness.agent.provider = ScriptedProvider(
             [
@@ -873,7 +929,7 @@ def test_shell_streams_bounded_output_and_timeout(config: HarnessConfig) -> None
             timeout = await harness.tools.shell("sleep 10", timeout=0.05)
             assert timeout["timed_out"] and timeout["exit_code"] != 0
             with pytest.raises(ValueError, match="timeout"):
-                await harness.tools.shell("exit 0", timeout=2)
+                await harness.tools.shell("exit 0", timeout=31)
         finally:
             await harness.close()
 

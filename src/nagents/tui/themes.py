@@ -1,27 +1,32 @@
-"""ngn semantic palettes and small, time-driven activity frames.
+"""ngn semantic terminal palettes.
 
 Configure before CSS is parsed (App.__init__ or on_load), not just on_mount.
-Native backgrounds use ANSI defaults, including in modals and syntax highlighting;
-we never detect RGB colors, rewrite the terminal palette, or assume white text.
+Native backgrounds use ANSI defaults, including in modals and syntax highlighting.
+Read-only terminal color reports allow a subtle composer/user-message shade;
+without a report we preserve native defaults. We never rewrite the palette.
 SVG exports use Rich's export palette and cannot show the user's actual defaults.
 """
 
 from __future__ import annotations
 
-from math import isfinite
 from typing import TYPE_CHECKING
+from typing import TypeVar
 
 from pygments.token import Token
+from textual.color import Color
 from textual.highlight import HighlightTheme
 from textual.theme import Theme
 
 from nagents.harness.config import THEME_BACKGROUNDS
 from nagents.harness.config import THEME_NAMES as THEME_NAMES
 
+from .terminal_colors import TerminalColors
+
 if TYPE_CHECKING:
     from textual.app import App
 
-ACTIVITY_FPS = 8
+_AppReturn = TypeVar("_AppReturn")
+_UNKNOWN_TERMINAL = TerminalColors()
 
 
 class CodeTheme(HighlightTheme):
@@ -143,22 +148,18 @@ _NATIVE_ACCENTS = {
     "ember": ("red", "magenta", "green", "red", "green", "cyan", "blue"),
 }
 
-_FRAMES: dict[str, tuple[str, ...]] = {
-    "terminal": (" | ", " / ", " - ", " \\ "),
-    "graphite": (".  ", ".. ", "...", " ..", "  .", " . "),
-    "ocean": ("~  ", " ~ ", "  ~", " ~ "),
-    "ember": (" . ", " o ", " O ", " o "),
-}
 
-
-def configure_theme(app: App[None], name: str, *, background: str = "auto") -> None:
+def configure_theme(
+    app: App[_AppReturn], name: str, *, background: str = "auto", terminal: TerminalColors = _UNKNOWN_TERMINAL
+) -> None:
     """Register/select a preset, exporting ngn colors and focus/selection styles.
 
     Only the supplied app's theme registry and selection are changed. Runtime
     switching is supported; initial setup must precede parsing ngn's CSS tokens.
     auto: native for terminal, painted otherwise. terminal: native for all names.
     theme: painted for all names; terminal uses graphite's dark surface fallback.
-    Message/editor surfaces always use a paired painted background and foreground.
+    Native surfaces inherit the terminal. A reported background supplies only
+    the subtle composer/user-message shade, never the conversation background.
     """
     if name not in THEME_NAMES:
         raise ValueError(f"Unknown theme; choose from: {', '.join(THEME_NAMES)}")
@@ -177,14 +178,32 @@ def configure_theme(app: App[None], name: str, *, background: str = "auto") -> N
         palette.update(accent="#85baff", user="#efabcf", heading="#85baff", tool="#d5bbff", code="#99d59b")
     focus_style = "bold reverse" if native else "bold"
     variables = {f"ngn-{key}": value for key, value in palette.items()}
-    # Message surfaces are deliberately painted, even on a native terminal
-    # background. Keep foregrounds paired with that surface for readable contrast.
-    message_palette = _PALETTES["graphite" if name == "terminal" else name] if native else palette
+    # Native surfaces use the terminal's own background and ANSI foregrounds.
+    # Painted presets keep their paired foregrounds and surfaces.
+    message_palette = palette
     variables["ngn-message-background"] = message_palette["panel"]
     variables.update(
         {
             f"ngn-message-{key}": message_palette[key]
             for key in ("text", "muted", "user", "info", "tool", "success", "warning", "error")
+        }
+    )
+    shade = terminal.background if native else palette["background"]
+    if shade:
+        base = Color.parse(shade)
+        shade = base.blend(Color(255, 255, 255) if base.brightness < 0.5 else Color(0, 0, 0), 0.07).hex
+    else:
+        shade = "ansi_default"
+    composer_text = terminal.foreground if native and terminal.foreground else palette["text"]
+    variables.update(
+        {
+            "ngn-composer-background": shade,
+            "ngn-composer-text": composer_text,
+            "ngn-composer-muted": composer_text if native else palette["muted"],
+            "ngn-composer-selection": shade if native else palette["selection"],
+            "ngn-composer-accent": shade if native else palette["accent"],
+            "ngn-composer-cursor-text": composer_text if native else shade,
+            "ngn-composer-cursor-style": "reverse" if native else "none",
         }
     )
     variables.update(
@@ -254,13 +273,3 @@ def configure_theme(app: App[None], name: str, *, background: str = "auto") -> N
     # Registering a different background for the active name doesn't change the
     # theme reactive, so explicitly invalidate CSS in that case too.
     app.refresh_css()
-
-
-def activity_frame(name: str, elapsed: float) -> str:
-    """Return a three-column ASCII frame; update at 8 FPS only while busy/enabled."""
-    if name not in THEME_NAMES:
-        raise ValueError(f"Unknown theme; choose from: {', '.join(THEME_NAMES)}")
-    frames = _FRAMES[name]
-    elapsed = max(0.0, elapsed) if isfinite(elapsed) else 0.0
-    period = len(frames) / ACTIVITY_FPS
-    return frames[int((elapsed % period) * ACTIVITY_FPS)]

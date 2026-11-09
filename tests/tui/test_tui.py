@@ -80,6 +80,11 @@ def test_startup_and_history(tmp_path: Path) -> None:
             assert len(app.query(Turn)) == 2
             assert app.query_one(Composer).prompt_history == ["[red]literal[/red]"]
             assert not app.query_one("#welcome").display
+            await send(app, pilot, "finish normally")
+            await idle(app, pilot)
+            status = str(app.query_one("#status", Static).content)
+            assert status[8:] == backend.config.agent
+            assert "Ready" not in status
         assert backend.closed
 
     asyncio.run(scenario())
@@ -125,6 +130,11 @@ def test_responsive_layout(
             # The status box is merged into the message box, sharing its fill
             # without a separate round frame.
             assert footer.parent is compose_area and app.query_one("#status").parent is footer
+            provider_model = app.query_one("#provider-model", Static)
+            assert provider_model.parent is footer and provider_model.region.height == 1
+            assert str(provider_model.content) == f"{backend.config.provider_profile().kind} · {backend.config.model}"
+            assert footer.region.x <= provider_model.region.x
+            assert provider_model.region.right <= footer.region.right
             assert composer.region.bottom <= footer.region.y
             assert footer.region.bottom <= size[1]
             assert str(app.query_one("#rail-auth", Static).content) == auth_status
@@ -461,10 +471,13 @@ def test_scrollback_stays_put_and_markdown_is_incremental(tmp_path: Path) -> Non
             await idle(app, pilot)
             original = app.query_one(Markdown)
             conversation = app.query_one("#conversation", VerticalScroll)
-            conversation.scroll_home(animate=False)
-            await pilot.pause()
             assert conversation.max_scroll_y > 20
             await send(app, pilot, "stream a long answer")
+            # A submission intentionally resumes following. Scrolling away while
+            # the answer streams must still preserve inspection position.
+            conversation.release_anchor()
+            conversation.scroll_home(animate=False)
+            await pilot.pause()
             await pilot.press("d", "r", "a", "f", "t")
             assert app.query_one(Composer).text == "draft"
             await idle(app, pilot)
@@ -500,10 +513,13 @@ def test_final_only_after_tools_and_error_status(tmp_path: Path) -> None:
             assert [item.source for item in app.query(Markdown)] == ["Before the tool.", "After the tool."]
             children = list(app.query_one("#conversation").children)
             assert children.index(app.query_one(ToolCard)) < children.index(list(app.query(".assistant"))[-1])
-            assert app.query_one("#status").has_class("error")
-            assert "Tool failed" in str(app.query_one("#status", Static).content)
+            assert not app.query_one("#status").has_class("error")
+            assert "Tool failed" not in str(app.query_one("#status", Static).content)
             assert "exited 1" not in str(app.query_one("#status", Static).content)
-            assert app.query_one(ToolCard).collapsed
+            card = app.query_one(ToolCard)
+            assert card.collapsed
+            assert card.has_class("failed")
+            assert "Command exited 1" in card.output_text
 
     asyncio.run(scenario())
 
@@ -688,8 +704,13 @@ def test_long_approval_is_scrollable_without_truncating(tmp_path: Path) -> None:
             assert scroll.max_scroll_y > 100
             assert app.screen.request.preview == preview
             assert app.screen.focused is app.screen.query_one("#deny")
-            scroll.scroll_end(animate=False)
-            await pilot.pause()
+            # Focus may still have a queued scroll-visible callback. Settle it
+            # before explicitly scrolling, then wait for the requested position.
+            await pilot.wait_for_scheduled_animations()
+            scroll.scroll_end(animate=False, immediate=True)
+            async with asyncio.timeout(HANG_GUARD):
+                while scroll.scroll_y <= 100:
+                    await pilot.pause()
             assert scroll.scroll_y > 100
             await pilot.press("escape")
             assert not await approval
@@ -812,8 +833,8 @@ def test_background_config_and_visible_tool_states(tmp_path: Path, background: s
             assert app.native_ansi_color is (background == "terminal")
             variables = app.get_css_variables()
             for state, token in (
-                ("running", "tool"),
-                ("complete", "success"),
+                ("running", "muted"),
+                ("complete", "muted"),
                 ("failed", "error"),
                 ("cancelled", "warning"),
             ):
@@ -838,7 +859,7 @@ def test_background_config_and_visible_tool_states(tmp_path: Path, background: s
             # surface; #rail-activity keeps the native/outside palette.
             for text, state, token in (
                 ("Running", "working", "ngn-message-tool"),
-                ("Ready", "ready", "ngn-message-success"),
+                ("", "ready", "ngn-message-success"),
                 ("Careful", "warning", "ngn-message-warning"),
             ):
                 app._status(text, state=state)
@@ -853,7 +874,13 @@ def test_background_config_and_visible_tool_states(tmp_path: Path, background: s
 
 
 @pytest.mark.parametrize("enabled,level", [(True, "full"), (False, "full"), (True, "none")])
-def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path, enabled: bool, level: str) -> None:
+def test_motion_preference_covers_activity_and_textual_scrolling(
+    tmp_path: Path, enabled: bool, level: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sending through Pilot may take more than a second under load. Keep the
+    # app's elapsed clock stable without freezing Textual's real animator clock.
+    monkeypatch.setattr("nagents.tui.app.monotonic", lambda: 100.0)
+
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
         backend.config.animations = enabled
@@ -871,8 +898,8 @@ def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path,
             app._status("Working")
             app._animate_activity()
             status = str(app.query_one("#status", Static).content)
-            assert status.endswith("Working")
-            assert (status != "Working") is expected_motion
+            assert len(status[:7]) == 7 and status[7] == " "
+            assert status[8:].startswith(f"{backend.config.agent} · Working · 00:00")
             conversation = app.query_one("#conversation", VerticalScroll)
             conversation.scroll_home(animate=False, immediate=True)
             assert conversation.max_scroll_y > 1
@@ -889,12 +916,12 @@ def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path,
             await conversation.stop_animation("scroll_y")
             app._status("Failure", error=True)
             app._animate_activity()
-            assert str(app.query_one("#status", Static).content) == "Failure"
+            assert str(app.query_one("#status", Static).content)[8:] == f"{backend.config.agent} · Failure"
             await pilot.press("escape")
             await idle(app, pilot)
-            app._status("Ready")
+            app._status("", state="ready")
             app._animate_activity()
-            assert str(app.query_one("#status", Static).content) == "Ready"
+            assert str(app.query_one("#status", Static).content)[8:] == backend.config.agent
 
             model = ModelModal(backend.config.model)
             await app.push_screen(model)

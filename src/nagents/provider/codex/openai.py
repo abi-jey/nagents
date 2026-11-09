@@ -28,6 +28,9 @@ from typing import cast
 
 import aiohttp
 
+from ...adapters._additional_tools import AdditionalToolsUnsupported
+from ...adapters._additional_tools import ToolTimeline
+from ...adapters._additional_tools import rejects_additional_tools
 from ...adapters._reasoning import SummaryAccumulator
 from ...adapters._tool_progress import ToolCallProgressTracker
 from ...adapters._validation import ProtocolError
@@ -683,10 +686,49 @@ class OpenAIProvider(Provider):
             async for generated in super().generate(messages, tools, config, stream, verify_model):
                 yield generated
             return
+        for fallback in (False, True):
+            try:
+                async for generated in self._generate_codex(messages, tools, config, stream, fallback=fallback):
+                    yield generated
+                return
+            except AdditionalToolsUnsupported:
+                if fallback:
+                    raise
+                self._responses_tools_unsupported.add((CODEX_ENDPOINT, self.model))
+
+    async def _generate_codex(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None,
+        config: GenerationConfig | None,
+        stream: bool,
+        *,
+        fallback: bool,
+    ) -> AsyncGenerator[Event, None]:
         started = monotonic()
         phase: FailurePhase = "request"
+        cache_key = self._conversation_cache.key(CODEX_ENDPOINT, self.model, self._http.session_id)
         try:
             body = _request_body(self.model, messages, tools, config)
+            # ChatGPT derives cache affinity from session-id, independently of
+            # the optional custom session header configured for API gateways.
+            if self._http.session_id:
+                body["prompt_cache_key"] = self._http.session_id
+            route = (CODEX_ENDPOINT, self.model)
+            timeline_key = (*route, self._http.session_id)
+            if (
+                not fallback
+                and route not in self._responses_tools_unsupported
+                and self.model.removesuffix("-latest") in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"}
+            ):
+                if timeline_key not in self._responses_tool_timelines:
+                    if len(self._responses_tool_timelines) >= 128:
+                        self._responses_tool_timelines.pop(next(iter(self._responses_tool_timelines)))
+                    self._responses_tool_timelines[timeline_key] = ToolTimeline()
+                self._responses_tool_timelines[timeline_key].apply(body)
+            has_additions = any(
+                isinstance(item, dict) and item.get("type") == "additional_tools" for item in list_data(body["input"])
+            )
         except (TypeError, ValueError) as error:
             message = str(error) if isinstance(error, _ProtocolError) else "Codex request data is invalid."
             yield ErrorEvent(message=message, code="CODEX_REQUEST_INVALID")
@@ -727,6 +769,9 @@ class OpenAIProvider(Provider):
         progress = ToolCallProgressTracker()
         try:
             headers.update(self._session_headers())
+            if self._http.session_id:
+                headers["session-id"] = self._http.session_id
+                headers["thread-id"] = self._http.session_id
             async with (
                 aiohttp.ClientSession(
                     timeout=aiohttp.ClientTimeout(total=self._timeout),
@@ -737,6 +782,8 @@ class OpenAIProvider(Provider):
                 client.post(CODEX_ENDPOINT, json=body, headers=headers, allow_redirects=False) as response,
             ):
                 phase = "response"
+                if has_additions:
+                    await GatewayHTTPClient._check_additional_tools(response, body)
                 if response.status != 200:
                     messages_by_status = {
                         401: "ChatGPT login expired or was rejected; sign in again with /login.",
@@ -764,8 +811,17 @@ class OpenAIProvider(Provider):
                 summaries = SummaryAccumulator(streaming=stream)
                 completed = False
                 usage = Usage()
+                received = False
                 async for event in _sse(response):
                     kind = _string(event.get("type"))
+                    if (
+                        has_additions
+                        and not received
+                        and kind == "error"
+                        and rejects_additional_tools(event.get("error", event))
+                    ):
+                        raise AdditionalToolsUnsupported()
+                    received = True
                     if kind in {"error", "response.failed", "response.incomplete", "response.cancelled"}:
                         descriptions = {
                             "error": "Codex reported a failed response; no tool calls were released. Retry the request.",
@@ -941,6 +997,8 @@ class OpenAIProvider(Provider):
                 for text_key, text in texts.items():
                     if final_texts.get(text_key) != text:
                         raise _ProtocolError("Codex terminal output did not match streamed text.")
+            # Count only fully validated responses, not repeated text/tool usage.
+            self._record_conversation_cache(cache_key, usage)
             # Finish network cleanup before releasing executable calls.
             for summary_event in summaries.finish():
                 summary_event.usage = usage

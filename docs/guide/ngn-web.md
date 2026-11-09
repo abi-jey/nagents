@@ -243,7 +243,7 @@ connection remain mounted while navigating settings. Microphone and speaker
 choices are local to the browser, separate from reusable agent preferences.
 
 **Overview** shows saved effective values and their sources. **Instructions**
-edits the full assistant prompt, replacing the packaged coding policy. Loaded
+edits the full assistant prompt, replacing the packaged assistant policy. Loaded
 workspace `AGENTS.md` context and runtime capability/permission messages still
 apply and remain inspectable. The inherited text is visible in the editor;
 **Customize** copies it into an editable draft, while inheritance restores the
@@ -1876,7 +1876,7 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `shell_timeout` | Finite number greater than 0 and at most 600 seconds |
 | `max_output` | Integer, 1,024 through 1,048,576 **bytes of tool output**, not model tokens |
 | `max_file_bytes` | Integer, 1,024 through 4,194,304 bytes |
-| `max_tool_rounds` | Integer, 1 through 1,000 |
+| `max_tool_rounds` | Integer, 1 through 3,000 |
 | `max_subagent_depth` | Integer, 0 through 8; root depth is 0 |
 | `compact_trigger` | One of `auto` (provider default), `tokens`, `messages`, or `off` |
 | `compact_tokens` | Integer, 1,024 through 10,000,000; the total context window used when `compact_trigger` is `tokens` |
