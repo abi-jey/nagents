@@ -704,8 +704,13 @@ def test_long_approval_is_scrollable_without_truncating(tmp_path: Path) -> None:
             assert scroll.max_scroll_y > 100
             assert app.screen.request.preview == preview
             assert app.screen.focused is app.screen.query_one("#deny")
-            scroll.scroll_end(animate=False)
-            await pilot.pause()
+            # Focus may still have a queued scroll-visible callback. Settle it
+            # before explicitly scrolling, then wait for the requested position.
+            await pilot.wait_for_scheduled_animations()
+            scroll.scroll_end(animate=False, immediate=True)
+            async with asyncio.timeout(HANG_GUARD):
+                while scroll.scroll_y <= 100:
+                    await pilot.pause()
             assert scroll.scroll_y > 100
             await pilot.press("escape")
             assert not await approval
