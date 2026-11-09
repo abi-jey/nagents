@@ -156,6 +156,13 @@ def test_ctrl_c_quits_without_waiting_for_animated_close(size: tuple[int, int]) 
     asyncio.run(scenario())
 
 
+@pytest.fixture(autouse=True)
+def driven_demo_timers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every lifecycle test advances _tick explicitly. Real timer callbacks can
+    # otherwise advance beyond the phase being asserted during a slow key event.
+    monkeypatch.setattr(StateFieldDemo, "set_interval", lambda *args, **kwargs: None)
+
+
 @pytest.mark.parametrize("size", [(60, 20), (80, 24), (132, 38)])
 def test_enabled_brand_intro_versions_then_enters_sweep(size: tuple[int, int]) -> None:
     async def scenario() -> None:
