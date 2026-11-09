@@ -69,7 +69,13 @@ def test_quiet_demo_footer_and_controls(effect: str, size: tuple[int, int]) -> N
 
 
 @pytest.mark.parametrize("effect", EFFECTS)
-def test_startup_effect_fades_out_and_can_be_replayed_or_quit(effect: str) -> None:
+def test_startup_effect_fades_out_and_can_be_replayed_or_quit(effect: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Pilot.press waits for the message queue to settle. On a busy runner that
+    # may outlast the entire 1.2-second intro, so control the demo's clock rather
+    # than assuming an active frame survives until press returns.
+    clock = [100.0]
+    monkeypatch.setattr("examples.tui_motion_v2.monotonic", lambda: clock[0])
+
     async def scenario() -> None:
         selected = next(value for value in EFFECTS if value == effect)
         app = QuietMotion(selected, theme="graphite")
@@ -77,10 +83,31 @@ def test_startup_effect_fades_out_and_can_be_replayed_or_quit(effect: str) -> No
             await pilot.pause()
             await pilot.press("0")
             assert app.query_one("#intro").display
-            await pilot.pause(1.5)
+            clock[0] += 1.0
+            app._tick()
+            assert app._intro_fading
+            assert app.query_one("#intro").display
+            clock[0] += 0.3
+            app._tick()
             assert not app.query_one("#intro").display
             await pilot.press("0")
             assert app.query_one("#intro").display
             await pilot.press("q")
+
+    asyncio.run(scenario())
+
+
+def test_startup_effect_timer_hides_expired_intro() -> None:
+    async def scenario() -> None:
+        app = QuietMotion("shimmer", theme="graphite")
+        async with app.run_test(size=(80, 24)):
+            # Start synchronously: unlike Pilot.press this cannot yield past
+            # the active frame before we assert it. The real timer must expire it.
+            app.action_intro()
+            assert app.query_one("#intro").display
+            async with asyncio.timeout(10):
+                while app.query_one("#intro").display:
+                    await asyncio.sleep(0.05)
+            assert not app.query_one("#intro").display
 
     asyncio.run(scenario())
