@@ -1,6 +1,6 @@
 [project]
 name = "nagents"
-version = "0.25.4"
+version = "0.26.0"
 description = "A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration"
 readme = "README.md"
 license = "MIT"
@@ -51,10 +51,6 @@ check_untyped_defs = true
 mypy_path = "src"
 ignore_missing_imports = true
 
-[tool.pytest.ini_options]
-asyncio_default_fixture_loop_scope = "function"
-filterwarnings = [ "error::DeprecationWarning",]
-
 [tool.ruff.lint]
 select = [ "E", "F", "I", "UP", "B", "SIM", "TCH", "RUF",]
 fixable = [ "ALL",]
@@ -62,6 +58,10 @@ ignore = [ "E501",]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [ "error::DeprecationWarning",]
 
 [tool.hatch.build]
 artifacts = [ "/src/nagents/web/static/**", "/src/nagents/skills/bundled/**", "/src/nagents/harness/instructions/*.md", "/src/nagents/web/instructions/*.md",]
