@@ -305,13 +305,42 @@ def test_conflict_during_claim_startup_settles_reserved_lane(
             pytest.fail("A conflicted root must be rejected before provider execution")
             yield TextDoneEvent(text="unreachable")
 
+        execute_claim = app.state.channels.execute_claim
+        allow_return = asyncio.Event()
+        claims: list[asyncio.Task[None]] = []
+
+        async def delayed_return(work: Work, started: asyncio.Event) -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            claims.append(task)
+            await execute_claim(work, started)
+            # Make the CI scheduling window deterministic: lane cleanup can be
+            # visible before the owning task has returned from its final join.
+            async with asyncio.timeout(HANG_GUARD):
+                await allow_return.wait()
+
         monkeypatch.setattr(store, "validate_work", conflicting_validation)
+        monkeypatch.setattr(app.state.channels, "execute_claim", delayed_return)
         app.providers[0].script = unexpected_model
         app.emit("Conflict at startup")
-        app.idle()  # Shared watchdog bounds claim, producer and finalizer progress.
+        app.idle()  # Durable/lane idle is not an owning-task completion barrier.
         assert len(reserved) == 1
         run = reserved[0]
-        assert run.finished and run.outcome == "failed" and run.task.done()
+        assert run.finished and run.outcome == "failed"
+        assert len(claims) == 1
+        claim = claims[0]
+        assert not claim.done()
+
+        async def join_claim() -> None:
+            allow_return.set()
+            async with asyncio.timeout(HANG_GUARD):
+                # execute_work may replace run.task with its producer task;
+                # the outer claim owns the durable finalizer in both cases.
+                await asyncio.shield(claim)
+
+        assert app.client.portal is not None
+        app.client.portal.call(join_claim)
+        assert claim.done() and run.task.done()
         assert not app.state.executions.runs
         assert not app.state.channels.work_tasks and not app.state.channels.work_cleanup
         assert not app.state.channels.activities.sources and not app.state.channels.activities.current
