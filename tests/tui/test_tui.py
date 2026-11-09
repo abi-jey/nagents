@@ -874,7 +874,13 @@ def test_background_config_and_visible_tool_states(tmp_path: Path, background: s
 
 
 @pytest.mark.parametrize("enabled,level", [(True, "full"), (False, "full"), (True, "none")])
-def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path, enabled: bool, level: str) -> None:
+def test_motion_preference_covers_activity_and_textual_scrolling(
+    tmp_path: Path, enabled: bool, level: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sending through Pilot may take more than a second under load. Keep the
+    # app's elapsed clock stable without freezing Textual's real animator clock.
+    monkeypatch.setattr("nagents.tui.app.monotonic", lambda: 100.0)
+
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
         backend.config.animations = enabled
