@@ -906,7 +906,10 @@ def test_shell_streams_bounded_output_and_timeout(config: HarnessConfig) -> None
     )
 
     async def scenario() -> None:
-        harness = Harness(replace(config, max_output=1024, shell_timeout=1.0))
+        # Output truncation must not depend on starting a fresh Python process
+        # within one second on a loaded runner. Test the short deadline below
+        # with an explicit timeout, separately from successful output streaming.
+        harness = Harness(replace(config, max_output=1024, shell_timeout=30.0))
         harness.approval_handler = approve
         harness.agent.provider = ScriptedProvider(
             [
@@ -926,7 +929,7 @@ def test_shell_streams_bounded_output_and_timeout(config: HarnessConfig) -> None
             timeout = await harness.tools.shell("sleep 10", timeout=0.05)
             assert timeout["timed_out"] and timeout["exit_code"] != 0
             with pytest.raises(ValueError, match="timeout"):
-                await harness.tools.shell("exit 0", timeout=2)
+                await harness.tools.shell("exit 0", timeout=31)
         finally:
             await harness.close()
 
