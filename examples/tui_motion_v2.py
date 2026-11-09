@@ -125,6 +125,10 @@ class QuietMotion(App[None]):
         )
 
     def _tick(self) -> None:
+        # App-owned timers can be dispatched while shutdown removes the screen
+        # children, before Textual closes the app's message pump.
+        if not self.is_running or self._exit:
+            return
         now = monotonic()
         self.state.advance(now)
         elapsed = now - self.state.started

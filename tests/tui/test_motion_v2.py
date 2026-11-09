@@ -97,6 +97,25 @@ def test_startup_effect_fades_out_and_can_be_replayed_or_quit(effect: str, monke
     asyncio.run(scenario())
 
 
+def test_demo_tick_does_not_query_widgets_during_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        app = QuietMotion("shimmer", theme="graphite")
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.exit()
+
+            # Reproduce an already-dispatched timer arriving after exit starts.
+            # Querying even a cached widget is unsafe as screen teardown proceeds.
+            def unexpected_query(*args: object, **kwargs: object) -> None:
+                pytest.fail("A shutdown tick must not query the removed screen")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(app, "query_one", unexpected_query)
+                app._tick()
+
+    asyncio.run(scenario())
+
+
 def test_startup_effect_timer_hides_expired_intro() -> None:
     async def scenario() -> None:
         app = QuietMotion("shimmer", theme="graphite")
