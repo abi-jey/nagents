@@ -8,6 +8,19 @@ import textual.timer
 from nagents.tui.timing import configure_timer_sleep
 
 
+def test_timer_configuration_survives_missing_package_attribute(monkeypatch: pytest.MonkeyPatch) -> None:
+    from importlib import import_module
+
+    import textual
+
+    timer = import_module("textual.timer")
+    monkeypatch.setattr(timer, "sleep", vars(timer)["sleep"])
+    monkeypatch.delattr(textual, "timer", raising=False)
+    monkeypatch.setattr("nagents.tui.timing.sys.platform", "win32")
+    configure_timer_sleep()
+    assert vars(timer)["sleep"] is asyncio.sleep
+
+
 @pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
 def test_timer_sleep_platform_boundary(monkeypatch: pytest.MonkeyPatch, platform: str) -> None:
     original = vars(textual.timer)["sleep"]
