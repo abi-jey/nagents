@@ -319,6 +319,9 @@ def test_pane_focus_and_tool_keyboard_navigation(tmp_path: Path, size: tuple[int
             # Compact one-row cards need enough entries to overflow tall viewports.
             for index in range(60):
                 await app._event(ToolCallEvent(id=str(index), name="read_file", arguments={"path": f"file{index}"}))
+                # Navigation needs overflow and stable cards, not sixty live
+                # shimmer/timer loops. Dedicated tests cover live animation.
+                await app._event(ToolResultEvent(id=str(index), name="read_file", result="saved contents"))
             await pilot.pause()
             composer = app.query_one(Composer)
             composer.load_text("unsent draft")
