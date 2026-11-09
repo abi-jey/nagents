@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from importlib import import_module
 
 
 def configure_timer_sleep() -> None:
@@ -14,6 +15,5 @@ def configure_timer_sleep() -> None:
     POSIX timing remains unchanged.
     """
     if sys.platform == "win32":
-        import textual.timer
-
-        textual.timer.sleep = asyncio.sleep
+        timer = import_module("textual.timer")
+        timer.sleep = asyncio.sleep

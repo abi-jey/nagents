@@ -391,7 +391,11 @@ def test_busy_agent_keeps_draft_when_command_cannot_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("animated", [False, True])
-def test_status_uses_agent_label_when_idle_and_work_label_when_busy(tmp_path: Path, animated: bool) -> None:
+def test_status_uses_agent_label_when_idle_and_work_label_when_busy(
+    tmp_path: Path, animated: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nagents.tui.app.monotonic", lambda: 100.0)
+
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
         backend.config.animations = animated
