@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from nagents.live.delegation import LiveAppendKind
     from nagents.types import Message
     from nagents.web.http.routing import ChatOwner
+    from nagents.web.http.routing import Work
     from tests.support.channels import FakeChannel
     from tests.support.channels import Site
 
@@ -172,6 +173,7 @@ def test_auto_reply_never_grants_outside_verified_source_or_original_callable(
         app.configure(auto_reply=case != "opt-out")
         app.configure("other-connection", auto_reply=True)
         invoked: list[str] = []
+        attempts: list[Run] = []
 
         async def replacement(
             channel: str, destination: str, text: str, thread_id: str = "", reply_to: str = ""
@@ -186,6 +188,7 @@ def test_auto_reply_never_grants_outside_verified_source_or_original_callable(
             state = app.state
             active = state.active
             assert active is not None
+            attempts.append(active)
             arguments = {"channel": "fixture", "destination": "chat-a", "text": "reply", "thread_id": "origin-thread"}
             tool = "channel_send"
             if case == "disabled":
@@ -252,6 +255,73 @@ def test_auto_reply_never_grants_outside_verified_source_or_original_callable(
         app.idle()
         assert not automatic_events(app)
         assert not invoked and all(not channel.deliveries for channel in app.channels)
+        assert len(attempts) == 1  # A startup failure must not masquerade as approval denial.
+        run = attempts[0]
+        assert run.finished and run.task.done() and run.pending is None
+        assert run.harness is not None and run.harness._worker is None and run.harness._queue is None
+        assert not app.state.executions.runs
+        assert not app.state.channels.work_tasks and not app.state.channels.work_cleanup
+        assert not app.state.channels.activities.sources and not app.state.channels.activities.current
+        if case == "conflicted":
+            # The denied tool result is persisted, then before_model rejects the
+            # now-quarantined root. That exception must settle the durable claim.
+            assert run.outcome == "failed"
+            assert run.work is not None
+            work_id = run.work.id
+            assert app.client.portal is not None
+            rows = app.client.portal.call(
+                app.state.channels.store._transaction,
+                lambda db: db.execute("SELECT status FROM ngn_web_inbox WHERE id = ?", (work_id,)).fetchall(),
+            )
+            assert rows == [("failed",)]
+            assert all(not task.done() for task in app.state.channels.tasks)
+
+
+@pytest.mark.parametrize("conflict_after_validation", [False, True])
+def test_conflict_during_claim_startup_settles_reserved_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conflict_after_validation: bool
+) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        app.configure(auto_reply=True)
+        store = app.state.channels.store
+        validate = store.validate_work
+        reserved: list[Run] = []
+
+        async def conflicting_validation(work: Work) -> None:
+            run = app.state.run_for(work.session_id)
+            assert run is not None
+            reserved.append(run)
+            if conflict_after_validation:
+                await validate(work)
+            await store._transaction(
+                lambda db: db.execute(
+                    "UPDATE ngn_web_session_owners SET conflicted = 1 WHERE session_id = ?", (work.session_id,)
+                ).close()
+            )
+            if not conflict_after_validation:
+                await validate(work)
+
+        async def unexpected_model(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            pytest.fail("A conflicted root must be rejected before provider execution")
+            yield TextDoneEvent(text="unreachable")
+
+        monkeypatch.setattr(store, "validate_work", conflicting_validation)
+        app.providers[0].script = unexpected_model
+        app.emit("Conflict at startup")
+        app.idle()  # Shared watchdog bounds claim, producer and finalizer progress.
+        assert len(reserved) == 1
+        run = reserved[0]
+        assert run.finished and run.outcome == "failed" and run.task.done()
+        assert not app.state.executions.runs
+        assert not app.state.channels.work_tasks and not app.state.channels.work_cleanup
+        assert not app.state.channels.activities.sources and not app.state.channels.activities.current
+        assert not automatic_events(app) and not app.channels[0].deliveries
+        assert app.client.portal is not None
+        rows = app.client.portal.call(
+            store._transaction, lambda db: db.execute("SELECT status FROM ngn_web_inbox").fetchall()
+        )
+        assert rows == [("failed",)]
+        assert all(not task.done() for task in app.state.channels.tasks)
 
 
 def test_owned_session_web_turn_with_spoofed_source_text_cannot_send_to_foreign_chat(

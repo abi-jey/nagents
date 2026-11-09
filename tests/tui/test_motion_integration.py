@@ -25,8 +25,10 @@ from nagents.harness.agents.subagents import TaskInfo
 from nagents.harness.types import ApprovalRequest
 from nagents.harness.types import TaskActivity
 from nagents.tui import NagentsApp
+from nagents.tui.screens import ApprovalModal
 from nagents.tui.tasks import AgentTree
 from nagents.types import Message
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.tui import FakeHarness
 from tests.support.tui import idle
 from tests.support.tui import make_app
@@ -69,21 +71,36 @@ def test_main_state_tracks_events_approval_and_cancellation(tmp_path: Path) -> N
             approval = asyncio.create_task(
                 app.request_approval(ApprovalRequest("approval-1", "write_file", "Review", {}))
             )
-            await pilot.pause(0.05)
-            assert current_state() == "approval"
-            await pilot.click("#deny")
-            assert await approval is False
-            assert current_state() == "working"
+            try:
+                # The motion field changes before push_screen has mounted and
+                # laid out the modal. A fixed sleep can click stale geometry on
+                # a loaded runner, leaving the decision future pending forever.
+                async with asyncio.timeout(HANG_GUARD):
+                    while not isinstance(app.screen, ApprovalModal) or not app.screen.is_mounted:
+                        await pilot.pause(0)
+                    await pilot.pause(0)
+                    assert current_state() == "approval"
+                    assert await pilot.click("#deny")
+                    assert await approval is False
+                assert current_state() == "working"
+            finally:
+                # A failed input/assertion must not leave an orphaned approval
+                # task waiting for a screen that run_test is about to remove.
+                approval.cancel()
+                await asyncio.gather(approval, return_exceptions=True)
 
             await app._event(ErrorEvent(message="Provider unavailable"))
             assert current_state() == "error"
 
             await send(app, pilot, "wait")
-            await pilot.pause()
-            assert current_state() == "responding"
-            await pilot.press("escape")
-            await idle(app, pilot)
+            async with asyncio.timeout(HANG_GUARD):
+                while current_state() != "responding":
+                    await pilot.pause(0)
+                assert backend.running
+                await pilot.press("escape")
+                await idle(app, pilot)
             assert current_state() == "idle"
+            assert backend.cancelled and not backend.running
 
     asyncio.run(scenario())
 
