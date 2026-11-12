@@ -106,7 +106,7 @@ class VoiceSettingsModal(ModalScreen[VoiceEdits]):
                     markup=False,
                 )
             yield Static(
-                "Only changed fields are overridden. Reset restores inheritance; prompts are preserved.",
+                "Changed fields only · Reset = inherit",
                 classes="dialog-hint",
                 markup=False,
             )
@@ -115,6 +115,9 @@ class VoiceSettingsModal(ModalScreen[VoiceEdits]):
                 if scope != "global":
                     yield Button("Reset", id="voice-reset")
                 yield Button("Save", id="voice-save", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#voice-enabled", Switch).focus()
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:

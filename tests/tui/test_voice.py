@@ -267,6 +267,10 @@ def test_voice_settings_use_shared_cas_and_preserve_inheritance_and_prompt(
             await app.push_screen(modal, edits.append)
             await pilot.pause()
             assert modal.query_one("#voice-save").region.bottom <= size[1]
+            enabled = modal.query_one("#voice-enabled", Switch)
+            viewport = modal.query_one("#voice-settings-content").region
+            assert viewport.y <= enabled.region.y and enabled.region.bottom <= viewport.bottom
+            assert modal.focused is enabled
             modal.query_one("#voice-enabled", Switch).value = False
             assert await pilot.click("#voice-save")
             await pilot.pause()
