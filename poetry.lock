@@ -242,7 +242,7 @@ description = "An implementation of Interactive Connectivity Establishment (RFC 
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "aioice-0.10.2-py3-none-any.whl", hash = "sha256:14911c15ab12d096dd14d372ebb4aecbb7420b52c9b76fdfcf54375dec17fcbf"},
     {file = "aioice-0.10.2.tar.gz", hash = "sha256:bf236c6829ee33c8e540535d31cd5a066b531cb56de2be94c46be76d68b1a806"},
@@ -288,7 +288,7 @@ description = "An implementation of WebRTC and ORTC"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "aiortc-1.15.0-py3-none-any.whl", hash = "sha256:4e1e54bff31a9c2cb654c7b7edc068085a7df53365e5df24a5cb24168e3f95f7"},
     {file = "aiortc-1.15.0.tar.gz", hash = "sha256:ee6c0757ca070cf6d6bee441936d6ede24eef51211bbff6653409c540f72e625"},
@@ -345,7 +345,7 @@ description = "Document parameters, class attributes, return types, and variable
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\""
 files = [
     {file = "annotated_doc-0.0.5-py3-none-any.whl", hash = "sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101"},
     {file = "annotated_doc-0.0.5.tar.gz", hash = "sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb"},
@@ -358,7 +358,7 @@ description = "Reusable constraint types to use with typing.Annotated"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\" or extra == \"a2a\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\" or extra == \"a2a\""
 files = [
     {file = "annotated_types-0.8.0-py3-none-any.whl", hash = "sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"},
     {file = "annotated_types-0.8.0.tar.gz", hash = "sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7"},
@@ -371,7 +371,7 @@ description = "High-level concurrency and networking framework on top of asyncio
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"a2a\" or extra == \"web\""
+markers = "extra == \"dev\" or extra == \"a2a\" or extra == \"web\" or extra == \"voice\""
 files = [
     {file = "anyio-4.15.1-py3-none-any.whl", hash = "sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101"},
     {file = "anyio-4.15.1.tar.gz", hash = "sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94"},
@@ -471,7 +471,7 @@ description = "Pythonic bindings for FFmpeg's libraries."
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "av-17.1.0-cp310-cp310-macosx_11_0_x86_64.whl", hash = "sha256:19c84fd72af5ef81a20f18fbc6f9aedff9e1455e53a7062c1d4c95926d73da4e"},
     {file = "av-17.1.0-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:19264c9bb4bee404accc7ce9ec461f2044b7f577a70234d29aafde31ed17de46"},
@@ -1119,7 +1119,7 @@ files = [
     {file = "cryptography-50.0.1-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:693c99b49bd37d0d096e4334c10232c77248c415b98d35236094cdf96d57258b"},
     {file = "cryptography-50.0.1.tar.gz", hash = "sha256:5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20"},
 ]
-markers = {main = "extra == \"dev\" or extra == \"a2a\" or extra == \"web\""}
+markers = {main = "extra == \"dev\" or extra == \"a2a\" or extra == \"web\" or extra == \"voice\""}
 
 [package.dependencies]
 cffi = {version = ">=2.0.0", markers = "platform_python_implementation != \"PyPy\""}
@@ -1204,7 +1204,7 @@ description = "DNS toolkit"
 optional = true
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "dnspython-2.9.0-py3-none-any.whl", hash = "sha256:9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9"},
     {file = "dnspython-2.9.0.tar.gz", hash = "sha256:b44dc6b18f07a8b1c56676a19fbfdb5209415b046a9cece286baafa87ff3f7f1"},
@@ -1242,7 +1242,7 @@ description = "FastAPI framework, high performance, easy to learn, fast to code,
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\""
 files = [
     {file = "fastapi-0.162.2-py3-none-any.whl", hash = "sha256:d0584f9662317e01140df94c64f4bed1d8b059fe35496e30c9c92f70e6e5ff15"},
     {file = "fastapi-0.162.2.tar.gz", hash = "sha256:9ebd2a69b579141315b2447d8e3f518e6fd909abd6c01cac5cc6b06d5c8841f4"},
@@ -1500,7 +1500,7 @@ description = "A python wrapper of the C library 'Google CRC32C'"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "google_crc32c-1.9.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:e6b529a6a287104ec79d281c411685231200ce954a29c28ab8e5093cb6e130fb"},
     {file = "google_crc32c-1.9.0-cp310-cp310-macosx_12_0_x86_64.whl", hash = "sha256:51cb4e23a38ad4f495f35f87c233ca3ea6b9c4559e7ac383cdef786fab0f7977"},
@@ -1735,7 +1735,7 @@ description = "Cross-platform network interface and IP address enumeration libra
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "ifaddr-0.2.0-py3-none-any.whl", hash = "sha256:085e0305cfe6f16ab12d72e2024030f5d52674afad6911bb1eee207177b8a748"},
     {file = "ifaddr-0.2.0.tar.gz", hash = "sha256:cc0cbfcaabf765d44595825fb96a99bb12c79716b73b44330ea38ee2b0c4aed4"},
@@ -2772,7 +2772,7 @@ description = "OpenTelemetry Python API"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\" or extra == \"a2a\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\" or extra == \"a2a\""
 files = [
     {file = "opentelemetry_api-1.45.1-py3-none-any.whl", hash = "sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb"},
     {file = "opentelemetry_api-1.45.1.tar.gz", hash = "sha256:aa38ed19bcc084ba42782a73255b3582283eced7ad6dddbd6695189e69adfb75"},
@@ -3097,7 +3097,7 @@ description = "Data validation using Python type hints"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\" or extra == \"a2a\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\" or extra == \"a2a\""
 files = [
     {file = "pydantic-2.13.5-py3-none-any.whl", hash = "sha256:346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73"},
     {file = "pydantic-2.13.5.tar.gz", hash = "sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08"},
@@ -3120,7 +3120,7 @@ description = "Core functionality for Pydantic validation and serialization"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\" or extra == \"a2a\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\" or extra == \"a2a\""
 files = [
     {file = "pydantic_core-2.46.5-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:657b40d6240c0a7b6a64b30f22d1e3aa631c7e846c621b0c0f6d1d75e2e15ea6"},
     {file = "pydantic_core-2.46.5-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:ecb42011e12ee19cafbc312887cbf3546959fe02fbad44f272d4be5baa997615"},
@@ -3254,7 +3254,7 @@ description = "A rough port of Node.js's EventEmitter to Python with a few trick
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "python_version < \"3.15\" and extra == \"web\""
+markers = "python_version < \"3.15\" and (extra == \"web\" or extra == \"voice\")"
 files = [
     {file = "pyee-13.0.1-py3-none-any.whl", hash = "sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228"},
     {file = "pyee-13.0.1.tar.gz", hash = "sha256:0b931f7c14535667ed4c7e0d531716368715e860b988770fc7eb8578d1f67fc8"},
@@ -3273,7 +3273,7 @@ description = "A rough port of Node.js's EventEmitter to Python with a few trick
 optional = true
 python-versions = ">=3.12"
 groups = ["main"]
-markers = "python_version >= \"3.12\" and extra == \"web\""
+markers = "python_version >= \"3.12\" and (extra == \"web\" or extra == \"voice\")"
 files = [
     {file = "pyee-14.0.0-py3-none-any.whl", hash = "sha256:3ac2d3229a9677f7de2c33d7f52fe25b638a46b19c413fea2edc8c6d0a644e4d"},
     {file = "pyee-14.0.0.tar.gz", hash = "sha256:76dd0f4314ecd27f02dc73589dea7fd3853f9b6176d8ef9b122860657e3602de"},
@@ -3324,7 +3324,7 @@ description = "Python wrapper around the libsrtp library"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "pylibsrtp-1.0.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:822c30ea9e759b333dc1f56ceac778707c51546e97eb874de98d7d378c000122"},
     {file = "pylibsrtp-1.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:aaad74e5c8cbc1c32056c3767fea494c1e62b3aea2c908eda2a1051389fdad76"},
@@ -3373,7 +3373,7 @@ description = "Python wrapper module around the OpenSSL library"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"web\""
+markers = "extra == \"web\" or extra == \"voice\""
 files = [
     {file = "pyopenssl-26.4.0-py3-none-any.whl", hash = "sha256:f0eb0cb2d581d3ad2b9c489468485e7f2ab6727d08401bcf9d824c3caddf3c1c"},
     {file = "pyopenssl-26.4.0.tar.gz", hash = "sha256:28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7"},
@@ -3773,7 +3773,7 @@ description = "The little ASGI library that shines."
 optional = true
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\" or extra == \"a2a\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\" or extra == \"a2a\""
 files = [
     {file = "starlette-1.10.0-py3-none-any.whl", hash = "sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4"},
     {file = "starlette-1.10.0.tar.gz", hash = "sha256:b8399098d4c1e3522734f7235dc79b1fc967f96cf139c81e0fa30479e0685f9b"},
@@ -3847,7 +3847,7 @@ files = [
     {file = "typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"},
     {file = "typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5"},
 ]
-markers = {main = "python_version <= \"3.14\" and (extra == \"dev\" or extra == \"a2a\" or extra == \"web\" or extra == \"tui\") or python_version < \"3.13\" or extra == \"dev\" or extra == \"web\" or extra == \"a2a\" or extra == \"tui\""}
+markers = {main = "python_version <= \"3.14\" and (extra == \"dev\" or extra == \"a2a\" or extra == \"web\" or extra == \"voice\" or extra == \"tui\") or python_version < \"3.13\" or extra == \"dev\" or extra == \"web\" or extra == \"voice\" or extra == \"a2a\" or extra == \"tui\""}
 
 [[package]]
 name = "typing-inspection"
@@ -3856,7 +3856,7 @@ description = "Runtime typing introspection tools"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"dev\" or extra == \"web\" or extra == \"a2a\""
+markers = "extra == \"dev\" or extra == \"web\" or extra == \"voice\" or extra == \"a2a\""
 files = [
     {file = "typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147"},
     {file = "typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47"},
@@ -4361,10 +4361,10 @@ a2a = ["PyJWT", "a2a-sdk", "uvicorn"]
 dev = ["PyJWT", "a2a-sdk", "fastapi", "httpx", "httpx2", "mypy", "numpy", "numpy", "pre-commit", "pydantic", "pytest", "pytest-asyncio", "pytest-cov", "pytest-xdist", "python-dotenv", "ruff", "sounddevice", "types-PyYAML"]
 docs = ["mkdocs", "mkdocs-material", "mkdocstrings"]
 tui = ["textual"]
-voice = ["sounddevice"]
+voice = ["aiortc", "fastapi", "pydantic", "sounddevice"]
 web = ["aiortc", "fastapi", "pydantic", "uvicorn", "websockets"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11, <4.0"
-content-hash = "95d04194b6a766c3e354c7565e25e7504f28343cfffa9780b89b6a7c8f141009"
+content-hash = "64b5c87dde1fbcec05912e7320cfbb05c70337f1a75f21e9aab8f073747307de"

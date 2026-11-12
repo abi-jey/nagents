@@ -100,6 +100,10 @@ from .tasks import TaskScreen
 from .terminal_colors import TerminalColorReported
 from .terminal_colors import TerminalColors
 from .themes import configure_theme
+from .voice import VoicePanel
+from .voice import VoicePrompt
+from .voice_settings import VoiceEdits
+from .voice_settings import VoiceSettingsModal
 from .wakeups import Wakeup
 from .wakeups import Wakeups
 from .widgets import Composer
@@ -136,8 +140,11 @@ if TYPE_CHECKING:
     from nagents.harness.providers.auth import DeviceAuthorization
     from nagents.harness.providers.login import LoginMethod
     from nagents.harness.providers.registry import ProviderProfile
+    from nagents.harness.runtime.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
+
+    from .voice_runtime import TuiVoice
 
 HELP = """KEYBOARD
 Enter                 Send (never sends a multiline paste)
@@ -152,6 +159,7 @@ Esc                   Cancel work; deny an approval
 Ctrl+P                Commands
 Ctrl+N / Ctrl+L       New session / saved sessions
 Ctrl+T                Agent tree / conversations
+Ctrl+G                Start / end Voice (also /voice)
 Mouse text selection  Copy automatically on release
 Ctrl+C                Copy selection; otherwise cancel / exit
 Ctrl+Shift+C           Copy selection without cancelling
@@ -162,6 +170,18 @@ scroll with PgUp/PgDn even while a decision button is focused.
 Scroll up to pause
 following the response; return to the bottom to follow again.
 """
+
+TUI_COMMANDS = (
+    Command(
+        "perf", "TUI/runtime performance diagnostics", source="tui", argument_hint="[on|off|hide|detail] [global|local]"
+    ),
+    Command(
+        "voice",
+        "Live voice, local audio devices and shared Voice settings",
+        source="tui",
+        argument_hint="[start|stop|mute|settings|devices|status]",
+    ),
+)
 
 
 class _AppLifecycle(Lifecycle):
@@ -188,6 +208,7 @@ class NagentsApp(App[None]):
         Binding("ctrl+n", "new_session", "New", priority=True),
         Binding("ctrl+l", "sessions", "Sessions", priority=True),
         Binding("ctrl+t", "tasks", "Agents", priority=True),
+        Binding("ctrl+g", "voice", "Voice", priority=True),
         Binding("ctrl+s", "send_queue", "Send queued", priority=True, show=False),
         Binding("f6", "focus_pane", "Message / conversation", priority=True),
         Binding("escape", "cancel", "Cancel", priority=True),
@@ -275,7 +296,7 @@ class NagentsApp(App[None]):
         self._wakeups = Wakeups()
         self._wake_field = StateField("sleeping", offset=3.4)
         self._owns_wakeups = False
-        self._queued_prompts: deque[str] = deque()
+        self._queued_prompts: deque[str | VoicePrompt] = deque()
         self._queue_paused = False
         self._queue_send_armed = False
         self._task_drafts: dict[str, str] = {}
@@ -298,6 +319,10 @@ class NagentsApp(App[None]):
         self._performance_last_log = monotonic()
         self._performance_last_render = 0.0
         self._performance_timer: Timer | None = None
+        self._voice: TuiVoice | None = None
+        self._voice_jobs: set[asyncio.Task[None]] = set()
+        self._voice_inputs: dict[tuple[str, str], VoicePrompt] = {}
+        self._voice_turns: deque[VoicePrompt] = deque()
 
     @property
     def busy(self) -> bool:
@@ -367,6 +392,7 @@ class NagentsApp(App[None]):
             compose_area.border_title = "Message"
             yield SlashMenu()
             yield Static(id="queue-status", markup=False)
+            yield VoicePanel()
             yield Composer(self.complete)
             with Vertical(id="footer"):
                 yield Static("Starting...", id="status", markup=False)
@@ -705,18 +731,13 @@ class NagentsApp(App[None]):
             if text.startswith("/") and not any(character.isspace() for character in text):
                 menu.update_commands(self._completion_commands(), text[1:])
 
+    def _client_commands(self) -> list[Command]:
+        local = {command.name for command in TUI_COMMANDS}
+        return [command for command in self.harness.commands.list() if command.name not in local] + list(TUI_COMMANDS)
+
     def _completion_commands(self) -> list[Command]:
         return [
-            command
-            for command in self.harness.commands.list()
-            if command.source != "skill" or self._skill_commands_enabled
-        ] + [
-            Command(
-                "perf",
-                "TUI/runtime performance diagnostics",
-                source="tui",
-                argument_hint="[on|off|hide|detail] [global|local]",
-            )
+            command for command in self._client_commands() if command.source != "skill" or self._skill_commands_enabled
         ]
 
     def _hide_completions(self) -> None:
@@ -1215,16 +1236,18 @@ class NagentsApp(App[None]):
             return
         is_command = command.startswith("/")
         name = command.split(maxsplit=1)[0]
-        if is_command:
+        if is_command and name not in {"/voice", "/perf"}:
             name = "/" + self.harness.commands.canonical_name(name[1:])
         custom_command = (
-            is_command and name not in {"/", "/perf"} and all(builtin.name != name[1:] for builtin in BUILTIN_COMMANDS)
+            is_command
+            and name not in {"/", "/perf", "/voice"}
+            and all(builtin.name != name[1:] for builtin in BUILTIN_COMMANDS)
         )
         if (
             self.busy
             and is_command
             and not custom_command
-            and name not in {"/", "/help", "/context", "/plugins", "/tasks", "/queue", "/quit", "/perf"}
+            and name not in {"/", "/help", "/context", "/plugins", "/tasks", "/queue", "/quit", "/perf", "/voice"}
         ):
             self._status("Already working. Esc cancels; your draft is kept.")
             return
@@ -1293,7 +1316,7 @@ class NagentsApp(App[None]):
             hint = "Ctrl+S again: interrupt & send" if self._queue_send_armed else "Ctrl+S: send next"
             lines = []
             for index, prompt in enumerate(self._queued_prompts, start=1):
-                preview = " ".join(prompt.split())
+                preview = " ".join((prompt if isinstance(prompt, str) else "Voice: " + prompt.text).split())
                 prefix = f"{len(self._queued_prompts)} queued ({state})  /  {hint}  /  " if index == 1 else ""
                 lines.append(f"{prefix}{index}. {preview}")
             label.update(Text("\n".join(lines), no_wrap=True, overflow="ellipsis"))
@@ -1304,7 +1327,16 @@ class NagentsApp(App[None]):
         prompt = self._queued_prompts.popleft()
         self._queue_send_armed = False
         self._update_queue()
-        if prompt.lstrip().startswith("/"):
+        if isinstance(prompt, VoicePrompt):
+            if prompt.session_id != self.harness.session_id:
+                prompt.bridge.discard(prompt)
+                self._status("A queued voice request belongs to another session and was not run.", error=True)
+                self.call_later(self._drain_queue)
+                return
+            self._launch(
+                lambda: self._send(prompt.text, voice_prompt=prompt), "Working on voice request  /  Esc to stop"
+            )
+        elif prompt.lstrip().startswith("/"):
             self.command(prompt)
             if not self.busy:
                 self._queue_paused = True
@@ -1312,13 +1344,26 @@ class NagentsApp(App[None]):
         else:
             self._launch(lambda: self._send(prompt), "Working on queued prompt  /  Esc to stop")
 
-    async def _send(self, text: str, *, display_text: str = "", session_id: str = "", wakeup: bool = False) -> None:
+    async def _send(
+        self,
+        text: str,
+        *,
+        display_text: str = "",
+        session_id: str = "",
+        wakeup: bool = False,
+        voice_prompt: VoicePrompt | None = None,
+    ) -> None:
         if not self._backend_ready:
             await self._initialize()
         if not wakeup:
             self._wakeups.human_turn()
         run_id = uuid4().hex
         self._task_note_run = run_id
+        if self._voice is not None:
+            for bridge in self._voice.bridges:
+                bridge.begin(run_id, voice_prompt)
+        if voice_prompt is not None and (self._voice is None or voice_prompt.bridge not in self._voice.bridges):
+            voice_prompt.bridge.begin(run_id, voice_prompt)
         self._cancel_tool_previews()
         self._answer = None
         self._answer_text = ""
@@ -1355,11 +1400,23 @@ class NagentsApp(App[None]):
                         del pending_events[index]
                         break
 
+        cancelled = failed = False
         try:
-            with host_run(self.harness, run_id, observe=pending_events.append):
+            with (
+                host_run(self.harness, run_id, observe=pending_events.append),
+                self.harness.followups.observe(self._voice_turn)
+                if isinstance(self.harness, Harness)
+                else nullcontext(),
+            ):
                 async with aclosing(stream) as events:
                     async for event in events:
                         await join_owned(asyncio.create_task(present(event)))
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        except Exception:
+            failed = True
+            raise
         finally:
             # Closing the stream joins the producer. Recover its bounded tail,
             # including an anchor already dequeued when cancellation arrived.
@@ -1376,6 +1433,12 @@ class NagentsApp(App[None]):
                 }
                 if self._task_note_run == run_id:
                     self._task_note_run = ""
+                if self._voice is not None:
+                    for bridge in self._voice.bridges:
+                        bridge.finish(run_id, cancelled=cancelled, failed=failed)
+                for prompt in self._voice_inputs.values():
+                    prompt.bridge.discard(prompt)
+                self._voice_inputs.clear()
 
     def _task_input(self, session_id: str, prompt: str) -> RunInput:
         identifier = uuid4().hex
@@ -1471,6 +1534,15 @@ class NagentsApp(App[None]):
         return self._tools[call_id]
 
     async def _event(self, event: HarnessEvent) -> None:
+        while self._voice_turns:
+            voice_turn = self._voice_turns.popleft()
+            await self._flush_stream()
+            self._answer = None
+            self._answer_text = self._run_text = ""
+            await self._add(Turn("user", voice_turn.text))
+        if self._voice is not None:
+            for bridge in self._voice.bridges:
+                bridge.event(event)
         if isinstance(event, TaskActivity):
             if event.depth == 1:
                 kind = event.payload.get("type")
@@ -1724,6 +1796,9 @@ class NagentsApp(App[None]):
             if allowed:
                 return True
         previous_screen = self.screen
+        if self._voice is not None:
+            for bridge in self._voice.bridges:
+                bridge.approval(request.tool)
         previous_focus = previous_screen.focused
         self._hide_completions()
         result: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
@@ -1871,6 +1946,14 @@ class NagentsApp(App[None]):
             self.harness.wakeup_handler = None
         self._queued_prompts.clear()
         try:
+            if self._voice is not None:
+                try:
+                    await self._voice.shutdown()
+                except Exception as error:
+                    logger.warning("Voice cleanup could not be confirmed", extra={"error_type": type(error).__name__})
+            for job in self._voice_jobs:
+                job.cancel()
+            await asyncio.gather(*self._voice_jobs, return_exceptions=True)
             if self.screen_stack and isinstance(self.screen, DeviceLoginModal):
                 self.screen.clear_code()
             if self._active is not None:
@@ -1903,13 +1986,15 @@ class NagentsApp(App[None]):
             self._hide_completions()
             commands = [
                 (command.name, f"/{command.name}  {command.description}  [{command.source}]")
-                for command in self.harness.commands.list()
+                for command in self._client_commands()
             ]
             self.push_screen(ChoiceModal("COMMANDS", commands), self._chosen_command)
 
     def _chosen_command(self, command: str | None) -> None:
         if command:
-            selected = self.harness.commands.get(command)
+            selected = next((item for item in TUI_COMMANDS if item.name == command), None) or self.harness.commands.get(
+                command
+            )
             if selected is not None:
                 self._use_command(selected)
 
@@ -2008,7 +2093,11 @@ class NagentsApp(App[None]):
             except ValueError as exc:
                 self._status(str(exc), error=True)
                 return
-            name = "/" + self.harness.commands.canonical_name(command_name)
+            name = "/" + (
+                command_name
+                if command_name in {"voice", "perf"}
+                else self.harness.commands.canonical_name(command_name)
+            )
         argument = raw_argument.strip()
         if name == "/":
             self.action_commands()
@@ -2017,7 +2106,7 @@ class NagentsApp(App[None]):
         elif name == "/help":
             commands = "\n".join(
                 f"/{command.name} {command.argument_hint}\n  {command.description} [{command.source}]"
-                for command in self.harness.commands.list()
+                for command in self._client_commands()
             )
             self.push_screen(DetailModal("NGN / HELP", f"COMMANDS\n{commands}\n\n{HELP}"))
         elif name in ("/context", "/plugins"):
@@ -2027,10 +2116,15 @@ class NagentsApp(App[None]):
                 self._status(str(exc), error=True)
         elif name == "/perf":
             self._performance_command(argument)
+        elif name == "/voice":
+            self._voice_command(argument)
         elif name == "/tasks":
             self._show_tasks()
         elif name == "/queue":
             if argument == "clear":
+                for prompt in self._queued_prompts:
+                    if isinstance(prompt, VoicePrompt):
+                        prompt.bridge.discard(prompt)
                 self._queued_prompts.clear()
                 self._queue_paused = False
                 self._update_queue()
@@ -2043,10 +2137,17 @@ class NagentsApp(App[None]):
                 self._status("Usage: /queue [resume|clear]", error=True)
             else:
                 text = (
-                    "\n\n".join(f"{index}. {prompt}" for index, prompt in enumerate(self._queued_prompts, 1))
+                    "\n\n".join(
+                        f"{index}. {prompt if isinstance(prompt, str) else 'Voice: ' + prompt.text}"
+                        for index, prompt in enumerate(self._queued_prompts, 1)
+                    )
                     or "No queued prompts."
                 )
                 self.push_screen(DetailModal("PROMPT QUEUE", text))
+        elif self._voice is not None and self._voice.active:
+            self._status(
+                "End Voice before changing the session, agent, model or provider. Use /voice stop.", error=True
+            )
         elif self.busy:
             self._status("Already working. Esc cancels before changing the session or configuration.")
         elif name == "/sessions":
@@ -2097,6 +2198,172 @@ class NagentsApp(App[None]):
             # Freshly installed skills may not be in the last completion snapshot.
             # The shared registry refreshes discovery before resolving or rejecting.
             self._launch(lambda: self._custom_command(command_name, raw_argument), f"Running /{command_name}...")
+
+    def action_voice(self) -> None:
+        if self._shutting_down or self._closing_requested:
+            return
+        if self._voice is not None and self._voice.active:
+            self._voice_job(self._voice.stop)
+        elif self.screen is self.default_screen:
+            self._voice_command("start")
+
+    def _ensure_voice(self) -> TuiVoice:
+        if self.harness.config.demo:
+            raise ValueError("Live voice is unavailable in offline demo mode. Restart ngn without --demo.")
+        if not self._backend_ready:
+            raise ValueError("Wait for the workspace to finish opening before using Voice.")
+        if self._voice is None:
+            try:
+                from .voice_runtime import TuiVoice
+            except ImportError:
+                raise ValueError(
+                    "Install nagents[tui,voice] to enable local voice. No web server is required."
+                ) from None
+            self._voice = TuiVoice(self.harness, self._accept_voice, self._voice_changed, lambda: self._task_note_run)
+        return self._voice
+
+    def _voice_changed(self, payload: dict[str, object], muted: bool) -> None:
+        if not self._shutting_down:
+            self.default_screen.query_one(VoicePanel).snapshot(payload, muted=muted)
+
+    def _voice_job(self, operation: Callable[[], Awaitable[None]]) -> None:
+        async def run() -> None:
+            try:
+                await operation()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if self._shutting_down:
+                    return
+                from .voice_runtime import error_message
+
+                message = error_message(error)
+                await self._notice(message, error=True)
+                if self._voice is None or not self._voice.active:
+                    self._voice_changed({"status": "error", "message": message}, False)
+
+        task = asyncio.create_task(run(), name="ngn-tui-voice-action")
+        self._voice_jobs.add(task)
+        task.add_done_callback(self._voice_jobs.discard)
+
+    def _voice_command(self, argument: str) -> None:
+        parts = argument.split()
+        action = parts[0] if parts else ""
+        if not action:
+            options = [
+                (
+                    "stop" if self._voice is not None and self._voice.active else "start",
+                    "End Voice" if self._voice is not None and self._voice.active else "Start Voice",
+                ),
+                ("mute", "Mute / unmute microphone"),
+                ("settings", "Voice settings / selected agent"),
+                ("settings workspace", "Voice settings / workspace"),
+                ("settings global", "Voice settings / global"),
+                ("devices", "Choose local microphone and speaker"),
+                ("status", "Inspect voice status, captions, delegation and startup context"),
+            ]
+            self.push_screen(ChoiceModal("VOICE", options), lambda value: self._voice_command(value) if value else None)
+            return
+        try:
+            voice = self._ensure_voice()
+            if action == "settings" and len(parts) <= 2:
+                scope = parts[1] if len(parts) == 2 else "agent"
+
+                async def settings() -> None:
+                    snapshot = await voice.snapshot(scope)
+                    if not self._shutting_down:
+                        self.push_screen(VoiceSettingsModal(snapshot), self._voice_edits)
+
+                self._voice_job(settings)
+            elif len(parts) != 1:
+                raise ValueError("Usage: /voice [start|stop|mute|settings [agent|global|workspace]|devices|status]")
+            elif action == "start":
+                self._voice_job(voice.start)
+            elif action in {"stop", "end"}:
+                self._voice_job(voice.stop)
+            elif action == "mute":
+                voice.mute()
+            elif action == "devices":
+                if voice.active:
+                    raise ValueError("End Voice before changing audio devices.")
+                self._voice_job(self._voice_devices)
+            elif action in {"status", "context"}:
+
+                async def details() -> None:
+                    text = await voice.details()
+                    if not self._shutting_down:
+                        self.push_screen(DetailModal("VOICE / STATUS & CONTEXT", text))
+
+                self._voice_job(details)
+            else:
+                raise ValueError("Usage: /voice [start|stop|mute|settings [agent|global|workspace]|devices|status]")
+        except ValueError as error:
+            self._status(str(error), error=True)
+
+    def _voice_edits(self, edits: VoiceEdits | None) -> None:
+        if edits is None or self._voice is None:
+            return
+        voice = self._voice
+
+        async def save() -> None:
+            await voice.save(edits.snapshot, edits.changes, reset=edits.reset)
+            await self._notice("Voice preferences saved. They apply to the next call.")
+
+        self._voice_job(save)
+
+    async def _voice_devices(self) -> None:
+        from .voice_audio import devices
+
+        available = await asyncio.to_thread(devices)
+        voice = self._ensure_voice()
+
+        def output(selected: str | None) -> None:
+            if selected is not None and not voice.active:
+                voice.output_device = int(selected)
+                self._status("Local voice devices selected. Use /voice start.")
+
+        def microphone(selected: str | None) -> None:
+            if selected is None or voice.active:
+                return
+            voice.input_device = int(selected)
+            choices = [
+                ("-1", "System default speaker"),
+                *((str(item.id), item.name) for item in available if item.output),
+            ]
+            self.push_screen(ChoiceModal("VOICE / SPEAKER", choices), output)
+
+        choices = [
+            ("-1", "System default microphone"),
+            *((str(item.id), item.name) for item in available if item.input),
+        ]
+        self.push_screen(ChoiceModal("VOICE / MICROPHONE", choices), microphone)
+
+    async def _accept_voice(self, prompt: VoicePrompt) -> None:
+        if self._shutting_down or self._closing_requested or prompt.session_id != self.harness.session_id:
+            raise RuntimeError("The voice conversation is no longer selected")
+        if len(self._queued_prompts) + len(self._voice_inputs) >= 20:
+            raise ValueError("The assistant input queue is full")
+        self._wakeups.human_turn()
+        if self.busy and isinstance(self.harness, Harness) and self.harness._busy == "run":
+            message = RunInput(
+                prompt.text, identifier=prompt.identifier, voice_session_id=prompt.bridge.voice_session_id
+            )
+            if self.harness.submit_followup(prompt.session_id, message):
+                self._voice_inputs[prompt.bridge.voice_session_id, prompt.identifier] = prompt
+                self._status("Voice request accepted for the next response boundary; current work continues.")
+                return
+        self._queued_prompts.append(prompt)
+        self._queue_paused = False
+        self._update_queue()
+        self._drain_queue()
+
+    def _voice_turn(self, marker: RunTurn) -> None:
+        if self._voice is not None:
+            for bridge in self._voice.bridges:
+                bridge.turn(marker)
+        prompt = self._voice_inputs.pop((marker.voice_session_id, marker.identifier), None)
+        if prompt is not None:
+            self._voice_turns.append(prompt)
 
     async def _skills(self, query: str) -> None:
         if not self._backend_ready:
