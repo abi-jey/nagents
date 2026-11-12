@@ -100,11 +100,13 @@ def test_end_during_setup_joins_resources_updates_panel_and_allows_reconnect(
 
 
 @pytest.mark.usefixtures("workspace_discovery_only")
+@pytest.mark.parametrize("delayed", [False, True])
 def test_spoken_yes_does_not_approve_terminal_permission_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delayed: bool
 ) -> None:
     async def scenario() -> None:
         decisions: list[bool] = []
+        approval_update = asyncio.Event()
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
@@ -122,6 +124,8 @@ def test_spoken_yes_does_not_approve_terminal_permission_request(
         sent: list[tuple[str, str, str]] = []
 
         async def sink(kind: LiveAppendKind, text: str, identifier: str) -> str:
+            if delayed and "Speech does not approve" in text:
+                await approval_update.wait()
             sent.append((kind, text, identifier))
             return "session." + kind + ".append"
 
@@ -141,6 +145,10 @@ def test_spoken_yes_does_not_approve_terminal_permission_request(
             bridge.attach(sink)
             await bridge.handle_request(ClientDelegationRequest("action", "Request an action", "[]"))
             await until(lambda: isinstance(app.screen, ApprovalModal))
+            # Mounting the dialog and delivering the queued voice notice have
+            # independent owners. Do not assume a scheduler/timer ordering.
+            approval_update.set()
+            await until(lambda: any("Speech does not approve" in text for _, text, _ in sent))
             await bridge.handle_request(ClientDelegationRequest("yes", "yes", "[]"))
             assert not decisions and isinstance(app.screen, ApprovalModal)
             assert any("Speech does not approve" in text for _, text, _ in sent)
