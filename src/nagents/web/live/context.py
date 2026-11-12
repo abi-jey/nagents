@@ -19,7 +19,10 @@ from .._async import finish_on_cancel
 from ..http.routing import RoutingStore
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
+
+    from nagents.types import Message
 
 Payload = dict[str, object]
 ContextMode = Literal["recent", "summary", "none"]
@@ -144,6 +147,136 @@ def with_summary(seed: LiveSeed, text: str) -> LiveSeed:
         text,
         generated=True,
     )
+
+
+def message_seed(
+    messages: Sequence[Message],
+    session_id: str,
+    mode: ContextMode,
+    *,
+    task_state: str = "",
+    partial: bool = False,
+    source_messages: int = 0,
+) -> LiveSeed:
+    """Pack a non-web host's visible text using the same startup privacy limits.
+
+    No tool arguments, output, attachments, system messages or reasoning enter
+    the seed. Startup context is never submitted as a new assistant request.
+    """
+    if mode == "none":
+        return LiveSeed(mode=mode, chat_session_id=session_id, notice="Voice starts without saved chat context.")
+    from nagents.types import TextContent
+
+    recent: list[Payload] = []
+    source: list[dict[str, str]] = []
+    summary = ""
+    remaining = MAX_SOURCE_BYTES // 2  # Leave room for JSON escaping/metadata.
+    omitted = partial or len(messages) > MAX_SOURCE_MESSAGES
+    for message in reversed(messages[-MAX_SOURCE_MESSAGES:]):
+        if message.role not in {"user", "assistant", "compaction_summary"}:
+            continue
+        if isinstance(message.content, str):
+            text = message.content
+        elif isinstance(message.content, list):
+            text = "\n".join(part.text for part in message.content if isinstance(part, TextContent))
+            omitted |= any(not isinstance(part, TextContent) for part in message.content)
+        else:
+            continue
+        value = bounded_text(text, min(8192, remaining))
+        omitted |= value != text
+        if not value.strip():
+            continue
+        # Bound the serialized source, not only the pre-escape Unicode text.
+        item = {"role": message.role, "text": value}
+        size = len(json.dumps(item, ensure_ascii=False).encode()) + 2
+        if size > remaining:
+            omitted = True
+            break
+        remaining -= size
+        source.append(item)
+        if message.role == "compaction_summary":
+            summary = value
+            break
+        if len(recent) < MAX_RECENT_MESSAGES:
+            recent.append(_message(message.role, value))
+    serialized = json.dumps(
+        {"messages": list(reversed(source)), "partial": omitted, "task_state": task_state}, ensure_ascii=False
+    )
+    seed = LiveSeed(
+        mode=mode,
+        method="existing_summary"
+        if mode == "summary" and summary
+        else "recent_fallback"
+        if mode == "summary"
+        else "recent",
+        chat_session_id=session_id,
+        fingerprint=hashlib.sha256((session_id + serialized).encode()).hexdigest(),
+        summary_source=serialized if source else "",
+        recent=tuple(reversed(recent)),
+        source_messages=max(source_messages, sum(item["role"] in {"user", "assistant"} for item in source)),
+        omitted_content=omitted,
+        task_state=task_state,
+        notice="Recent chat text was included; omitted details remain with the main assistant.",
+    )
+    return _pack(seed, summary)
+
+
+def _read_session_seed(path: Path, session_id: str, mode: ContextMode, task_state: str) -> LiveSeed:
+    """Read standard Harness text without materializing attachment bytes in Python."""
+    from nagents.types import Message
+
+    with closing(sqlite3.connect(path, timeout=5)) as db, db:
+        db.execute("BEGIN")
+        row = db.execute(
+            "SELECT COALESCE(compacted_at_message_id, 0) FROM v2_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("The voice conversation is no longer available")
+        boundary = int(row[0])
+        if mode == "none":
+            return message_seed((), session_id, mode)
+        count = int(
+            db.execute(
+                "SELECT COUNT(*) FROM v2_messages WHERE session_id = ? AND id >= ? AND role IN ('user', 'assistant')",
+                (session_id, boundary),
+            ).fetchone()[0]
+        )
+        visible = (
+            "CASE WHEN " + _multimodal() + " THEN (SELECT group_concat(part, char(10)) FROM ("
+            "SELECT substr(json_extract(value, '$.text'), 1, 8193) AS part FROM json_each(m.content) "
+            "WHERE type = 'object' AND json_extract(value, '$.type') = 'text' "
+            "AND json_type(value, '$.text') = 'text' LIMIT 16)) ELSE m.content END"
+        )
+        rows = db.execute(
+            "SELECT m.role, substr("
+            + visible
+            + ", 1, 8193), CASE WHEN "
+            + _multimodal()
+            + " THEN EXISTS (SELECT 1 FROM json_each(m.content) WHERE json_extract(value, '$.type') != 'text') ELSE 0 END "
+            "FROM v2_messages m WHERE m.session_id = ? AND m.id >= ? "
+            "AND m.role IN ('user', 'assistant', 'compaction_summary') ORDER BY m.id DESC LIMIT ?",
+            (session_id, boundary, MAX_SOURCE_MESSAGES),
+        ).fetchall()
+    return message_seed(
+        tuple(
+            Message(
+                role="user" if role == "user" else "assistant" if role == "assistant" else "compaction_summary",
+                content=text,
+            )
+            for role, text, _ in reversed(rows)
+            if isinstance(text, str)
+        ),
+        session_id,
+        mode,
+        task_state=task_state,
+        source_messages=count,
+        partial=bool(boundary or count > MAX_SOURCE_MESSAGES or any(attachment for _, _, attachment in rows)),
+    )
+
+
+async def read_session_seed(path: Path, session_id: str, mode: ContextMode, *, task_state: str = "") -> LiveSeed:
+    """Bounded standard-session startup context for a host without web routing tables."""
+    return await finish_on_cancel(asyncio.to_thread(_read_session_seed, path, session_id, mode, task_state))
 
 
 def _multimodal() -> str:

@@ -20,6 +20,7 @@ from dataclasses import replace
 from time import monotonic
 from typing import TYPE_CHECKING
 from typing import Literal
+from typing import Protocol
 from typing import cast
 from uuid import uuid4
 
@@ -54,11 +55,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents import Agent
+    from nagents.audio import AudioInput
+    from nagents.audio import AudioOutput
     from nagents.events import Event
     from nagents.live.delegation import LiveAppend
     from nagents.live.delegation import LiveAppendKind
 
-    from .bridge import MainAgentBridge
     from .diagnostics import FailureStage
     from .login import LoginVoiceConfig
     from .relay import ChatGPTMediaRelay
@@ -87,6 +89,24 @@ _DELEGATION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _CHAT_ID = re.compile(r"ngn-[A-Za-z0-9-]{1,76}\Z")
 _DELEGATION_STATES = {"queued", "working", "completed", "failed", "cancelled"}
 _DELEGATION_TERMINAL = {"completed", "failed", "cancelled"}
+
+
+class BridgeUpdates(Protocol):
+    ready: asyncio.Event | None
+    needs_attention: Callable[[], bool]
+
+
+class VoiceBridge(Protocol):
+    """The call owns speech delivery, not the host's assistant execution."""
+
+    voice_session_id: str
+
+    @property
+    def updates(self) -> BridgeUpdates: ...
+
+    def attach(self, sink: LiveAppend) -> None: ...
+
+    async def close(self) -> None: ...
 
 
 def _bounded_text(text: str, limit: int) -> Payload:
@@ -387,10 +407,11 @@ class _Call:
     stream: bool = False
     audio_in: _BrowserInput | None = None
     audio_out: _BrowserOutput | None = None
+    duplex: AudioDuplex | None = None
     browser: bool = False
     captions: Callable[[Payload], Awaitable[None]] | None = field(default=None, repr=False)
     seed: LiveSeed = field(default_factory=LiveSeed, repr=False)
-    bridge: MainAgentBridge | None = field(default=None, repr=False)
+    bridge: VoiceBridge | None = field(default=None, repr=False)
     last_speech: float = field(default_factory=monotonic, repr=False)
 
     def fail(
@@ -406,6 +427,23 @@ class _Call:
             self.reason = reason
             self.stop.set()
             self.record.transition("closing", reason)
+
+    def audio(self) -> tuple[AudioInput, AudioOutput]:
+        if self.duplex is not None:
+            assert self.duplex.input is not None and self.duplex.output is not None
+            return self.duplex.input, self.duplex.output
+        assert self.audio_in is not None and self.audio_out is not None
+        return self.audio_in, self.audio_out
+
+    async def close_output(self) -> None:
+        try:
+            async with asyncio.timeout(CLEANUP_SECONDS):
+                if self.duplex is not None and self.duplex.output is not None:
+                    await self.duplex.output.close()
+                elif self.audio_out is not None:
+                    await self.audio_out.close()
+        except Exception as error:
+            self.fail("Live audio output cleanup could not be confirmed.", stage="cleanup", error=error)
 
 
 def _sdp(value: object) -> str:
@@ -528,7 +566,7 @@ class LiveService:
         """Discover the owned reservation, including provisioning and teardown."""
         return next(iter(self._active), "")
 
-    def bind_bridge(self, session_id: str, bridge: MainAgentBridge) -> None:
+    def bind_bridge(self, session_id: str, bridge: VoiceBridge) -> None:
         call = self._active.get(session_id)
         if call is None or call.bridge is not None or bridge.voice_session_id != session_id:
             raise RuntimeError("Voice bridge must belong to one newly reserved call")
@@ -650,16 +688,30 @@ class LiveService:
 
     async def create_stream(self, voice: str = "") -> Payload:
         """Start one server-to-provider WebSocket; browser audio joins separately."""
+        return await self._create_stream(
+            _Call(stream=True, audio_in=_BrowserInput(), audio_out=_BrowserOutput()), voice
+        )
+
+    async def create_duplex(self, duplex: AudioDuplex, voice: str = "") -> Payload:
+        """Use the same call owner with local audio; no HTTP server or browser lease.
+
+        The caller owns input-device cleanup. Output is closed on every terminal
+        path, including failed setup. Ending voice never cancels assistant work.
+        """
+        if duplex.input is None or duplex.output is None:
+            raise ValueError("Local voice requires both an audio input and output")
+        return await self._create_stream(_Call(stream=True, duplex=duplex), voice)
+
+    async def _create_stream(self, call: _Call, voice: str) -> Payload:
         if self._closed:
             raise HTTPException(503, "Live is shutting down.")
         if self._active:
             raise HTTPException(409, "End the active Live conversation before starting another.")
         if not isinstance(voice, str) or (voice and not _NAME.fullmatch(voice)):
             raise HTTPException(422, "Invalid Live voice.")
-        call = _Call(stream=True, audio_in=_BrowserInput(), audio_out=_BrowserOutput())
         identifier = call.record.identifier
-        assert call.audio_out is not None
-        call.audio_out.voice_session_id = identifier
+        if call.audio_out is not None:
+            call.audio_out.voice_session_id = identifier
         self._active[identifier] = call
         self._records[identifier] = call.record
         call.record.append("status", call.record.message)
@@ -673,7 +725,7 @@ class LiveService:
                 "session_id": identifier,
                 "model": call.record.model,
                 "voice": call.record.voice,
-                "playback_mode": "realtime" if call.audio_out.realtime else "buffered",
+                "playback_mode": "realtime" if call.audio_out is not None and call.audio_out.realtime else "buffered",
                 **({"context": dict(call.record.context)} if call.record.context else {}),
             }
         except asyncio.CancelledError:
@@ -684,7 +736,14 @@ class LiveService:
     async def serve_audio(self, session_id: str, socket: WebSocket) -> None:
         """Only the reserved browser owns the raw PCM connection."""
         call = self._active.get(session_id)
-        if call is None or not call.stream or call.browser or call.stop.is_set() or call.record.status != "connected":
+        if (
+            call is None
+            or not call.stream
+            or call.duplex is not None
+            or call.browser
+            or call.stop.is_set()
+            or call.record.status != "connected"
+        ):
             await socket.close(code=1008)
             return
         source, sink = call.audio_in, call.audio_out
@@ -752,7 +811,7 @@ class LiveService:
         if type(after) is not int or after < 0:
             raise HTTPException(422, "Live event cursor must be a nonnegative integer.")
         call = self._active.get(session_id)
-        if call is not None and record.status == "connected" and not call.stop.is_set():
+        if call is not None and call.duplex is None and record.status == "connected" and not call.stop.is_set():
             now = asyncio.get_running_loop().time()
             if now >= call.deadline:
                 call.request_stop("Live browser heartbeat expired.")
@@ -852,16 +911,19 @@ class LiveService:
             await self._seed(call)
             if self._caption_factory is not None:
                 call.captions = await self._caption_factory(call.record.identifier)
-            assert call.audio_in is not None and call.audio_out is not None
             # The RTP track owns the continuous 20 ms clock. Padding this input
             # too would add silence between slightly delayed browser frames and
             # overfeed a correctly paced sender. Primary provider WebSockets
             # instead use the input's single PCM/silence playout clock.
-            call.audio_in.fill_gaps = False
-            media = ChatGPTMediaRelay(call.audio_in, call.audio_out)
+            if call.audio_in is not None:
+                call.audio_in.fill_gaps = False
+            source, output = call.audio()
+            media = ChatGPTMediaRelay(source, output)
         except ImportError as error:
             call.fail(
-                "Install nagents[web] on the server to enable ChatGPT voice audio.",
+                "Install nagents[tui,voice] to enable ChatGPT voice audio."
+                if call.duplex is not None
+                else "Install nagents[web] on the server to enable ChatGPT voice audio.",
                 503,
                 stage="configuration",
                 error=error,
@@ -876,6 +938,8 @@ class LiveService:
         else:
             await self._run_login(call, "", replace(login, history=call.seed.history), media)
             return
+        await self._detach_bridge(call)
+        await call.close_output()
         call.record.transition("error", call.failure)
         self._active.pop(call.record.identifier, None)
         self._prune_records()
@@ -968,8 +1032,7 @@ class LiveService:
                 pending.cancel()
             await asyncio.gather(*preparing, return_exceptions=True)
             await self._detach_bridge(call)
-            if call.audio_out is not None:
-                await call.audio_out.close()
+            await call.close_output()
             if media is not None:
                 with suppress(Exception):
                     await media.quiet()
@@ -1124,11 +1187,11 @@ class LiveService:
                     call.fail("Live requires a dedicated voice agent with an owned backend.", 503)
                     return
                 call.record.model, call.record.voice = agent.provider.model, config.voice
-                assert call.audio_in is not None and call.audio_out is not None
-                agent.audio = AudioDuplex(input=call.audio_in, output=call.audio_out)
+                source, output = call.audio()
+                agent.audio = AudioDuplex(input=source, output=output)
                 observer = asyncio.create_task(self._observe(call, agent, ""), name="web-live-upstream")
                 await self._connected(call, observer)
-                await call.audio_out.close()
+                await call.close_output()
                 if call.record.status != "closing":
                     call.record.transition("closing", "Closing Live session.")
                 if call.attached.is_set() and not observer.done():
@@ -1149,8 +1212,7 @@ class LiveService:
                     call.fail("Live connection failed. Provider finalization is unconfirmed.")
         finally:
             await self._detach_bridge(call)
-            if call.audio_out is not None:
-                await call.audio_out.close()
+            await call.close_output()
             if agent is not None:
                 try:
                     async with asyncio.timeout(CLEANUP_SECONDS):
@@ -1180,6 +1242,9 @@ class LiveService:
             call.deadline = asyncio.get_running_loop().time() + LEASE_SECONDS
             call.record.transition("connected", "Live connected.")
             call.ready.set()
+            if call.duplex is not None:
+                await asyncio.wait({observer, stopped}, return_when=asyncio.FIRST_COMPLETED)
+                return
             while not observer.done() and not call.stop.is_set():
                 remaining = call.deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:

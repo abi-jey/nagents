@@ -76,6 +76,15 @@ with `--no-animations`. Build-capable delegation uses the built-in `agent` profi
 by default, never exceeds the parent's permissions, and defaults to depth two
 (root 0, child 1, grandchild 2).
 
+For local Live voice, install `nagents[tui,voice]` (or
+`poetry install -E tui -E voice`). Open `/voice settings` to enable it and choose
+an API-key, Foundry, or eligible ChatGPT/Codex connection, then use **Ctrl+G** or
+`/voice start`. `/voice mute` toggles the microphone, `/voice devices` selects
+local audio devices, and `/voice stop` ends the call without stopping assistant
+work. Voice shares the web UI's settings and uses the current assistant's tools
+and approvals; no browser or web server is needed. Use headphones to avoid echo.
+See [terminal Voice](docs/guide/ngn.md#live-voice) for setup and limitations.
+
 For ChatGPT/Codex subscription access, select a named OpenAI connection with
 `"auth": "chatgpt"` or `"auth": "codex"` in `providers.json`. Use `/login`
 or `ngn login chatgpt` for the ChatGPT device flow. Device login must

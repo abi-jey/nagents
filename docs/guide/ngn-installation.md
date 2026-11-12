@@ -19,6 +19,13 @@ python -m pip install 'nagents[tui]'
 ngn --demo
 ```
 
+For [terminal Live voice](ngn.md#live-voice), install
+`python -m pip install 'nagents[tui,voice]'`, launch without `--demo`, and open
+`/voice settings`. The optional `voice` extra includes sounddevice/PortAudio
+bindings, the shared Voice configuration dependencies, and aiortc/PyAV for
+ChatGPT/Codex media. It does not start a web server. The ordinary `tui` extra
+and headless/core installs do not require these voice dependencies.
+
 For the browser client, install `nagents[web]` and run `ngn serve`. Published
 wheels serve bundled frontend assets without requiring Node. Omit these extras
 for headless-only use. Pin a release with `==VERSION` when reproducibility is

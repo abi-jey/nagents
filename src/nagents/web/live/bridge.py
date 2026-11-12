@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 DelegationStatus = Literal["queued", "working", "completed", "failed", "cancelled"]
 
 
-def _speech_data(transcript: str) -> tuple[list[dict[str, object]], bool]:
+def speech_data(transcript: str) -> tuple[list[dict[str, object]], bool]:
     try:
         fragments = json.loads(transcript)
         if not isinstance(fragments, list):
@@ -232,7 +232,7 @@ class MainAgentBridge:
                 explicit = request
             else:
                 try:
-                    fragments, _ = _speech_data(request.transcript)
+                    fragments, _ = speech_data(request.transcript)
                     fresh = [
                         part
                         for part in fragments

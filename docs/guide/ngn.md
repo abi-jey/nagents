@@ -161,6 +161,70 @@ LiteLLM requires an explicit `base_url` and an API-key reference such as
 `api_key_env: LITELLM_API_KEY`; it does not use ChatGPT OAuth or require a
 gateway SDK in ngn. See [provider recipes](ngn-configuration.md#provider-recipes).
 
+## Live voice
+
+The interactive terminal supports the same GPT-Live connections and inherited
+Voice preferences as the web client. Install the optional local audio support:
+
+```bash
+python -m pip install 'nagents[tui,voice]'
+# In an existing source/Poetry environment instead:
+poetry install -E tui -E voice
+```
+
+Run `ngn` without `--demo`, open `/voice settings`, enable Voice, and choose a
+Live-capable provider connection. Use `/provider` and `/login` to configure the
+connection first. API-key/Entra GPT-Live and eligible ChatGPT/Codex subscription
+connections use their existing, distinct authentication and media transports;
+ngn never falls back from a failed subscription login to an API key.
+
+| Control | Purpose |
+| --- | --- |
+| **Ctrl+G**, `/voice start` | Start Voice; Ctrl+G again ends it. |
+| `/voice stop` | Stop audio and finalize the provider call, leaving assistant work running. |
+| `/voice mute` | Mute/unmute speech sent to the provider; output continues. |
+| `/voice devices` | Choose a microphone and speaker for this ngn process; end Voice before changing them. |
+| `/voice settings [agent\|workspace\|global]` | Edit the same canonical Markdown preferences as the web UI. |
+| `/voice status` | Inspect bounded captions, delegation status, and the actual startup instructions/context. |
+| `/voice` | Open the Voice menu. |
+
+The default **Main assistant** backend retains the selected conversation's
+provider, tools, agent restrictions and approval dialogs. Voice can join work
+already running: spoken requests enter the next complete response/tool boundary
+without cancelling the current run. Speech is input data, never a terminal slash
+command. Requests and assistant answers use normal session persistence. Ending
+Voice detaches speech delivery, not accepted assistant work; use **Esc** to cancel
+assistant work separately. Switching sessions, agents or provider connections
+requires ending Voice first. Quitting ngn closes audio and joins managed work.
+
+Global → workspace → authored agent → saved agent settings inherit field by field.
+The editor overrides only changed fields and preserves `live.prompt`; **Reset**
+restores inherited settings without deleting that prompt. Edit `live.prompt` in
+the corresponding agent Markdown document to change voice instructions. Settings
+saved during a call apply to the next call. **Hosted Responses** is an advanced
+API-key option without workspace tools; ChatGPT voice requires Main assistant.
+
+Startup context can be recent text, a read-only generated summary with recent
+text, or none. It is bounded background context, not new caller speech. Tool
+output, attachments and private reasoning are excluded. Only the parent's
+verified text replies and task/tool status reach Voice; child streams and private
+reasoning do not. The compact caption preview and retained call inspectors are
+bounded, process-local views; they are not durable copies of all spoken dialogue.
+No raw audio is saved by this client. Provider retention policies still apply.
+
+Local audio uses PortAudio, mono PCM16 at 24 kHz. Install the system PortAudio
+library if your platform needs it (for example `libportaudio2` on Debian/Ubuntu
+or `brew install portaudio` on macOS), and grant microphone access to the terminal.
+Devices must support this format. Use **headphones**: the terminal does not
+provide browser-style acoustic echo cancellation. Muting drops queued input and
+sends silence, while the local device stays open. An audio-device failure ends
+the call; reconnect after fixing permissions or device selection. On SSH/remote
+terminals, devices are on the machine running ngn, not the client laptop. Voice
+is unavailable in the offline demo and headless `ngn run`.
+
+Automated coverage uses local provider/media fixtures and fake devices; it does
+not establish microphone acoustics or paid-provider account eligibility.
+
 ## Subagent conversations
 
 Open an agent from the Agents tree (Ctrl+T focuses it on wide terminals, or opens
@@ -216,6 +280,7 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 | `/plugins` | Inspect configured and loaded Python extensions. |
 | `/skills [filter]` | Browse discovered skills and prefill a command without executing it. |
 | `/tasks` | Open the agent tree, inspect conversations, and send follow-ups. |
+| `/voice [start\|stop\|mute\|settings\|devices\|status]` | Interactive TUI Live voice and shared Voice preferences. |
 | `/queue [resume\|clear]` | Inspect, resume, or explicitly discard queued input. |
 | `/login`, `/logout` | Manage ngn's local OpenAI device login. |
 | `/quit` | Close the client and clean up managed work. |

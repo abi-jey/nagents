@@ -51,6 +51,8 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 #compose-area { height: auto; padding: 0 1; border: none; }
 #compose-area { border-title-color: $ngn-message-user; background: $ngn-message-background; color: $ngn-message-text; }
 #queue-status { color: $ngn-message-muted; }
+#voice-panel { height: auto; max-height: 5; color: $ngn-message-info; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
+#voice-panel.error { color: $ngn-message-error; }
 #footer { height: auto; padding: 0 1; border: none; background: $ngn-message-background; }
 #composer {
     height: 3;
@@ -142,6 +144,11 @@ Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; backgroun
 .detail-dialog { height: 85%; }
 .detail-dialog VerticalScroll { height: 1fr; }
 .detail-dialog Button { margin-top: 1; }
+.voice-settings-dialog { height: 90%; }
+#voice-settings-content { height: 1fr; scrollbar-size: 1 1; }
+#voice-settings-content Static { height: auto; }
+#voice-settings-content Select { margin-bottom: 1; }
+.voice-settings-dialog .dialog-actions Button { min-width: 8; margin-left: 1; }
 .small #mode { padding: 0 1; }
 .small #conversation { padding: 1 1; }
 .small #welcome { margin: 0; }
@@ -149,6 +156,9 @@ Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; backgroun
 .small .suggestion { margin-bottom: 0; }
 .small #compose-area, .small #footer { padding: 0; }
 .small .dialog { padding: 0 1; max-height: 95%; }
+.small .voice-settings-dialog { height: 95%; }
+.small .voice-settings-dialog .dialog-title { margin-bottom: 0; }
+.small .voice-settings-dialog .dialog-actions { margin-top: 0; }
 .login-method-dialog { height: 28; }
 .login-method-content { height: 1fr; scrollbar-size: 1 1; margin-bottom: 1; }
 .login-method-content Static { height: auto; }
