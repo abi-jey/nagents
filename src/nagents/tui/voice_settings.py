@@ -20,6 +20,7 @@ from textual.widgets import Switch
 if TYPE_CHECKING:
     from textual.app import ComposeResult
     from textual.binding import BindingType
+    from textual.events import Resize
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,19 @@ class VoiceSettingsModal(ModalScreen[VoiceEdits]):
                 yield Button("Save", id="voice-save", variant="primary")
 
     def on_mount(self) -> None:
-        self.query_one("#voice-enabled", Switch).focus()
+        enabled = self.query_one("#voice-enabled", Switch)
+        enabled.focus(scroll_visible=False)
+        self._resize_voice_form(self.app.size.width, self.app.size.height)
+
+    def on_resize(self, event: Resize) -> None:
+        self._resize_voice_form(event.size.width, event.size.height)
+
+    def _resize_voice_form(self, width: int, height: int) -> None:
+        # Modal screens are siblings of the workspace, not descendants of its
+        # .small class. Own responsive styling and reflow for this form.
+        self.set_class(width < 72 or height < 23, "small")
+        if self.focused is not None:
+            self.call_after_refresh(self.focused.scroll_visible, animate=False)
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:

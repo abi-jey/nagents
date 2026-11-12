@@ -156,6 +156,7 @@ Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; backgroun
 .small .suggestion { margin-bottom: 0; }
 .small #compose-area, .small #footer { padding: 0; }
 .small .dialog { padding: 0 1; max-height: 95%; }
+.small .voice-settings-dialog { height: 95%; }
 .small .voice-settings-dialog .dialog-title { margin-bottom: 0; }
 .small .voice-settings-dialog .dialog-actions { margin-top: 0; }
 .login-method-dialog { height: 28; }

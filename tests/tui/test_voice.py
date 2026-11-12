@@ -272,6 +272,16 @@ def test_voice_settings_use_shared_cas_and_preserve_inheritance_and_prompt(
             viewport = modal.query_one("#voice-settings-content").region
             assert viewport.y <= enabled.region.y and enabled.region.bottom <= viewport.bottom
             assert modal.focused is enabled
+            if size == (48, 18):
+                assert modal.has_class("small")
+                assert viewport.height >= 5  # Two label rows and the complete three-row toggle.
+            else:
+                await pilot.resize_terminal(48, 18)
+                await pilot.pause()
+                viewport = modal.query_one("#voice-settings-content").region
+                assert modal.has_class("small")
+                assert viewport.height >= 5
+                assert viewport.y <= enabled.region.y and enabled.region.bottom <= viewport.bottom
             modal.query_one("#voice-enabled", Switch).value = False
             assert await pilot.click("#voice-save")
             await pilot.pause()
