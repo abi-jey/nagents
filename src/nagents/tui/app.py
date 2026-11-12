@@ -144,6 +144,7 @@ if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
 
+    from .voice_bridge import TuiVoiceBridge
     from .voice_runtime import TuiVoice
 
 HELP = """KEYBOARD
@@ -323,6 +324,7 @@ class NagentsApp(App[None]):
         self._voice_jobs: set[asyncio.Task[None]] = set()
         self._voice_inputs: dict[tuple[str, str], VoicePrompt] = {}
         self._voice_turns: deque[VoicePrompt] = deque()
+        self._voice_run_bridges: set[TuiVoiceBridge] = set()
 
     @property
     def busy(self) -> bool:
@@ -1359,11 +1361,11 @@ class NagentsApp(App[None]):
             self._wakeups.human_turn()
         run_id = uuid4().hex
         self._task_note_run = run_id
-        if self._voice is not None:
-            for bridge in self._voice.bridges:
-                bridge.begin(run_id, voice_prompt)
-        if voice_prompt is not None and (self._voice is None or voice_prompt.bridge not in self._voice.bridges):
-            voice_prompt.bridge.begin(run_id, voice_prompt)
+        self._voice_run_bridges.update(self._voice_bridges())
+        if voice_prompt is not None:
+            self._voice_run_bridges.add(voice_prompt.bridge)
+        for bridge in self._voice_run_bridges:
+            bridge.begin(run_id, voice_prompt)
         self._cancel_tool_previews()
         self._answer = None
         self._answer_text = ""
@@ -1433,9 +1435,9 @@ class NagentsApp(App[None]):
                 }
                 if self._task_note_run == run_id:
                     self._task_note_run = ""
-                if self._voice is not None:
-                    for bridge in self._voice.bridges:
-                        bridge.finish(run_id, cancelled=cancelled, failed=failed)
+                for bridge in self._voice_bridges():
+                    bridge.finish(run_id, cancelled=cancelled, failed=failed)
+                self._voice_run_bridges.clear()
                 for prompt in self._voice_inputs.values():
                     prompt.bridge.discard(prompt)
                 self._voice_inputs.clear()
@@ -1540,9 +1542,8 @@ class NagentsApp(App[None]):
             self._answer = None
             self._answer_text = self._run_text = ""
             await self._add(Turn("user", voice_turn.text))
-        if self._voice is not None:
-            for bridge in self._voice.bridges:
-                bridge.event(event)
+        for bridge in self._voice_bridges():
+            bridge.event(event)
         if isinstance(event, TaskActivity):
             if event.depth == 1:
                 kind = event.payload.get("type")
@@ -2349,6 +2350,7 @@ class NagentsApp(App[None]):
                 prompt.text, identifier=prompt.identifier, voice_session_id=prompt.bridge.voice_session_id
             )
             if self.harness.submit_followup(prompt.session_id, message):
+                self._voice_run_bridges.add(prompt.bridge)
                 self._voice_inputs[prompt.bridge.voice_session_id, prompt.identifier] = prompt
                 self._status("Voice request accepted for the next response boundary; current work continues.")
                 return
@@ -2358,12 +2360,16 @@ class NagentsApp(App[None]):
         self._drain_queue()
 
     def _voice_turn(self, marker: RunTurn) -> None:
-        if self._voice is not None:
-            for bridge in self._voice.bridges:
-                bridge.turn(marker)
+        for bridge in self._voice_bridges():
+            bridge.turn(marker)
         prompt = self._voice_inputs.pop((marker.voice_session_id, marker.identifier), None)
         if prompt is not None:
             self._voice_turns.append(prompt)
+
+    def _voice_bridges(self) -> set[TuiVoiceBridge]:
+        # Completed-call UI history is bounded, but accepted work must retain
+        # its original reporter even after many reconnects evict that history.
+        return self._voice_run_bridges | (set(self._voice.bridges) if self._voice is not None else set())
 
     async def _skills(self, query: str) -> None:
         if not self._backend_ready:

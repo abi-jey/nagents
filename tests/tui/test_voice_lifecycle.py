@@ -10,6 +10,7 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.harness.types import ApprovalRequest
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.tui import NagentsApp
 from nagents.tui import voice_runtime
 from nagents.tui.screens import ApprovalModal
@@ -102,8 +103,6 @@ def test_end_during_setup_joins_resources_updates_panel_and_allows_reconnect(
 def test_spoken_yes_does_not_approve_terminal_permission_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from nagents.live.delegation import ClientDelegationRequest
-
     async def scenario() -> None:
         decisions: list[bool] = []
 
@@ -149,5 +148,65 @@ def test_spoken_yes_does_not_approve_terminal_permission_request(
             await idle(app, pilot)
             assert decisions == [False]
             assert any(message.content == "yes" for message in await harness.history())
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.usefixtures("workspace_discovery_only")
+def test_accepted_request_keeps_its_reporter_after_many_voice_reconnects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        blocked, release = asyncio.Event(), asyncio.Event()
+        reports: list[dict[str, object]] = []
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            if len(provider.requests) == 1:
+                blocked.set()
+                await release.wait()
+            yield TextDoneEvent(text="Verified answer")
+
+        async def sink(kind: LiveAppendKind, text: str, identifier: str) -> str:
+            return "session." + kind + ".append"
+
+        harness, _ = setup_harness(tmp_path, monkeypatch, script)
+        app = NagentsApp(harness)
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            voice = app._ensure_voice()
+            old = TuiVoiceBridge(
+                harness.session_id,
+                "original-call",
+                app._accept_voice,
+                reports.append,
+                agent="assistant",
+                provider="text",
+                model="normal",
+            )
+            voice.bridges.append(old)
+            old.attach(sink)
+            app._launch(lambda: app._send("first"), "Working")
+            await asyncio.wait_for(blocked.wait(), HANG_GUARD)
+            await old.handle_request(ClientDelegationRequest("accepted", "Continue this request", "[]"))
+            await old.close()
+            for index in range(8):
+                voice.bridges.append(
+                    TuiVoiceBridge(
+                        harness.session_id,
+                        f"reconnected-{index}",
+                        app._accept_voice,
+                        lambda report: None,
+                        agent="assistant",
+                        provider="text",
+                        model="normal",
+                    )
+                )
+            assert old not in voice.bridges
+            release.set()
+            await idle(app, pilot)
+            assert [report["status"] for report in reports] == ["queued", "working", "completed"]
+            assert all(report["voice_session_id"] == "original-call" for report in reports)
+            assert any(message.content == "Continue this request" for message in await harness.history())
+            assert not app._voice_run_bridges
 
     asyncio.run(scenario())
