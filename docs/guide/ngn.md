@@ -43,9 +43,12 @@ and version labels are omitted rather than redacted or hashed. Messages, argumen
 tracebacks, arbitrary logger names, and exception text are never rendered. Only
 explicitly allowlisted built-in exception identities retain their fixed type label;
 other exception classes are recorded as `other`. Unknown extras and invalid values
-are dropped. Root/provider warnings are not captured by this runtime log. This policy
-applies to the runtime JSONL file, not the richer on-screen performance snapshot or
-separately enabled wire logging.
+are dropped. While the interactive CLI runs, framework/provider/tool warnings and
+errors use this same metadata-only log instead of propagating to root terminal
+handlers, which can otherwise paint tracebacks over Textual's interface. Tool
+failures remain inspectable in their tool cards. Root and third-party loggers are
+not reconfigured. This policy applies to the runtime JSONL file, not the richer
+on-screen performance snapshot or separately enabled wire logging.
 
 ## Shared provider connections
 
@@ -121,8 +124,9 @@ After exit, ngn prints the selected session, a resume command when the session
 was saved, and its runtime-log path. Runtime logs are private JSON Lines files
 under the configured data directory's `logs/` folder (normally
 `~/.local/share/ngn/logs/`), with UTC timestamps and elapsed milliseconds. They
-record allowlisted TUI lifecycle/performance metadata and exception types, not
-rendered messages, exception text, tracebacks, or third-party warnings. The
+record allowlisted TUI lifecycle/performance metadata, framework warning/error
+metadata, and exception types, not rendered messages, exception text, tracebacks,
+or third-party warnings. The
 terminal client does not enable request/response payload logging by default;
 wire logging requires an explicit opt-in.
 

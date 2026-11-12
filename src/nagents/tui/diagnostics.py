@@ -1,4 +1,4 @@
-"""Private timestamped runtime metadata for a terminal launch; payload logging stays off."""
+"""Private runtime metadata; framework errors must not write over the terminal UI."""
 
 from __future__ import annotations
 
@@ -113,12 +113,19 @@ class RuntimeLog:
         formatter = _Formatter(self.started)
         self.handler = logging.StreamHandler(self.stream)
         self.handler.setFormatter(formatter)
-        self._level, self._propagate = logger.level, logger.propagate
+        self._loggers = ((logging.getLogger("nagents"), logging.WARNING), (logger, logging.INFO))
+        self._states: tuple[tuple[logging.Logger, int, bool], ...] = ()
 
     def __enter__(self) -> RuntimeLog:
-        logger.setLevel(logging.INFO)
-        logger.propagate = False
-        logger.addHandler(self.handler)
+        # A StreamHandler installed before Textual starts retains the original
+        # stderr, bypassing Textual's print capture. Route framework diagnostics
+        # here instead; tool errors are still presented through ToolResultEvent.
+        # Leave the application's root handlers and non-TUI behavior untouched.
+        self._states = tuple((target, target.level, target.propagate) for target, _ in self._loggers)
+        for target, level in self._loggers:
+            target.setLevel(level)
+            target.propagate = False
+            target.addHandler(self.handler)
         return self
 
     def __exit__(
@@ -127,8 +134,9 @@ class RuntimeLog:
         exception: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        logger.removeHandler(self.handler)
-        logger.setLevel(self._level)
-        logger.propagate = self._propagate
+        for target, level, propagate in reversed(self._states):
+            target.removeHandler(self.handler)
+            target.setLevel(level)
+            target.propagate = propagate
         self.handler.close()
         self.stream.close()

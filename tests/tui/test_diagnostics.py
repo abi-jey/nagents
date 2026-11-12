@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -126,3 +127,39 @@ def test_identity_labels_are_omitted_regardless_of_value(tmp_path: Path, value: 
     with RuntimeLog(tmp_path) as runtime:
         logging.getLogger("nagents.tui").info("event", extra=dict.fromkeys(_LABELS, value))
     assert not set(_LABELS) & json.loads(runtime.path.read_text(encoding="utf-8")).keys()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_framework_errors_do_not_reach_terminal_and_logging_is_restored(tmp_path: Path, interrupted: bool) -> None:
+    framework = logging.getLogger("nagents")
+    root = logging.getLogger()
+    before = framework.level, framework.propagate, tuple(framework.handlers)
+    terminal = io.StringIO()
+    console = logging.StreamHandler(terminal)
+    console.setLevel(logging.WARNING)
+    root.addHandler(console)
+    root_handlers = tuple(root.handlers)
+    try:
+        try:
+            with RuntimeLog(tmp_path) as runtime:
+                logging.getLogger("nagents.provider.base").warning("PRIVATE-PROVIDER-WARNING")
+                try:
+                    raise FileNotFoundError("PRIVATE-TOOL-PATH")
+                except FileNotFoundError:
+                    logging.getLogger("nagents.tools.executor").exception("PRIVATE-TOOL-ERROR")
+                assert terminal.getvalue() == ""
+                if interrupted:
+                    raise ValueError("Interrupted TUI")
+        except ValueError:
+            assert interrupted
+        assert (framework.level, framework.propagate, tuple(framework.handlers)) == before
+        assert tuple(root.handlers) == root_handlers
+        logging.getLogger("nagents.tools.executor").warning("normal logging restored")
+        assert "normal logging restored" in terminal.getvalue()
+        records = [json.loads(line) for line in runtime.path.read_text(encoding="utf-8").splitlines()]
+        assert [record["level"] for record in records] == ["WARNING", "ERROR"]
+        assert records[-1]["exception_type"] == "FileNotFoundError"
+        assert "PRIVATE-" not in runtime.path.read_text(encoding="utf-8")
+    finally:
+        root.removeHandler(console)
+        console.close()
