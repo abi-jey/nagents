@@ -140,6 +140,16 @@ class VoiceSettingsModal(ModalScreen[VoiceEdits]):
                 return
             source = self.snapshot.get("global_preferences" if self.snapshot["scope"] == "global" else "overrides", {})
             changes: dict[str, object] = dict(source) if isinstance(source, dict) else {}
+            if self.snapshot["scope"] == "global":
+                origins = self.snapshot.get("origins")
+                if not isinstance(origins, dict):
+                    self.notify(
+                        "Reload Voice settings before saving; preference origins are unavailable.", severity="error"
+                    )
+                    return
+                # Global snapshots contain resolved defaults as well as saved
+                # fields. Re-saving defaults must not pin a followed provider.
+                changes = {key: value for key, value in changes.items() if origins.get(key) == "global"}
             changes.pop("prompt", None)  # The shared settings API preserves live.prompt separately.
             changed = {key: value for key, value in values.items() if value != self.values.get(key)}
             if self.snapshot["scope"] == "agent":

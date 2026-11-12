@@ -16,6 +16,7 @@ from textual.widgets import Switch
 
 from nagents import Provider
 from nagents.events import TextDoneEvent
+from nagents.harness.agents.documents import agent_document_store
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.live.delegation import ClientDelegationRequest
@@ -302,6 +303,55 @@ def test_demo_voice_is_explicitly_unavailable_without_accessing_devices(tmp_path
             assert "unavailable in offline demo" in str(app.query_one("#status", Static).content)
             assert app._voice is None and not app.busy
             assert any(command.name == "voice" for command in app._completion_commands())
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.usefixtures("workspace_discovery_only")
+@pytest.mark.parametrize("scope", ["global", "workspace"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_unrelated_voice_setting_preserves_model_binding_presence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str, explicit: bool
+) -> None:
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="unused")
+
+        harness, _ = setup_harness(tmp_path, monkeypatch, script)
+        app = NagentsApp(harness)
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            configure(harness, monkeypatch)
+            for layer in ("global", "workspace"):
+                store = agent_document_store(harness.provider_store, "global" if layer == "global" else "workspace")
+                current = store.load("assistant")
+                store.patch_live("assistant", {}, removed=("model",), expected=current.revision)
+            if explicit:
+                store = agent_document_store(harness.provider_store, "global" if scope == "global" else "workspace")
+                current = store.load("assistant")
+                store.patch_live(
+                    "assistant", {"model": {"provider": "voice", "id": "gpt-live-custom"}}, expected=current.revision
+                )
+            voice = app._ensure_voice()
+            before = await voice.snapshot(scope)
+            edits: list[VoiceEdits | None] = []
+            modal = VoiceSettingsModal(before)
+            await app.push_screen(modal, edits.append)
+            await pilot.pause()
+            enabled = modal.query_one("#voice-enabled", Switch)
+            enabled.value = not enabled.value
+            assert await pilot.click("#voice-save")
+            await pilot.pause()
+            edit = edits[0]
+            assert edit is not None
+            if explicit:
+                assert edit.changes["model"] == "gpt-live-custom" and edit.changes["connection_id"] == "voice"
+            else:
+                assert "model" not in edit.changes and "connection_id" not in edit.changes
+            await voice.save(edit.snapshot, edit.changes)
+            saved = voice.settings.voice.snapshot("global" if scope == "global" else "workspace")
+            fields = saved.global_values.model_fields_set if scope == "global" else saved.overrides.model_fields_set
+            assert {"model", "connection_id"} <= fields if explicit else not {"model", "connection_id"} & fields
 
     asyncio.run(scenario())
 
