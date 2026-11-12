@@ -1,6 +1,7 @@
 """Provider-backed compaction strategy behavior."""
 
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 from typing import cast
 
@@ -9,7 +10,10 @@ import pytest
 from nagents import Agent
 from nagents import ModelCompaction
 from nagents import SessionManager
+from nagents.compaction import COMPACTION_CONTINUATION_PROMPT
 from nagents.compaction import DEFAULT_COMPACTION_PROMPT
+from nagents.compaction import with_compaction_continuation
+from nagents.events import CompactionDoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import Event
 from nagents.events import FinishReason
@@ -17,6 +21,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.extensions import CompactionRequest
 from nagents.types import Message
+from nagents.types import ToolCall
 from tests.agent.test_extensions import OfflineProvider
 
 
@@ -37,6 +42,136 @@ def test_model_compaction_thresholds_prefer_observed_input_tokens() -> None:
         # When usage is unavailable, use the estimate.
         request.actual_input_tokens = 0
         assert await ModelCompaction(token_threshold=100).should_compact(request)
+
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize(
+    ("messages", "continued"),
+    [
+        ([], False),
+        ([Message(role="system", content="rules")], False),
+        ([Message(role="assistant", content="ordinary prefill")], False),
+        ([Message(role="user", content="go")], False),
+        ([Message(role="compaction_summary", content="facts"), Message(role="user", content="next")], False),
+        (
+            [
+                Message(role="compaction_summary", content="facts"),
+                Message(role="developer", content="rules"),
+                Message(role="user", content="next"),
+            ],
+            False,
+        ),
+        ([Message(role="compaction_summary", content="facts")], True),
+        ([Message(role="system", content="rules"), Message(role="compaction_summary", content="facts")], True),
+        (
+            [Message(role="compaction_summary", content="first"), Message(role="compaction_summary", content="second")],
+            True,
+        ),
+        (
+            [
+                Message(role="compaction_summary", content="facts"),
+                Message(role="assistant", content="done"),
+                Message(role="user", content="next"),
+            ],
+            True,
+        ),
+        (
+            [
+                Message(role="compaction_summary", content="facts"),
+                Message(role="assistant", tool_calls=[ToolCall("a", "work")]),
+                Message(role="tool", tool_call_id="a", name="work", content="completed"),
+            ],
+            True,
+        ),
+    ],
+)
+def test_compaction_continuation_is_idempotent_preserves_history_and_only_fills_missing_user_boundary(
+    messages: list[Message], continued: bool
+) -> None:
+    original = deepcopy(messages)
+    prepared = with_compaction_continuation(messages)
+    assert messages == original
+    continuation = Message(role="user", content=COMPACTION_CONTINUATION_PROMPT)
+    assert prepared.count(continuation) == int(continued)
+    assert [message for message in prepared if message != continuation] == original
+    assert with_compaction_continuation(prepared) is prepared
+    if not continued:
+        assert prepared is messages
+
+
+def test_summary_only_continuation_formats_for_every_native_contract() -> None:
+    from nagents.adapters import anthropic
+    from nagents.adapters import gemini
+    from nagents.adapters import openai
+    from nagents.adapters import responses
+
+    messages = with_compaction_continuation([Message(role="compaction_summary", content="Completed work")])
+    assert anthropic.format_messages(messages)[1][0]["role"] == "user"
+    assert gemini.format_request(messages)["contents"][0]["role"] == "user"
+    assert openai.format_messages(messages)[-1]["role"] == "user"
+    assert responses.format_request("fixture", messages, [], None, True)["input"]
+
+
+def test_repeated_mid_turn_compactions_rebuild_one_ephemeral_continuation(tmp_path: Path) -> None:
+    async def drive() -> None:
+        provider = OfflineProvider(
+            [
+                [ToolCallEvent(id="first", name="work", arguments={"value": "first"})],
+                [TextDoneEvent(text="First action completed")],
+                [ToolCallEvent(id="second", name="work", arguments={"value": "second"})],
+                [TextDoneEvent(text="Both actions completed")],
+                [TextDoneEvent(text="Finished")],
+            ]
+        )
+        performed: list[str] = []
+
+        def work(value: str) -> str:
+            """Perform a local action once."""
+            performed.append(value)
+            return value
+
+        session = SessionManager(tmp_path / "repeated.db")
+        agent = Agent(provider, session, tools=[work], compaction_strategy=ModelCompaction(message_threshold=3))
+        try:
+            events = [event async for event in agent.run("Do both actions", session_id="s")]
+            assert performed == ["first", "second"]
+            assert sum(isinstance(event, CompactionDoneEvent) for event in events) == 2
+            continuation = Message(role="user", content=COMPACTION_CONTINUATION_PROMPT)
+            assert provider.requests[2].messages == [
+                Message(role="compaction_summary", content="First action completed"),
+                continuation,
+            ]
+            assert provider.requests[4].messages == [
+                Message(role="compaction_summary", content="Both actions completed"),
+                continuation,
+            ]
+            assert await SessionManager(session.db_path).get_history("s") == [
+                Message(role="compaction_summary", content="Both actions completed"),
+                Message(role="assistant", content="Finished"),
+            ]
+        finally:
+            await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_manual_compaction_with_new_user_turn_does_not_invent_a_continuation(tmp_path: Path) -> None:
+    async def drive() -> None:
+        provider = OfflineProvider([[TextDoneEvent(text="Saved facts")], [TextDoneEvent(text="Answer")]])
+        session = SessionManager(tmp_path / "manual.db")
+        await session.get_or_create_session("s", "u")
+        await session.add_message("s", Message(role="user", content="Old request"))
+        agent = Agent(provider, session, compaction_strategy=ModelCompaction(message_threshold=10))
+        try:
+            await agent.compact("s")
+            _ = [event async for event in agent.run("New request", session_id="s")]
+            assert provider.requests[-1].messages == [
+                Message(role="compaction_summary", content="Saved facts"),
+                Message(role="user", content="New request"),
+            ]
+        finally:
+            await agent.close()
 
     asyncio.run(drive())
 

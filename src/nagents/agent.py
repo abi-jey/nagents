@@ -44,6 +44,7 @@ from .compaction import ModelCompaction
 from .compaction import describe_compaction
 from .compaction import estimate_messages_tokens
 from .compaction import get_model_context_limit
+from .compaction import with_compaction_continuation
 from .context_stats import ContextStats
 from .events import CompactionDoneEvent
 from .events import CompactionStartedEvent
@@ -1624,6 +1625,10 @@ class Agent:
                     # The next API call will give us new actual prompt_tokens
                     self._discard_observed_usage(session_id)
                     observe("context_after_compaction", messages=messages, session_id=session_id)
+
+            # Rebuild after every history load, not just the compaction event:
+            # later tool rounds and reopened sessions need the same boundary.
+            messages = with_compaction_continuation(messages)
 
             # Generate response
             pending_tool_calls: list[ToolCall] = []

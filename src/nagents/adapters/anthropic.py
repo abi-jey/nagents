@@ -214,6 +214,11 @@ def format_messages(messages: list[Message]) -> tuple[str | None, list[dict[str,
         else:
             system_prompt = COMPACTION_SUMMARY_PREFIX + combined
 
+    if not result:
+        raise ProtocolError(
+            "Messages requests require at least one user or assistant message; "
+            "system instructions and compaction summaries alone are not a conversation."
+        )
     return system_prompt, result
 
 
