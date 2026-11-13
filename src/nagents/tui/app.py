@@ -69,6 +69,7 @@ from nagents.harness.types import TranscriptAbandoned
 from nagents.harness.types import TranscriptAnchor
 from nagents.session import forks
 from nagents.types import TextContent
+from nagents.web.dashboard import DashboardHost
 from nagents.web.execution.approvals import ToolApprovals
 
 from .activity import ACTIVITY_FPS
@@ -243,6 +244,8 @@ class NagentsApp(App[None]):
         # Once the theme is registered below, return ANSI mode to theme control.
         super().__init__(ansi_color=True)
         self.harness = harness
+        self._dashboard = DashboardHost(harness.workspace)
+        self._dashboard_opening = False
         self._tool_approvals: ToolApprovals | None = None
         if not harness.config.animations:
             self.animation_level = "none"
@@ -1249,7 +1252,8 @@ class NagentsApp(App[None]):
             self.busy
             and is_command
             and not custom_command
-            and name not in {"/", "/help", "/context", "/plugins", "/tasks", "/queue", "/quit", "/perf", "/voice"}
+            and name
+            not in {"/", "/help", "/dashboard", "/context", "/plugins", "/tasks", "/queue", "/quit", "/perf", "/voice"}
         ):
             self._status("Already working. Esc cancels; your draft is kept.")
             return
@@ -1967,6 +1971,7 @@ class NagentsApp(App[None]):
                 await asyncio.gather(self._preinitialized, return_exceptions=True)
             if self._channel_host is not None:
                 self._channel_host.close()
+            await self._dashboard.close()
             await self.harness.close()
             logger.info(
                 "TUI stopped",
@@ -2115,6 +2120,12 @@ class NagentsApp(App[None]):
                 self.push_screen(DetailModal(name[1:].upper(), self.harness.describe()))
             except Exception as exc:
                 self._status(str(exc), error=True)
+        elif name == "/dashboard":
+            if argument:
+                self._status("Usage: /dashboard", error=True)
+            elif not self._dashboard_opening:
+                self._dashboard_opening = True
+                self.run_worker(self._open_dashboard(), group="dashboard")
         elif name == "/perf":
             self._performance_command(argument)
         elif name == "/voice":
@@ -2370,6 +2381,18 @@ class NagentsApp(App[None]):
         # Completed-call UI history is bounded, but accepted work must retain
         # its original reporter even after many reconnects evict that history.
         return self._voice_run_bridges | (set(self._voice.bridges) if self._voice is not None else set())
+
+    async def _open_dashboard(self) -> None:
+        import webbrowser
+
+        try:
+            url = await self._dashboard.start()
+            opened = await asyncio.to_thread(webbrowser.open, url, new=2)
+            self._status(f"Dashboard: {url}" if opened else f"Open the dashboard in your browser: {url}")
+        except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
+            self._status(f"Could not open dashboard: {exc}", error=True)
+        finally:
+            self._dashboard_opening = False
 
     async def _skills(self, query: str) -> None:
         if not self._backend_ready:

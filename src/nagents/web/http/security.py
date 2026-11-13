@@ -117,7 +117,7 @@ class LocalOnly:
         # bootstrap, embedded documents and WebSockets keep their boundary.
         browser_navigation = remote_callback or (
             scope["method"] == "GET"
-            and scope["path"] == "/"
+            and scope["path"] in {"/", "/dashboard"}
             and headers.getlist("sec-fetch-mode") == ["navigate"]
             and headers.getlist("sec-fetch-dest") == ["document"]
         )

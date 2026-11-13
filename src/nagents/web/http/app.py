@@ -456,6 +456,12 @@ def create_app(
             "active_runs": state.active_runs(),
         }
 
+    @app.get("/api/dashboard")
+    async def dashboard() -> dict[str, str]:
+        from ..dashboard import dashboard_summary
+
+        return dashboard_summary(state.harness.workspace)
+
     @app.websocket("/api/events")
     async def events(socket: WebSocket) -> None:
         await state.bus.serve(socket, state.snapshot, state.disconnected)
@@ -891,6 +897,7 @@ def create_app(
         return {"status": body.decision}
 
     @app.get("/")
+    @app.get("/dashboard")
     async def index() -> FileResponse:
         return FileResponse(directory / "index.html")
 

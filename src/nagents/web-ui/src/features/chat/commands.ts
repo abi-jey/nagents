@@ -18,6 +18,7 @@ export const webCommands = [
   { name: "tools", description: "Choose available tools", argument: "" },
   { name: "channels", description: "Manage connected channels", argument: "" },
   { name: "voice", description: "Open voice settings", argument: "" },
+  { name: "dashboard", description: "Open the local dashboard in a new tab", argument: "" },
   { name: "stop", description: "Stop the active run", argument: "" },
 ] as const;
 export type WebCommand = typeof webCommands[number];
