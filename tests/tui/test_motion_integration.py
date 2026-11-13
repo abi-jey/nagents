@@ -96,6 +96,10 @@ def test_main_state_tracks_events_approval_and_cancellation(tmp_path: Path) -> N
             async with asyncio.timeout(HANG_GUARD):
                 while current_state() != "responding":
                     await pilot.pause(0)
+                # Text can be visible while the consumer is still processing the
+                # yielded chunk. Cancel only once the producer is awaiting work,
+                # so this tests cancellation rather than async-generator close.
+                await backend.wait_started.wait()
                 assert backend.running
                 await pilot.press("escape")
                 await idle(app, pilot)
