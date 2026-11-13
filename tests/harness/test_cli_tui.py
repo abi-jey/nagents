@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from nagents._version import framework_version
 from nagents.cli import _parser
 from nagents.cli import main
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def test_version_is_checkout_aware_and_does_not_import_textual(capsys: pytest.CaptureFixture[str]) -> None:
@@ -24,10 +22,27 @@ def test_version_is_checkout_aware_and_does_not_import_textual(capsys: pytest.Ca
     assert "textual" not in sys.modules
 
 
-def test_nonterminal_tui_exits_with_headless_guidance(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["--workspace", str(tmp_path)]) == 2
-    assert "The TUI needs a terminal" in capsys.readouterr().err
-    assert "textual" not in sys.modules
+def test_nonterminal_tui_exits_with_headless_guidance(tmp_path: Path) -> None:
+    # Other tests may already have loaded Textual in this xdist worker. A fresh
+    # process tests lazy imports without depending on collection/execution order.
+    source = Path(__file__).resolve().parents[2] / "src"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from nagents.cli import main; "
+            "code = main(['--workspace', sys.argv[2]]); "
+            "assert 'textual' not in sys.modules; sys.exit(code)",
+            str(source),
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2, result.stderr
+    assert "The TUI needs a terminal" in result.stderr
 
 
 def test_parser_keeps_resume_and_demo_options_available() -> None:

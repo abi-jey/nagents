@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 from textual.color import Color
 from textual.content import Content
+from textual.widgets import Collapsible
 from textual.widgets import Static
 
 from nagents.events import DoneEvent
@@ -45,9 +46,10 @@ def test_saved_tool_added_message_is_one_unlabeled_row_and_not_composer_history(
         app = make_app(backend)
         async with app.run_test(size=(80, 24)) as pilot:
             await idle(app, pilot)
-            rows = list(app.query(".notice.tool-added").results(Static))
+            rows = list(app.query(ToolNotice))
             assert len(rows) == 1
-            assert str(rows[0].content) == "Tool added: weather_forecast"
+            assert rows[0].title == "Tools added: 1"
+            assert rows[0].collapsed
             assert isinstance(rows[0], ToolNotice)
             assert rows[0].region.height == 1
             assert rows[0].styles.color == Color.parse(app.get_css_variables()["ngn-tool"])
@@ -73,13 +75,57 @@ def test_live_tool_added_notice_is_not_a_user_turn_or_sent_prompt(tmp_path: Path
             await idle(app, pilot)
             await send(app, pilot, "continue")
             await idle(app, pilot)
-            rows = list(app.query(".notice.tool-added").results(Static))
+            rows = list(app.query(ToolNotice))
             assert len(rows) == 1
-            assert str(rows[0].content) == "Tool added: calendar_lookup"
+            assert rows[0].title == "Tools added: 1"
+            assert rows[0].collapsed
             assert backend.prompts == ["continue"]
             assert len(app.query(Turn)) == 1
             assert app.query_one(Composer).prompt_history == ["continue"]
             assert isinstance(rows[0], ToolNotice)
+
+    asyncio.run(scenario())
+
+
+def test_tool_notice_groups_expand_independently(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        backend.messages = [
+            Message(
+                role="user",
+                name="ngn_tools_added",
+                content=(
+                    "Tools added: weather_forecast, mcp__chrome-devtools__click, "
+                    "mcp__chrome-devtools__fill, mcp__docs__search"
+                ),
+            ),
+        ]
+        app = make_app(backend)
+        async with app.run_test(size=(80, 30)) as pilot:
+            await idle(app, pilot)
+            notice = app.query_one(ToolNotice)
+            assert notice.title == "Tools added: 4"
+            assert notice.region.height == 1
+            await pilot.click(notice.query_one("CollapsibleTitle"))
+            await pilot.pause()
+            assert not notice.collapsed
+            groups = list(notice.query(".tool-source").results(Collapsible))
+            assert [group.title for group in groups] == [
+                "MCP server chrome-devtools added: 2",
+                "MCP server docs added: 1",
+                "Custom tools: 1",
+            ]
+            assert all(group.collapsed for group in groups)
+            await pilot.click(groups[0].query_one("CollapsibleTitle"))
+            await pilot.pause()
+            assert not groups[0].collapsed
+            assert not notice.collapsed
+            assert groups[1].collapsed
+            assert str(groups[0].query_one("Contents > Static", Static).content) == "click\nfill"
+            await pilot.click(notice.query_one("CollapsibleTitle"))
+            await pilot.pause()
+            assert notice.collapsed
+            assert notice.region.height == 1
 
     asyncio.run(scenario())
 
@@ -124,8 +170,10 @@ def test_restored_notices_keep_order_without_reclassifying_user_text(tmp_path: P
             rows = [child for child in children if isinstance(child, (ToolNotice, Turn))]
             assert [type(row) for row in rows] == [ToolNotice, ToolNotice, Turn, Turn, ToolNotice]
             notices = list(app.query(ToolNotice))
-            assert str(notices[0].content) == literal
-            rendered = notices[0].render()
+            assert notices[0].title == "Tools added"
+            body = notices[0].query_one("Contents > Static", Static)
+            assert str(body.content) == literal
+            rendered = body.render()
             assert isinstance(rendered, Content)
             assert rendered.plain == literal
             assert notices[1].region.height == 1
