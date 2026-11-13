@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import socket
+import sys
 from contextlib import contextmanager
 from contextlib import suppress
 from typing import TYPE_CHECKING
@@ -35,15 +37,15 @@ def create_dashboard_app(workspace: Path, assets: Path, authority: str) -> FastA
     app.add_middleware(LocalOnly, authority=authority, token=token)
 
     @app.get("/api/bootstrap")
-    async def bootstrap() -> dict[str, str]:
-        return {"token": token, "workspace": str(workspace)}
+    async def bootstrap() -> dict[str, object]:
+        return {"token": token, "workspace": str(workspace), "capabilities": {"chat": False}}
 
     @app.get("/api/dashboard")
     async def summary() -> dict[str, str]:
         return dashboard_summary(workspace)
 
-    @app.get("/")
-    @app.get("/dashboard")
+    @app.get("/", response_model=None)
+    @app.get("/dashboard", response_model=None)
     async def index() -> FileResponse:
         return FileResponse(assets / "index.html")
 
@@ -74,6 +76,10 @@ class DashboardHost:
                 from . import built_assets
 
                 class EmbeddedServer(Server):
+                    def install_signal_handlers(self) -> None:
+                        # Uvicorn < 0.29 uses this hook instead of capture_signals.
+                        pass
+
                     @contextmanager
                     def capture_signals(self) -> Iterator[None]:
                         # Textual owns process signals; this server only owns its socket.
@@ -91,6 +97,7 @@ class DashboardHost:
                         host="127.0.0.1",
                         port=port,
                         proxy_headers=False,
+                        ws="none",
                         access_log=False,
                         log_config=None,
                         log_level="warning",
@@ -134,3 +141,42 @@ class DashboardHost:
             self._server = None
             self._task = None
             self.url = ""
+
+
+async def open_dashboard_browser(url: str) -> bool:
+    """Ask the default desktop handler without a terminal browser or executor job."""
+    if any(os.environ.get(name) for name in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")):
+        return False
+    if sys.platform == "darwin":
+        command = ("/usr/bin/open", url)
+    elif sys.platform == "win32":
+        command = ("rundll32.exe", "url.dll,FileProtocolHandler", url)
+    elif os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        # Unlike xdg-open/webbrowser, gio never falls back to a text-mode browser.
+        command = ("/usr/bin/gio", "open", url)
+    else:
+        return False
+    process: asyncio.subprocess.Process | None = None
+    starting = asyncio.create_task(
+        asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    )
+    try:
+        process = await asyncio.shield(starting)
+        async with asyncio.timeout(2):
+            return await process.wait() == 0
+    except asyncio.CancelledError:
+        with suppress(OSError):
+            process = await starting
+        raise
+    except (OSError, TimeoutError):
+        return False
+    finally:
+        if process is not None and process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()

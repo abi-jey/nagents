@@ -33,11 +33,12 @@ export function Dashboard() {
     return () => controller.abort();
   }, [attempt]);
   const workspace = connection.state === "ready" ? connection.snapshot.workspace : "";
+  const chatAvailable = connection.state === "ready" && connection.snapshot.chatAvailable;
   return <main className="dashboard-shell">
     <div className="dashboard-content">
       <header className="dashboard-topbar">
-        <a href="/" className="dashboard-brand" aria-label="ngn chat">ngn<span> / dashboard</span></a>
-        <a href="/" className="dashboard-back">Back to chat <span aria-hidden="true">&rarr;</span></a>
+        <a href={chatAvailable ? "/" : "/dashboard"} className="dashboard-brand" aria-label={chatAvailable ? "ngn chat" : "ngn dashboard"}>ngn<span> / dashboard</span></a>
+        {chatAvailable && <a href="/" className="dashboard-back">Back to chat <span aria-hidden="true">&rarr;</span></a>}
       </header>
       <section className="dashboard-intro" aria-labelledby="dashboard-title">
         <p className="dashboard-eyebrow">Your agent environment</p>

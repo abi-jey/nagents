@@ -443,6 +443,7 @@ def create_app(
     async def bootstrap() -> dict[str, object]:
         return {
             "schema_version": 1,
+            "capabilities": {"chat": True},
             "token": token,
             "workspace": str(state.harness.workspace),
             "provider": state.harness.config.provider_profile().kind,

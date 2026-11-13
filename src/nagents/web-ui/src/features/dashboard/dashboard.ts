@@ -1,6 +1,6 @@
 import { request } from "../../api/client.js";
 
-export type DashboardSnapshot = { workspace: string; status: "not_connected" };
+export type DashboardSnapshot = { workspace: string; status: "not_connected"; chatAvailable: boolean };
 
 export async function readDashboard(signal: AbortSignal): Promise<DashboardSnapshot> {
   // The standalone dashboard host has no chat session; its bootstrap is minimal.
@@ -15,7 +15,10 @@ export async function readDashboard(signal: AbortSignal): Promise<DashboardSnaps
   if (!value || typeof value !== "object" || !("workspace" in value) ||
       typeof value.workspace !== "string" || !("status" in value) || value.status !== "not_connected")
     throw new Error("Dashboard metadata is unavailable.");
-  return { workspace: value.workspace, status: value.status };
+  const capabilities = "capabilities" in bootstrap ? bootstrap.capabilities : undefined;
+  const chatAvailable = !!capabilities && typeof capabilities === "object" &&
+    "chat" in capabilities && capabilities.chat === true;
+  return { workspace: value.workspace, status: value.status, chatAvailable };
 }
 
 /** Call directly from the command gesture, before any asynchronous work. */
