@@ -676,10 +676,13 @@ class CodingTools:
                     pattern = rule[1:] if negate else rule
                     directory_only = pattern.endswith("/")
                     pattern = pattern.rstrip("/")
-                    target = child.relative_to(origin).as_posix()
                     anchored = pattern.startswith("/")
                     pattern = pattern.lstrip("/")
-                    match = fnmatch.fnmatchcase(target if anchored or "/" in pattern else name, pattern)
+                    # Origins are ancestor folders from this walk. Most ignore
+                    # rules match only the basename; avoid constructing relative
+                    # Paths (and scanning their parents) for every rule/entry.
+                    target = "/".join(child.parts[len(origin.parts) :]) if anchored or "/" in pattern else name
+                    match = fnmatch.fnmatchcase(target, pattern)
                     if match and (not directory_only or is_directory):
                         ignored = not negate
                 if ignored:
@@ -716,7 +719,6 @@ class CodingTools:
         if not 1 <= limit <= 1000 or not pattern or len(pattern) > 1000:
             raise ValueError("limit must be 1..1000 and pattern must be 1..1000 characters")
         relative = self.relative(path)
-        instructions = self.instructions(relative, directory=True)
         found: list[str] = []
         truncated = False
         size = 0
@@ -729,7 +731,7 @@ class CodingTools:
                     truncated = True
                     break
                 found.append(item + ("/" if is_directory else ""))
-        return {"paths": found, "truncated": truncated, "instructions": instructions}
+        return {"paths": found, "truncated": truncated}
 
     async def search(self, query: str, path: str = ".", limit: int = 100) -> dict[str, JsonValue]:
         """Case-sensitive literal search in a workspace file or directory, not regex.
