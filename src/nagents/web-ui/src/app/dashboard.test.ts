@@ -7,7 +7,7 @@ import { Dashboard } from "../features/dashboard/Dashboard.js";
 import { isDashboardPath, openDashboard, readDashboard } from "../features/dashboard/dashboard.js";
 import { commandIntent, commandMatches } from "../features/chat/commands.js";
 
-const bootstrap = { token: "local-dashboard-token", workspace: "/work/project" };
+const bootstrap = { token: "local-dashboard-token", workspace: "/work/project", capabilities: { chat: true } };
 
 function browser() {
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost/dashboard" });
@@ -55,6 +55,7 @@ test("dashboard authenticates metadata and keeps both scopes explicitly unmeasur
   try {
     await act(async () => view.root.render(createElement(Dashboard)));
     assert.equal(view.dom.window.document.title, "Dashboard | ngn");
+    assert.equal(view.container.querySelector(".dashboard-back")?.getAttribute("href"), "/");
     assert.match(view.container.textContent!, /Instrumentation not connected/);
     assert.match(view.container.textContent!, /Current server workspace \/work\/project/);
     assert.equal(view.container.querySelectorAll(".dashboard-metric dd").length, 4);
@@ -110,3 +111,17 @@ test("dashboard metadata validates the disconnected contract", async t => {
   t.mock.method(globalThis, "fetch", async (input: string) => Response.json(input === "/api/bootstrap" ? bootstrap : { workspace: 12, status: "connected" }));
   await assert.rejects(readDashboard(new AbortController().signal), /Dashboard metadata is unavailable/);
 });
+
+for (const capabilities of [{ chat: false }, undefined]) {
+  test(`standalone dashboard omits chat navigation (${JSON.stringify(capabilities)})`, async t => {
+    const view = browser();
+    t.mock.method(globalThis, "fetch", async (input: string) => Response.json(input === "/api/bootstrap"
+      ? { ...bootstrap, capabilities } : { workspace: "/work/project", status: "not_connected" }));
+    try {
+      await act(async () => view.root.render(createElement(Dashboard)));
+      assert.equal(view.container.querySelector(".dashboard-back"), null);
+      assert.equal(view.container.querySelector(".dashboard-brand")?.getAttribute("href"), "/dashboard");
+      assert.equal(view.container.querySelector(".dashboard-brand")?.getAttribute("aria-label"), "ngn dashboard");
+    } finally { await view.cleanup(); }
+  });
+}

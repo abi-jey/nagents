@@ -23,11 +23,11 @@ async def test_dashboard_command_opens_browser_without_model_call(
     monkeypatch.setattr(app._dashboard, "start", start)
     monkeypatch.setattr(app._dashboard, "close", close)
 
-    def open_browser(url: str, new: int) -> bool:
+    async def open_browser(url: str) -> bool:
         opened.append(url)
         return True
 
-    monkeypatch.setattr("webbrowser.open", open_browser)
+    monkeypatch.setattr("nagents.tui.app.open_dashboard_browser", open_browser)
     async with app.run_test() as pilot:
         await idle(app, pilot)
         await send(app, pilot, "/dashboard")
@@ -48,3 +48,14 @@ async def test_dashboard_start_failure_stays_in_client(tmp_path: Path, monkeypat
         await app.workers.wait_for_complete()
         assert not app._dashboard_opening
         assert "Install nagents[web]" in app._last_error
+
+
+@pytest.mark.asyncio
+async def test_dashboard_close_failure_still_closes_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = FakeHarness(tmp_path)
+    app = make_app(backend)
+    monkeypatch.setattr(app._dashboard, "close", AsyncMock(side_effect=RuntimeError("dashboard shutdown failed")))
+    with pytest.raises(RuntimeError, match="dashboard shutdown failed"):
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+    assert backend.closed
