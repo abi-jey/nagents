@@ -47,6 +47,7 @@ class FakeHarness:
         self._initialized = False
         self.closed = False
         self.cancelled = False
+        self.wait_started = asyncio.Event()
         self.running = False
         self.prompts: list[str] = []
         self.messages: list[Message] = []
@@ -90,6 +91,7 @@ class FakeHarness:
         try:
             if prompt == "wait":
                 yield TextChunkEvent(chunk="A partial answer.")
+                self.wait_started.set()
                 await asyncio.Event().wait()
             if prompt == "approval":
                 allowed = await self.approval_handler(

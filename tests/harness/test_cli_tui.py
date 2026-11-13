@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from nagents._version import framework_version
 from nagents.cli import _parser
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def cli_without_textual(*arguments: str) -> subprocess.CompletedProcess[str]:
@@ -18,13 +15,17 @@ def cli_without_textual(*arguments: str) -> subprocess.CompletedProcess[str]:
     # tests optional imports without depending on another test unimporting them.
     script = """
 import sys
+sys.path.insert(0, sys.argv.pop(1))
 from nagents.cli import main
 try:
     raise SystemExit(main(sys.argv[1:]))
 finally:
     assert 'textual' not in sys.modules
 """
-    return subprocess.run([sys.executable, "-c", script, *arguments], capture_output=True, text=True, timeout=30)
+    source = Path(__file__).resolve().parents[2] / "src"
+    return subprocess.run(
+        [sys.executable, "-c", script, str(source), *arguments], capture_output=True, text=True, timeout=30
+    )
 
 
 def test_version_is_checkout_aware_and_does_not_import_textual() -> None:

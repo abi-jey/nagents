@@ -163,3 +163,53 @@ def test_framework_errors_do_not_reach_terminal_and_logging_is_restored(tmp_path
     finally:
         root.removeHandler(console)
         console.close()
+
+
+@pytest.mark.parametrize("name", ["nagents", "nagents.tui", "nagents.tools.executor"])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_preexisting_framework_handlers_are_suspended_and_restored(
+    tmp_path: Path, name: str, interrupted: bool
+) -> None:
+    target = logging.getLogger(name)
+    terminal = io.StringIO()
+    console = logging.StreamHandler(terminal)
+    old_level, old_propagate = target.level, target.propagate
+    target.addHandler(console)
+    target.propagate = False
+    before = tuple(target.handlers)
+    try:
+        try:
+            with RuntimeLog(tmp_path) as runtime:
+                target.error("PRIVATE-ERROR")
+                assert terminal.getvalue() == ""
+                if interrupted:
+                    raise ValueError("interrupted")
+        except ValueError:
+            assert interrupted
+        assert (target.level, target.propagate, tuple(target.handlers)) == (old_level, False, before)
+        assert json.loads(runtime.path.read_text())["level"] == "ERROR"
+        target.error("normal logging restored")
+        assert "normal logging restored" in terminal.getvalue()
+    finally:
+        target.removeHandler(console)
+        target.setLevel(old_level)
+        target.propagate = old_propagate
+        console.close()
+
+
+@pytest.mark.parametrize("operation", ["write", "flush"])
+def test_runtime_write_failure_never_prints_raw_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], operation: str
+) -> None:
+    def fail(*args: object) -> None:
+        raise OSError("PRIVATE-DISK-ERROR")
+
+    with RuntimeLog(tmp_path) as runtime:
+        with monkeypatch.context() as patch:
+            patch.setattr(runtime.stream, operation, fail)
+            patch.setattr(logging, "raiseExceptions", True)
+            try:
+                raise ValueError("PRIVATE-EXCEPTION")
+            except ValueError:
+                logging.getLogger("nagents.tools.executor").exception("PRIVATE-MESSAGE %s", "PRIVATE-ARG")
+        assert capsys.readouterr().err == ""

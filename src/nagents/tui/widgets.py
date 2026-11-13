@@ -29,6 +29,7 @@ from textual.widgets.markdown import MarkdownFence
 
 from nagents.harness.agents.updates import NOTIFICATION_PREFIX
 from nagents.harness.agents.updates import WAKEUP_PREFIX
+from nagents.harness.tools.discovery import added_tool_names
 from nagents.tool_outcomes import shell_outcome
 from nagents.tools.output import ToolOutput
 
@@ -102,12 +103,35 @@ def saved_context_title(text: str) -> str:
     return ""
 
 
-class ToolNotice(Static):
-    """One compact availability row shared by live events and restored history."""
+class ToolNotice(Collapsible):
+    """Compact availability summary with inspectable source groups."""
 
     def __init__(self, text: str) -> None:
-        super().__init__(text, markup=False, classes="notice tool-added")
-        # The row deliberately stays one line; keep long tool names inspectable.
+        names = sorted(added_tool_names(text))
+        groups: dict[str, list[str]] = {}
+        for name in names:
+            parts = name.split("__", 2)
+            if len(parts) == 3 and parts[0] == "mcp" and parts[1] and parts[2]:
+                label, tool = f"MCP server {parts[1]} added", parts[2]
+            else:
+                label, tool = "Custom tools", name
+            groups.setdefault(label, []).append(tool)
+        children: list[Collapsible | Static] = [
+            Collapsible(
+                Static("\n".join(tools), markup=False),
+                title=f"{label}: {len(tools)}",
+                collapsed=True,
+                classes="tool-source",
+            )
+            for label, tools in groups.items()
+        ]
+        title = f"Tools added: {len(names)}" if names else "Tools added"
+        super().__init__(
+            *(children or [Static(text, markup=False)]),
+            title=title,
+            collapsed=True,
+            classes="tool-added",
+        )
         self.tooltip = text
 
 
