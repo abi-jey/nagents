@@ -269,6 +269,8 @@ class NagentsApp(App[None]):
         self._pending: list[str] = []
         self._answer_text = ""
         self._run_text = ""
+        self._response_text: dict[tuple[str, str], list[Markdown]] = {}
+        self._text_response: tuple[str, str] = ("", "")
         self._tools: dict[str, ToolCard] = {}
         self._running_tools: set[str] = set()
         self._usage = ""
@@ -1374,6 +1376,8 @@ class NagentsApp(App[None]):
         self._answer = None
         self._answer_text = ""
         self._run_text = ""
+        self._response_text.clear()
+        self._text_response = ("", "")
         self._pending.clear()
         self._tools.clear()
         self._unanchored_tools.clear()
@@ -1480,6 +1484,45 @@ class NagentsApp(App[None]):
         self._answer_text += text
         self._run_text += text
         self._pending.append(text)
+
+    async def _response_text_event(self, event: TextChunkEvent | TextDoneEvent) -> bool:
+        response_id = event.extra.get("response_id")
+        session_id = event.extra.get("response_session_id", "")
+        if not isinstance(response_id, str) or not response_id or not isinstance(session_id, str):
+            return False
+        key = (session_id, response_id)
+        if key != self._text_response:
+            await self._flush_stream()
+            self._answer = None
+            self._answer_text = ""
+            self._text_response = key
+        parts = self._response_text.setdefault(key, [])
+        if isinstance(event, TextChunkEvent):
+            await self._text(event.chunk)
+            if self._answer is not None and self._answer not in parts:
+                parts.append(self._answer)
+            return True
+        await self._flush_stream()
+        if not event.text:
+            return True
+        if not parts:
+            await self._text(event.text)
+            if self._answer is not None:
+                parts.append(self._answer)
+            await self._flush_stream()
+            return True
+        # Tool previews split the visual stream, not the provider response.
+        # Reconcile its final snapshot against those exact widgets in place.
+        offset = 0
+        for index, part in enumerate(parts):
+            size = len(part.source)
+            text = event.text[offset:] if index == len(parts) - 1 else event.text[offset : offset + size]
+            offset += size
+            if part.source != text:
+                await part.update(text)
+        if self._answer is not None and self._answer in parts:
+            self._answer_text = self._answer.source
+        return True
 
     async def _flush_stream(self) -> None:
         async with self._flush_lock:
@@ -1670,8 +1713,13 @@ class NagentsApp(App[None]):
             return
         elif isinstance(event, TextChunkEvent):
             self._response_activity()
-            await self._text(event.chunk)
+            if not await self._response_text_event(event):
+                await self._text(event.chunk)
         elif isinstance(event, TextDoneEvent):
+            if await self._response_text_event(event):
+                if event.text:
+                    self._response_activity()
+                return
             if event.text:
                 self._response_activity()
             if not event.text or event.text == self._run_text:
