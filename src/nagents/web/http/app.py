@@ -112,6 +112,7 @@ class MessageInput(SessionInput):
     attachments: list[str] = Field(default_factory=list, max_length=3)
     message_id: str = Field(pattern=r"^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$")
     command: Literal["", "compact", "skill"] = ""
+    delivery: Literal["steer", "queue"] | None = None
 
 
 class RunInput(Input):
@@ -483,15 +484,22 @@ def create_app(
         async def accept() -> dict[str, str]:
             if body.command:
                 session_id, _ = await state.queued_inputs.submit(
-                    body.session_id, body.message_id, body.prompt, command=body.command
+                    body.session_id, body.message_id, body.prompt, command=body.command, delivery=body.delivery or ""
                 )
             elif body.attachments:
                 media = await state.uploads.capabilities(body.session_id)
                 session_id, _ = await state.queued_inputs.submit(
-                    body.session_id, body.message_id, body.prompt, tuple(body.attachments), media
+                    body.session_id,
+                    body.message_id,
+                    body.prompt,
+                    tuple(body.attachments),
+                    media,
+                    delivery=body.delivery or "",
                 )
             else:
-                session_id, _ = await state.queued_inputs.submit(body.session_id, body.message_id, body.prompt)
+                session_id, _ = await state.queued_inputs.submit(
+                    body.session_id, body.message_id, body.prompt, delivery=body.delivery or ""
+                )
             return {"session_id": session_id, "message_id": body.message_id, "status": "queued"}
 
         # Admission and the selected policy complete even if the HTTP caller

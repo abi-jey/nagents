@@ -3,7 +3,7 @@ import { openDashboard } from "../features/dashboard/dashboard.js";
 import { useChatRun } from "../features/chat/useChatRun";
 import { useSessions } from "../features/sessions/useSessions";
 import { useSettings } from "../features/settings/useSettings";
-import { queuedMessageFailure } from "../api/messages";
+import { queuedMessageFailure, type MessageDelivery } from "../api/messages";
 import { useChannels } from "../features/channels/useChannels";
 import { useContextStats } from "../features/context/useContext";
 import { useSessionActions } from "../features/sessions/useSessionActions";
@@ -195,7 +195,7 @@ export function useClient() {
     });
   }
 
-  async function submit(value = chat.prompt) {
+  async function submit(value = chat.prompt, delivery?: MessageDelivery) {
     if (
       !access().submit ||
       sessions.activityOnly ||
@@ -220,7 +220,7 @@ export function useClient() {
     }
     const failure = value.length > 32000
       ? "The draft exceeds 32,000 characters. Shorten it before sending; it is kept."
-      : queuedMessageFailure(value, sessions.sessionId, uploadState.items.map((item) => item.id));
+      : queuedMessageFailure(value, sessions.sessionId, uploadState.items.map((item) => item.id), delivery, skillInvocation ? "skill" : undefined);
     if (failure) {
       setError(failure);
       return;
@@ -228,7 +228,7 @@ export function useClient() {
     await operate(async () => {
       const ids = uploads.begin();
       let confirmed = false;
-      try { await chat.submit(value, ids, skillInvocation ? "skill" : undefined); confirmed = true; }
+      try { await chat.submit(value, ids, skillInvocation ? "skill" : undefined, delivery); confirmed = true; }
       finally { uploads.finish(ids, confirmed); }
     });
   }
