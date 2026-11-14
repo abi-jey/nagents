@@ -40,6 +40,30 @@ DEFAULT_COMPACTION_PROMPT = (
     "important facts, constraints, unresolved questions, and relevant tool results. "
     "Be concise and do not invent details. Return only the summary."
 )
+COMPACTION_CONTINUATION_PROMPT = (
+    "Continue the user's request using the conversation summary above. "
+    "This is an automatic continuation after context compaction, not a new user request or approval. "
+    "Preserve completed work and do not repeat completed tool actions."
+)
+
+
+def with_compaction_continuation(messages: list[Message]) -> list[Message]:
+    """Supply a wire-only user boundary when compacted context has no initial user turn.
+
+    Some adapters fold summaries into system instructions. Summary-only history
+    would then produce an empty conversation; subsequent tool rounds and resumed
+    sessions could start with an assistant instead. Rebuild this boundary on each
+    generation, without persisting a synthetic user or retaining bulky tool output.
+    Strategies that keep a real initial user turn are left unchanged.
+    """
+    prefix = 0
+    summarized = False
+    while prefix < len(messages) and messages[prefix].role in {"system", "developer", "compaction_summary"}:
+        summarized = summarized or messages[prefix].role == "compaction_summary"
+        prefix += 1
+    if not summarized or (prefix < len(messages) and messages[prefix].role == "user"):
+        return messages
+    return [*messages[:prefix], Message(role="user", content=COMPACTION_CONTINUATION_PROMPT), *messages[prefix:]]
 
 
 class ModelCompaction:

@@ -84,6 +84,17 @@ Call `agent.trigger_compaction()` during a run to request compaction before the
 next model call. The configured strategy still performs the replacement. A
 `CompactionDoneEvent` reports the old and new message counts and summary.
 
+If the compacted context begins with a summary and has no initial user turn,
+the agent adds an **ephemeral continuation** to the next model request. This
+keeps Messages/Gemini requests from becoming system-only and avoids an
+assistant-only Chat Completions continuation. It is rebuilt for subsequent tool
+rounds and reopened sessions when needed; completed tools are not replayed.
+The continuation explicitly is not a new user request or approval, is visible
+to `before_model` hooks, and is never saved as a user message or prompt-history
+entry. Strategies that retain an initial user turn are unchanged. Direct
+Messages API calls containing only system instructions or summaries fail locally
+with `PROVIDER_PROTOCOL_ERROR` rather than sending an empty `messages` array.
+
 See [ModelCompaction in the API reference](../api/agent.md#nagents.ModelCompaction)
 for the complete built-in strategy signature.
 

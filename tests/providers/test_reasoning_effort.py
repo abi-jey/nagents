@@ -22,6 +22,7 @@ from nagents.provider.reasoning import catalog_reasoning_efforts
 from nagents.provider.reasoning import reasoning_effort_options
 from nagents.provider.reasoning import validate_reasoning_effort
 from nagents.types import GenerationConfig
+from nagents.types import Message
 from tests.providers.test_gateway_provider import payload
 from tests.providers.test_provider_reliability import candidate
 from tests.support.config import connection
@@ -97,7 +98,11 @@ async def test_portable_effort_maps_to_native_wire_fields(
         with patch.object(provider._http, "post_json", AsyncMock(return_value=response)) as request:
             events = [
                 event
-                async for event in provider.generate([], config=GenerationConfig(reasoning_effort="low"), stream=False)
+                async for event in provider.generate(
+                    [Message(role="user", content="Hello")],
+                    config=GenerationConfig(reasoning_effort="low"),
+                    stream=False,
+                )
             ]
         assert not any(isinstance(event, ErrorEvent) for event in events)
         body = request.call_args.args[1]

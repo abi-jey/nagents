@@ -33,6 +33,7 @@ from nagents.provider import FoundryProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
+from nagents.types import Message
 from nagents.types import ToolCall
 from nagents.web.http.app import _provider_profile
 from tests.providers.test_gateway_provider import KEY
@@ -56,6 +57,7 @@ def test_generation_header_is_optional_explicit_and_excludes_catalog(
 ) -> None:
     async def scenario() -> None:
         seen: list[tuple[str, str]] = []
+        messages = [Message(role="user", content="Check the conversation header")]
 
         async def handle(request: web.Request) -> web.StreamResponse:
             seen.append((request.method, request.headers.get(HEADER, "")))
@@ -69,17 +71,17 @@ def test_generation_header_is_optional_explicit_and_excludes_catalog(
         ):
             # Existing callers may set IDs for logging without enabling an HTTP header.
             provider.set_session_id("logging-only")
-            assert isinstance([event async for event in provider.generate([], stream=stream)][-1], TextDoneEvent)
+            assert isinstance([event async for event in provider.generate(messages, stream=stream)][-1], TextDoneEvent)
             provider.set_session_id(None)
             provider.session_id_header = HEADER
-            assert isinstance([event async for event in provider.generate([], stream=stream)][-1], TextDoneEvent)
+            assert isinstance([event async for event in provider.generate(messages, stream=stream)][-1], TextDoneEvent)
             provider.set_session_id("conversation:opaque-123")
             assert await provider.get_model_list() == ["fixture"]
             for _ in range(2):
-                events = [event async for event in provider.generate([], stream=stream)]
+                events = [event async for event in provider.generate(messages, stream=stream)]
                 assert isinstance(events[-1], TextDoneEvent)
             provider.set_session_id("")
-            assert isinstance([event async for event in provider.generate([], stream=stream)][-1], TextDoneEvent)
+            assert isinstance([event async for event in provider.generate(messages, stream=stream)][-1], TextDoneEvent)
         assert seen == [
             ("POST", ""),
             ("POST", ""),

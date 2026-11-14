@@ -6,41 +6,36 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from nagents._version import framework_version
 from nagents.cli import _parser
+
+
+def cli_without_textual(*arguments: str) -> subprocess.CompletedProcess[str]:
+    # Collection imports TUI tests in each xdist worker. A fresh interpreter
+    # tests optional imports without depending on another test unimporting them.
+    script = """
+import sys
+sys.path.insert(0, sys.argv.pop(1))
 from nagents.cli import main
+try:
+    raise SystemExit(main(sys.argv[1:]))
+finally:
+    assert 'textual' not in sys.modules
+"""
+    source = Path(__file__).resolve().parents[2] / "src"
+    return subprocess.run(
+        [sys.executable, "-c", script, str(source), *arguments], capture_output=True, text=True, timeout=30
+    )
 
 
-def test_version_is_checkout_aware_and_does_not_import_textual(capsys: pytest.CaptureFixture[str]) -> None:
-    sys.modules.pop("textual", None)
-    with pytest.raises(SystemExit) as result:
-        main(["--version"])
-    assert result.value.code == 0
-    assert capsys.readouterr().out.strip() == f"ngn (nagents {framework_version()})"
-    assert "textual" not in sys.modules
+def test_version_is_checkout_aware_and_does_not_import_textual() -> None:
+    result = cli_without_textual("--version")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"ngn (nagents {framework_version()})"
 
 
 def test_nonterminal_tui_exits_with_headless_guidance(tmp_path: Path) -> None:
-    # Other tests may already have loaded Textual in this xdist worker. A fresh
-    # process tests lazy imports without depending on collection/execution order.
-    source = Path(__file__).resolve().parents[2] / "src"
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from nagents.cli import main; "
-            "code = main(['--workspace', sys.argv[2]]); "
-            "assert 'textual' not in sys.modules; sys.exit(code)",
-            str(source),
-            str(tmp_path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    result = cli_without_textual("--workspace", str(tmp_path))
     assert result.returncode == 2, result.stderr
     assert "The TUI needs a terminal" in result.stderr
 
