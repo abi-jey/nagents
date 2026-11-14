@@ -27,6 +27,21 @@ test("summary targets are bounded plain text selected from recognized inputs onl
   assert.equal(executionName("constructor"), "constructor");
 });
 
+test("skill summaries show the requested name before and after execution and in saved history", () => {
+  for (const state of ["Requested", "Running", "Completed", "Recorded result"]) {
+    const entry: Entry = {
+      id: "skill", kind: "tool", title: "skill", text: "", state,
+      inputs: JSON.stringify({ name: "ngn-customize" }),
+    };
+    assert.equal(executionTarget(entry), "ngn-customize");
+    const dom = new JSDOM(renderToStaticMarkup(createElement(ExecutionRecord, { entry })));
+    const summary = dom.window.document.querySelector("summary")!;
+    assert.equal(summary.querySelector(".execution-target")!.textContent, "ngn-customize");
+    assert.equal(summary.querySelector(".execution-name")!.textContent, "Load skill");
+    dom.window.close();
+  }
+});
+
 test("compact summaries retain long names, exact inputs, approval state and duration in the inspector", () => {
   for (const title of ["read_file", "shell", "custom_".repeat(40)]) {
     const inputs = JSON.stringify({ path: "/long-segment".repeat(80), command: "python " + "argument ".repeat(80) });
