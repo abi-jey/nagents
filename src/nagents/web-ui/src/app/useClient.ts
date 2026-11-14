@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { openDashboard } from "../features/dashboard/dashboard.js";
 import { useChatRun } from "../features/chat/useChatRun";
 import { useSessions } from "../features/sessions/useSessions";
 import { useSettings } from "../features/settings/useSettings";
@@ -137,6 +138,7 @@ export function useClient() {
     if (["login", "settings", "model", "agent", "provider"].includes(name) && !access().settings)
       throw new Error("Close the current dialog or wait for the pending request. Your draft is kept.");
     if (name === "help") { setCommandHelp(true); return true; }
+    if (name === "dashboard") { openDashboard(); return true; }
     if (name === "skills") { skills.show(argument); return true; }
     if (name === "login") { voice.close(); setLoginOpen(true); return true; }
     if (name === "new") {

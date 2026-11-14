@@ -79,6 +79,7 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("quit", "Close the client"),
     Command("tasks", "Inspect agent tree, conversations, and follow-ups"),
     Command("queue", "Inspect, resume, or clear queued prompts", argument_hint="[resume|clear]"),
+    Command("dashboard", "Open workspace and global usage dashboard in your browser"),
 )
 BUILTIN_ALIASES = {"resume": "sessions"}
 

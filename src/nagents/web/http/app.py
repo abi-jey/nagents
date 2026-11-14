@@ -443,6 +443,7 @@ def create_app(
     async def bootstrap() -> dict[str, object]:
         return {
             "schema_version": 1,
+            "capabilities": {"chat": True},
             "token": token,
             "workspace": str(state.harness.workspace),
             "provider": state.harness.config.provider_profile().kind,
@@ -455,6 +456,12 @@ def create_app(
             "active_run_background": state.active.background if state.active is not None else False,
             "active_runs": state.active_runs(),
         }
+
+    @app.get("/api/dashboard")
+    async def dashboard() -> dict[str, str]:
+        from ..dashboard import dashboard_summary
+
+        return dashboard_summary(state.harness.workspace)
 
     @app.websocket("/api/events")
     async def events(socket: WebSocket) -> None:
@@ -891,6 +898,7 @@ def create_app(
         return {"status": body.decision}
 
     @app.get("/")
+    @app.get("/dashboard")
     async def index() -> FileResponse:
         return FileResponse(directory / "index.html")
 

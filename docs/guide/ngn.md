@@ -14,6 +14,20 @@ Related pages: [installation and environment choices](ngn-installation.md),
 [complete configuration schema and recipes](ngn-configuration.md), and the
 [local web client](ngn-web.md), available with the `web` extra and bundled assets.
 
+## Usage dashboard
+
+Run `/dashboard` in the terminal or web client to open the React usage dashboard
+in a browser tab. In the TUI, this starts a read-only loopback server on an
+available port; repeat invocations reuse it, and exiting the TUI stops it. Install
+the `web` extra and build the frontend assets when using an editable checkout.
+In the web client, the dashboard opens at `/dashboard` on the existing server.
+If a browser cannot be launched, the TUI shows the local URL to open manually.
+
+This first dashboard is a skeleton: workspace/global scope controls and sections
+for tokens, skills, agents, models, and workspaces are present, but usage
+collection and aggregation are not connected. Empty values are not measured
+zeros. No historical scanning, telemetry upload, or model requests are performed.
+
 ## Performance diagnostics
 
 The optional performance panel belongs to the terminal client, not the core

@@ -1,5 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
+import { Dashboard } from "./features/dashboard/Dashboard";
+import { isDashboardPath } from "./features/dashboard/dashboard";
+import "./features/dashboard/dashboard.css";
 import "./app/styles.css";
 import "./components/codeBlock.css";
 import "./features/chat/chatMedia.css";
@@ -14,4 +17,4 @@ import "./features/context/context.css";
 import "./features/sessions/sessionAgent.css";
 import "./app/panels.css";
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(isDashboardPath(window.location.pathname) ? <Dashboard /> : <App />);
