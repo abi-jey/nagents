@@ -108,3 +108,32 @@ def test_native_link_rejects_unsafe_targets(href: str) -> None:
 def test_native_link_preserves_encoded_spaces_and_query_delimiters() -> None:
     href = "https://example.com/a%20b?q=a%26b%3Dc"
     assert _terminal_link(href) == href
+
+
+def test_screen_compositor_emits_native_links_with_inline_formatting() -> None:
+    from textual._compositor import CompositorUpdate
+    from textual.app import App
+    from textual.app import ComposeResult
+
+    href = "https://example.com/a%20b?q=x%26y"
+
+    class LinkApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield ConversationMarkdown(f"[**bold** and *italic* and `code`]({href})", open_links=False)
+
+    async def scenario() -> None:
+        app = LinkApp()
+        async with app.run_test(size=(100, 15)) as pilot:
+            await pilot.pause()
+            update = app.screen._compositor.render_update(full=True)
+            assert isinstance(update, CompositorUpdate)
+            output = update.render_segments(Console(force_terminal=True))
+            assert f";{href}\x1b\\" in output
+            paragraph = app.query_one("MarkdownParagraph", Static)
+            strips = paragraph.render_lines(paragraph.size.region)
+            styles = [segment.style for strip in strips for segment in strip if segment.style and segment.style.link]
+            assert any(style.bold for style in styles)
+            assert any(style.italic for style in styles)
+            assert all(style.underline for style in styles)
+
+    asyncio.run(scenario())
