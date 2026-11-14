@@ -44,6 +44,7 @@ from .compaction import ModelCompaction
 from .compaction import describe_compaction
 from .compaction import estimate_messages_tokens
 from .compaction import get_model_context_limit
+from .compaction import with_compaction_continuation
 from .context_stats import ContextStats
 from .events import CompactionDoneEvent
 from .events import CompactionStartedEvent
@@ -1315,7 +1316,7 @@ class Agent:
             system_prompt=self.system_prompt or "",
             tools=tools,
             skill_manifest=skill_manifest,
-            messages=messages,
+            messages=with_compaction_continuation(messages),
             compaction=describe_compaction(self.compaction_strategy, provider),
             observed=observed,
             additional_messages=additional,
@@ -1572,7 +1573,7 @@ class Agent:
             messages.extend(history)
 
             # Filter unsupported audio from all messages (including history)
-            messages = self._filter_unsupported_audio(messages)
+            messages = with_compaction_continuation(self._filter_unsupported_audio(messages))
 
             # Get stored prompt_tokens from previous API calls (or estimate if first call)
             observed_usage = await self._observed_usage(session_id, history)
@@ -1619,7 +1620,7 @@ class Agent:
                         messages.append(Message(role="system", content=self.system_prompt))
                     history = await self.session.get_history(session_id)
                     messages.extend(history)
-                    messages = self._filter_unsupported_audio(messages)
+                    messages = with_compaction_continuation(self._filter_unsupported_audio(messages))
                     # Reset token tracking after compaction (context was summarized)
                     # The next API call will give us new actual prompt_tokens
                     self._discard_observed_usage(session_id)

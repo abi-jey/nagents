@@ -1,4 +1,4 @@
-"""Private timestamped runtime metadata for a terminal launch; payload logging stays off."""
+"""Private runtime metadata; framework errors must not write over the terminal UI."""
 
 from __future__ import annotations
 
@@ -101,6 +101,13 @@ class _Formatter(logging.Formatter):
         return json.dumps(entry, ensure_ascii=True, allow_nan=False)
 
 
+class _RuntimeHandler(logging.StreamHandler["TextIO"]):
+    def handleError(self, record: logging.LogRecord) -> None:
+        # StreamHandler's default fallback prints the raw record and traceback
+        # to stderr, leaking private payloads if the runtime file cannot be written.
+        pass
+
+
 class RuntimeLog:
     def __init__(self, data_dir: Path) -> None:
         directory = data_dir / "logs"
@@ -111,14 +118,28 @@ class RuntimeLog:
         self.stream: TextIO = os.fdopen(descriptor, "w", encoding="utf-8", buffering=1)
         self.started = monotonic()
         formatter = _Formatter(self.started)
-        self.handler = logging.StreamHandler(self.stream)
+        self.handler = _RuntimeHandler(self.stream)
         self.handler.setFormatter(formatter)
-        self._level, self._propagate = logger.level, logger.propagate
+        self._loggers = ((logging.getLogger("nagents"), logging.WARNING), (logger, logging.INFO))
+        self._states: tuple[tuple[logging.Logger, int, bool, tuple[logging.Handler, ...]], ...] = ()
 
     def __enter__(self) -> RuntimeLog:
-        logger.setLevel(logging.INFO)
-        logger.propagate = False
-        logger.addHandler(self.handler)
+        # A StreamHandler installed before Textual starts retains the original
+        # stderr, bypassing Textual's print capture. Route framework diagnostics
+        # here instead; tool errors are still presented through ToolResultEvent.
+        # Leave the application's root handlers and non-TUI behavior untouched.
+        targets = dict(self._loggers)
+        for name, target in tuple(logging.Logger.manager.loggerDict.items()):
+            if name.startswith("nagents.") and isinstance(target, logging.Logger):
+                targets.setdefault(target, target.level)
+        self._states = tuple((target, target.level, target.propagate, tuple(target.handlers)) for target in targets)
+        for target, level in targets.items():
+            for handler in tuple(target.handlers):
+                target.removeHandler(handler)
+            target.setLevel(level)
+            target.propagate = target not in dict(self._loggers)
+            if not target.propagate:
+                target.addHandler(self.handler)
         return self
 
     def __exit__(
@@ -127,8 +148,11 @@ class RuntimeLog:
         exception: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        logger.removeHandler(self.handler)
-        logger.setLevel(self._level)
-        logger.propagate = self._propagate
+        for target, level, propagate, handlers in reversed(self._states):
+            target.removeHandler(self.handler)
+            for handler in handlers:
+                target.addHandler(handler)
+            target.setLevel(level)
+            target.propagate = propagate
         self.handler.close()
         self.stream.close()

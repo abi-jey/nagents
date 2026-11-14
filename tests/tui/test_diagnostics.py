@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -126,3 +127,89 @@ def test_identity_labels_are_omitted_regardless_of_value(tmp_path: Path, value: 
     with RuntimeLog(tmp_path) as runtime:
         logging.getLogger("nagents.tui").info("event", extra=dict.fromkeys(_LABELS, value))
     assert not set(_LABELS) & json.loads(runtime.path.read_text(encoding="utf-8")).keys()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_framework_errors_do_not_reach_terminal_and_logging_is_restored(tmp_path: Path, interrupted: bool) -> None:
+    framework = logging.getLogger("nagents")
+    root = logging.getLogger()
+    before = framework.level, framework.propagate, tuple(framework.handlers)
+    terminal = io.StringIO()
+    console = logging.StreamHandler(terminal)
+    console.setLevel(logging.WARNING)
+    root.addHandler(console)
+    root_handlers = tuple(root.handlers)
+    try:
+        try:
+            with RuntimeLog(tmp_path) as runtime:
+                logging.getLogger("nagents.provider.base").warning("PRIVATE-PROVIDER-WARNING")
+                try:
+                    raise FileNotFoundError("PRIVATE-TOOL-PATH")
+                except FileNotFoundError:
+                    logging.getLogger("nagents.tools.executor").exception("PRIVATE-TOOL-ERROR")
+                assert terminal.getvalue() == ""
+                if interrupted:
+                    raise ValueError("Interrupted TUI")
+        except ValueError:
+            assert interrupted
+        assert (framework.level, framework.propagate, tuple(framework.handlers)) == before
+        assert tuple(root.handlers) == root_handlers
+        logging.getLogger("nagents.tools.executor").warning("normal logging restored")
+        assert "normal logging restored" in terminal.getvalue()
+        records = [json.loads(line) for line in runtime.path.read_text(encoding="utf-8").splitlines()]
+        assert [record["level"] for record in records] == ["WARNING", "ERROR"]
+        assert records[-1]["exception_type"] == "FileNotFoundError"
+        assert "PRIVATE-" not in runtime.path.read_text(encoding="utf-8")
+    finally:
+        root.removeHandler(console)
+        console.close()
+
+
+@pytest.mark.parametrize("name", ["nagents", "nagents.tui", "nagents.tools.executor"])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_preexisting_framework_handlers_are_suspended_and_restored(
+    tmp_path: Path, name: str, interrupted: bool
+) -> None:
+    target = logging.getLogger(name)
+    terminal = io.StringIO()
+    console = logging.StreamHandler(terminal)
+    old_level, old_propagate = target.level, target.propagate
+    target.addHandler(console)
+    target.propagate = False
+    before = tuple(target.handlers)
+    try:
+        try:
+            with RuntimeLog(tmp_path) as runtime:
+                target.error("PRIVATE-ERROR")
+                assert terminal.getvalue() == ""
+                if interrupted:
+                    raise ValueError("interrupted")
+        except ValueError:
+            assert interrupted
+        assert (target.level, target.propagate, tuple(target.handlers)) == (old_level, False, before)
+        assert json.loads(runtime.path.read_text())["level"] == "ERROR"
+        target.error("normal logging restored")
+        assert "normal logging restored" in terminal.getvalue()
+    finally:
+        target.removeHandler(console)
+        target.setLevel(old_level)
+        target.propagate = old_propagate
+        console.close()
+
+
+@pytest.mark.parametrize("operation", ["write", "flush"])
+def test_runtime_write_failure_never_prints_raw_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], operation: str
+) -> None:
+    def fail(*args: object) -> None:
+        raise OSError("PRIVATE-DISK-ERROR")
+
+    with RuntimeLog(tmp_path) as runtime:
+        with monkeypatch.context() as patch:
+            patch.setattr(runtime.stream, operation, fail)
+            patch.setattr(logging, "raiseExceptions", True)
+            try:
+                raise ValueError("PRIVATE-EXCEPTION")
+            except ValueError:
+                logging.getLogger("nagents.tools.executor").exception("PRIVATE-MESSAGE %s", "PRIVATE-ARG")
+        assert capsys.readouterr().err == ""

@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import getpass
 import json
-import logging
 import os
 import shlex
 import sqlite3
@@ -683,7 +682,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .tui.diagnostics import RuntimeLog
         from .tui.diagnostics import logger as tui_logger
 
-        logging.basicConfig(level=logging.WARNING)
         with RuntimeLog(config.data_dir) as runtime_log:
             tui_logger.info(
                 "TUI starting",

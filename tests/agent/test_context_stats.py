@@ -34,6 +34,24 @@ def tokens(stats: ContextStats, key: str) -> int:
     return component.tokens
 
 
+def test_compacted_context_counts_wire_only_continuation(tmp_path: Path) -> None:
+    from nagents.compaction import with_compaction_continuation
+
+    async def scenario() -> None:
+        agent = Agent(OfflineProvider(), SessionManager(tmp_path / "compacted.db"))
+        history = [Message(role="compaction_summary", content="Completed work")]
+        try:
+            snapshot = agent._context_snapshot(agent.provider, "s", history, None)
+            prepared = with_compaction_continuation(history)
+            assert snapshot.total_tokens == estimate_messages_tokens(prepared)
+            assert tokens(snapshot, HISTORY_USER_KEY) == estimate_messages_tokens([prepared[-1]])
+            assert history == [Message(role="compaction_summary", content="Completed work")]
+        finally:
+            await agent.close()
+
+    asyncio.run(scenario())
+
+
 def test_empty_request_reports_stable_zero_components() -> None:
     stats = estimate_context_stats()
 
