@@ -605,7 +605,7 @@ class CodingTools:
             raise ValueError("start_line must be >= 1 and limit must be 1..1000")
         relative = self.relative(path)
         try:
-            instructions = self.instructions(relative)
+            self.instructions(relative)
             data, _ = self.snapshot(path)
         except FileNotFoundError as exc:
             raise FileNotFoundError(
@@ -638,7 +638,6 @@ class CodingTools:
             "newline_counts": newline_counts,
             "total_lines": len(lines),
             "truncated": len(bounded) < len(text) or start_line - 1 + limit < len(lines),
-            "instructions": instructions,
         }
 
     def walk(self, path: str, *, recursive: bool = True) -> Iterator[tuple[str, bool]]:
