@@ -20,6 +20,8 @@ from tests.support.providers import setup_harness
 if TYPE_CHECKING:
     from pathlib import Path
 
+pytestmark = pytest.mark.requires_posix
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allow", [True, False])
