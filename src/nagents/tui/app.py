@@ -248,6 +248,7 @@ class NagentsApp(App[None]):
         self.harness = harness
         self._dashboard = DashboardHost(harness.workspace)
         self._dashboard_opening = False
+        self._shell_pending: set[str] = set()
         self._tool_approvals: ToolApprovals | None = None
         if not harness.config.animations:
             self.animation_level = "none"
@@ -423,6 +424,8 @@ class NagentsApp(App[None]):
 
     def on_mount(self) -> None:
         self.harness.approval_handler = self.request_approval
+        if isinstance(self.harness, Harness):
+            self.harness.shell_jobs.on_work_pending = self._shell_work_pending
         if isinstance(self.harness, Harness) and self.harness.wakeup_handler is None:
             self.harness.wakeup_handler = self._schedule_wakeup
             self._owns_wakeups = True
@@ -591,6 +594,7 @@ class NagentsApp(App[None]):
     def _refresh_task_content(self) -> None:
         if self._shutting_down:
             return
+        self._drain_shell_jobs()
         tasks = self.harness.tasks.list()
         self._activity_tasks = [task for task in tasks if task.depth == 1]
         self.default_screen.query_one("#agent-tree", AgentTree).update_tasks(
@@ -610,6 +614,42 @@ class NagentsApp(App[None]):
             if self._wakeups.error:
                 self._status(self._wakeups.error, error=True)
                 self._wakeups.error = ""
+
+    async def _shell_work_pending(self, session_id: str) -> None:
+        self._shell_pending.add(session_id)
+        self.call_later(self._drain_shell_jobs)
+
+    def _drain_shell_jobs(self) -> None:
+        if (
+            self._shutting_down
+            or self._closing_requested
+            or not self._backend_ready
+            or self.busy
+            or self._queued_prompts
+        ):
+            return
+        session_id = self.harness.session_id
+        if session_id in self._shell_pending:
+            self._shell_pending.discard(session_id)
+            self._launch(lambda: self._send("", wakeup=True, shell_resume=True), "Shell job completed...")
+
+    async def _show_shell_jobs(self, argument: str) -> None:
+        from .shell_jobs import ShellJobsModal
+
+        jobs = getattr(self.harness, "shell_jobs", None)
+        if jobs is None:
+            self._status("Managed shell jobs are unavailable.", error=True)
+            return
+        try:
+            if argument:
+                parts = argument.split()
+                if len(parts) != 2 or parts[0] != "stop":
+                    raise ValueError("Usage: /jobs [stop <job-id>]")
+                await jobs.stop(parts[1], session_id=self.harness.session_id)
+            records = await jobs.list(session_id=self.harness.session_id)
+            self.push_screen(ShellJobsModal(records))
+        except (ValueError, KeyError) as error:
+            self._status(str(error), error=True)
 
     async def _schedule_wakeup(self, session_id: str, delay: float, reason: str) -> dict[str, str]:
         if self._shutting_down or self._closing_requested or not self.busy:
@@ -1259,7 +1299,19 @@ class NagentsApp(App[None]):
             and is_command
             and not custom_command
             and name
-            not in {"/", "/help", "/dashboard", "/context", "/plugins", "/tasks", "/queue", "/quit", "/perf", "/voice"}
+            not in {
+                "/",
+                "/help",
+                "/jobs",
+                "/dashboard",
+                "/context",
+                "/plugins",
+                "/tasks",
+                "/queue",
+                "/quit",
+                "/perf",
+                "/voice",
+            }
         ):
             self._status("Already working. Esc cancels; your draft is kept.")
             return
@@ -1381,6 +1433,7 @@ class NagentsApp(App[None]):
         session_id: str = "",
         wakeup: bool = False,
         voice_prompt: VoicePrompt | None = None,
+        shell_resume: bool = False,
     ) -> None:
         if not self._backend_ready:
             await self._initialize()
@@ -1405,14 +1458,16 @@ class NagentsApp(App[None]):
         self._called_tools.clear()
         self._delivery_session = self.harness.session_id
         self._usage = ""
-        if not session_id and not wakeup:
+        if not session_id and not wakeup and not shell_resume:
             # A new human submission resumes live following even if inspecting
             # the previous tool card released the conversation's bottom anchor.
             self.query_one("#conversation", VerticalScroll).anchor()
             await self._add(Turn("user", display_text or text))
         # Close the producer even if cancellation happens while rendering an event.
         stream = (
-            self.harness.wake(text, session_id=session_id)
+            self.harness.resume_shell_jobs(session_id=self.harness.session_id)
+            if shell_resume
+            else self.harness.wake(text, session_id=session_id)
             if wakeup
             else self.harness.continue_task(session_id, text, message=self._task_input(session_id, text))
             if session_id
@@ -2219,6 +2274,8 @@ class NagentsApp(App[None]):
             self._performance_command(argument)
         elif name == "/voice":
             self._voice_command(argument)
+        elif name == "/jobs":
+            self.run_worker(self._show_shell_jobs(argument), group="shell-jobs", exclusive=True)
         elif name == "/tasks":
             self._show_tasks()
         elif name == "/queue":

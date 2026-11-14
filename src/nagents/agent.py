@@ -1390,6 +1390,46 @@ class Agent:
         finally:
             self._active_runs -= 1
 
+    async def resume_notice(
+        self,
+        message_id: int,
+        *,
+        session_id: str,
+        user_id: str = "default",
+        config: GenerationConfig | None = None,
+    ) -> AsyncGenerator[Event, None]:
+        """Continue a claimed, persisted shell notice without inserting it twice.
+
+        The host must serialize this with other runs for the session and claim
+        the notice through ShellJobStore before resuming. No ordinary history
+        row or model-supplied message ID can authorize this path.
+        """
+        from .session.shell_jobs import ShellJobStore
+
+        self._check_channel_access()
+        if self.batch:
+            raise ValueError("Shell notice continuation requires a text agent")
+        await self._ensure_initialized()
+        message = await ShellJobStore(self.session).notice_message(session_id, message_id)
+        self._active_runs += 1
+        try:
+            with self._execution_bridge.turn(session_id) if self._execution_bridge else nullcontext():
+                async with aclosing(
+                    self._run_interaction(
+                        message,
+                        session_id,
+                        user_id,
+                        config,
+                        auto_commit=None,
+                        log_file=None,
+                        persisted_notice_id=message_id,
+                    )
+                ) as events:
+                    async for event in events:
+                        yield event
+        finally:
+            self._active_runs -= 1
+
     async def _run_interaction(
         self,
         user_message: str | list[ContentPart] | Message | None,
@@ -1399,6 +1439,7 @@ class Agent:
         *,
         auto_commit: bool | None,
         log_file: Path | str | None,
+        persisted_notice_id: int = 0,
     ) -> AsyncGenerator[Event, None]:
         if user_message is None:
             if self.provider.live_config is None:
@@ -1442,7 +1483,7 @@ class Agent:
             # Capture only original incoming user text, never tool output, prior
             # history, transcribed audio or plugin-injected instructions.
             text = ""
-            if message.role == "user":
+            if message.role == "user" and not persisted_notice_id:
                 if isinstance(message.content, str):
                     text = message.content
                 elif isinstance(message.content, list):
@@ -1452,7 +1493,9 @@ class Agent:
                 message = await plugin.before_run(context, message)
                 if not isinstance(message, Message):
                     raise TypeError(f"{type(plugin).__name__}.before_run must return Message")
-            text_run = self._run_text(message, context, config, plugins, references)
+            text_run = self._run_text(
+                message, context, config, plugins, references, persisted_notice_id=persisted_notice_id
+            )
             while True:
                 # Scope each advance, never the outward yield: callers may stop
                 # or close the stream from another task/context between events.
@@ -1531,6 +1574,8 @@ class Agent:
         config: GenerationConfig | None,
         plugins: tuple[AgentPlugin, ...],
         skill_references: tuple[str, ...] = (),
+        *,
+        persisted_notice_id: int = 0,
     ) -> AsyncGenerator[Event, None]:
         session_id = context.session_id
         skill_context: list[Message] = []
@@ -1550,8 +1595,9 @@ class Agent:
             name=message.name,
         )
 
-        # Add user message to history
-        await self.session.add_message(session_id, processed_message)
+        # A claimed job notice already has its durable history row.
+        if not persisted_notice_id:
+            await self.session.add_message(session_id, processed_message)
 
         session_usage = self._session_usage.setdefault(session_id, TokenUsage())
         last_usage = Usage()

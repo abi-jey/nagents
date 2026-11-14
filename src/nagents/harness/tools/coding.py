@@ -14,7 +14,6 @@ metadata has no executable effect. General YAML and multiline scalars are unsupp
 """
 
 import asyncio
-import codecs
 import copy
 import difflib
 import fnmatch
@@ -23,7 +22,6 @@ import inspect
 import json
 import math
 import os
-import signal
 import stat
 import time
 import uuid
@@ -48,7 +46,6 @@ from nagents.types import JsonValue
 from nagents.types import ToolCall
 from nagents.types import ToolDefinition
 
-from ..types import ToolOutput
 from .execution import _execution_for
 from .execution import _mask_delivery_authority
 from .timing import invocation
@@ -929,99 +926,9 @@ class CodingTools:
         self.read_hashes[str(relative)] = hashlib.sha256(data).hexdigest()
         return {"path": str(relative), "diff": preview, "changed": True}
 
-    async def shell(self, command: str, timeout: float = 0.0) -> dict[str, JsonValue]:
-        """Run a local POSIX shell in the workspace after approval. NOT SANDBOXED. Output and time are bounded."""
-        self.writable()
-        if os.name != "posix":
-            raise OSError("Shell process-group cleanup currently requires POSIX")
-        if not command.strip() or len(command) > 16384 or "\x00" in command:
-            raise ValueError("command must be nonempty, without NUL, and <= 16384 characters")
-        seconds = timeout or self.harness.config.shell_timeout
-        if not math.isfinite(seconds) or not 0 < seconds <= self.harness.config.shell_timeout:
-            raise ValueError(
-                f"timeout must be > 0 and <= {self.harness.config.shell_timeout}, "
-                "or omit it/use 0 for the configured default. No command was started."
-            )
-        await self.harness.approve(
-            "shell",
-            {"command": command, "timeout": seconds},
-            "LOCAL SHELL IS NOT SANDBOXED: may access the network, credentials, and files outside the workspace.",
-            f"cwd: {self.root}\ntimeout: {seconds}s\n\n{command}",
-            self.call_id.get(),
-        )
-        self.writable()
-        spawn = asyncio.create_task(
-            asyncio.create_subprocess_exec(
-                "/bin/sh",
-                "-c",
-                command,
-                cwd=self.root,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                start_new_session=True,
-            )
-        )
-        process: asyncio.subprocess.Process | None = None
-        output: list[str] = []
-        remaining = self.harness.config.max_output
-        truncated = False
-        timed_out = False
-        decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        try:
-            process = await asyncio.shield(spawn)
-            assert process.stdout is not None
-            async with asyncio.timeout(seconds):
-                while chunk := await process.stdout.read(4096):
-                    accepted = chunk[:remaining]
-                    remaining -= len(accepted)
-                    text = decoder.decode(accepted)
-                    if text:
-                        output.append(text)
-                        await self.harness.emit(ToolOutput(self.call_id.get(), "shell", text))
-                    if len(accepted) < len(chunk) and not truncated:
-                        truncated = True
-                        await self.harness.emit(ToolOutput(self.call_id.get(), "shell", "\n[output truncated]\n"))
-                await process.wait()
-        except TimeoutError:
-            timed_out = True
-        finally:
-
-            async def cleanup() -> None:
-                nonlocal process
-                if process is None:
-                    process = await spawn
-                # Kill before emitting timeout notices, which can backpressure.
-                # Drain paused pipes so asyncio can reap a noisy cancelled child.
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                if process.stdout is not None:
-                    while await process.stdout.read(4096):
-                        pass
-                await process.wait()
-
-            cleanup_task = asyncio.create_task(cleanup())
-            cancelled = False
-            while not cleanup_task.done():
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError:
-                    cancelled = True
-            cleanup_task.result()
-            if cancelled:
-                raise asyncio.CancelledError
-        assert process is not None
-        if timed_out:
-            await self.harness.emit(ToolOutput(self.call_id.get(), "shell", f"\n[timed out after {seconds}s]\n"))
-        ending = decoder.decode(b"", final=True)
-        if ending:
-            output.append(ending)
-            await self.harness.emit(ToolOutput(self.call_id.get(), "shell", ending))
-        return {
-            "output": "".join(output),
-            "exit_code": process.returncode,
-            "timed_out": timed_out,
-            "truncated": truncated,
-        }
+    async def shell(self, command: str, timeout: float = 0.0, background: bool = False) -> dict[str, JsonValue]:
+        """Run a local POSIX shell after approval. NOT SANDBOXED; optional managed background execution."""
+        return await self.harness.shell_jobs.execute(command, timeout, background)
 
     def discover_skills(self) -> None:
         discovered: dict[str, tuple[str, str]] = {}

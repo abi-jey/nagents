@@ -62,7 +62,7 @@ async def test_misnamed_file_read_call_returns_actionable_schema_and_recovers_in
         assert any(isinstance(event, DoneEvent) for event in events)
         assert len(providers[0].requests) == 3
         tools = {tool.name: tool.parameters for tool in harness.agent.tool_registry.get_all()}
-        assert set(tools["shell"]["properties"]) == {"command", "timeout"}
+        assert set(tools["shell"]["properties"]) == {"command", "timeout", "background"}
         assert set(tools["read_file"]["properties"]) == {"path", "start_line", "limit"}
     finally:
         await harness.close()

@@ -12,6 +12,7 @@ import sqlite3
 import sys
 from contextlib import aclosing
 from contextlib import closing
+from contextlib import suppress
 from dataclasses import asdict
 from dataclasses import replace
 from datetime import datetime
@@ -58,6 +59,7 @@ from .harness.types import TranscriptAnchor
 from .tool_outcomes import shell_outcome
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from collections.abc import Sequence
 
     from .harness.providers.auth import DeviceAuthorization
@@ -452,7 +454,24 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
         completed = False
         streamed = False
         compacting = False
-        async with aclosing(harness.run(prompt)) as events:
+
+        async def settled_events() -> AsyncGenerator[HarnessEvent]:
+            async with aclosing(harness.run(prompt)) as initial:
+                async for event in initial:
+                    yield event
+            jobs = getattr(harness, "shell_jobs", None)
+            if jobs is None:
+                return
+            while True:
+                async with aclosing(harness.resume_shell_jobs(session_id=harness.session_id)) as resumed:
+                    async for event in resumed:
+                        yield event
+                if not await jobs.has_pending():
+                    break
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(jobs.wait_changed(), timeout=0.5)
+
+        async with aclosing(settled_events()) as events:
             async for event in events:
                 if isinstance(event, TranscriptAnchor | TranscriptAbandoned):
                     # These retain host-local event references, never JSON wire data.

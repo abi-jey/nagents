@@ -77,6 +77,7 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("skills", "Browse discovered skills", argument_hint="[filter]"),
     Command("context", "Show effective configuration and context"),
     Command("quit", "Close the client"),
+    Command("jobs", "Inspect or stop managed shell jobs", argument_hint="[stop <job-id>]"),
     Command("tasks", "Inspect agent tree, conversations, and follow-ups"),
     Command("queue", "Inspect, resume, or clear queued prompts", argument_hint="[resume|clear]"),
     Command("dashboard", "Open workspace and global usage dashboard in your browser"),

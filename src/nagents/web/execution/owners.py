@@ -224,6 +224,7 @@ class Executions:
                         await self.dispose(run.session_id)
                         raise
             run.harness = harness
+            self.state.bind_shell_jobs(harness)
             if harness is not self.state.harness:
                 # Apply the latest saved next-turn view without changing a
                 # running lane or losing its retained children and wakeups.
@@ -260,6 +261,9 @@ class Executions:
             harness is not None
             and session_id not in self.runs
             and not harness.tasks._infos
+            and (
+                harness._closed or harness.shell_jobs._controller is None or not await harness.shell_jobs.has_pending()
+            )
             and not any(item.session_id == session_id for item in self.state.wakeups.pending.values())
         ):
             await self.dispose(session_id)

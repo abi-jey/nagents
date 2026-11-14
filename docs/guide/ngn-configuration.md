@@ -40,6 +40,46 @@ without provider calls, run from the repository root:
 poetry run ngn --config examples/harness/config.json --demo
 ```
 
+## Managed background shells
+
+The shell tool accepts `background: true` when the host enables this capability.
+It returns a job ID and a live output-file path instead of waiting. Use `/jobs`
+to inspect jobs and `/jobs stop JOB_ID` to stop one without running the model.
+The shell remains a non-sandboxed POSIX tool and still requires approval.
+
+```json
+{
+  "allow_background_shell": true,
+  "shell_timeout": 600,
+  "shell_max_log_bytes": 67108864,
+  "shell_max_total_log_bytes": 268435456,
+  "shell_max_concurrent": 8,
+  "shell_max_concurrent_per_owner": 4
+}
+```
+
+Set `allow_background_shell` to `false` to remove the background argument from
+advertised schemas and reject stale background requests at execution. The
+standalone shell library defaults to background disabled; ngn explicitly opts in.
+These settings also accept their uppercase `NGN_` environment-variable names.
+Per-owner concurrency cannot exceed the total concurrency; total log capacity
+cannot be smaller than a single job's limit. Background jobs retain the existing
+`shell_timeout` ceiling (at most 600 seconds), rather than running indefinitely.
+
+Full output is written privately beneath the workspace's ngn data directory.
+Completion notices contain at most the last 200 lines and 32 KiB, plus the log
+path. Reaching a disk/output limit stops the job with an explicit failure instead
+of silently discarding the rest. Logs may contain sensitive command output; do
+not publish them without inspection.
+
+Natural completion or failure requests an automatic continuation of the owning
+agent through the normal serialized admission gate. Stopping a job explicitly,
+interrupting its agent, or closing ngn instead records a cancellation reason
+without waking the model. A normal assistant reply does not terminate running
+background jobs. Jobs do not survive ngn shutdown, and interrupted commands are
+never replayed automatically. The reusable library lets its host select temporary
+or persistent storage and whether to react to completion events.
+
 ## Provider wire logging
 
 Wire logging currently requires POSIX ownership and no-follow filesystem

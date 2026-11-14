@@ -26,6 +26,7 @@ from nagents.agent import Agent
 from nagents.compaction import ModelCompaction
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
+from nagents.events import ToolResultEvent
 from nagents.observation import scope as observation_scope
 from nagents.provider.codex.openai import OpenAIProvider
 from nagents.session import SessionManager
@@ -76,6 +77,7 @@ from ..tools.execution import host_run_id
 from ..tools.execution import observe_host_event
 from ..tools.execution import publish_anchor
 from ..tools.resources import HarnessResources
+from ..tools.shell import ShellJobs
 from ..tools.timing import current_clock
 from ..types import ApprovalRequest
 from ..types import HarnessEvent
@@ -316,6 +318,8 @@ class Harness:
         self.commands = CommandRegistry(self)
         self.tasks = SubagentManager(self)
         self.followups = RunInputs()
+        self.shell_jobs = ShellJobs(self)
+        self.followups.shell_reader = self.shell_jobs.next_input
         self.tasks.register()
         self.resources = HarnessResources(self)
         self.agent.tool_executor = HarnessExecutor(self, self.tools)
@@ -937,14 +941,23 @@ class Harness:
             async for event in events:
                 yield event
 
-    async def _generation_events(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
+    async def _generation_events(
+        self, prompt: str | list[ContentPart], *, persisted_notice_id: int = 0
+    ) -> AsyncGenerator[HarnessEvent, None]:
         capture = self.wire_log.capture(self.session_id) if self.wire_log is not None else nullcontext()
         with capture:
-            async with aclosing(self._observed_generation_events(prompt)) as events:
+            stream = (
+                self._observed_generation_events(prompt, persisted_notice_id=persisted_notice_id)
+                if persisted_notice_id
+                else self._observed_generation_events(prompt)
+            )
+            async with aclosing(stream) as events:
                 async for event in events:
                     yield event
 
-    async def _observed_generation_events(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
+    async def _observed_generation_events(
+        self, prompt: str | list[ContentPart], *, persisted_notice_id: int = 0
+    ) -> AsyncGenerator[HarnessEvent, None]:
         if self._remote_profile.configured:
             from ..remote.runtime import run_remote
 
@@ -958,9 +971,16 @@ class Harness:
                 async for event in events:
                     yield event
         else:
-            async with aclosing(
-                self.agent.run(prompt, session_id=self.session_id, user_id="harness", config=self.generation_config())
-            ) as events:
+            stream = (
+                self.agent.resume_notice(
+                    persisted_notice_id, session_id=self.session_id, user_id="harness", config=self.generation_config()
+                )
+                if persisted_notice_id
+                else self.agent.run(
+                    prompt, session_id=self.session_id, user_id="harness", config=self.generation_config()
+                )
+            )
+            async with aclosing(stream) as events:
                 async for event in events:
                     yield event
 
@@ -1107,6 +1127,9 @@ class Harness:
             self._queue = queue
             session_id = self.session_id
             run_id = host_run_id(self)
+            self.shell_jobs.run_id = run_id
+            if trigger == "human":
+                self.shell_jobs._automatic_turns = 0
 
             async def produce() -> None:
                 self.tasks.begin(
@@ -1148,7 +1171,11 @@ class Harness:
                         try:
                             async with (
                                 message.context(),
-                                aclosing(self._generation_events(message.prompt)) as events,
+                                aclosing(
+                                    self._generation_events(
+                                        message.prompt, persisted_notice_id=message.persisted_notice_id
+                                    )
+                                ) as events,
                             ):
                                 async for event in events:
                                     if isinstance(event, DoneEvent):
@@ -1157,11 +1184,17 @@ class Harness:
                                     else:
                                         if isinstance(event, ErrorEvent) and not event.recoverable:
                                             failed = True
+                                        if isinstance(event, ToolResultEvent) and event.name == "shell":
+                                            await self.shell_jobs.process_notifications(session_id)
                                         await self.tasks.flush_observed()
                                         await self.emit(event)
                         except FollowupReady as boundary:
                             if boundary.owner is not self.followups:
                                 raise
+                        if message.persisted_notice_id:
+                            await self.shell_jobs.store.finish_wake(
+                                session_id, message.persisted_notice_id, uncertain=failed
+                            )
                         if failed:
                             # Preserve completed-task lifecycle evidence without
                             # constructing notifications or making another model call.
@@ -1173,6 +1206,19 @@ class Harness:
                     await self.tasks.end()
                     if final is not None:
                         await self.emit(final)
+                except (asyncio.CancelledError, GeneratorExit):
+
+                    async def cancel_shells() -> None:
+                        if message is not None and message.persisted_notice_id:
+                            await self.shell_jobs.store.finish_wake(
+                                session_id, message.persisted_notice_id, uncertain=True
+                            )
+                        await self.shell_jobs.cancel_owner(
+                            session_id, "host_shutdown" if self._closed else "owner_cancelled"
+                        )
+
+                    await _await_cleanup(asyncio.create_task(cancel_shells()))
+                    raise
                 finally:
                     self.followups.end()
                     self.agent._execution_bridge = None
@@ -1222,6 +1268,24 @@ class Harness:
                 finally:
                     self._worker = None
                     self._queue = None
+                    if (
+                        self.shell_jobs.on_work_pending is not None
+                        and not self._closed
+                        and await self.shell_jobs.wake_pending()
+                    ):
+                        await self.shell_jobs.on_work_pending(session_id)
+
+    async def resume_shell_jobs(self, *, session_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
+        """Admit existing notices through the host's normal serialized run gate."""
+        if session_id and session_id != self.session_id:
+            raise ValueError("Shell notifications require their exact owning runtime")
+        await self.initialize()
+        message = await self.shell_jobs.next_input()
+        if message is None:
+            return
+        async with aclosing(self._run(message.prompt, trigger="shell_notice", initial_input=message)) as events:
+            async for event in events:
+                yield event
 
     async def history(self) -> list["Message"]:
         await self.initialize(create_session=False)
@@ -1804,6 +1868,7 @@ class Harness:
                         await self.tasks.end()
                     finally:
                         try:
+                            await self.shell_jobs.close()
                             await self.agent.close()
                         finally:
                             try:

@@ -1,4 +1,7 @@
 [
+  ["nagents.session.shell_jobs", "nagents._sqlite", "write_database"],
+  ["nagents.tools.shell.runtime", "nagents._async", "finish_on_cancel"],
+  ["nagents.tools.shell.runtime", "nagents._async", "join_owned"],
   ["nagents.a2a.images", "nagents._async", "finish_on_cancel"],
   ["nagents.cli", "nagents._version", "framework_version"],
   ["nagents.tui.app", "nagents._version", "framework_version"],
