@@ -13,6 +13,7 @@ from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
+from nagents.harness.runtime.task_activity import ChildActivity
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskDeliveryWarning
 from nagents.harness.types import TaskNotification
@@ -24,13 +25,26 @@ from tests.support.providers import collect
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from nagents.extensions import RunContext
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wrong_parent", [False, True])
+@pytest.mark.parametrize("cleanup_failure", [False, True])
 async def test_child_budget_failure_cancels_descendant_without_poisoning_recovered_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_parent: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_parent: bool, cleanup_failure: bool
 ) -> None:
     scenario = ChildFailureScenario(monkeypatch, wrong_parent=wrong_parent)
+    after_run = ChildActivity.after_run
+    cleanup_failures: list[str] = []
+
+    async def failing_after_run(activity: ChildActivity, context: RunContext) -> None:
+        await after_run(activity, context)
+        if cleanup_failure and activity.info.depth == 1 and activity.info.error:
+            cleanup_failures.append(activity.info.session_id)
+            raise RuntimeError("PRIVATE_CLEANUP_DETAIL")
+
+    monkeypatch.setattr(ChildActivity, "after_run", failing_after_run)
     harness = Harness(
         HarnessConfig(tmp_path, data_dir=tmp_path / "state", providers=connection(auth="api-key"), max_tool_rounds=6)
     )
@@ -40,6 +54,10 @@ async def test_child_budget_failure_cancels_descendant_without_poisoning_recover
         scenario.assert_recovered()
         assert isinstance(events[-1], DoneEvent) and events[-1].final_text == "ROOT_RECOVERED"
         completions = [event for event in events if isinstance(event, TaskCompleted)]
+        failed = next(event for event in completions if event.depth == 1 and event.status == "failed")
+        assert "tool-round limit" in failed.error
+        assert cleanup_failures == ([failed.session_id] if cleanup_failure else [])
+        assert "PRIVATE_CLEANUP_DETAIL" not in repr(events) + repr(harness.tasks.list())
         assert sorted((event.depth, event.status) for event in completions) == [
             (1, "completed"),
             (1, "failed"),
