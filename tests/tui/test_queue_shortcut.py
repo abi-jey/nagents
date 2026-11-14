@@ -108,6 +108,7 @@ def test_queue_shortcut_stages_then_interrupts(tmp_path: Path, phase: str, inter
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("workspace_discovery_only")
 @pytest.mark.parametrize("tool_count", [1, 2])
 async def test_first_ctrl_s_steers_before_next_model_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool_count: int
@@ -120,7 +121,7 @@ async def test_first_ctrl_s_steers_before_next_model_request(
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         if len(provider.requests) == 1:
             for index in range(tool_count):
-                yield ToolCallEvent(id=f"lookup-{index}", name="list_files", arguments={})
+                yield ToolCallEvent(id=f"lookup-{index}", name="boundary_probe", arguments={})
         else:
             assert completed.is_set()
             assert [m.content for m in messages if m.role == "user"][-1] == "change direction"
@@ -130,16 +131,14 @@ async def test_first_ctrl_s_steers_before_next_model_request(
             yield TextDoneEvent(text="Steered answer")
 
     harness, providers = setup_harness(tmp_path, monkeypatch, script)
-    execute = harness.agent.tool_executor.execute
 
     async def gated(call: ToolCall) -> ToolResultEvent:
         nonlocal cancelled
         entered.set()
         try:
             await release.wait()
-            result = await execute(call)
             completed.set()
-            return result
+            return ToolResultEvent(id=call.id, name=call.name, result="completed")
         except asyncio.CancelledError:
             cancelled = True
             raise
