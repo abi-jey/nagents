@@ -14,6 +14,21 @@ Related pages: [installation and environment choices](ngn-installation.md),
 [complete configuration schema and recipes](ngn-configuration.md), and the
 [local web client](ngn-web.md), available with the `web` extra and bundled assets.
 
+## Opening conversation links
+
+Web links in assistant responses use native terminal hyperlinks (OSC 8). Use
+your terminal's open-link gesture, commonly Ctrl+click on Linux or Cmd+click on
+macOS, or its Open Link context-menu action. The terminal, rather than ngn,
+launches the browser; this preserves the terminal's desktop integration and can
+bring the browser forward where an application-level opener does not. Browser
+focus is still controlled by the terminal, browser, and operating system.
+
+A plain click does not launch a browser. Only validated HTTP/HTTPS targets are
+linked; no links open automatically while responses stream or history loads.
+Terminal support and gestures vary, including through tmux or SSH. If native
+hyperlinks are unavailable, copy the URL and open it manually. Login dialog
+Open Browser buttons and `/dashboard` retain their existing launch behavior.
+
 ## Usage dashboard
 
 Run `/dashboard` in the terminal or web client to open the React usage dashboard
