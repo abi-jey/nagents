@@ -1,4 +1,4 @@
-"""Queued-message shortcut stages delivery, then safely interrupts on repeat."""
+"""Queued-message shortcut steers at tool boundaries and interrupts on repeat."""
 
 from __future__ import annotations
 
@@ -11,9 +11,13 @@ from textual.widgets import Static
 
 from nagents.events import DoneEvent
 from nagents.events import TextChunkEvent
+from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.tui import NagentsApp
 from nagents.tui.widgets import Composer
+from nagents.tui.widgets import Turn
+from tests.support.providers import setup_harness
 from tests.support.tui import FakeHarness
 from tests.support.tui import idle
 from tests.support.tui import make_app
@@ -23,7 +27,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from nagents.events import Event
     from nagents.harness.types import HarnessEvent
+    from nagents.types import Message
+    from nagents.types import ToolCall
+    from tests.support.providers import FakeProvider
 
 
 class QueuedHarness(FakeHarness):
@@ -97,6 +105,64 @@ def test_queue_shortcut_stages_then_interrupts(tmp_path: Path, phase: str, inter
             assert not app._queue_send_armed
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("workspace_discovery_only")
+@pytest.mark.parametrize("tool_count", [1, 2])
+async def test_first_ctrl_s_steers_before_next_model_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool_count: int
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+    cancelled = False
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if len(provider.requests) == 1:
+            for index in range(tool_count):
+                yield ToolCallEvent(id=f"lookup-{index}", name="boundary_probe", arguments={})
+        else:
+            assert completed.is_set()
+            assert [m.content for m in messages if m.role == "user"][-1] == "change direction"
+            assert {m.tool_call_id for m in messages if m.role == "tool"} == {
+                f"lookup-{index}" for index in range(tool_count)
+            }
+            yield TextDoneEvent(text="Steered answer")
+
+    harness, providers = setup_harness(tmp_path, monkeypatch, script)
+
+    async def gated(call: ToolCall) -> ToolResultEvent:
+        nonlocal cancelled
+        entered.set()
+        try:
+            await release.wait()
+            completed.set()
+            return ToolResultEvent(id=call.id, name=call.name, result="completed")
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+
+    monkeypatch.setattr(harness.agent.tool_executor, "execute", gated)
+    app = NagentsApp(harness)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await idle(app, pilot)
+        await send(app, pilot, "first")
+        await asyncio.wait_for(entered.wait(), 5)
+        await send(app, pilot, "change direction")
+        composer = app.query_one(Composer)
+        composer.text = "unsent draft"
+        await pilot.press("ctrl+s")
+        assert len(providers[0].requests) == 1
+        assert not completed.is_set()
+        assert not cancelled
+        release.set()
+        await idle(app, pilot)
+        assert len(providers[0].requests) == 2
+        assert not cancelled
+        assert composer.text == "unsent draft"
+        assert not app._queued_prompts
+        assert len(app.query(Turn)) == 3
 
 
 def test_queue_shortcut_empty_modal_and_paused_queue(tmp_path: Path) -> None:

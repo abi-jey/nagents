@@ -328,6 +328,8 @@ class NagentsApp(App[None]):
         self._voice_jobs: set[asyncio.Task[None]] = set()
         self._voice_inputs: dict[tuple[str, str], VoicePrompt] = {}
         self._voice_turns: deque[VoicePrompt] = deque()
+        self._steering_turns: deque[str] = deque()
+        self._steering_inputs: dict[str, str] = {}
         self._voice_run_bridges: set[TuiVoiceBridge] = set()
 
     @property
@@ -1308,10 +1310,27 @@ class NagentsApp(App[None]):
                 self._wakeups.cancel_turn()
                 self._active.cancel()
             else:
-                self._status("Queued messages will run next  /  Ctrl+S again to interrupt and send")
+                if isinstance(self.harness, Harness):
+                    self.harness.followups.changed()
+                    self.harness.tasks._changed.set()
+                self._status("Queued text will steer after current tools  /  Ctrl+S again to interrupt and send")
             self._update_queue()
         else:
             self._drain_queue()
+
+    async def _queued_input(self) -> RunInput | None:
+        """Pick up explicitly steered text only at the harness's safe boundary."""
+        if not self._queue_send_armed or self._queue_paused or not self._queued_prompts:
+            return None
+        prompt = self._queued_prompts[0]
+        # Commands and voice requests retain their own dispatch/ownership paths.
+        if not isinstance(prompt, str) or prompt.lstrip().startswith("/"):
+            return None
+        self._queued_prompts.popleft()
+        identifier = uuid4().hex
+        self._steering_inputs[identifier] = prompt
+        self._update_queue()
+        return RunInput(prompt, identifier=identifier)
 
     def _update_queue(self) -> None:
         if not self._queued_prompts or self._queue_paused:
@@ -1411,6 +1430,9 @@ class NagentsApp(App[None]):
         try:
             with (
                 host_run(self.harness, run_id, observe=pending_events.append),
+                self.harness.followups.source(self._queued_input)
+                if isinstance(self.harness, Harness)
+                else nullcontext(),
                 self.harness.followups.observe(self._voice_turn)
                 if isinstance(self.harness, Harness)
                 else nullcontext(),
@@ -1446,6 +1468,12 @@ class NagentsApp(App[None]):
                 for prompt in self._voice_inputs.values():
                     prompt.bridge.discard(prompt)
                 self._voice_inputs.clear()
+                # A boundary may pick up text just before cancellation prevents
+                # its turn marker from reaching the UI. Keep it available to retry.
+                for steering in reversed(tuple(self._steering_inputs.values())):
+                    self._queued_prompts.appendleft(steering)
+                self._steering_inputs.clear()
+                self._update_queue()
 
     def _task_input(self, session_id: str, prompt: str) -> RunInput:
         identifier = uuid4().hex
@@ -1541,6 +1569,11 @@ class NagentsApp(App[None]):
         return self._tools[call_id]
 
     async def _event(self, event: HarnessEvent) -> None:
+        while self._steering_turns:
+            await self._flush_stream()
+            self._answer = None
+            self._answer_text = self._run_text = ""
+            await self._add(Turn("user", self._steering_turns.popleft()))
         while self._voice_turns:
             voice_turn = self._voice_turns.popleft()
             await self._flush_stream()
@@ -2374,6 +2407,9 @@ class NagentsApp(App[None]):
         self._drain_queue()
 
     def _voice_turn(self, marker: RunTurn) -> None:
+        steering = self._steering_inputs.pop(marker.identifier, "")
+        if steering:
+            self._steering_turns.append(steering)
         for bridge in self._voice_bridges():
             bridge.turn(marker)
         prompt = self._voice_inputs.pop((marker.voice_session_id, marker.identifier), None)
