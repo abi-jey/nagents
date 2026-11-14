@@ -56,10 +56,7 @@ class HarnessSkillDiscoverer:
         if path != skill.location:
             raise ValueError("Skill location changed; refresh discovery")
         relative = self.tools.relative(path)
-        instructions = self.tools.instructions(relative)
+        self.tools.instructions(relative)
         data, _ = self.tools.snapshot(path)
         self.tools.read_hashes[str(relative)] = hashlib.sha256(data).hexdigest()
-        content = data.decode("utf-8")
-        if instructions:
-            content = f"Applicable project context:\n{instructions}\n\nSkill document:\n{content}"
-        return content
+        return data.decode("utf-8")
