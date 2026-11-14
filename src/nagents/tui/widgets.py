@@ -504,14 +504,14 @@ class ToolCard(Collapsible):
             "".join(char for char in text if char.isprintable() or char.isspace() or char == "\u200d").split()
         )
 
-    @classmethod
-    def _argument_hint(cls, arguments: object) -> str:
+    def _argument_hint(self, arguments: object) -> str:
         # Only recognizable targets; never summarize arbitrary payloads or errors.
+        keys = ("name",) if self.tool == "skill" else ("command", "path", "file_path", "pattern", "url")
         if isinstance(arguments, dict):
-            for key in ("command", "path", "file_path", "pattern", "url"):
+            for key in keys:
                 value = arguments.get(key)
                 if isinstance(value, str) and value.strip():
-                    return cls._plain_line(value)
+                    return self._plain_line(value)
         return ""
 
     @staticmethod
