@@ -2,29 +2,33 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
+from dataclasses import replace
 from time import monotonic
 from typing import TYPE_CHECKING
 from typing import ClassVar
 from urllib.parse import unquote
 from urllib.parse import urlsplit
 
-from markdown_it import MarkdownIt
 from rich.color import Color
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.containers import VerticalScroll
 from textual.content import Content
+from textual.content import Span
 from textual.highlight import highlight
 from textual.message import Message
+from textual.style import Style
 from textual.widgets import Collapsible
 from textual.widgets import Markdown
 from textual.widgets import Static
 from textual.widgets import TextArea
 from textual.widgets._collapsible import CollapsibleTitle
+from textual.widgets.markdown import MarkdownBlock
 from textual.widgets.markdown import MarkdownFence
 
 from nagents.harness.agents.updates import NOTIFICATION_PREFIX
@@ -38,6 +42,7 @@ from .themes import CodeTheme
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from markdown_it.token import Token
     from textual.app import ComposeResult
     from textual.binding import BindingType
     from textual.events import Click
@@ -45,7 +50,6 @@ if TYPE_CHECKING:
     from textual.events import Paste
     from textual.geometry import Size
     from textual.timer import Timer
-    from textual.widgets.markdown import MarkdownBlock
 
 OUTPUT_LIMIT = 16_000
 
@@ -242,37 +246,61 @@ class CodeFence(MarkdownFence):
         return highlight(code, language=language or "text", theme=CodeTheme)
 
 
+def _terminal_link(href: str) -> str:
+    """Accept web URLs only, never terminal control bytes or encoded controls."""
+    if any(character.isspace() for character in href) or any(
+        ord(character) < 32 or 127 <= ord(character) <= 159 for character in unquote(href)
+    ):
+        return ""
+    try:
+        target = urlsplit(href)
+        if target.scheme.lower() in {"http", "https"} and target.hostname:
+            return href
+    except ValueError:
+        pass
+    return ""
+
+
+class NativeLinkBlock(MarkdownBlock):
+    """Keep Textual's inline formatting but hand web activation to the terminal."""
+
+    def _token_to_content(self: MarkdownBlock, token: Token) -> Content:
+        content = MarkdownBlock._token_to_content(self, token)
+        spans: list[Span] = []
+        for span in content.spans:
+            style = span.style
+            if isinstance(style, Style):
+                action = style.meta.get("@click")
+                if isinstance(action, str) and action.startswith("link("):
+                    try:
+                        href = ast.literal_eval(action[5:-1])
+                    except (SyntaxError, ValueError):
+                        href = ""
+                    link = _terminal_link(href) if isinstance(href, str) else ""
+                    # Drop the application click handler for every link, including
+                    # unsafe schemes; the exact original URI is never unquoted.
+                    style = replace(style, link=link or None, _meta=None, underline=bool(link))
+                    if link:
+                        style = Style.parse("underline $accent") + style
+            spans.append(Span(span.start, span.end, style))
+        return Content(content.plain, spans=spans)
+
+
+_NATIVE_BLOCKS: dict[type[MarkdownBlock], type[MarkdownBlock]] = {}
+
+
 class ConversationMarkdown(Markdown):
     def get_block_class(self, block_name: str) -> type[MarkdownBlock]:
-        return CodeFence if block_name in {"fence", "code_block"} else super().get_block_class(block_name)
+        base = CodeFence if block_name in {"fence", "code_block"} else super().get_block_class(block_name)
+        if base not in _NATIVE_BLOCKS:
+            _NATIVE_BLOCKS[base] = type(
+                f"Native{base.__name__}", (base,), {"_token_to_content": NativeLinkBlock._token_to_content}
+            )
+        return _NATIVE_BLOCKS[base]
 
     def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
-        """Open web links only on a deliberate click, through the normal browser."""
+        """No application-level browser launch, even for synthetic click events."""
         event.stop()
-        # Textual unquotes LinkClicked.href, which would turn an encoded '&'
-        # in a query value into a new parameter. Recover the original target
-        # from Markdown tokens; ambiguous targets must never open a different URL.
-        parser = MarkdownIt("gfm-like") if self._parser_factory is None else self._parser_factory()
-        targets = {
-            target
-            for block in parser.parse(self.source or "")
-            for token in block.children or ()
-            if token.type == "link_open"
-            for target in (token.attrGet("href"),)
-            if isinstance(target, str) and target and unquote(target) == event.href
-        }
-        if len(targets) > 1:
-            return
-        href = next(iter(targets), event.href)
-        decoded = unquote(href)
-        if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
-            return
-        try:
-            target = urlsplit(href)
-            if target.scheme.lower() in {"http", "https"} and target.hostname:
-                self.app.open_url(href)
-        except ValueError:
-            return
 
 
 class Turn(Vertical):
