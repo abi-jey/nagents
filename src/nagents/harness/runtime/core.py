@@ -868,6 +868,7 @@ class Harness:
             )
         clock = current_clock(self)
         with clock.pause() if clock is not None else nullcontext():
+            cancelled = False
             try:
                 if clock is not None and not self._is_subagent:
                     await self.emit(ToolApprovalTiming(clock.call_id, clock.elapsed(), True))
@@ -890,8 +891,13 @@ class Harness:
                         raise PermissionError(
                             f"Tool {tool} is disabled for this agent by its inherited tool policy or .ngn/tools.yaml"
                         )
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
             finally:
-                if clock is not None and not self._is_subagent:
+                # A stopped consumer may leave the bounded queue full. Never
+                # make cancellation cleanup wait for a final timing snapshot.
+                if not cancelled and clock is not None and not self._is_subagent:
                     await self.emit(ToolApprovalTiming(clock.call_id, clock.elapsed(), False))
 
     async def emit(self, event: HarnessEvent) -> None:
