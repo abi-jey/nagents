@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient } from "./useClient";
+import type { MessageDelivery } from "../api/messages";
 import { WorkspaceHeader } from "./WorkspaceHeader";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceComposer } from "./WorkspaceComposer";
@@ -79,10 +80,10 @@ export function App() {
       requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }));
     }
   }
-  async function submit(value?: string) {
+  async function submit(value?: string, delivery?: MessageDelivery) {
     composer.current?.focus({ preventScroll: true });
     if (client.team.selected) await client.team.submit();
-    else await client.submit(value);
+    else await client.submit(value, delivery);
   }
 
   return (
@@ -99,7 +100,7 @@ export function App() {
             entries: client.chat.entries, sessionId: client.sessions.sessionId, demo: !!client.sessions.config?.demo,
             providerSetup: root.providerKind === "a2a" ? undefined : client.sessions.config?.provider_setup, canSubmit: client.available.submit, submit: value => void submit(value),
             delegation: { agents, profiles: client.team.profiles, activity: client.chat.taskActivity, inspect: client.team.select } }}
-          composer={<WorkspaceComposer client={client} composer={composer} submit={() => void submit()} select={select}
+          composer={<WorkspaceComposer client={client} composer={composer} submit={delivery => void submit(undefined, delivery)} select={select}
             configureSettings={() => openAgentSettings(client.sessionAgent.selection?.agent || "assistant", "Voice")} audioChanged={setNavigatorAudio} />}
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />
         <PanelDivider side="team" collapsed={!teamOpen} setCollapsed={value => setTeamOpen(!value)} layout={panels} />

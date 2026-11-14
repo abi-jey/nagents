@@ -1,6 +1,7 @@
 import { useMemo, useState, type RefObject } from "react";
 import { Icon } from "../components/Icon";
 import { Composer } from "../features/chat/Composer";
+import type { MessageDelivery } from "../api/messages";
 import { UploadPreviews } from "../features/chat/UploadPreviews";
 import { DraftRecoveryNotice } from "../features/chat/DraftRecoveryNotice.js";
 import { LiveDialog } from "../features/live/LiveDialog.js";
@@ -8,6 +9,7 @@ import { isProfileTarget, profileSelection } from "../features/team/useTeam.js";
 import { profileLabel } from "../features/team/model.js";
 import type { LiveComposerTargets } from "../features/live/LiveComposer.js";
 import "../features/live/live.css";
+import "../features/chat/composerTouch.css";
 import "../features/live/composer.css";
 import "../features/live/voiceControls.css";
 import "../features/live/sharedComposer.css";
@@ -19,7 +21,7 @@ import type { NavigatorAudio } from "../features/settings/navigator/AgentNavigat
 export function WorkspaceComposer({ client, composer, submit, select, configureSettings, audioChanged }: {
   client: Client;
   composer: RefObject<HTMLTextAreaElement | null>;
-  submit: () => void;
+  submit: (delivery?: MessageDelivery) => void;
   select: (id?: string) => Promise<void>;
   configureSettings: () => void; audioChanged: (audio?: NavigatorAudio) => void;
 }) {
@@ -70,7 +72,7 @@ export function WorkspaceComposer({ client, composer, submit, select, configureS
       openAgentSettings={configureSettings} audioChanged={audioChanged} />}</div>
     <Composer inputRef={composer} prompt={child ? team.prompt : chat.prompt} setPrompt={child ? team.setPrompt : chat.setPrompt} demo={!!config?.demo}
       voiceLayout={client.liveOpen && !child} voiceRefs={voiceRefs}
-      recipient={child ? recipient : "ngn"} commandsEnabled={!child} maxLength={child ? 16000 : 32000}
+      recipient={child ? recipient : "ngn"} commandsEnabled={!child} deliveryEnabled={!child} maxLength={child ? 16000 : 32000}
       disabled={!config || !sessionId} attachmentsDisabled={!config || client.operating}
       submitting={child ? team.submitting : chat.submitting} stopping={chat.stopping}
       attachmentTypes={child ? [] : client.uploadState.types} hasAttachments={!child && !!client.uploadState.items.length}
