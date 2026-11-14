@@ -148,6 +148,11 @@ class HarnessConfig:
     demo: bool = False
     data_dir: Path = field(default_factory=_data_dir)
     shell_timeout: float = 600.0
+    allow_background_shell: bool = True
+    shell_max_log_bytes: int = 64 * 1024 * 1024
+    shell_max_total_log_bytes: int = 256 * 1024 * 1024
+    shell_max_concurrent: int = 8
+    shell_max_concurrent_per_owner: int = 4
     max_output: int = 32768
     max_file_bytes: int = 262144
     max_tool_rounds: int = 3000
@@ -226,6 +231,21 @@ class HarnessConfig:
         self.profile(self.agent)
         if not 0 < self.shell_timeout <= 600:
             raise ValueError("shell_timeout must be > 0 and <= 600 seconds")
+        if type(self.allow_background_shell) is not bool:
+            raise ValueError("allow_background_shell must be a boolean")
+        for name, minimum, maximum in (
+            ("shell_max_log_bytes", 1024, 1024 * 1024 * 1024),
+            ("shell_max_total_log_bytes", 1024, 16 * 1024 * 1024 * 1024),
+            ("shell_max_concurrent", 1, 64),
+            ("shell_max_concurrent_per_owner", 1, 64),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be an integer between {minimum} and {maximum}")
+        if self.shell_max_total_log_bytes < self.shell_max_log_bytes:
+            raise ValueError("shell_max_total_log_bytes must be >= shell_max_log_bytes")
+        if self.shell_max_concurrent_per_owner > self.shell_max_concurrent:
+            raise ValueError("shell_max_concurrent_per_owner must be <= shell_max_concurrent")
         if not 1024 <= self.max_output <= 1048576:
             raise ValueError("max_output must be between 1024 and 1048576 bytes")
         if not 1024 <= self.max_file_bytes <= 4194304:
@@ -533,6 +553,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "reasoning_effort",
     }
     integers = {
+        "shell_max_log_bytes",
+        "shell_max_total_log_bytes",
+        "shell_max_concurrent",
+        "shell_max_concurrent_per_owner",
         "max_output",
         "max_file_bytes",
         "skill_token_limit",
@@ -541,7 +565,15 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "max_subagent_executions",
         "max_subagent_depth",
     }
-    booleans = {"demo", "animations", "read_only", "reasoning_summaries", "tui_performance", "wire_log"}
+    booleans = {
+        "demo",
+        "animations",
+        "read_only",
+        "reasoning_summaries",
+        "tui_performance",
+        "wire_log",
+        "allow_background_shell",
+    }
     allowed = (
         strings
         | integers

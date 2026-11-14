@@ -251,6 +251,8 @@ async def _release_process(state: WebState, session_id: str, *, journal: bool = 
     harness = state.harness_for(session_id)
     run = state.run_for(session_id)
     state.wakeups.cancel_session(session_id)
+    state._shell_pending.pop(session_id, None)
+    await harness.shell_jobs.cancel_owner(session_id, "session_deleted")
     if run is not None:
         await state.stop(run)
     if claim := state.channels.work_tasks.get(session_id):

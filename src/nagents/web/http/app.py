@@ -72,6 +72,7 @@ from ..settings.preferences import WebSettings
 from ..settings.provider_login import ProviderLogin
 from ..settings.provider_setup import provider_setup
 from ..settings.tools import register as register_tool_settings
+from ..shell_jobs import register as register_shell_jobs
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
 
@@ -402,6 +403,7 @@ def create_app(
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_tool_settings(app, lambda: state)
+    register_shell_jobs(app, lambda: state)
     from ..tasks.routes import register as register_tasks
 
     register_tasks(app, lambda: state)

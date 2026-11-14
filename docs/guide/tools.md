@@ -2,6 +2,52 @@
 
 Tools allow your agent to call Python functions during conversations, enabling it to perform actions, fetch data, and interact with external systems.
 
+## Reusable managed shell
+
+`nagents.tools.shell` is independent of the ngn harness and user interfaces.
+A host owns its controller and decides how to persist or deliver job events:
+
+```python
+from pathlib import Path
+from nagents.tools.shell import ShellController, ShellOwner, ShellPolicy, ShellStorage
+
+controller = ShellController(
+    policy=ShellPolicy(allow_background=True),
+    storage=ShellStorage(root=Path("private-shell-output"), persistent=True),
+)
+owner = ShellOwner(
+    workspace=Path.cwd(),
+    session_id="conversation-1",
+    run_id="turn-1",
+    tool_call_id="call-1",
+    profile="assistant",
+    provider="configured-provider",
+    model="configured-model",
+)
+job = await controller.execute("printf 'hello\\n'", owner=owner, background=True)
+print(job.job_id, job.output_path)
+# Subscribe to events or inspect controller.get(job.job_id).
+# A host can stop a job even after its agent has finished:
+await controller.stop(job.job_id, reason="user_stop")
+await controller.close()
+```
+
+Background execution is disabled by default: `ShellController()` uses
+`ShellPolicy(allow_background=False)`. Library hosts retain authority over policy,
+output storage, ownership, and whether a completion should wake their agent.
+Typed owner metadata is not exported to the command's environment. This is a
+local, non-sandboxed POSIX shell; constructing the controller does not provide
+approval or filesystem/network isolation. ngn adds its normal approval checks.
+
+The output file contains raw combined stdout/stderr; terminal events expose only
+a bounded, decoded tail. Use job IDs and controller state rather than treating
+an output path or saved PID as authority to control a process. Temporary storage
+is available through `ShellStorage()`; persistent storage must be explicitly
+selected by the library host. Always close the controller to reap owned jobs.
+
+See [background-shell configuration](ngn-configuration.md#managed-background-shells)
+for ngn's receipts, automatic completion continuation, limits, and stop behavior.
+
 ## Automatic tools in ngn
 
 Put Python modules in `.agents/tools/` and mark exported functions with `@tool`:

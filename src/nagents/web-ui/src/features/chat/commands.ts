@@ -20,6 +20,7 @@ export const webCommands = [
   { name: "voice", description: "Open voice settings", argument: "" },
   { name: "dashboard", description: "Open the local dashboard in a new tab", argument: "" },
   { name: "stop", description: "Stop the active run", argument: "" },
+  { name: "jobs", description: "Inspect or stop managed shell jobs", argument: "[stop <job-id>]" },
 ] as const;
 export type WebCommand = typeof webCommands[number];
 export type CommandName = WebCommand["name"];
