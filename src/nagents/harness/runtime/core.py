@@ -946,9 +946,12 @@ class Harness:
     ) -> AsyncGenerator[HarnessEvent, None]:
         capture = self.wire_log.capture(self.session_id) if self.wire_log is not None else nullcontext()
         with capture:
-            async with aclosing(
+            stream = (
                 self._observed_generation_events(prompt, persisted_notice_id=persisted_notice_id)
-            ) as events:
+                if persisted_notice_id
+                else self._observed_generation_events(prompt)
+            )
+            async with aclosing(stream) as events:
                 async for event in events:
                     yield event
 
