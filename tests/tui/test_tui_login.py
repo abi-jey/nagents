@@ -21,6 +21,7 @@ from nagents.tui.login import OpenRouterLoginModal
 from nagents.tui.login import ProviderKeyModal
 from nagents.tui.screens import ChoiceModal
 from nagents.tui.widgets import Composer
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.tui import FakeHarness
 from tests.support.tui import idle
 from tests.support.tui import make_app
@@ -119,7 +120,12 @@ class LoginHarness(FakeHarness):
 async def start_login(app: NagentsApp, pilot: Pilot[None]) -> DeviceLoginModal:
     await send(app, pilot, "/login")
     assert isinstance(app.screen, LoginMethodModal)
-    assert app.screen.focused is app.screen.query_one("#login-choice-cancel", Button)
+    cancel_button = app.screen.query_one("#login-choice-cancel", Button)
+    # Screen mounting and its deferred focus update have independent callbacks.
+    async with asyncio.timeout(HANG_GUARD):
+        while app.screen.focused is not cancel_button:
+            await pilot.pause()
+    assert app.screen.focused is cancel_button
     await pilot.click("#login-chatgpt")
     await pilot.pause()
     assert isinstance(app.screen, DeviceLoginModal)

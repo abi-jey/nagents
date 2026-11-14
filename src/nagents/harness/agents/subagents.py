@@ -1518,11 +1518,13 @@ class SubagentManager:
                 info.error = "Subagent cancelled; it will not be replayed. Subagent setup or execution failed."
                 raise asyncio.CancelledError from None
             info.status = "failed"
-            info.error = (
-                "Subagent operation timed out during setup or execution; no successful result is available."
-                if isinstance(error, TimeoutError)
-                else "Subagent failed during setup or execution; no successful result is available."
-            )
+            # A later cleanup exception must not replace an already-sanitized failure.
+            if not info.error:
+                info.error = (
+                    "Subagent operation timed out during setup or execution; no successful result is available."
+                    if isinstance(error, TimeoutError)
+                    else "Subagent failed during setup or execution; no successful result is available."
+                )
         finally:
             info.phase = "stopping"
             try:
