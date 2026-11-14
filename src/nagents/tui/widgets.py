@@ -369,6 +369,7 @@ class ToolCard(Collapsible):
 
     _elapsed_timer: Timer | None = None
     _allocated_width: int = 0
+    _approval_waiting: bool = False
 
     def on_mount(self) -> None:
         if self._outcome in {"preparing", "ready", "running"}:
@@ -412,6 +413,7 @@ class ToolCard(Collapsible):
         self.tool_name.update(tool)
         self._file_change = tool in {"edit", "write"}
         self._outcome = "running"
+        self._approval_waiting = False
         self._started_at = monotonic()
         self._duration = "0.00s"
         self.arguments.display = not self._file_change
@@ -477,8 +479,17 @@ class ToolCard(Collapsible):
             self._elapsed_timer.stop()
             self._elapsed_timer = None
 
+    def set_approval_timing(self, elapsed: float, *, waiting: bool) -> None:
+        """Rebase the live clock to host active time, freezing it during approval."""
+        if self._outcome != "running":
+            return
+        self._approval_waiting = waiting
+        self._started_at = monotonic() - elapsed
+        self._duration = f"{max(0, elapsed):.2f}s"
+        self._update_summary()
+
     def _tick_elapsed(self) -> None:
-        if self._outcome == "running":
+        if self._outcome == "running" and not self._approval_waiting:
             self._duration = f"{max(0, monotonic() - self._started_at):.2f}s"
         if self._outcome in {"preparing", "ready", "running"}:
             self._update_summary()

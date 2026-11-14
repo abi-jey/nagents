@@ -51,6 +51,7 @@ from nagents.types import ToolDefinition
 from ..types import ToolOutput
 from .execution import _execution_for
 from .execution import _mask_delivery_authority
+from .timing import invocation
 
 READ_ONLY_TOOLS = frozenset(
     {
@@ -159,8 +160,12 @@ class HarnessExecutor(ToolExecutor):
 
     async def execute(self, tool_call: ToolCall) -> ToolResultEvent:
         bridge = _execution_for(self.harness)
-        with _mask_delivery_authority():
-            return await self._execute_guarded(tool_call, bridge)
+        with _mask_delivery_authority(), invocation(self.harness, tool_call.id) as clock:
+            result = await self._execute_guarded(tool_call, bridge)
+            # One owning clock covers validation, custom gates, built-in internal
+            # approvals, delivery and failures, regardless of inner executor timing.
+            result.duration_ms = clock.elapsed() * 1000
+            return result
 
     def _host_channel_send(self, tool: ToolDefinition | None, call: ToolCall, bridge: "ExecutionBridge | None") -> bool:
         """Only the host's original, bound send tool bypasses custom-tool approval."""

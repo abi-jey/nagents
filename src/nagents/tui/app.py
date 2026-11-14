@@ -64,6 +64,7 @@ from nagents.harness.types import TaskDeliveryWarning
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolAddedNotice
+from nagents.harness.types import ToolApprovalTiming
 from nagents.harness.types import ToolOutput
 from nagents.harness.types import TranscriptAbandoned
 from nagents.harness.types import TranscriptAnchor
@@ -1798,6 +1799,10 @@ class NagentsApp(App[None]):
             self._unanchored_tools[id(event)] = (event, card)
             self._running_tools.add(event.id)
             self._status(f"Running {event.name}  /  Esc to cancel")
+        elif isinstance(event, ToolApprovalTiming):
+            timing_card = self._tools.get(event.call_id)
+            if timing_card is not None and event.call_id in self._running_tools:
+                timing_card.set_approval_timing(event.elapsed, waiting=event.waiting)
         elif isinstance(event, ToolOutput):
             card = await self._tool(event.call_id, event.tool)
             self._running_tools.add(event.call_id)

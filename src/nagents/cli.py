@@ -51,6 +51,7 @@ from .harness.types import TaskMessage
 from .harness.types import TaskNotification
 from .harness.types import TaskStarted
 from .harness.types import ToolAddedNotice
+from .harness.types import ToolApprovalTiming
 from .harness.types import ToolOutput
 from .harness.types import TranscriptAbandoned
 from .harness.types import TranscriptAnchor
@@ -228,6 +229,7 @@ def _event_record(event: HarnessEvent) -> dict[str, object]:
     else:
         record["event"] = {
             ToolOutput: "tool_output",
+            ToolApprovalTiming: "tool_approval_timing",
             Notice: "notice",
             ToolAddedNotice: "tool_added",
             RemoteArtifacts: "remote_artifacts",
