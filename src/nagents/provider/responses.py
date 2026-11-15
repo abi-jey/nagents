@@ -79,7 +79,7 @@ class ResponsesBackend(ProviderBackend):
         # Compatible endpoints and unknown models must not be probed speculatively.
         model = self._provider.model.removesuffix("-latest")
         eligible = (
-            self._provider.provider_type == ProviderType.OPENAI
+            self._provider.provider_type in {ProviderType.OPENAI, ProviderType.OPENAI_COMPATIBLE}
             and urlsplit(self._provider.base_url).hostname == "api.openai.com"
             and model in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"}
             and route not in self._provider._responses_tools_unsupported

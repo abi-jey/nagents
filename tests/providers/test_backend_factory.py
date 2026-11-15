@@ -25,6 +25,7 @@ from nagents.types import ToolDefinition
     [
         (ProviderType.ANTHROPIC, "messages", AnthropicBackend),
         (ProviderType.OPENAI_COMPATIBLE, "messages", AnthropicBackend),
+        (ProviderType.OPENAI, "responses", ResponsesBackend),
         (ProviderType.OPENAI_COMPATIBLE, "responses", ResponsesBackend),
         (ProviderType.OPENROUTER, "responses", ResponsesBackend),
         (ProviderType.OPENAI_COMPATIBLE, "chat_completions", ChatCompletionsBackend),
