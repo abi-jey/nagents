@@ -1,4 +1,5 @@
 [
+  ["nagents.harness.tools.shell", "nagents._async", "join_owned"],
   ["nagents.session.shells", "nagents._sqlite", "write_database"],
   ["nagents.tools.shell.runtime", "nagents._async", "finish_on_cancel"],
   ["nagents.tools.shell.runtime", "nagents._async", "join_owned"],
