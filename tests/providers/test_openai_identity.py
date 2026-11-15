@@ -67,3 +67,18 @@ def test_shared_model_discovery(provider_type: ProviderType) -> None:
     with patch("nagents.provider.base.GatewayHTTPClient.get_json", catalog):
         assert asyncio.run(provider.get_model_list()) == ["gpt-4.1"]
     catalog.assert_awaited_once_with("https://api.openai.com/v1/models", {"Authorization": "Bearer test-key"})
+
+
+@pytest.mark.parametrize("api", ["auto", "chat_completions", "responses", "messages"])
+@pytest.mark.parametrize("base_url", ["https://example.test/v1", "https://example.test/v1/"])
+def test_generic_custom_endpoint_matches_native_wrapper(api: str, base_url: str) -> None:
+    generic = Provider(ProviderType.OPENAI, api_key="test-key", model="third-party", base_url=base_url, api=api)
+    native = OpenAIProvider(api_key="test-key", model="third-party", base_url=base_url, api=api)
+    assert generic.provider_type is native.provider_type is ProviderType.OPENAI_COMPATIBLE
+    assert generic.base_url == native.base_url
+
+
+@pytest.mark.parametrize("base_url", ["https://api.openai.com/v1", "https://api.openai.com/v1/"])
+def test_generic_explicit_native_endpoint_keeps_identity(base_url: str) -> None:
+    provider = Provider(ProviderType.OPENAI, api_key="test-key", model="gpt-4.1", base_url=base_url)
+    assert provider.provider_type is ProviderType.OPENAI

@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from nagents.exceptions import ModelListError
 from nagents.provider import FoundryProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
@@ -100,7 +101,12 @@ class _EnvOpenAIProvider(OpenAIProvider):
         return True
 
     async def get_model_list(self) -> list[str]:
-        self.credentials()
+        try:
+            self.credentials()
+        except ValueError:
+            raise ModelListError(
+                "API-key credentials are unavailable; configure your provider key before discovery."
+            ) from None
         return await super().get_model_list()
 
     async def generate(
@@ -143,7 +149,12 @@ class _EnvFoundryProvider(FoundryProvider):
         return await super().auth_headers(url)
 
     async def get_model_list(self) -> list[str]:
-        self._key()
+        try:
+            self._key()
+        except ValueError:
+            raise ModelListError(
+                "API-key credentials are unavailable; configure your provider key before discovery."
+            ) from None
         return await super().get_model_list()
 
     async def generate(
