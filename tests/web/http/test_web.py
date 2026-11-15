@@ -330,7 +330,7 @@ def test_models_captures_provider_during_inflight_read(tmp_path: Path, monkeypat
                     harness.agent.provider = replacement
                     release.set()
                     response = await task
-                    assert response.json() == {"models": ["captured-provider-model"], "source": "openai_compatible"}
+                    assert response.json() == {"models": ["captured-provider-model"], "source": "openai"}
                     assert harness.agent.provider is replacement
                     other.assert_not_called()
                 finally:
