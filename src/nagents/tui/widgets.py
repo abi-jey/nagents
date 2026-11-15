@@ -603,9 +603,9 @@ class ToolCard(Collapsible):
         if width < len(suffix) + len(timing) + 4:
             suffix = f"  {self._outcome}"
         if width < len(suffix) + len(timing) + 4:
-            timing = ""
-        if width < len(suffix) + 4:
-            # Outcome wins only when even a minimal tool name cannot fit.
+            timing = f" {elapsed}" if elapsed else ""
+        if width < len(suffix) + len(timing) + 4:
+            # Preserve outcome and elapsed when even a minimal name cannot fit.
             suffix = self._shorten(self._outcome, width)
             timing = self._duration if not preview and width >= len(suffix) + len(self._duration) + 1 else ""
             if timing:
