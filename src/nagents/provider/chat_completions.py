@@ -421,7 +421,7 @@ class ChatCompletionsBackend(ProviderBackend):
         # Handle reasoning content (from chain-of-thought models, Ollama)
         reasoning = message.get("reasoning_content") or message.get("reasoning")
         if reasoning:
-            yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage, extra=extra, displayable=True)
+            yield ReasoningChunkEvent(chunk=string_data(reasoning), usage=latest_usage, extra=extra, displayable=True)
 
         # Handle tool calls
         tool_calls = openai_adapter.parse_tool_calls(choice)

@@ -12,11 +12,13 @@ import logging
 import math
 import unicodedata
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from contextlib import contextmanager
 from dataclasses import replace
 from enum import Enum
 from time import monotonic
 from typing import TYPE_CHECKING
+from typing import cast
 from urllib.parse import quote
 from urllib.parse import urlsplit
 
@@ -58,6 +60,7 @@ from .session_header import validate_session_header_value
 from .session_header import validate_session_id_header
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from collections.abc import Iterator
     from collections.abc import Sequence
 
@@ -149,6 +152,8 @@ class Provider:
                 Empty disables it. Agent supplies the ID; direct callers use
                 set_session_id() or session_context(). Only generation requests carry it.
         """
+        if provider_type == ProviderType.OPENAI and base_url and base_url.rstrip("/") != "https://api.openai.com/v1":
+            provider_type = ProviderType.OPENAI_COMPATIBLE
         self.session_id_header = session_id_header
         self.context_window = validate_context_window(context_window)
         self.model_context_windows: dict[str, int] = {}
@@ -796,8 +801,11 @@ class Provider:
                 return
 
         try:
-            async for event in self._with_retry(messages, tools, config, stream):
-                yield event
+            async with aclosing(
+                cast("AsyncGenerator[Event]", self._with_retry(messages, tools, config, stream))
+            ) as events:
+                async for event in events:
+                    yield event
         except HTTPError as e:
             logger.error("Generation failed (HTTP %s)", e.status)
             yield ErrorEvent(
@@ -835,8 +843,9 @@ class Provider:
         from .factory import create_backend
 
         backend = create_backend(self)
-        async for event in backend.generate(messages, tools, config, stream):
-            yield event
+        async with aclosing(cast("AsyncGenerator[Event]", backend.generate(messages, tools, config, stream))) as events:
+            async for event in events:
+                yield event
 
     async def _with_retry(
         self,
@@ -863,16 +872,19 @@ class Provider:
             emitted = False
             pending: dict[tuple[str, int], ToolCallProgressEvent] = {}
             try:
-                async for event in self._dispatch(messages, tools, config, stream):
-                    if isinstance(event, ToolCallProgressEvent):
-                        key = (event.generation_id, event.index)
-                        if event.status == "streaming":
-                            pending[key] = event
+                async with aclosing(
+                    cast("AsyncGenerator[Event]", self._dispatch(messages, tools, config, stream))
+                ) as events:
+                    async for event in events:
+                        if isinstance(event, ToolCallProgressEvent):
+                            key = (event.generation_id, event.index)
+                            if event.status == "streaming":
+                                pending[key] = event
+                            else:
+                                pending.pop(key, None)
                         else:
-                            pending.pop(key, None)
-                    else:
-                        emitted = True
-                    yield event
+                            emitted = True
+                        yield event
                 return  # Success — exit retry loop
             except Exception as e:
                 # A preview never authorizes execution. Retire it before an

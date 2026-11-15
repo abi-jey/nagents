@@ -50,7 +50,8 @@ class GeminiBackend(ProviderBackend):
         from ..adapters import gemini as gemini_adapter
 
         endpoint = "streamGenerateContent" if stream else "generateContent"
-        url = f"{self._provider.base_url}/models/{self._provider.model}:{endpoint}?key={self._provider.api_key}"
+        model = self._provider.model.removeprefix("models/")
+        url = f"{self._provider.base_url}/models/{model}:{endpoint}?key={self._provider.api_key}"
 
         if stream:
             url += "&alt=sse"
@@ -59,6 +60,8 @@ class GeminiBackend(ProviderBackend):
         headers.update(self._provider._session_headers())
 
         body = gemini_adapter.format_request(messages, tools, config)
+        if config and config.thinking_config:
+            body.setdefault("generationConfig", {})["thinkingConfig"] = dict(config.thinking_config)
         if config and config.reasoning_effort:
             thinking = dict(config.thinking_config or {})
             thinking.pop("thinkingBudget", None)
