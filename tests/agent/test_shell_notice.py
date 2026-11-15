@@ -8,6 +8,8 @@ import pytest
 from nagents import Agent
 from nagents import SessionManager
 from nagents.events import TextDoneEvent
+from nagents.extensions import AgentPlugin
+from nagents.extensions import RunContext
 from nagents.session.shell_jobs import ShellJobOwner
 from nagents.session.shell_jobs import ShellJobRecord
 from nagents.session.shell_jobs import ShellJobStore
@@ -17,11 +19,21 @@ from nagents.types import ToolCall
 from tests.agent.test_extensions import OfflineProvider
 
 
+class RedactNotice(AgentPlugin):
+    async def before_run(self, context: RunContext, message: Message) -> Message:
+        if message.name == "ngn_shell_notice":
+            message.content = "REDACTED SHELL NOTICE"
+        return message
+
+
 @pytest.mark.asyncio
-async def test_resume_claimed_notice_does_not_duplicate_history(tmp_path: Path) -> None:
+@pytest.mark.parametrize("redact", [False, True])
+async def test_resume_claimed_notice_does_not_duplicate_history(tmp_path: Path, redact: bool) -> None:
     provider = OfflineProvider([[TextDoneEvent(text="Shell finished.")]])
     session = SessionManager(tmp_path / "sessions.db")
     agent = Agent(provider, session)
+    if redact:
+        agent.plugins.append(RedactNotice())
     try:
         await session.get_or_create_session("owner", "user")
         store = ShellJobStore(session)
@@ -48,7 +60,13 @@ async def test_resume_claimed_notice_does_not_duplicate_history(tmp_path: Path) 
         history = await session.get_history("owner")
         assert len([message for message in history if message.name == "ngn_shell_notice"]) == 1
         assert len(provider.requests) == 1
-        assert len([message for message in provider.requests[0].messages if message.name == "ngn_shell_notice"]) == 1
+        notices = [message for message in provider.requests[0].messages if message.name == "ngn_shell_notice"]
+        assert len(notices) == 1
+        if redact:
+            assert notices[0].content == "REDACTED SHELL NOTICE"
+            assert (
+                next(message for message in history if message.name == "ngn_shell_notice").content == notices[0].content
+            )
         await store.finish_wake("owner", message_id)
         with pytest.raises(ValueError):
             _ = [event async for event in agent.resume_notice(message_id, session_id="owner")]
