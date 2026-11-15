@@ -21,12 +21,12 @@ from nagents.harness.config import load_config
 from nagents.harness.providers import registry as providers_module
 from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.connection import build_provider
-from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ProviderRegistryStore
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.runtime.core import Harness
+from nagents.provider import OpenAIProvider
 from nagents.provider.codex.openai import CODEX_ENDPOINT
 from nagents.provider.codex.openai import CodexConfigError
 from nagents.web.live.routes import create_agent
@@ -364,11 +364,11 @@ def test_openai_auto_prefers_named_environment_without_codex_files(
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-account")
     monkeypatch.setenv("MY_OPENAI_KEY", "selected-account")
     provider = build_provider(profile, config, OpenAIAuth())
-    assert isinstance(provider, HarnessProvider)
-    provider.credentials()
+    assert isinstance(provider, OpenAIProvider)
+    asyncio.run(provider.verify_model())
     assert provider.api_key == "selected-account"
     monkeypatch.setenv("MY_OPENAI_KEY", "rotated-account")
-    provider.credentials()
+    asyncio.run(provider.verify_model())
     assert provider.api_key == "rotated-account"
     with pytest.raises(CodexConfigError):
         build_provider(sample(auth="codex", api_key_env=""), config, OpenAIAuth())

@@ -97,7 +97,8 @@ logger = logging.getLogger(__name__)
 class ProviderType(Enum):
     """Supported provider types."""
 
-    OPENAI_COMPATIBLE = "openai_compatible"  # OpenAI, Gemini-via-compat, Ollama, etc.
+    OPENAI = "openai"  # Native OpenAI API and ChatGPT subscription connections
+    OPENAI_COMPATIBLE = "openai_compatible"  # Third-party OpenAI-style endpoints
     OPENROUTER = "openrouter"  # OpenRouter (OpenAI-compatible with reasoning support)
     LITELLM = "litellm"  # Self-hosted API-key gateway; requires an explicit base URL
     GEMINI_NATIVE = "gemini_native"  # Native Gemini REST API
@@ -188,7 +189,11 @@ class Provider:
                 raise ValueError("Choose api_key or bearer_token_provider, not both")
             if not callable(bearer_token_provider):
                 raise ValueError("bearer_token_provider must be an async callable")
-            if provider_type not in {ProviderType.OPENAI_COMPATIBLE, ProviderType.AZURE_OPENAI_COMPATIBLE_V1}:
+            if provider_type not in {
+                ProviderType.OPENAI,
+                ProviderType.OPENAI_COMPATIBLE,
+                ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
+            }:
                 raise ValueError("Bearer token authentication requires an OpenAI-compatible v1 provider")
             if api not in {"auto", "chat_completions", "responses"} or realtime_config is not None:
                 raise ValueError("Bearer token authentication supports text chat/responses and GPT-Live, not Realtime")
@@ -200,6 +205,7 @@ class Provider:
         if live_config is not None and realtime_config is not None:
             raise ValueError("Choose live_config or realtime_config, not both")
         if live_config is not None and provider_type not in {
+            ProviderType.OPENAI,
             ProviderType.OPENAI_COMPATIBLE,
             ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
         }:
@@ -209,7 +215,7 @@ class Provider:
         if provider_type == ProviderType.LITELLM and not base_url:
             raise ValueError("LiteLLM requires an explicit base_url pointing to your gateway")
         default_api = "messages" if provider_type == ProviderType.ANTHROPIC else "chat_completions"
-        if provider_type == ProviderType.OPENAI_COMPATIBLE:
+        if provider_type in {ProviderType.OPENAI, ProviderType.OPENAI_COMPATIBLE}:
             default_api = native_openai_api(model, base_url=base_url or "")
             if default_api == "auto":
                 default_api = "chat_completions"
@@ -225,6 +231,7 @@ class Provider:
             provider_type
             not in {
                 ProviderType.LITELLM,
+                ProviderType.OPENAI,
                 ProviderType.OPENAI_COMPATIBLE,
                 ProviderType.OPENROUTER,
                 ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
@@ -232,6 +239,8 @@ class Provider:
             and self.api != default_api
         ):
             raise ValueError("This provider does not support the selected HTTP API contract")
+        if provider_type == ProviderType.OPENAI and self.api == "messages":
+            raise ValueError("Native OpenAI supports chat_completions or responses, not messages")
         if provider_type == ProviderType.OPENAI_COMPATIBLE and self.api == "messages" and not base_url:
             raise ValueError("The messages API requires an explicit compatible base_url or an Anthropic provider")
         if base_url:
@@ -269,7 +278,7 @@ class Provider:
                 raise ValueError("base_url is required for Azure OpenAI")
         if base_url:
             self.base_url = base_url.rstrip("/")
-        elif provider_type == ProviderType.OPENAI_COMPATIBLE:
+        elif provider_type in {ProviderType.OPENAI, ProviderType.OPENAI_COMPATIBLE}:
             self.base_url = "https://api.openai.com/v1"
         elif provider_type == ProviderType.OPENROUTER:
             self.base_url = "https://openrouter.ai/api/v1"
@@ -589,6 +598,7 @@ class Provider:
         Each call makes a fresh bounded request, with no redirects or raw logging.
         """
         if self.provider_type not in {
+            ProviderType.OPENAI,
             ProviderType.OPENAI_COMPATIBLE,
             ProviderType.OPENROUTER,
             ProviderType.LITELLM,
@@ -684,7 +694,12 @@ class Provider:
             self._model_verified = True
             return True
         try:
-            if self.provider_type in (ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER, ProviderType.LITELLM):
+            if self.provider_type in (
+                ProviderType.OPENAI,
+                ProviderType.OPENAI_COMPATIBLE,
+                ProviderType.OPENROUTER,
+                ProviderType.LITELLM,
+            ):
                 models = await self.get_model_list()
 
                 # Check for exact match first
@@ -845,7 +860,7 @@ class Provider:
         elif self.api == "messages":
             async for event in self._generate_anthropic(messages, tools, config, stream):
                 yield event
-        elif self.provider_type in {ProviderType.OPENAI_COMPATIBLE, ProviderType.LITELLM}:
+        elif self.provider_type in {ProviderType.OPENAI, ProviderType.OPENAI_COMPATIBLE, ProviderType.LITELLM}:
             async for event in self._generate_openai(messages, tools, config, stream):
                 yield event
         elif self.provider_type == ProviderType.OPENROUTER:
@@ -1834,7 +1849,7 @@ class Provider:
         # Compatible endpoints and unknown models must not be probed speculatively.
         model = self.model.removesuffix("-latest")
         eligible = (
-            self.provider_type == ProviderType.OPENAI_COMPATIBLE
+            self.provider_type in {ProviderType.OPENAI, ProviderType.OPENAI_COMPATIBLE}
             and urlsplit(self.base_url).hostname == "api.openai.com"
             and model in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"}
             and route not in self._responses_tools_unsupported

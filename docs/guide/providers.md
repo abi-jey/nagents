@@ -6,11 +6,23 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 
 | Provider | Type | Description |
 |----------|------|-------------|
-| OpenAI | `ProviderType.OPENAI_COMPATIBLE` | OpenAI API and compatible services |
+| OpenAI | `ProviderType.OPENAI` | Native OpenAI API and ChatGPT subscription authentication |
+| OpenAI-compatible | `ProviderType.OPENAI_COMPATIBLE` | Third-party endpoints using OpenAI-style protocols |
 | Anthropic | `ProviderType.ANTHROPIC` | Anthropic Claude API |
 | Google | `ProviderType.GEMINI_NATIVE` | Google Gemini API |
 | OpenRouter | `ProviderType.OPENROUTER` | OpenAI-compatible API with OpenRouter identification |
 | LiteLLM | `ProviderType.LITELLM` | API-key gateway with an explicit API prefix |
+
+Provider identity is separate from authentication and the wire protocol.
+`OpenAIProvider` (also importable from `nagents.provider.openai`) identifies native
+API-key and ChatGPT subscription connections as `ProviderType.OPENAI`. Codex is
+an internal subscription transport and optional local configuration source, not a
+second provider. Third-party connections use `ProviderType.OPENAI_COMPATIBLE`
+with their own `base_url`. For compatibility, an existing `OpenAIProvider` with
+an explicit custom endpoint or discovered custom-provider configuration retains
+`OPENAI_COMPATIBLE` identity. Existing imports from `nagents.provider.codex.openai`
+continue to work. Older generic `OPENAI_COMPATIBLE` calls targeting OpenAI still
+work; new native integrations should use `OPENAI` or `OpenAIProvider`.
 
 ## Sign in from ngn
 

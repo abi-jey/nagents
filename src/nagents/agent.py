@@ -72,6 +72,7 @@ from .media import MediaCapabilities
 from .media import transcode_audio_to_wav
 from .observation import observe
 from .observation import scope as observation_scope
+from .provider import OpenAIProvider
 from .provider import Provider
 from .provider import ProviderType
 from .response_metadata import ResponseTrace
@@ -421,9 +422,12 @@ class Agent:
 
     def _init_batch_client(self) -> None:
         """Initialize the batch client for batch mode."""
+        if isinstance(self.provider, OpenAIProvider) and self.provider.uses_chatgpt_auth:
+            raise ValueError("Batch mode requires API-key authentication, not ChatGPT subscription authentication")
         if self.provider.bearer_token_provider is not None:
             raise ValueError("Batch mode does not support bearer_token_provider")
         valid_types = (
+            ProviderType.OPENAI,
             ProviderType.OPENAI_COMPATIBLE,
             ProviderType.AZURE_OPENAI_COMPATIBLE,
             ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
@@ -431,7 +435,7 @@ class Agent:
         )
         if self.provider.provider_type not in valid_types:
             raise ValueError(
-                f"Batch mode only supported for OPENAI_COMPATIBLE, AZURE_OPENAI, and ANTHROPIC providers. "
+                f"Batch mode only supported for OPENAI, OPENAI_COMPATIBLE, AZURE_OPENAI, and ANTHROPIC providers. "
                 f"Got: {self.provider.provider_type}"
             )
         self._batch_client = BatchClient(
@@ -800,11 +804,13 @@ class Agent:
         from .realtime import RealtimeConfig
         from .realtime import RealtimeSession
 
+        if isinstance(self.provider, OpenAIProvider) and self.provider.uses_chatgpt_auth:
+            raise ValueError("Realtime requires API-key authentication, not ChatGPT subscription authentication")
         if self.provider.bearer_token_provider is not None:
             raise ValueError("Realtime does not support bearer_token_provider; use GPT-Live with live_config")
-        if self.provider.provider_type != ProviderType.OPENAI_COMPATIBLE:
+        if self.provider.provider_type not in {ProviderType.OPENAI, ProviderType.OPENAI_COMPATIBLE}:
             raise ValueError(
-                "Realtime speech-to-speech sessions require an OPENAI_COMPATIBLE provider. "
+                "Realtime speech-to-speech sessions require an OPENAI or OPENAI_COMPATIBLE provider. "
                 f"Got: {self.provider.provider_type}"
             )
 
