@@ -598,7 +598,14 @@ class ToolCard(Collapsible):
         timeout = format_duration(self._timeout) if not preview and self._timeout > 0 else ""
         timing = elapsed.rjust(8) + (f" / {timeout:>8}" if timeout else " " * 11)
         if width < len(suffix) + len(timing) + 4:
-            # Outcome wins on tiny terminals; timeout is supplementary metadata.
+            # Drop supplementary timeout slots before sacrificing tool identity.
+            timing = elapsed.rjust(8) if elapsed else ""
+        if width < len(suffix) + len(timing) + 4:
+            suffix = f"  {self._outcome}"
+        if width < len(suffix) + len(timing) + 4:
+            timing = ""
+        if width < len(suffix) + 4:
+            # Outcome wins only when even a minimal tool name cannot fit.
             suffix = self._shorten(self._outcome, width)
             timing = self._duration if not preview and width >= len(suffix) + len(self._duration) + 1 else ""
             if timing:

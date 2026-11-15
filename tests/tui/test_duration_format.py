@@ -62,3 +62,20 @@ def test_timer_fields_remain_fixed_across_units(monkeypatch: pytest.MonkeyPatch)
     card.finish({}, None, 102940)
     assert card.title.endswith("  1m 43s /      10m")
     assert card._elapsed_timer is None
+
+
+@pytest.mark.parametrize("preview", [False, True])
+@pytest.mark.parametrize("timeout", [0, 600])
+def test_narrow_headers_preserve_distinct_tool_names(preview: bool, timeout: int) -> None:
+    titles = []
+    for tool in ("read", "edit"):
+        card = ToolCard(tool, tool, {"timeout": timeout}, preview=preview)
+        card._allocated_width = 38
+        card._duration = "" if preview else "1.25s"
+        card._update_summary()
+        assert card.title.startswith(tool)
+        assert card._outcome in card.title
+        assert len(card.title) == 34
+        assert " / " not in card.title
+        titles.append(card.title)
+    assert titles[0] != titles[1]
