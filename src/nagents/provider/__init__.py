@@ -1,5 +1,6 @@
 """LLM providers, including explicit API-key gateway routes and isolated Codex OAuth."""
 
+from .backend import ProviderBackend
 from .base import Provider
 from .base import ProviderType
 from .cache import ConversationCacheKey
@@ -22,6 +23,7 @@ __all__ = [
     "FoundryProvider",
     "OpenAIProvider",
     "Provider",
+    "ProviderBackend",
     "ProviderType",
     "TokenCredential",
 ]
