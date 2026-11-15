@@ -1598,6 +1598,10 @@ class Agent:
         # A claimed job notice already has its durable history row.
         if not persisted_notice_id:
             await self.session.add_message(session_id, processed_message)
+        else:
+            from .session.shell_jobs import ShellJobStore
+
+            await ShellJobStore(self.session).transform_notice(session_id, persisted_notice_id, processed_message)
 
         session_usage = self._session_usage.setdefault(session_id, TokenUsage())
         last_usage = Usage()

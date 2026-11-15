@@ -187,6 +187,36 @@ async def test_quota_root_exclusive_and_existing_logs(tmp_path: Path) -> None:
         await controller.close()
 
 
+async def test_spawn_failure_returns_registered_background_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registered: list[ShellJob] = []
+    terminal: list[ShellJob] = []
+
+    async def started(job: ShellJob) -> None:
+        registered.append(job)
+
+    async def completed(job: ShellJob) -> None:
+        terminal.append(job)
+
+    async def fail(*args: str, **kwargs: object) -> asyncio.subprocess.Process:
+        raise OSError("private spawn details")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail)
+    controller = ShellController(ShellPolicy(allow_background=True), on_started=started, on_terminal=completed)
+    try:
+        job = await controller.execute("true", owner=owner(tmp_path), background=True)
+        assert job.state == "failed" and job.reason == "spawn_failed"
+        assert job.job_id == registered[0].job_id == terminal[0].job_id
+        assert job.output_path is not None and job.output_path.exists()
+        assert not job.output_complete and job.exit_code is None
+        assert "private" not in job.output
+        with pytest.raises(OSError, match="private spawn details"):
+            await controller.execute("true", owner=owner(tmp_path))
+    finally:
+        await controller.close()
+
+
 async def test_storage_failure_and_total_quota(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     controller = ShellController(ShellPolicy(allow_background=True, max_total_log_bytes=10))
     try:

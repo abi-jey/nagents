@@ -1109,6 +1109,10 @@ class Harness:
             if not prompt_text.strip():
                 raise ValueError("Prompt must not be empty")
             await self.initialize()
+            if trigger == "shell_notice":
+                initial_input = await self.shell_jobs.next_input()
+                if initial_input is None:
+                    return
             if self.followups in self.agent.plugins:
                 self.agent.plugins.remove(self.followups)
             self.agent.plugins.append(self.followups)  # Boundary signal follows every normal host/plugin hook.
@@ -1279,11 +1283,7 @@ class Harness:
         """Admit existing notices through the host's normal serialized run gate."""
         if session_id and session_id != self.session_id:
             raise ValueError("Shell notifications require their exact owning runtime")
-        await self.initialize()
-        message = await self.shell_jobs.next_input()
-        if message is None:
-            return
-        async with aclosing(self._run(message.prompt, trigger="shell_notice", initial_input=message)) as events:
+        async with aclosing(self._run("Shell job notification", trigger="shell_notice")) as events:
             async for event in events:
                 yield event
 
@@ -1868,8 +1868,10 @@ class Harness:
                         await self.tasks.end()
                     finally:
                         try:
-                            await self.shell_jobs.close()
-                            await self.agent.close()
+                            try:
+                                await self.shell_jobs.close()
+                            finally:
+                                await self.agent.close()
                         finally:
                             try:
                                 await self.resources.aclose()

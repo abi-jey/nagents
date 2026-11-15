@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.harness import ApprovalRequest
+    from nagents.tools.shell import ShellJob
     from nagents.types import Message
     from tests.support.providers import FakeProvider
 
@@ -276,5 +277,152 @@ async def test_new_exclusive_lease_reconciles_only_recorded_dead_hosts(
         assert next(record for record in records if record["job_id"] == "other")["state"] == "running"
         assert not [event async for event in harness.resume_shell_jobs()]
         assert not providers[0].requests
+    finally:
+        await harness.close()
+
+
+async def test_busy_resume_does_not_claim_pending_notice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    claims: list[str] = []
+
+    async def claim() -> None:
+        claims.append("claimed")
+
+    monkeypatch.setattr(harness.shell_jobs, "next_input", claim)
+    try:
+        with harness.operation("existing run"), pytest.raises(RuntimeError, match="busy"):
+            _ = [event async for event in harness.resume_shell_jobs()]
+        assert not claims
+    finally:
+        await harness.close()
+
+
+async def test_idle_terminal_failure_retries_without_host_activity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+
+    gate = tmp_path / "release"
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if len(provider.requests) == 1:
+            yield ToolCallEvent(
+                id="bg",
+                name="shell",
+                arguments={"command": f"while [ ! -f '{gate}' ]; do sleep .01; done", "background": True},
+            )
+        else:
+            yield TextDoneEvent(text="Done")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness.approval_handler = allow
+    try:
+        await collect(harness)
+        original = harness.shell_jobs._persist_terminal
+        failed = asyncio.Event()
+        notified = asyncio.Event()
+        calls = 0
+
+        async def flaky(job: ShellJob) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                failed.set()
+                raise OSError("temporary journal failure")
+            await original(job)
+
+        async def pending(session_id: str) -> None:
+            notified.set()
+
+        monkeypatch.setattr(harness.shell_jobs, "_persist_terminal", flaky)
+        harness.shell_jobs.on_work_pending = pending
+        gate.touch()
+        async with asyncio.timeout(3):
+            await failed.wait()
+            await notified.wait()
+        assert calls == 2
+        assert (await harness.shell_jobs.list())[0]["output_complete"]
+    finally:
+        await harness.close()
+
+
+async def test_closed_bridge_releases_shared_owner_references(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if len(provider.requests) == 1:
+            yield ToolCallEvent(id="bg", name="shell", arguments={"command": "sleep 30", "background": True})
+        else:
+            yield TextDoneEvent(text="Done")
+
+    first, _ = setup_harness(tmp_path, monkeypatch, script)
+    second, _ = setup_harness(tmp_path, monkeypatch, script)
+    first.approval_handler = second.approval_handler = allow
+    try:
+        await collect(first)
+        await collect(second)
+        shared = second.shell_jobs._shared
+        assert shared is not None
+        await first.close()
+        assert first.shell_jobs not in shared.owners.values()
+        assert second.shell_jobs in shared.owners.values()
+    finally:
+        await first.close()
+        await second.close()
+
+
+async def test_shell_close_failure_still_closes_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="unused")
+
+    harness, providers = setup_harness(tmp_path, monkeypatch, script)
+
+    async def broken() -> None:
+        raise OSError("shell cleanup failure")
+
+    monkeypatch.setattr(harness.shell_jobs, "close", broken)
+    with pytest.raises(OSError, match="shell cleanup"):
+        await harness.close()
+    assert providers[0].closed
+
+
+async def test_child_background_is_runtime_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness._is_subagent = True
+    try:
+        assert not harness.shell_jobs._policy().allow_background
+        with pytest.raises(PermissionError, match="disabled"):
+            await harness.tools.shell("sleep 30", background=True)
+    finally:
+        await harness.close()
+
+
+async def test_background_spawn_failure_returns_receipt_and_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if len(provider.requests) == 1:
+            yield ToolCallEvent(id="bg", name="shell", arguments={"command": "true", "background": True})
+        else:
+            yield TextDoneEvent(text="Done")
+
+    async def broken_spawn(*args: object, **kwargs: object) -> asyncio.subprocess.Process:
+        raise OSError("forced spawn failure")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness.approval_handler = allow
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", broken_spawn)
+    try:
+        async with asyncio.timeout(3):
+            events = await collect(harness)
+            _ = [event async for event in harness.resume_shell_jobs()]
+        receipt = next(event for event in events if isinstance(event, ToolResultEvent))
+        assert not receipt.error and isinstance(receipt.result, dict) and receipt.result["job_id"]
+        assert not await harness.shell_jobs.has_pending()
+        record = (await harness.shell_jobs.list())[0]
+        assert record["state"] == "failed" and record["reason"] == "spawn_failed"
     finally:
         await harness.close()

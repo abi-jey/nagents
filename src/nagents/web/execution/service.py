@@ -377,6 +377,8 @@ class WebState:
         return True
 
     def changed(self) -> None:
+        if self._shell_pending:
+            asyncio.get_running_loop().call_soon(self._drain_shell_jobs)
         self.wakeups.changed.set()
         self.channels.changed.set()
 

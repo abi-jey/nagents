@@ -350,6 +350,26 @@ class ShellJobStore:
 
         return await self._transaction(read)
 
+    async def transform_notice(self, session_id: str, message_id: int, message: Message) -> None:
+        """Apply trusted before_run transformations to the existing claimed row."""
+
+        def write(db: sqlite3.Connection) -> None:
+            row = db.execute(
+                "SELECT 1 FROM ngn_shell_outbox o JOIN ngn_shell_jobs j USING(job_id) "
+                "WHERE j.session_id = ? AND o.message_id = ? AND o.wake_state = 'claimed'",
+                (session_id, message_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Notice is not a claimed shell wake for this session")
+            values = self.session._message_values(session_id, message)
+            db.execute(
+                "UPDATE v2_messages SET role=?,content=?,tool_calls=?,tool_call_id=?,name=? "
+                "WHERE session_id=? AND id=?",
+                (*values[1:], session_id, message_id),
+            )
+
+        await self._transaction(write)
+
     async def eligible_notice(self, session_id: str, message_id: int) -> bool:
         try:
             await self.notice_message(session_id, message_id)

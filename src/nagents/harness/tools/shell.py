@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -89,6 +90,8 @@ class ShellJobs:
         self._shared: _SharedShell | None = None
         self._stores: dict[str, ShellJobStore] = {}
         self._retrying: set[str] = set()
+        self._terminal_retries: dict[str, asyncio.Task[None]] = {}
+        self._closing = False
 
     @property
     def store(self) -> ShellJobStore:
@@ -99,7 +102,7 @@ class ShellJobs:
     def _policy(self) -> ShellPolicy:
         config = self.harness.config
         return ShellPolicy(
-            allow_background=config.allow_background_shell,
+            allow_background=config.allow_background_shell and not self.harness._is_subagent,
             timeout=config.shell_timeout,
             max_output=config.max_output,
             max_log_bytes=config.shell_max_log_bytes,
@@ -145,7 +148,33 @@ class ShellJobs:
             )
         )
 
+    async def _retry_terminal(self, job_id: str) -> None:
+        assert self._controller is not None
+        # Retry independently of run-scoped consumers and idle host callbacks.
+        for delay in (0.01, 0.05, 0.2, 0.5, 1.0):
+            await asyncio.sleep(delay)
+            self._retrying.add(job_id)
+            try:
+                await self._controller.retry_terminal(job_id)
+            except Exception:
+                continue
+            finally:
+                self._retrying.discard(job_id)
+            return
+        logging.getLogger(__name__).error("Shell terminal persistence retries exhausted: %s", job_id)
+        self._changed.set()
+
     async def _terminal(self, job: ShellJob) -> None:
+        try:
+            await self._persist_terminal(job)
+        except Exception:
+            if job.job_id not in self._terminal_retries and not self._closing:
+                self._terminal_retries[job.job_id] = asyncio.create_task(
+                    self._retry_terminal(job.job_id), name=f"shell-persist-{job.job_id}"
+                )
+            raise
+
+    async def _persist_terminal(self, job: ShellJob) -> None:
         if not job.background:
             return
         await self._session_store(job.owner.session_id).terminal(
@@ -175,10 +204,10 @@ class ShellJobs:
 
     async def execute(self, command: str, timeout: float = 0.0, background: bool = False) -> dict[str, JsonValue]:
         h = self.harness
-        h.tools.writable()
         policy = self._policy()
         if background and not policy.allow_background:
             raise PermissionError("Background shell execution is disabled")
+        h.tools.writable()
         seconds = timeout or policy.timeout
         if not math.isfinite(seconds) or not 0 < seconds <= policy.timeout:
             raise ValueError(
@@ -195,7 +224,7 @@ class ShellJobs:
             call_id,
         )
         h.tools.writable()
-        if background and not h.config.allow_background_shell:
+        if background and (not h.config.allow_background_shell or h._is_subagent):
             raise PermissionError("Background shell execution is disabled")
         owner = ShellOwner(
             h.workspace,
@@ -233,6 +262,8 @@ class ShellJobs:
             command, owner=owner, timeout=seconds, background=background, on_output=None if background else output
         )
         if not background:
+            if job.state in {"output_limit", "storage_failure"}:
+                raise RuntimeError(f"Shell stopped: {job.reason}; output is incomplete.")
             return {
                 "output": job.output,
                 "exit_code": job.exit_code,
@@ -393,22 +424,46 @@ class ShellJobs:
     async def close(self) -> None:
         if self._controller is None or self._shared is None:
             return
+        self._closing = True
+        shared = self._shared
         sessions = {
             job.owner.session_id
             for job in self._controller.list()
-            if job.background and self._shared.owners.get(job.owner.run_id) is self
+            if job.background and shared.owners.get(job.owner.run_id) is self
         }
-        for session in sessions:
-            await self.cancel_owner(session, "host_shutdown")
-        shared = self._shared
-        shared.bridges.discard(self)
-        shared.save_hosts()
-        if not shared.bridges:
-            try:
-                await shared.controller.close()
-            finally:
-                for key, value in tuple(_shared.items()):
-                    if value is shared:
-                        del _shared[key]
-        for session in sessions:
-            await self.process_notifications(session)
+        try:
+            for session in sessions:
+                await self.cancel_owner(session, "host_shutdown")
+            for task in self._terminal_retries.values():
+                await asyncio.shield(task)
+            for session in sessions:
+                await self.process_notifications(session)
+        finally:
+            # Even journal cleanup failure must reap owned processes before
+            # releasing callback routing and the bridge's strong references.
+            await asyncio.gather(
+                *(
+                    self._controller.stop(job.job_id, "host_shutdown")
+                    for job in self._controller.list()
+                    if shared.owners.get(job.owner.run_id) is self and not job.terminal
+                ),
+                return_exceptions=True,
+            )
+            for task in self._terminal_retries.values():
+                if not task.done():
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+            for run_id, bridge in tuple(shared.owners.items()):
+                if bridge is self:
+                    del shared.owners[run_id]
+            self._terminal_retries.clear()
+            shared.bridges.discard(self)
+            shared.save_hosts()
+            if not shared.bridges:
+                try:
+                    await shared.controller.close()
+                finally:
+                    for key, value in tuple(_shared.items()):
+                        if value is shared:
+                            del _shared[key]

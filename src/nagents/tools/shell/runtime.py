@@ -238,9 +238,11 @@ class ShellController:
         reason = "exited"
         preview = bytearray()
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        registered = False
         try:
             if self.on_started is not None:
                 await self.on_started(entry.job)
+            registered = True
             if entry.stop_reason:
                 return
             entry.process = await asyncio.create_subprocess_exec(
@@ -298,7 +300,7 @@ class ShellController:
                 "storage_failure" if entry.process else "failed",
                 "storage_failure" if entry.process else "spawn_failed",
             )
-            if entry.process is None and not entry.ready.done():
+            if entry.process is None and not entry.ready.done() and not (entry.job.background and registered):
                 entry.ready.set_exception(error)
         except Exception as error:
             entry.terminal_error = error
@@ -331,7 +333,8 @@ class ShellController:
                 output_complete=reason in ("exited", "nonzero_exit"),
                 completed_at=_now(),
             )
-            if not entry.ready.done():
+            terminal_receipt = entry.job.background and registered and reason == "spawn_failed"
+            if not entry.ready.done() and not terminal_receipt:
                 entry.ready.set_exception(RuntimeError(f"shell admission cancelled: {reason}"))
             try:
                 if self.on_terminal is not None:
@@ -339,6 +342,10 @@ class ShellController:
             except Exception as error:
                 entry.terminal_error = error
             self._publish("completed", entry)
+            if terminal_receipt and not entry.ready.done():
+                # Registration is durable even though no process could start.
+                # Return its terminal receipt so hosts can commit the tool anchor.
+                entry.ready.set_result(None)
 
     @staticmethod
     def _write(fd: int, data: bytes) -> None:

@@ -65,3 +65,52 @@ def test_shell_routes_auth_ownership_stop_and_private_download(tmp_path: Path) -
             assert (await client.get(path, headers=headers)).json()["jobs"][0]["state"] == "cancelled"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("blocker", ["mutation", "inbox"])
+def test_shell_wake_retried_when_host_blocker_releases(tmp_path: Path, blocker: str) -> None:
+    async def scenario() -> None:
+        from unittest.mock import AsyncMock
+        from unittest.mock import patch
+
+        from nagents.web.execution.service import WebState
+
+        async with client_app(tmp_path) as (app, _client, _headers, harnesses):
+            state = app.state.web
+            harness = harnesses[0]
+            session = harness.session_id
+            state.executions.owners[session] = harness
+            claimed = asyncio.create_task(asyncio.Event().wait())
+            resumed = asyncio.Event()
+
+            async def resume(*args: object, **kwargs: object) -> None:
+                resumed.set()
+
+            try:
+                if blocker == "mutation":
+                    state.mutating = True
+                else:
+                    state.channels.work_tasks[session] = claimed
+                with patch.object(WebState, "_resume_shell_jobs", AsyncMock(side_effect=resume)) as activation:
+                    assert harness.shell_jobs.on_work_pending is not None
+                    await harness.shell_jobs.on_work_pending(session)
+                    await asyncio.sleep(0)
+                    activation.assert_not_called()
+                    assert session in state._shell_pending
+                    state.mutating = False
+                    state.channels.work_tasks.pop(session, None)
+                    state.changed()
+                    await asyncio.wait_for(resumed.wait(), 2)
+                    activation.assert_awaited_once()
+                    assert session not in state._shell_pending
+                    run = state.run_for(session)
+                    assert run is not None
+                    await run.task
+                    state.executions.release(run)
+            finally:
+                state.mutating = False
+                state.channels.work_tasks.pop(session, None)
+                claimed.cancel()
+                await asyncio.gather(claimed, return_exceptions=True)
+
+    asyncio.run(scenario())
