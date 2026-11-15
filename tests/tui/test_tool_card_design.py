@@ -92,9 +92,9 @@ async def test_streamed_preview_shimmers_between_argument_updates(
             assert (frames[0] != frames[1]) == (enabled and level != "none")
             assert card._duration == ""
             assert card._outcome in card.title
-            assert "0.00s" not in card.title
+            assert "0ms" not in card.title
         card.start_call("running", "shell", {"command": "echo hello"})
-        assert card._duration == "0.00s"
+        assert card._duration == "0ms"
         assert card._elapsed_timer is not None
         assert card._elapsed_timer is not timer
         card.cancel()
@@ -145,8 +145,9 @@ async def test_tool_columns_align_with_and_without_timeout(width: int, outcome: 
         assert len({cell_len(card.title.split("1.25s")[0]) for card in cards}) == 1
         assert len({cell_len(card.title) for card in cards}) == 1
         assert " / " not in cards[0].title
-        assert " / 60s" in cards[1].title
-        assert " / 600s" in cards[2].title
+        assert cards[0].title.endswith(f"{'1.25s':>8}" + " " * 11)
+        assert cards[1].title.endswith(f"{'1.25s':>8} / {'1m':>8}")
+        assert cards[2].title.endswith(f"{'1.25s':>8} / {'10m':>8}")
 
 
 def assert_transparent(widget: Widget) -> None:
@@ -304,18 +305,19 @@ async def test_status_and_timer_columns_survive_phases_and_resize(
         app.set_focus(None)
         await pilot.pause()
         regions = (card.region, neighbour.region)
-        initial = right_columns(card, "running", "0.00s / 30s")
+        initial = right_columns(card, "running", f"{'0ms':>8} / {'30s':>8}")
         clock[0] = 112.25
         card._tick_elapsed()
         await pilot.pause()
-        assert right_columns(card, "running", "12.25s / 30s") == initial
+        assert right_columns(card, "running", f"{'12.2s':>8} / {'30s':>8}") == initial
         card.set_arguments({"command": "Short target", "timeout": 30})
         card.append_output("Output must not expand a closed card\n" * 3)
         await pilot.pause()
-        assert right_columns(card, "running", "12.25s / 30s") == initial
+        assert right_columns(card, "running", f"{'12.2s':>8} / {'30s':>8}") == initial
         settle(card, outcome)
         await pilot.pause()
-        timing = "12.25s / 30s" if outcome == "cancelled" else "1.25s / 30s"
+        elapsed = "12.2s" if outcome == "cancelled" else "1.25s"
+        timing = f"{elapsed:>8} / {'30s':>8}"
         assert right_columns(card, outcome, timing) == initial
         assert (card.region, neighbour.region) == regions
         assert card.collapsed and card.size.height == 1

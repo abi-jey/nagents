@@ -37,11 +37,11 @@ def test_repeated_approval_waits_rebase_active_clock(monkeypatch: pytest.MonkeyP
     card.set_approval_timing(3.0, waiting=True)
     clock[0] += 500
     card._tick_elapsed()
-    assert card._duration == "3.00s"
+    assert card._duration == "3s"
     card.set_approval_timing(3.0, waiting=False)
     clock[0] += 0.5
     card._tick_elapsed()
-    assert card._duration == "3.50s"
+    assert card._duration == "3.5s"
 
 
 @pytest.mark.parametrize("outcome", ["complete", "failed", "cancelled"])
@@ -56,7 +56,7 @@ def test_terminal_card_ignores_late_approval_timing(outcome: str, monkeypatch: p
         assert card._duration == "1.25s"
     else:
         card.finish({}, "denied" if outcome == "failed" else None, 1500)
-        assert card._duration == "1.50s"
+        assert card._duration == "1.5s"
     frozen = card.title
     card.set_approval_timing(99, waiting=False)
     card._tick_elapsed()
@@ -70,7 +70,7 @@ def test_new_invocation_resets_approval_pause() -> None:
     card.cancel()
     card.start_call("new", "custom", {})
     assert not card._approval_waiting
-    assert card._duration == "0.00s"
+    assert card._duration == "0ms"
 
 
 def test_tui_routes_approval_timing_only_to_running_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
