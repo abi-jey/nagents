@@ -12,6 +12,7 @@ from typing import TypedDict
 
 from nagents.error_presentation import remote_error_message
 from nagents.error_presentation import transport_error_message
+from nagents.harness.providers.connection import _EnvOpenAIProvider
 from nagents.harness.providers.factory import HarnessProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider._diagnostics import transport_diagnostic
@@ -43,16 +44,17 @@ def provider_setup(harness: Harness) -> ProviderSetup:
             "message": "ChatGPT login is missing or unreadable in this container. Use /login in this chat, "
             "or run ngn login chatgpt on the server with persistent XDG_DATA_HOME.",
         }
-    if not isinstance(provider, HarnessProvider) and not (
+    if not isinstance(provider, (HarnessProvider, _EnvOpenAIProvider)) and not (
         config.provider and config.provider_profile().auth == "api-key"
     ):
         # Entra and other provider-specific credential sources are resolved on request.
         return {"configured": True, "message": ""}
-    key_env = (
-        provider.harness_config.provider_profile().key_env
-        if isinstance(provider, HarnessProvider)
-        else config.provider_profile().key_env
-    )
+    if isinstance(provider, _EnvOpenAIProvider):
+        key_env = provider._env
+    elif isinstance(provider, HarnessProvider):
+        key_env = provider.harness_config.provider_profile().key_env
+    else:
+        key_env = config.provider_profile().key_env
     if os.environ.get(key_env, "").strip() or (
         not config.provider and harness.login_store.key_for(config.provider_profile().kind)
     ):

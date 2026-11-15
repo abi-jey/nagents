@@ -47,7 +47,7 @@ REVISION = re.compile(r"[0-9a-f]{64}\Z")
 MAX_BYTES = 64 * 1024
 PROVIDERS = {provider.value: provider for provider in ProviderType}
 PROVIDERS.update(
-    openai=ProviderType.OPENAI_COMPATIBLE,
+    openai=ProviderType.OPENAI,
     gemini=ProviderType.GEMINI_NATIVE,
     google=ProviderType.GEMINI_NATIVE,
     azure=ProviderType.AZURE_OPENAI_COMPATIBLE,

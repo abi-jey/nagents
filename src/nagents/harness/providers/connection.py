@@ -13,11 +13,13 @@ from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.provider.codex.openai import CodexConfigError
 from nagents.provider.codex.openai import _load_config
+from nagents.provider.reasoning import native_openai_api
 from nagents.types import RetryConfig
 
 from .factory import HarnessProvider
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from collections.abc import AsyncIterator
 
     from nagents.events import Event
@@ -56,6 +58,62 @@ class _EntraFoundryProvider(FoundryProvider):
             await super().close()
         finally:
             await self._owned_credential.close()  # type: ignore[attr-defined]
+
+
+class _EnvOpenAIProvider(OpenAIProvider):
+    """Native API-key connection with lazy, named environment credentials."""
+
+    def __init__(self, profile: ProviderProfile, model: str) -> None:
+        self._env = profile.key_env
+        self._automatic_model_api = profile.api == "auto"
+        super().__init__(
+            api_key="deferred-until-live-request",
+            model=model,
+            api=native_openai_api(model) if self._automatic_model_api else profile.api,
+            timeout=profile.request_timeout,
+            session_id_header=profile.session_id_header,
+        )
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self._model = value
+        if self._automatic_model_api:
+            self.api = native_openai_api(value)
+
+    def credentials(self) -> None:
+        """Resolve only this named connection's API key, never a saved login."""
+        key = os.environ.get(self._env, "")
+        if not key.strip():
+            raise ValueError(f"Set ${self._env} before an API-key request")
+        self.api_key = key
+
+    def _prepare_context_usage(self) -> None:
+        self.credentials()
+
+    async def verify_model(self, force: bool = False) -> bool:
+        self.credentials()
+        # Startup is local; the actual generation endpoint is authoritative.
+        return True
+
+    async def get_model_list(self) -> list[str]:
+        self.credentials()
+        return await super().get_model_list()
+
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        config: GenerationConfig | None = None,
+        stream: bool = True,
+        verify_model: bool = False,
+    ) -> AsyncGenerator[Event, None]:
+        self.credentials()
+        async for event in super().generate(messages, tools, config, stream, verify_model):
+            yield event
 
 
 class _EnvFoundryProvider(FoundryProvider):
@@ -140,11 +198,7 @@ def _build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenA
         if profile.auth == "codex" and not _codex_files_exist():
             raise CodexConfigError("Local Codex configuration was not found; sign in with Codex first")
         if profile.auth == "auto" and not _codex_files_exist():
-            return HarnessProvider(
-                replace(config, providers={**config.providers, config.provider: replace(profile, auth="api-key")}),
-                None,
-                request_timeout=profile.request_timeout,
-            )
+            return _EnvOpenAIProvider(profile, config.model)
         try:
             return OpenAIProvider(model=config.model, timeout=profile.request_timeout)
         except CodexConfigError:
@@ -155,6 +209,8 @@ def _build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenA
             if _codex_files_exist():
                 raise
             # No usable Codex login: use the named environment variable lazily.
+    if profile.kind == "openai":
+        return _EnvOpenAIProvider(profile, config.model)
     # No fallback to the legacy single-login key for named connections.
     selected = (
         replace(
@@ -191,6 +247,16 @@ def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str,
         # An unrelated environment key must not replace Codex's selected
         # credential or API prefix. Discovery errors remain terminal here.
         return OpenAIProvider(model=model, live_config=options, timeout=profile.request_timeout)
+    if profile.kind == "openai":
+        return OpenAIProvider(
+            api_key=key,
+            model=model,
+            api="responses",
+            live_config=options,
+            timeout=profile.request_timeout,
+            retry_config=RetryConfig(max_retries=0),
+            session_id_header=profile.session_id_header,
+        )
     return Provider(
         ProviderType.OPENAI_COMPATIBLE,
         api_key=key,

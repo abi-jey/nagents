@@ -18,7 +18,7 @@ from nagents.events import TextDoneEvent
 from nagents.harness.config import load_config
 from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.auth import OpenAIAuthError
-from nagents.harness.providers.factory import HarnessProvider
+from nagents.harness.providers.connection import _EnvOpenAIProvider
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
@@ -232,14 +232,14 @@ def test_missing_selected_key_does_not_block_scripted_provider(tmp_path: Path, m
     providers.model_store("workspace").save("team-chat")
 
     async def scripted(
-        provider: HarnessProvider,
+        provider: _EnvOpenAIProvider,
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         config: GenerationConfig | None = None,
         stream: bool = True,
         verify_model: bool = False,
     ) -> AsyncIterator[Event]:
-        assert provider.harness_config.provider == "team" and provider.model == "team-chat"
+        assert provider._env == "TEAM_PROVIDER_KEY" and provider.model == "team-chat"
         yield TextDoneEvent(text="Scripted reply")
 
     async def check() -> None:
@@ -253,8 +253,8 @@ def test_missing_selected_key_does_not_block_scripted_provider(tmp_path: Path, m
             assert "UNRELATED-PRIVATE-KEY" not in json.dumps(events)
 
     with (
-        patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
-        patch.object(HarnessProvider, "generate", scripted),
+        patch.object(_EnvOpenAIProvider, "verify_model", AsyncMock(return_value=True)),
+        patch.object(_EnvOpenAIProvider, "generate", scripted),
     ):
         asyncio.run(check())
 

@@ -24,7 +24,6 @@ from nagents.harness.providers.connection import build_live_provider
 from nagents.harness.providers.connection import build_provider
 from nagents.harness.providers.credentials import ProviderLoginError
 from nagents.harness.providers.credentials import ProviderLoginStore
-from nagents.harness.providers.factory import HarnessProvider
 from nagents.harness.providers.registry import ProviderProfile
 from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ProviderRegistryStore
@@ -319,7 +318,8 @@ def test_named_chatgpt_login_rebuild_and_logout_keep_timeout(
             await harness.logout()
             assert logged_in_session.closed and harness.agent.provider is not before_logout
             assert_timeout(harness.agent.provider, 77)
-            assert isinstance(harness.agent.provider, OpenAIProvider if auth == "chatgpt" else HarnessProvider)
+            assert isinstance(harness.agent.provider, OpenAIProvider)
+            assert harness.agent.provider.uses_chatgpt_auth is (auth == "chatgpt")
             remaining_session = await harness.agent.provider._http._get_session()
         finally:
             await harness.close()

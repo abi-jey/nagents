@@ -232,7 +232,7 @@ def test_strict_config_rejects_invalid_and_secret_fields(config: HarnessConfig, 
 
 def test_provider_aliases_and_missing_explicit_config(config: HarnessConfig, tmp_path: Path) -> None:
     assert set(ProviderType) <= set(PROVIDERS.values())
-    assert PROVIDERS["openai"] is ProviderType.OPENAI_COMPATIBLE
+    assert PROVIDERS["openai"] is ProviderType.OPENAI
     with pytest.raises(FileNotFoundError):
         load_config(config.workspace, tmp_path / "missing.json")
 

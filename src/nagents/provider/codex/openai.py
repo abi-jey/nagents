@@ -514,7 +514,9 @@ class OpenAIProvider(Provider):
                 api = local.api if api == "auto" else api
         if api_key or bearer_token_provider is not None:
             super().__init__(
-                ProviderType.OPENAI_COMPATIBLE,
+                ProviderType.OPENAI
+                if not base_url or base_url.rstrip("/") == "https://api.openai.com/v1"
+                else ProviderType.OPENAI_COMPATIBLE,
                 api_key,
                 model or DEFAULT_CODEX_MODEL,
                 base_url=base_url or None,
@@ -538,7 +540,7 @@ class OpenAIProvider(Provider):
                 "Use ngn serve browser voice for GPT-Live with ChatGPT login."
             )
         super().__init__(
-            ProviderType.OPENAI_COMPATIBLE,
+            ProviderType.OPENAI,
             "oauth-not-an-api-key",
             model or DEFAULT_CODEX_MODEL,
             timeout=timeout,

@@ -112,6 +112,11 @@ _PROVIDER_CAPABILITIES: dict[str, MediaCapabilities] = {
     # Most OpenAI models do NOT support input_audio content blocks.
     # Only audio-specific models (gpt-4o-audio-preview, gpt-audio-*)
     # accept them. Default to no audio support; model overrides add it.
+    "openai": MediaCapabilities(
+        audio_formats=frozenset(),
+        image_formats=frozenset({"jpeg", "jpg", "png", "gif", "webp"}),
+        document_formats=frozenset(),
+    ),
     "openai_compatible": MediaCapabilities(
         audio_formats=frozenset(),
         image_formats=frozenset({"jpeg", "jpg", "png", "gif", "webp"}),
@@ -212,6 +217,19 @@ _MODEL_CAPABILITIES: list[tuple[str, str, MediaCapabilities]] = [
     # -------------------------------------------------------------------------
     # OpenAI models — only audio-specific models support input_audio blocks
     # -------------------------------------------------------------------------
+    # Native OpenAI uses the same inline-audio formats as compatible routes.
+    *[
+        (
+            "openai",
+            prefix,
+            MediaCapabilities(
+                audio_formats=frozenset({"wav", "mp3"}),
+                image_formats=frozenset({"jpeg", "jpg", "png", "gif", "webp"}),
+                document_formats=frozenset(),
+            ),
+        )
+        for prefix in ("gpt-4o-audio-preview", "gpt-4o-mini-audio-preview", "gpt-audio")
+    ],
     # gpt-4o-audio-preview — supports inline audio input
     (
         "openai_compatible",
