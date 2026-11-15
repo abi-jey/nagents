@@ -157,19 +157,19 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str, tables: set[str
         pass
 
 
-def _purge_shell_jobs(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
-    if "ngn_shell_jobs" not in tables:
+def _purge_shells(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
+    if "ngn_shells" not in tables:
         return
     jobs = db.execute(
-        "SELECT job_id,output_path,terminal_json FROM ngn_shell_jobs WHERE root_session_id=? OR session_id=?",
+        "SELECT shell_id,output_path,terminal_json FROM ngn_shells WHERE root_session_id=? OR session_id=?",
         (session_id, session_id),
     ).fetchall()
     if any(not row[2] for row in jobs):
-        raise HTTPException(409, "Shell jobs are still stopping. Retry permanent deletion.")
+        raise HTTPException(409, "Shells are still stopping. Retry permanent deletion.")
     database = next((row[2] for row in db.execute("PRAGMA database_list") if row[1] == "main"), "")
-    root = Path(database).parent / "shell-jobs"
-    for job_id, output_path, _ in jobs:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id) or output_path != str(root / job_id / "output.log"):
+    root = Path(database).parent / "shells"
+    for shell_id, output_path, _ in jobs:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", shell_id) or output_path != str(root / shell_id / "output.log"):
             raise HTTPException(409, "Shell output allocation is inconsistent. Deletion was not performed.")
         if os.name != "posix":
             if Path(output_path).exists():
@@ -179,7 +179,7 @@ def _purge_shell_jobs(db: sqlite3.Connection, session_id: str, tables: set[str])
         try:
             parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             descriptors.append(parent)
-            directory = os.open(job_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            directory = os.open(shell_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
             descriptors.append(directory)
             for descriptor in descriptors:
                 info = os.fstat(descriptor)
@@ -200,18 +200,18 @@ def _purge_shell_jobs(db: sqlite3.Connection, session_id: str, tables: set[str])
             for descriptor in reversed(descriptors):
                 os.close(descriptor)
         if "ngn_shell_outbox" in tables:
-            db.execute("DELETE FROM ngn_shell_outbox WHERE job_id=?", (job_id,))
+            db.execute("DELETE FROM ngn_shell_outbox WHERE shell_id=?", (shell_id,))
     if "ngn_shell_outbox" in tables:
         db.execute(
-            "DELETE FROM ngn_shell_outbox WHERE job_id IN "
-            "(SELECT job_id FROM ngn_shell_jobs WHERE root_session_id=? OR session_id=?)",
+            "DELETE FROM ngn_shell_outbox WHERE shell_id IN "
+            "(SELECT shell_id FROM ngn_shells WHERE root_session_id=? OR session_id=?)",
             (session_id, session_id),
         )
-    db.execute("DELETE FROM ngn_shell_jobs WHERE root_session_id=? OR session_id=?", (session_id, session_id))
+    db.execute("DELETE FROM ngn_shells WHERE root_session_id=? OR session_id=?", (session_id, session_id))
 
 
 def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
-    _purge_shell_jobs(db, session_id, tables)
+    _purge_shells(db, session_id, tables)
     cleanup_deliveries(db, session_id)
     children: set[str] = set()
     if "ngn_web_agent_sessions" in tables:
@@ -309,7 +309,7 @@ async def _release_process(state: WebState, session_id: str, *, journal: bool = 
     run = state.run_for(session_id)
     state.wakeups.cancel_session(session_id)
     state._shell_pending.pop(session_id, None)
-    await harness.shell_jobs.cancel_owner(session_id, "session_deleted")
+    await harness.shells.cancel_owner(session_id, "session_deleted")
     if run is not None:
         await state.stop(run)
     if claim := state.channels.work_tasks.get(session_id):

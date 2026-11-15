@@ -8,17 +8,19 @@ import logging
 import math
 import os
 import uuid
+from contextlib import asynccontextmanager
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from nagents._async import join_owned
 from nagents.observation import scope as observation_scope
-from nagents.session.shell_jobs import ShellJobOwner
-from nagents.session.shell_jobs import ShellJobRecord
-from nagents.session.shell_jobs import ShellJobStore
-from nagents.session.shell_jobs import ShellJobTerminal
+from nagents.session.shells import ShellRecord
+from nagents.session.shells import ShellRecordOwner
+from nagents.session.shells import ShellStore
+from nagents.session.shells import ShellTerminal
 from nagents.tools.shell import ShellController
-from nagents.tools.shell import ShellJob
+from nagents.tools.shell import ShellInstance
 from nagents.tools.shell import ShellOwner
 from nagents.tools.shell import ShellPolicy
 from nagents.tools.shell import ShellStorage
@@ -27,6 +29,7 @@ from nagents.tools.shell import ShellSubscription
 from ..types import ToolOutput
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from collections.abc import Awaitable
     from collections.abc import Callable
 
@@ -38,11 +41,11 @@ if TYPE_CHECKING:
 
 class _SharedShell:
     def __init__(self, policy: ShellPolicy, root: Path) -> None:
-        self.bridges: set[ShellJobs] = set()
+        self.bridges: set[Shells] = set()
         self.root = root
         self.lease_file = root / ".harness-hosts.json"
         self.stale_hosts: tuple[str, ...] = ()
-        self.owners: dict[str, ShellJobs] = {}
+        self.owners: dict[str, Shells] = {}
         self.controller = ShellController(
             policy,
             ShellStorage(root, persistent=True),
@@ -65,17 +68,17 @@ class _SharedShell:
             os.fsync(handle.fileno())
         os.replace(path, self.lease_file)
 
-    async def started(self, job: ShellJob) -> None:
-        await self.owners[job.owner.run_id]._started(job)
+    async def started(self, shell: ShellInstance) -> None:
+        await self.owners[shell.owner.run_id]._started(shell)
 
-    async def terminal(self, job: ShellJob) -> None:
-        await self.owners[job.owner.run_id]._terminal(job)
+    async def terminal(self, shell: ShellInstance) -> None:
+        await self.owners[shell.owner.run_id]._terminal(shell)
 
 
 _shared: dict[tuple[asyncio.AbstractEventLoop, Path], _SharedShell] = {}
 
 
-class ShellJobs:
+class Shells:
     """One host's process lifetime, independent of a foreground Agent iterator."""
 
     def __init__(self, harness: Harness) -> None:
@@ -83,38 +86,58 @@ class ShellJobs:
         self.host_id = uuid.uuid4().hex
         self.run_id = ""
         self.on_work_pending: Callable[[str], Awaitable[None]] | None = None
-        self._store: ShellJobStore | None = None
+        self._store: ShellStore | None = None
         self._controller: ShellController | None = None
         self._automatic_turns = 0
         self._changed = asyncio.Event()
         self._shared: _SharedShell | None = None
-        self._stores: dict[str, ShellJobStore] = {}
+        self._stores: dict[str, ShellStore] = {}
         self._retrying: set[str] = set()
         self._terminal_retries: dict[str, asyncio.Task[None]] = {}
         self._closing = False
 
     @property
-    def store(self) -> ShellJobStore:
+    def store(self) -> ShellStore:
         if self._store is None or self._store.session is not self.harness.agent.session:
-            self._store = ShellJobStore(self.harness.agent.session)
+            self._store = ShellStore(self.harness.agent.session)
         return self._store
+
+    @asynccontextmanager
+    async def notice_admission(self, *, enabled: bool) -> AsyncIterator[None]:
+        if not enabled:
+            yield
+            return
+        # Snapshot authority before claiming: cancellation can arrive after the
+        # SQLite commit but before claim_wake returns its message identifier.
+        session_id, store, host_id = self.harness.session_id, self.store, self.host_id
+        try:
+            yield
+        except BaseException:
+
+            async def reconcile() -> None:
+                for record in await store.list_shells(session_id):
+                    if record.owner.host_id == host_id and record.wake_state == "claimed":
+                        await store.finish_wake(session_id, record.notice_message_id, uncertain=True)
+
+            await join_owned(asyncio.create_task(reconcile()))
+            raise
 
     def _policy(self) -> ShellPolicy:
         config = self.harness.config
         return ShellPolicy(
-            allow_background=config.allow_background_shell and not self.harness._is_subagent,
+            allow_background=config.shell.allow_background and not self.harness._is_subagent,
             timeout=config.shell_timeout,
             max_output=config.max_output,
-            max_log_bytes=config.shell_max_log_bytes,
-            max_total_log_bytes=config.shell_max_total_log_bytes,
-            max_concurrent=config.shell_max_concurrent,
-            max_concurrent_per_owner=config.shell_max_concurrent_per_owner,
+            max_log_bytes=config.shell.max_log_bytes,
+            max_total_log_bytes=config.shell.max_total_log_bytes,
+            max_concurrent=config.shell.max_concurrent,
+            max_concurrent_per_owner=config.shell.max_concurrent_per_owner,
         )
 
     @property
     def controller(self) -> ShellController:
         if self._controller is None:
-            key = (asyncio.get_running_loop(), (self.harness.agent.session.db_path.parent / "shell-jobs").resolve())
+            key = (asyncio.get_running_loop(), (self.harness.agent.session.db_path.parent / "shells").resolve())
             shared = _shared.get(key)
             if shared is None:
                 shared = _SharedShell(self._policy(), key[1])
@@ -125,80 +148,80 @@ class ShellJobs:
             self._controller = shared.controller
         return self._controller
 
-    def _session_store(self, session_id: str) -> ShellJobStore:
+    def _session_store(self, session_id: str) -> ShellStore:
         return self._stores.get(session_id, self.store)
 
-    async def _started(self, job: ShellJob) -> None:
-        if not job.background:
+    async def _started(self, shell: ShellInstance) -> None:
+        if not shell.background:
             return
-        await self._session_store(job.owner.session_id).register(
-            ShellJobRecord(
-                job.job_id,
-                ShellJobOwner(
-                    str(job.owner.workspace),
-                    job.owner.root_id,
-                    job.owner.session_id,
-                    job.owner.run_id,
-                    job.owner.tool_call_id,
+        await self._session_store(shell.owner.session_id).register(
+            ShellRecord(
+                shell.shell_id,
+                ShellRecordOwner(
+                    str(shell.owner.workspace),
+                    shell.owner.root_id,
+                    shell.owner.session_id,
+                    shell.owner.run_id,
+                    shell.owner.tool_call_id,
                     self.host_id,
                 ),
-                job.command,
-                str(job.output_path or ""),
-                job.retention,
+                shell.command,
+                str(shell.output_path or ""),
+                shell.retention,
             )
         )
 
-    async def _retry_terminal(self, job_id: str) -> None:
+    async def _retry_terminal(self, shell_id: str) -> None:
         assert self._controller is not None
         # Retry independently of run-scoped consumers and idle host callbacks.
         for delay in (0.01, 0.05, 0.2, 0.5, 1.0):
             await asyncio.sleep(delay)
-            self._retrying.add(job_id)
+            self._retrying.add(shell_id)
             try:
-                await self._controller.retry_terminal(job_id)
+                await self._controller.retry_terminal(shell_id)
             except Exception:
                 continue
             finally:
-                self._retrying.discard(job_id)
+                self._retrying.discard(shell_id)
             return
-        logging.getLogger(__name__).error("Shell terminal persistence retries exhausted: %s", job_id)
+        logging.getLogger(__name__).error("Shell terminal persistence retries exhausted: %s", shell_id)
         self._changed.set()
 
-    async def _terminal(self, job: ShellJob) -> None:
+    async def _terminal(self, shell: ShellInstance) -> None:
         try:
-            await self._persist_terminal(job)
+            await self._persist_terminal(shell)
         except Exception:
-            if job.job_id not in self._terminal_retries and not self._closing:
-                self._terminal_retries[job.job_id] = asyncio.create_task(
-                    self._retry_terminal(job.job_id), name=f"shell-persist-{job.job_id}"
+            if shell.shell_id not in self._terminal_retries and not self._closing:
+                self._terminal_retries[shell.shell_id] = asyncio.create_task(
+                    self._retry_terminal(shell.shell_id), name=f"shell-persist-{shell.shell_id}"
                 )
             raise
 
-    async def _persist_terminal(self, job: ShellJob) -> None:
-        if not job.background:
+    async def _persist_terminal(self, shell: ShellInstance) -> None:
+        if not shell.background:
             return
-        await self._session_store(job.owner.session_id).terminal(
-            job.owner.session_id,
-            job.job_id,
-            ShellJobTerminal(
-                job.state,
-                job.reason,
-                job.output,
-                job.exit_code if job.exit_code is not None else -1,
-                job.timed_out,
-                job.truncated,
-                job.bytes_written,
-                job.output_complete,
+        await self._session_store(shell.owner.session_id).terminal(
+            shell.owner.session_id,
+            shell.shell_id,
+            ShellTerminal(
+                shell.state,
+                shell.reason,
+                shell.output,
+                shell.exit_code if shell.exit_code is not None else -1,
+                shell.timed_out,
+                shell.truncated,
+                shell.bytes_written,
+                shell.output_complete,
             ),
-            wake=job.state != "cancelled" and not self.harness._closed,
+            wake=shell.state != "cancelled" and not self.harness._closed,
         )
         if self.harness._worker is None:
-            await self.process_notifications(job.owner.session_id)
+            await self.process_notifications(shell.owner.session_id)
         self.harness.followups.changed()
         self._changed.set()
-        if job.state != "cancelled" and self.on_work_pending is not None and not self.harness._closed:
+        if shell.state != "cancelled" and self.on_work_pending is not None and not self.harness._closed:
             try:
-                await self.on_work_pending(job.owner.session_id)
+                await self.on_work_pending(shell.owner.session_id)
             except Exception:
                 logging.getLogger(__name__).exception("Shell host wake callback failed after durable completion")
 
@@ -224,7 +247,7 @@ class ShellJobs:
             call_id,
         )
         h.tools.writable()
-        if background and (not h.config.allow_background_shell or h._is_subagent):
+        if background and (not h.config.shell.allow_background or h._is_subagent):
             raise PermissionError("Background shell execution is disabled")
         owner = ShellOwner(
             h.workspace,
@@ -258,37 +281,37 @@ class ShellJobs:
         self._shared.owners[owner.run_id] = self
         self._stores[owner.session_id] = self.store
         controller.policy = policy
-        job = await controller.execute(
+        shell = await controller.execute(
             command, owner=owner, timeout=seconds, background=background, on_output=None if background else output
         )
         if not background:
-            if job.state in {"output_limit", "storage_failure"}:
-                raise RuntimeError(f"Shell stopped: {job.reason}; output is incomplete.")
+            if shell.state in {"output_limit", "storage_failure"}:
+                raise RuntimeError(f"Shell stopped: {shell.reason}; output is incomplete.")
             return {
-                "output": job.output,
-                "exit_code": job.exit_code,
-                "timed_out": job.timed_out,
-                "truncated": job.truncated,
+                "output": shell.output,
+                "exit_code": shell.exit_code,
+                "timed_out": shell.timed_out,
+                "truncated": shell.truncated,
             }
         return {
-            "job_id": job.job_id,
-            "state": job.state,
+            "shell_id": shell.shell_id,
+            "state": shell.state,
             "background": True,
-            "output_path": str(job.output_path or ""),
-            "retention": job.retention,
-            "output_available": job.output_available,
+            "output_path": str(shell.output_path or ""),
+            "retention": shell.retention,
+            "output_available": shell.output_available,
             "message": "You will receive a notification once the shell completes.",
         }
 
-    def _snapshot(self, record: ShellJobRecord) -> dict[str, JsonValue]:
+    def _snapshot(self, record: ShellRecord) -> dict[str, JsonValue]:
         terminal = json.loads(record.terminal_json) if record.terminal_json else {}
         live = (
-            self._controller.get(record.job_id)
+            self._controller.get(record.shell_id)
             if self._controller is not None and record.owner.host_id == self.host_id
             else None
         )
         return {
-            "job_id": record.job_id,
+            "shell_id": record.shell_id,
             "state": live.state if live is not None else record.state,
             "command": record.command,
             "output_path": record.output_path,
@@ -316,22 +339,24 @@ class ShellJobs:
         await self.harness.initialize()
         _ = self.controller
         await self._recover()
-        return [self._snapshot(record) for record in await self.store.list_jobs(session_id or self.harness.session_id)]
+        return [
+            self._snapshot(record) for record in await self.store.list_shells(session_id or self.harness.session_id)
+        ]
 
-    async def get(self, job_id: str, session_id: str = "") -> dict[str, JsonValue]:
+    async def get(self, shell_id: str, session_id: str = "") -> dict[str, JsonValue]:
         await self.harness.initialize()
-        return self._snapshot(await self.store.get(session_id or self.harness.session_id, job_id))
+        return self._snapshot(await self.store.get(session_id or self.harness.session_id, shell_id))
 
-    async def stop(self, job_id: str, session_id: str = "", reason: str = "user_stop") -> dict[str, JsonValue]:
+    async def stop(self, shell_id: str, session_id: str = "", reason: str = "user_stop") -> dict[str, JsonValue]:
         session = session_id or self.harness.session_id
         await self.harness.initialize()
-        record = await self.store.get(session, job_id)
+        record = await self.store.get(session, shell_id)
         if record.owner.host_id != self.host_id and not record.terminal_json:
-            raise ValueError("Shell job belongs to another host")
-        if await self.store.request_cancel(session, job_id, reason):
-            await self.controller.stop(job_id, reason)
+            raise ValueError("Shell belongs to another host")
+        if await self.store.request_cancel(session, shell_id, reason):
+            await self.controller.stop(shell_id, reason)
         await self.process_notifications(session)
-        return self._snapshot(await self.store.get(session, job_id))
+        return self._snapshot(await self.store.get(session, shell_id))
 
     async def has_pending(self) -> bool:
         # Lifecycle inspection must not create a selected/new conversation.
@@ -342,14 +367,14 @@ class ShellJobs:
             await self.store.suppress_wakes(self.harness.session_id)
         return any(
             not record.terminal_json or record.wake_state == "pending"
-            for record in await self.store.list_jobs(self.harness.session_id)
+            for record in await self.store.list_shells(self.harness.session_id)
         )
 
     async def wake_pending(self) -> bool:
         if self._controller is None or not self._stores:
             return False
         return self._automatic_turns < 16 and any(
-            record.wake_state == "pending" for record in await self.store.list_jobs(self.harness.session_id)
+            record.wake_state == "pending" for record in await self.store.list_shells(self.harness.session_id)
         )
 
     async def wait_changed(self) -> None:
@@ -362,25 +387,25 @@ class ShellJobs:
     async def process_notifications(self, session_id: str = "") -> None:
         session = session_id or self.harness.session_id
         if self._controller is not None and self._shared is not None:
-            for job in self._controller.list():
+            for shell in self._controller.list():
                 if (
-                    job.background
-                    and job.owner.session_id == session
-                    and job.terminal
-                    and self._shared.owners.get(job.owner.run_id) is self
-                    and job.job_id not in self._retrying
-                    and self._controller.terminal_error(job.job_id)
+                    shell.background
+                    and shell.owner.session_id == session
+                    and shell.terminal
+                    and self._shared.owners.get(shell.owner.run_id) is self
+                    and shell.shell_id not in self._retrying
+                    and self._controller.terminal_error(shell.shell_id)
                 ):
-                    self._retrying.add(job.job_id)
+                    self._retrying.add(shell.shell_id)
                     try:
-                        await self._controller.retry_terminal(job.job_id)
+                        await self._controller.retry_terminal(shell.shell_id)
                     finally:
-                        self._retrying.discard(job.job_id)
-        for record in await self._session_store(session).list_jobs(session):
+                        self._retrying.discard(shell.shell_id)
+        for record in await self._session_store(session).list_shells(session):
             if not record.receipt_committed:
                 await self._session_store(session).mark_receipt_committed(session, record.owner.tool_call_id)
             if record.terminal_json and not record.notice_message_id:
-                await self._session_store(session).claim_notice(session, record.job_id)
+                await self._session_store(session).claim_notice(session, record.shell_id)
 
     async def next_input(self) -> RunInput | None:
         from ..runtime.followups import RunInput
@@ -398,27 +423,27 @@ class ShellJobs:
         if not message_id:
             return None
         self._automatic_turns += 1
-        return RunInput("Shell job notification", kind="notification", persisted_notice_id=message_id)
+        return RunInput("Shell notification", kind="notification", persisted_notice_id=message_id)
 
     async def cancel_owner(self, session_id: str, reason: str = "owner_cancelled") -> None:
         await self._session_store(session_id).suppress_wakes(session_id)
         # A boundary may claim a notice before its queued turn is dispatched.
         # Reconcile the journal rather than relying on the current RunInput.
-        for record in await self._session_store(session_id).list_jobs(session_id):
+        for record in await self._session_store(session_id).list_shells(session_id):
             if record.owner.host_id == self.host_id and record.wake_state == "claimed":
                 await self._session_store(session_id).finish_wake(session_id, record.notice_message_id, uncertain=True)
         if self._controller is None:
             return
-        for job in self._controller.list():
+        for shell in self._controller.list():
             if (
-                job.background
-                and job.owner.session_id == session_id
-                and not job.terminal
+                shell.background
+                and shell.owner.session_id == session_id
+                and not shell.terminal
                 and self._shared is not None
-                and self._shared.owners.get(job.owner.run_id) is self
+                and self._shared.owners.get(shell.owner.run_id) is self
             ):
-                await self._session_store(session_id).request_cancel(session_id, job.job_id, reason)
-                await self._controller.stop(job.job_id, reason)
+                await self._session_store(session_id).request_cancel(session_id, shell.shell_id, reason)
+                await self._controller.stop(shell.shell_id, reason)
         await self.process_notifications(session_id)
 
     async def close(self) -> None:
@@ -427,9 +452,9 @@ class ShellJobs:
         self._closing = True
         shared = self._shared
         sessions = {
-            job.owner.session_id
-            for job in self._controller.list()
-            if job.background and shared.owners.get(job.owner.run_id) is self
+            shell.owner.session_id
+            for shell in self._controller.list()
+            if shell.background and shared.owners.get(shell.owner.run_id) is self
         }
         try:
             for session in sessions:
@@ -443,9 +468,9 @@ class ShellJobs:
             # releasing callback routing and the bridge's strong references.
             await asyncio.gather(
                 *(
-                    self._controller.stop(job.job_id, "host_shutdown")
-                    for job in self._controller.list()
-                    if shared.owners.get(job.owner.run_id) is self and not job.terminal
+                    self._controller.stop(shell.shell_id, "host_shutdown")
+                    for shell in self._controller.list()
+                    if shared.owners.get(shell.owner.run_id) is self and not shell.terminal
                 ),
                 return_exceptions=True,
             )

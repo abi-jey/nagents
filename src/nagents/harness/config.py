@@ -131,6 +131,52 @@ class AgentDefinitionSource:
 
 
 @dataclass
+class ShellConfig:
+    """Host-owned managed-shell capability and resource limits."""
+
+    allow_background: bool = True
+    max_log_bytes: int = 64 * 1024 * 1024
+    max_total_log_bytes: int = 256 * 1024 * 1024
+    max_concurrent: int = 8
+    max_concurrent_per_owner: int = 4
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        if type(self.allow_background) is not bool:
+            raise ValueError("allow_background must be a boolean")
+        for name, minimum, maximum in (
+            ("max_log_bytes", 1024, 1024 * 1024 * 1024),
+            ("max_total_log_bytes", 1024, 16 * 1024 * 1024 * 1024),
+            ("max_concurrent", 1, 64),
+            ("max_concurrent_per_owner", 1, 64),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be an integer between {minimum} and {maximum}")
+        if self.max_total_log_bytes < self.max_log_bytes:
+            raise ValueError("max_total_log_bytes must be >= max_log_bytes")
+        if self.max_concurrent_per_owner > self.max_concurrent:
+            raise ValueError("max_concurrent_per_owner must be <= max_concurrent")
+
+    def merged(self, value: object) -> "ShellConfig":
+        if not isinstance(value, dict):
+            raise ValueError("shell must be an object")
+        names = {
+            "allow_background",
+            "max_log_bytes",
+            "max_total_log_bytes",
+            "max_concurrent",
+            "max_concurrent_per_owner",
+        }
+        unknown = value.keys() - names
+        if unknown:
+            raise ValueError(f"Unknown shell configuration fields: {', '.join(sorted(unknown))}")
+        return replace(self, **value)
+
+
+@dataclass
 class HarnessConfig:
     workspace: Path
     provider: str = ""
@@ -148,11 +194,7 @@ class HarnessConfig:
     demo: bool = False
     data_dir: Path = field(default_factory=_data_dir)
     shell_timeout: float = 600.0
-    allow_background_shell: bool = True
-    shell_max_log_bytes: int = 64 * 1024 * 1024
-    shell_max_total_log_bytes: int = 256 * 1024 * 1024
-    shell_max_concurrent: int = 8
-    shell_max_concurrent_per_owner: int = 4
+    shell: ShellConfig = field(default_factory=ShellConfig)
     max_output: int = 32768
     max_file_bytes: int = 262144
     max_tool_rounds: int = 3000
@@ -231,21 +273,9 @@ class HarnessConfig:
         self.profile(self.agent)
         if not 0 < self.shell_timeout <= 600:
             raise ValueError("shell_timeout must be > 0 and <= 600 seconds")
-        if type(self.allow_background_shell) is not bool:
-            raise ValueError("allow_background_shell must be a boolean")
-        for name, minimum, maximum in (
-            ("shell_max_log_bytes", 1024, 1024 * 1024 * 1024),
-            ("shell_max_total_log_bytes", 1024, 16 * 1024 * 1024 * 1024),
-            ("shell_max_concurrent", 1, 64),
-            ("shell_max_concurrent_per_owner", 1, 64),
-        ):
-            value = getattr(self, name)
-            if type(value) is not int or not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be an integer between {minimum} and {maximum}")
-        if self.shell_max_total_log_bytes < self.shell_max_log_bytes:
-            raise ValueError("shell_max_total_log_bytes must be >= shell_max_log_bytes")
-        if self.shell_max_concurrent_per_owner > self.shell_max_concurrent:
-            raise ValueError("shell_max_concurrent_per_owner must be <= shell_max_concurrent")
+        if not isinstance(self.shell, ShellConfig):
+            raise ValueError("shell must be a ShellConfig")
+        self.shell.validate()
         if not 1024 <= self.max_output <= 1048576:
             raise ValueError("max_output must be between 1024 and 1048576 bytes")
         if not 1024 <= self.max_file_bytes <= 4194304:
@@ -553,10 +583,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "reasoning_effort",
     }
     integers = {
-        "shell_max_log_bytes",
-        "shell_max_total_log_bytes",
-        "shell_max_concurrent",
-        "shell_max_concurrent_per_owner",
         "max_output",
         "max_file_bytes",
         "skill_token_limit",
@@ -572,13 +598,12 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "reasoning_summaries",
         "tui_performance",
         "wire_log",
-        "allow_background_shell",
     }
     allowed = (
         strings
         | integers
         | booleans
-        | {"plugins", "data_dir", "shell_timeout", "profiles", "providers", "mcp_servers", "agent_imports"}
+        | {"plugins", "data_dir", "shell_timeout", "shell", "profiles", "providers", "mcp_servers", "agent_imports"}
     )
     limit_names = {"max_concurrent_subagents", "max_subagent_executions", "max_subagent_depth"}
     environment_limit_values: dict[str, int] = {}
@@ -605,6 +630,26 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             setattr(config, key, Path(env_value) if key == "data_dir" else env_value)
             if key == "model":
                 global_model = env_value
+
+    shell_environment: dict[str, object] = {}
+    for key in (
+        "allow_background",
+        "max_log_bytes",
+        "max_total_log_bytes",
+        "max_concurrent",
+        "max_concurrent_per_owner",
+    ):
+        env_name = f"NGN_SHELL_{key.upper()}"
+        raw = os.environ.get(env_name)
+        if raw is None:
+            continue
+        if key == "allow_background":
+            if raw.lower() not in {"true", "false", "1", "0"}:
+                raise ValueError(f"{env_name} must be true/false or 1/0")
+            shell_environment[key] = raw.lower() in {"true", "1"}
+        else:
+            shell_environment[key] = int(raw)
+    config.shell = config.shell.merged(shell_environment)
 
     diagnostics: list[str] = [login_note] if login_note else []
     agent_sources = [
@@ -667,6 +712,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             elif key in booleans:
                 if type(value) is not bool:
                     raise ValueError(f"{path}: {key} must be a boolean")
+            elif key == "shell":
+                value = config.shell.merged(value)
             elif key == "mcp_servers":
                 value = parse_mcp_servers(value, directories[path], config.workspace)
             elif key == "plugins":

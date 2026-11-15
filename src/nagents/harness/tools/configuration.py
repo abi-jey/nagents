@@ -152,7 +152,7 @@ class HarnessToolRegistry(ToolRegistry):
         tools = super().get_all()
         for index, tool in enumerate(tools):
             if tool.func == self.harness.tools.shell and (
-                not self.harness.config.allow_background_shell or self.harness._is_subagent
+                not self.harness.config.shell.allow_background or self.harness._is_subagent
             ):
                 tool = replace(tool, parameters=deepcopy(tool.parameters))
                 tool.parameters.get("properties", {}).pop("background", None)

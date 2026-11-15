@@ -459,11 +459,11 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
             async with aclosing(harness.run(prompt)) as initial:
                 async for event in initial:
                     yield event
-            jobs = getattr(harness, "shell_jobs", None)
+            jobs = getattr(harness, "shells", None)
             if jobs is None:
                 return
             while True:
-                async with aclosing(harness.resume_shell_jobs(session_id=harness.session_id)) as resumed:
+                async with aclosing(harness.resume_shells(session_id=harness.session_id)) as resumed:
                     async for event in resumed:
                         yield event
                 if not await jobs.has_pending():

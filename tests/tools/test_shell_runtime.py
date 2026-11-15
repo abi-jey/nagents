@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.tools.shell import ShellController
-from nagents.tools.shell import ShellJob
+from nagents.tools.shell import ShellInstance
 from nagents.tools.shell import ShellOwner
 from nagents.tools.shell import ShellPolicy
 
@@ -24,11 +24,11 @@ def owner(path: Path, session: str = "s") -> ShellOwner:
     return ShellOwner(path, session, "run")
 
 
-async def finished(controller: ShellController, job: ShellJob) -> ShellJob:
+async def finished(controller: ShellController, job: ShellInstance) -> ShellInstance:
     async with asyncio.timeout(5):
-        while not controller.get(job.job_id).terminal:
+        while not controller.get(job.shell_id).terminal:
             await asyncio.sleep(0.001)
-    return await controller.stop(job.job_id)
+    return await controller.stop(job.shell_id)
 
 
 async def test_foreground(tmp_path: Path) -> None:
@@ -67,7 +67,7 @@ async def test_full_log_and_tail(tmp_path: Path) -> None:
         assert giant.output == "x" * 40 and giant.bytes_written == 50000
     finally:
         await controller.close()
-    assert not controller.get(job.job_id).output_available
+    assert not controller.get(job.shell_id).output_available
 
 
 async def test_stop_owner_timeout_limit(tmp_path: Path) -> None:
@@ -76,8 +76,8 @@ async def test_stop_owner_timeout_limit(tmp_path: Path) -> None:
         first = await controller.execute("sleep 20", owner=owner(tmp_path), background=True)
         second = await controller.execute("sleep 20", owner=owner(tmp_path, "other"), background=True)
         await controller.cancel_owner(owner(tmp_path), "interrupted")
-        assert (await controller.stop(first.job_id, "changed")).reason == "interrupted"
-        assert not controller.get(second.job_id).terminal
+        assert (await controller.stop(first.shell_id, "changed")).reason == "interrupted"
+        assert not controller.get(second.shell_id).terminal
         timeout = await controller.execute("sleep 20", owner=owner(tmp_path), timeout=0.02)
         assert timeout.timed_out
         limit = await controller.execute("head -c 50000 /dev/zero", owner=owner(tmp_path), background=True)
@@ -85,7 +85,7 @@ async def test_stop_owner_timeout_limit(tmp_path: Path) -> None:
         assert limit.state == "output_limit" and limit.bytes_written == 30 and not limit.output_complete
     finally:
         await controller.close()
-    assert controller.get(second.job_id).reason == "host_shutdown"
+    assert controller.get(second.shell_id).reason == "host_shutdown"
 
 
 async def test_subscriber_is_nonblocking(tmp_path: Path) -> None:
@@ -151,7 +151,7 @@ async def test_tail_controls_unicode_missing(tmp_path: Path) -> None:
 async def test_terminal_hook_retry(tmp_path: Path) -> None:
     attempts = 0
 
-    async def persist(job: ShellJob) -> None:
+    async def persist(job: ShellInstance) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -161,9 +161,9 @@ async def test_terminal_hook_retry(tmp_path: Path) -> None:
     try:
         job = await controller.execute("true", owner=owner(tmp_path), background=True)
         await finished(controller, job)
-        assert controller.terminal_error(job.job_id) == "OSError"
-        await controller.retry_terminal(job.job_id)
-        assert attempts == 2 and not controller.terminal_error(job.job_id)
+        assert controller.terminal_error(job.shell_id) == "OSError"
+        await controller.retry_terminal(job.shell_id)
+        assert attempts == 2 and not controller.terminal_error(job.shell_id)
     finally:
         await controller.close()
 
@@ -190,13 +190,13 @@ async def test_quota_root_exclusive_and_existing_logs(tmp_path: Path) -> None:
 async def test_spawn_failure_returns_registered_background_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    registered: list[ShellJob] = []
-    terminal: list[ShellJob] = []
+    registered: list[ShellInstance] = []
+    terminal: list[ShellInstance] = []
 
-    async def started(job: ShellJob) -> None:
+    async def started(job: ShellInstance) -> None:
         registered.append(job)
 
-    async def completed(job: ShellJob) -> None:
+    async def completed(job: ShellInstance) -> None:
         terminal.append(job)
 
     async def fail(*args: str, **kwargs: object) -> asyncio.subprocess.Process:
@@ -207,7 +207,7 @@ async def test_spawn_failure_returns_registered_background_receipt(
     try:
         job = await controller.execute("true", owner=owner(tmp_path), background=True)
         assert job.state == "failed" and job.reason == "spawn_failed"
-        assert job.job_id == registered[0].job_id == terminal[0].job_id
+        assert job.shell_id == registered[0].shell_id == terminal[0].shell_id
         assert job.output_path is not None and job.output_path.exists()
         assert not job.output_complete and job.exit_code is None
         assert "private" not in job.output

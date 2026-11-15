@@ -10,7 +10,7 @@ from .executor import ToolExecutor
 from .registry import ToolRegistry
 from .shell import ShellController
 from .shell import ShellEvent
-from .shell import ShellJob
+from .shell import ShellInstance
 from .shell import ShellOwner
 from .shell import ShellPolicy
 from .shell import ShellStorage
@@ -19,7 +19,7 @@ from .shell import ShellSubscription
 __all__ = [
     "ShellController",
     "ShellEvent",
-    "ShellJob",
+    "ShellInstance",
     "ShellOwner",
     "ShellPolicy",
     "ShellStorage",

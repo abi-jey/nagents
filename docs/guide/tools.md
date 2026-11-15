@@ -25,10 +25,10 @@ owner = ShellOwner(
     model="configured-model",
 )
 job = await controller.execute("printf 'hello\\n'", owner=owner, background=True)
-print(job.job_id, job.output_path)
-# Subscribe to events or inspect controller.get(job.job_id).
+print(job.shell_id, job.output_path)
+# Subscribe to events or inspect controller.get(job.shell_id).
 # A host can stop a job even after its agent has finished:
-await controller.stop(job.job_id, reason="user_stop")
+await controller.stop(job.shell_id, reason="user_stop")
 await controller.close()
 ```
 

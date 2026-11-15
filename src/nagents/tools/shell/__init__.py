@@ -4,8 +4,8 @@ from .runtime import ShellController
 from .runtime import ShellSubscription
 from .types import ShellCallback
 from .types import ShellEvent
-from .types import ShellJob
-from .types import ShellJobCallback
+from .types import ShellInstance
+from .types import ShellInstanceCallback
 from .types import ShellOutputCallback
 from .types import ShellOwner
 from .types import ShellPolicy
@@ -16,8 +16,8 @@ __all__ = [
     "ShellCallback",
     "ShellController",
     "ShellEvent",
-    "ShellJob",
-    "ShellJobCallback",
+    "ShellInstance",
+    "ShellInstanceCallback",
     "ShellOutputCallback",
     "ShellOwner",
     "ShellPolicy",

@@ -425,7 +425,7 @@ class NagentsApp(App[None]):
     def on_mount(self) -> None:
         self.harness.approval_handler = self.request_approval
         if isinstance(self.harness, Harness):
-            self.harness.shell_jobs.on_work_pending = self._shell_work_pending
+            self.harness.shells.on_work_pending = self._shell_work_pending
         if isinstance(self.harness, Harness) and self.harness.wakeup_handler is None:
             self.harness.wakeup_handler = self._schedule_wakeup
             self._owns_wakeups = True
@@ -594,7 +594,7 @@ class NagentsApp(App[None]):
     def _refresh_task_content(self) -> None:
         if self._shutting_down:
             return
-        self._drain_shell_jobs()
+        self._drain_shells()
         tasks = self.harness.tasks.list()
         self._activity_tasks = [task for task in tasks if task.depth == 1]
         self.default_screen.query_one("#agent-tree", AgentTree).update_tasks(
@@ -617,9 +617,9 @@ class NagentsApp(App[None]):
 
     async def _shell_work_pending(self, session_id: str) -> None:
         self._shell_pending.add(session_id)
-        self.call_later(self._drain_shell_jobs)
+        self.call_later(self._drain_shells)
 
-    def _drain_shell_jobs(self) -> None:
+    def _drain_shells(self) -> None:
         if (
             self._shutting_down
             or self._closing_requested
@@ -631,23 +631,23 @@ class NagentsApp(App[None]):
         session_id = self.harness.session_id
         if session_id in self._shell_pending:
             self._shell_pending.discard(session_id)
-            self._launch(lambda: self._send("", wakeup=True, shell_resume=True), "Shell job completed...")
+            self._launch(lambda: self._send("", wakeup=True, shell_resume=True), "Shell completed...")
 
-    async def _show_shell_jobs(self, argument: str) -> None:
-        from .shell_jobs import ShellJobsModal
+    async def _show_shells(self, argument: str) -> None:
+        from .shells import ShellsModal
 
-        jobs = getattr(self.harness, "shell_jobs", None)
+        jobs = getattr(self.harness, "shells", None)
         if jobs is None:
-            self._status("Managed shell jobs are unavailable.", error=True)
+            self._status("Managed shells are unavailable.", error=True)
             return
         try:
             if argument:
                 parts = argument.split()
                 if len(parts) != 2 or parts[0] != "stop":
-                    raise ValueError("Usage: /jobs [stop <job-id>]")
+                    raise ValueError("Usage: /shells [stop <job-id>]")
                 await jobs.stop(parts[1], session_id=self.harness.session_id)
             records = await jobs.list(session_id=self.harness.session_id)
-            self.push_screen(ShellJobsModal(records))
+            self.push_screen(ShellsModal(records))
         except (ValueError, KeyError) as error:
             self._status(str(error), error=True)
 
@@ -1302,7 +1302,7 @@ class NagentsApp(App[None]):
             not in {
                 "/",
                 "/help",
-                "/jobs",
+                "/shells",
                 "/dashboard",
                 "/context",
                 "/plugins",
@@ -1465,7 +1465,7 @@ class NagentsApp(App[None]):
             await self._add(Turn("user", display_text or text))
         # Close the producer even if cancellation happens while rendering an event.
         stream = (
-            self.harness.resume_shell_jobs(session_id=self.harness.session_id)
+            self.harness.resume_shells(session_id=self.harness.session_id)
             if shell_resume
             else self.harness.wake(text, session_id=session_id)
             if wakeup
@@ -2274,8 +2274,8 @@ class NagentsApp(App[None]):
             self._performance_command(argument)
         elif name == "/voice":
             self._voice_command(argument)
-        elif name == "/jobs":
-            self.run_worker(self._show_shell_jobs(argument), group="shell-jobs", exclusive=True)
+        elif name == "/shells":
+            self.run_worker(self._show_shells(argument), group="shells", exclusive=True)
         elif name == "/tasks":
             self._show_tasks()
         elif name == "/queue":

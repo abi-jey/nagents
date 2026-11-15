@@ -928,7 +928,7 @@ class CodingTools:
 
     async def shell(self, command: str, timeout: float = 0.0, background: bool = False) -> dict[str, JsonValue]:
         """Run a local POSIX shell after approval. NOT SANDBOXED; optional managed background execution."""
-        return await self.harness.shell_jobs.execute(command, timeout, background)
+        return await self.harness.shells.execute(command, timeout, background)
 
     def discover_skills(self) -> None:
         discovered: dict[str, tuple[str, str]] = {}

@@ -35,18 +35,18 @@ class StopInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-def open_output(harness: Harness, job_id: str, output_path: str) -> tuple[int, int]:
+def open_output(harness: Harness, shell_id: str, output_path: str) -> tuple[int, int]:
     """Open only an allocated private log; pin every mutable path component."""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", shell_id):
         raise HTTPException(404, "Shell output unavailable.")
-    root = harness.agent.session.db_path.parent / "shell-jobs"
-    if output_path != str(root / job_id / "output.log"):
+    root = harness.agent.session.db_path.parent / "shells"
+    if output_path != str(root / shell_id / "output.log"):
         raise HTTPException(404, "Shell output unavailable.")
     descriptors: list[int] = []
     try:
         directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         descriptors.append(directory)
-        directory = os.open(job_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        directory = os.open(shell_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
         descriptors.append(directory)
         for descriptor in descriptors:
             info = os.fstat(descriptor)
@@ -74,38 +74,38 @@ def register(app: FastAPI, state: Callable[[], WebState]) -> None:
         await host.channels.store._transaction(lambda db: RoutingStore.root(db, session_id))
         return host.harness_for(session_id)
 
-    @app.get("/api/sessions/{session_id}/shell-jobs")
-    async def jobs(session_id: SessionId) -> dict[str, object]:
+    @app.get("/api/sessions/{session_id}/shells")
+    async def shells(session_id: SessionId) -> dict[str, object]:
         harness = await owner(session_id)
-        return {"jobs": await harness.shell_jobs.list(session_id=session_id)}
+        return {"shells": await harness.shells.list(session_id=session_id)}
 
-    @app.get("/api/sessions/{session_id}/shell-jobs/{job_id}")
-    async def detail(session_id: SessionId, job_id: JobId) -> dict[str, object]:
+    @app.get("/api/sessions/{session_id}/shells/{shell_id}")
+    async def detail(session_id: SessionId, shell_id: JobId) -> dict[str, object]:
         harness = await owner(session_id)
         try:
-            return dict(await harness.shell_jobs.get(job_id, session_id=session_id))
+            return dict(await harness.shells.get(shell_id, session_id=session_id))
         except (ValueError, KeyError) as error:
-            raise HTTPException(404, "Shell job not found in this session.") from error
+            raise HTTPException(404, "Shell not found in this session.") from error
 
-    @app.post("/api/sessions/{session_id}/shell-jobs/{job_id}/stop")
-    async def stop(session_id: SessionId, job_id: JobId, body: StopInput) -> dict[str, object]:
+    @app.post("/api/sessions/{session_id}/shells/{shell_id}/stop")
+    async def stop(session_id: SessionId, shell_id: JobId, body: StopInput) -> dict[str, object]:
         harness = await owner(session_id)
         try:
-            return dict(await harness.shell_jobs.stop(job_id, session_id=session_id))
+            return dict(await harness.shells.stop(shell_id, session_id=session_id))
         except (ValueError, KeyError) as error:
-            raise HTTPException(404, "Shell job not found in this session.") from error
+            raise HTTPException(404, "Shell not found in this session.") from error
 
-    @app.get("/api/sessions/{session_id}/shell-jobs/{job_id}/output")
-    async def output(session_id: SessionId, job_id: JobId) -> StreamingResponse:
+    @app.get("/api/sessions/{session_id}/shells/{shell_id}/output")
+    async def output(session_id: SessionId, shell_id: JobId) -> StreamingResponse:
         harness = await owner(session_id)
         try:
-            job = await harness.shell_jobs.get(job_id, session_id=session_id)
+            shell = await harness.shells.get(shell_id, session_id=session_id)
         except (ValueError, KeyError) as error:
-            raise HTTPException(404, "Shell job not found in this session.") from error
-        path = job.get("output_path")
+            raise HTTPException(404, "Shell not found in this session.") from error
+        path = shell.get("output_path")
         if not isinstance(path, str):
             raise HTTPException(404, "Shell output unavailable.")
-        descriptor, size = open_output(harness, job_id, path)
+        descriptor, size = open_output(harness, shell_id, path)
 
         async def chunks() -> AsyncIterator[bytes]:
             remaining = size
@@ -123,7 +123,7 @@ def register(app: FastAPI, state: Callable[[], WebState]) -> None:
             chunks(),
             media_type="application/octet-stream",
             headers={
-                "Content-Disposition": f'attachment; filename="shell-{job_id}.log"',
+                "Content-Disposition": f'attachment; filename="shell-{shell_id}.log"',
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
             },

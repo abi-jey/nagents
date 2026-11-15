@@ -23,8 +23,8 @@ from nagents._async import join_owned
 from .storage import read_tail
 from .types import ShellCallback
 from .types import ShellEvent
-from .types import ShellJob
-from .types import ShellJobCallback
+from .types import ShellInstance
+from .types import ShellInstanceCallback
 from .types import ShellOutputCallback
 from .types import ShellOwner
 from .types import ShellPolicy
@@ -85,7 +85,7 @@ class ShellSubscription:
 
 @dataclass
 class _Entry:
-    job: ShellJob
+    shell: ShellInstance
     policy: ShellPolicy
     fd: int
     ready: asyncio.Future[None]
@@ -105,8 +105,8 @@ class ShellController:
         policy: ShellPolicy = _DEFAULT_POLICY,
         storage: ShellStorage = _DEFAULT_STORAGE,
         *,
-        on_started: ShellJobCallback | None = None,
-        on_terminal: ShellJobCallback | None = None,
+        on_started: ShellInstanceCallback | None = None,
+        on_terminal: ShellInstanceCallback | None = None,
     ) -> None:
         self.policy = policy
         self.storage = storage
@@ -144,19 +144,19 @@ class ShellController:
         return subscription
 
     def _publish(self, kind: str, entry: _Entry, text: str = "") -> None:
-        event = ShellEvent(kind, entry.job, text)  # type: ignore[arg-type]
+        event = ShellEvent(kind, entry.shell, text)  # type: ignore[arg-type]
         for subscription in self._subscriptions:
             subscription.publish(event)
 
-    def get(self, job_id: str) -> ShellJob:
-        job = self._entries[job_id].job
-        return replace(job, output_available=job.output_path is not None and job.output_path.is_file())
+    def get(self, shell_id: str) -> ShellInstance:
+        shell = self._entries[shell_id].shell
+        return replace(shell, output_available=shell.output_path is not None and shell.output_path.is_file())
 
-    def list(self, *, owner: ShellOwner | None = None) -> tuple[ShellJob, ...]:
+    def list(self, *, owner: ShellOwner | None = None) -> tuple[ShellInstance, ...]:
         return tuple(
             self.get(key)
             for key, entry in self._entries.items()
-            if owner is None or _same_owner(entry.job.owner, owner)
+            if owner is None or _same_owner(entry.shell.owner, owner)
         )
 
     async def execute(
@@ -167,7 +167,7 @@ class ShellController:
         timeout: float = 0.0,
         background: bool = False,
         on_output: ShellOutputCallback | None = None,
-    ) -> ShellJob:
+    ) -> ShellInstance:
         if os.name != "posix":
             raise OSError("Shell process-group cleanup currently requires POSIX")
         if self._closed:
@@ -182,21 +182,21 @@ class ShellController:
         seconds = timeout or policy.timeout
         if not math.isfinite(seconds) or not 0 < seconds <= policy.timeout:
             raise ValueError(f"timeout must be > 0 and <= {policy.timeout}, or 0 for the default")
-        active = [entry for entry in self._entries.values() if not entry.job.terminal]
+        active = [entry for entry in self._entries.values() if not entry.shell.terminal]
         if (
             len(active) >= policy.max_concurrent
-            or sum(_same_owner(e.job.owner, owner) for e in active) >= policy.max_concurrent_per_owner
+            or sum(_same_owner(e.shell.owner, owner) for e in active) >= policy.max_concurrent_per_owner
         ):
             raise RuntimeError("shell concurrency limit reached")
         owner = replace(owner, workspace=owner.workspace.resolve())
-        job_id = uuid.uuid4().hex
+        shell_id = uuid.uuid4().hex
         assert self._root is not None
-        directory = self._root / job_id
+        directory = self._root / shell_id
         directory.mkdir(mode=0o700)
         path = directory / "output.log"
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
-        job = ShellJob(
-            job_id,
+        shell = ShellInstance(
+            shell_id,
             owner,
             command,
             background,
@@ -205,21 +205,21 @@ class ShellController:
             output_available=True,
             created_at=_now(),
         )
-        entry = _Entry(job, policy, fd, asyncio.get_running_loop().create_future())
-        self._entries[job_id] = entry
+        entry = _Entry(shell, policy, fd, asyncio.get_running_loop().create_future())
+        self._entries[shell_id] = entry
         # Cancellation can abandon the admission waiter, but not its exception.
         entry.ready.add_done_callback(lambda future: None if future.cancelled() else future.exception())
         entry.task = asyncio.create_task(self._worker(entry, seconds, on_output), context=contextvars.Context())
         try:
             await asyncio.shield(entry.ready)
             if background:
-                return self.get(job_id)
+                return self.get(shell_id)
             await asyncio.shield(entry.task)
             if entry.terminal_error is not None:
                 raise entry.terminal_error
-            return self.get(job_id)
+            return self.get(shell_id)
         except asyncio.CancelledError:
-            await finish_on_cancel(self.stop(job_id, reason="owner_cancelled"))
+            await finish_on_cancel(self.stop(shell_id, reason="owner_cancelled"))
             raise
 
     async def _reap(self, entry: _Entry) -> None:
@@ -241,20 +241,20 @@ class ShellController:
         registered = False
         try:
             if self.on_started is not None:
-                await self.on_started(entry.job)
+                await self.on_started(entry.shell)
             registered = True
             if entry.stop_reason:
                 return
             entry.process = await asyncio.create_subprocess_exec(
                 "/bin/sh",
                 "-c",
-                entry.job.command,
-                cwd=entry.job.owner.workspace,
+                entry.shell.command,
+                cwd=entry.shell.owner.workspace,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,
             )
-            entry.job = replace(entry.job, state="running", started_at=_now())
+            entry.shell = replace(entry.shell, state="running", started_at=_now())
             if entry.stop_reason:
                 state, reason = "cancelled", entry.stop_reason
             else:
@@ -268,7 +268,7 @@ class ShellController:
                             break
                         allowed = min(
                             len(chunk),
-                            entry.policy.max_log_bytes - entry.job.bytes_written,
+                            entry.policy.max_log_bytes - entry.shell.bytes_written,
                             entry.policy.max_total_log_bytes - self._bytes,
                         )
                         accepted = chunk[: max(0, allowed)]
@@ -276,10 +276,10 @@ class ShellController:
                         await join_owned(asyncio.create_task(asyncio.to_thread(self._write, entry.fd, accepted)))
                         old_size = len(preview)
                         preview.extend(chunk[: max(0, entry.policy.max_output - old_size)])
-                        entry.job = replace(
-                            entry.job,
-                            bytes_written=entry.job.bytes_written + len(accepted),
-                            truncated=entry.job.truncated or len(chunk) > entry.policy.max_output - old_size,
+                        entry.shell = replace(
+                            entry.shell,
+                            bytes_written=entry.shell.bytes_written + len(accepted),
+                            truncated=entry.shell.truncated or len(chunk) > entry.policy.max_output - old_size,
                         )
                         text = decoder.decode(bytes(preview[old_size:]))
                         self._publish("output", entry, text)
@@ -300,7 +300,7 @@ class ShellController:
                 "storage_failure" if entry.process else "failed",
                 "storage_failure" if entry.process else "spawn_failed",
             )
-            if entry.process is None and not entry.ready.done() and not (entry.job.background and registered):
+            if entry.process is None and not entry.ready.done() and not (entry.shell.background and registered):
                 entry.ready.set_exception(error)
         except Exception as error:
             entry.terminal_error = error
@@ -316,14 +316,14 @@ class ShellController:
                 state, reason = "failed", "nonzero_exit"
             output = bytes(preview).decode("utf-8", "replace")
             available = True
-            if entry.job.background and entry.job.output_path is not None:
+            if entry.shell.background and entry.shell.output_path is not None:
                 output, available = await asyncio.to_thread(
-                    read_tail, entry.job.output_path, lines=entry.policy.tail_lines, limit=entry.policy.tail_bytes
+                    read_tail, entry.shell.output_path, lines=entry.policy.tail_lines, limit=entry.policy.tail_bytes
                 )
             if entry.stop_reason:
                 state, reason = "cancelled", entry.stop_reason
-            entry.job = replace(
-                entry.job,
+            entry.shell = replace(
+                entry.shell,
                 state=state,
                 reason=reason,
                 output=output,
@@ -333,12 +333,12 @@ class ShellController:
                 output_complete=reason in ("exited", "nonzero_exit"),
                 completed_at=_now(),
             )
-            terminal_receipt = entry.job.background and registered and reason == "spawn_failed"
+            terminal_receipt = entry.shell.background and registered and reason == "spawn_failed"
             if not entry.ready.done() and not terminal_receipt:
                 entry.ready.set_exception(RuntimeError(f"shell admission cancelled: {reason}"))
             try:
                 if self.on_terminal is not None:
-                    await self.on_terminal(entry.job)
+                    await self.on_terminal(entry.shell)
             except Exception as error:
                 entry.terminal_error = error
             self._publish("completed", entry)
@@ -356,47 +356,49 @@ class ShellController:
                 raise OSError("shell log write made no progress")
             view = view[count:]
 
-    async def stop(self, job_id: str, reason: str = "stopped") -> ShellJob:
-        entry = self._entries[job_id]
-        if not entry.job.terminal and not entry.stop_reason:
+    async def stop(self, shell_id: str, reason: str = "stopped") -> ShellInstance:
+        entry = self._entries[shell_id]
+        if not entry.shell.terminal and not entry.stop_reason:
             entry.stop_reason = reason
             if entry.process is not None:
                 with suppress(ProcessLookupError):
                     os.killpg(entry.process.pid, signal.SIGKILL)
         if entry.task is not None:
             await join_owned(entry.task)
-        return self.get(job_id)
+        return self.get(shell_id)
 
-    async def retry_terminal(self, job_id: str) -> ShellJob:
+    async def retry_terminal(self, shell_id: str) -> ShellInstance:
         """Retry an idempotent host persistence hook after a recorded failure."""
-        entry = self._entries[job_id]
-        if not entry.job.terminal:
-            raise RuntimeError("shell job is not terminal")
+        entry = self._entries[shell_id]
+        if not entry.shell.terminal:
+            raise RuntimeError("shell is not terminal")
         if entry.task is not None:
             await join_owned(entry.task)
         if entry.terminal_error is not None and self.on_terminal is not None:
-            await self.on_terminal(entry.job)
+            await self.on_terminal(entry.shell)
             entry.terminal_error = None
             self._publish("completed", entry)
-        return self.get(job_id)
+        return self.get(shell_id)
 
-    def terminal_error(self, job_id: str) -> str:
+    def terminal_error(self, shell_id: str) -> str:
         """Expose hook failure type without leaking credentials in exception text."""
-        error = self._entries[job_id].terminal_error
+        error = self._entries[shell_id].terminal_error
         return type(error).__name__ if error is not None else ""
 
-    async def cancel_owner(self, owner: ShellOwner, reason: str = "owner_cancelled") -> tuple[ShellJob, ...]:
-        jobs = self.list(owner=owner)
-        return tuple(await asyncio.gather(*(self.stop(job.job_id, reason) for job in jobs if not job.terminal)))
+    async def cancel_owner(self, owner: ShellOwner, reason: str = "owner_cancelled") -> tuple[ShellInstance, ...]:
+        shells = self.list(owner=owner)
+        return tuple(
+            await asyncio.gather(*(self.stop(shell.shell_id, reason) for shell in shells if not shell.terminal))
+        )
 
     async def update_policy(self, policy: ShellPolicy) -> None:
         self.policy = policy
         if not policy.allow_background:
             await asyncio.gather(
                 *(
-                    self.stop(e.job.job_id, "policy_revoked")
+                    self.stop(e.shell.shell_id, "policy_revoked")
                     for e in self._entries.values()
-                    if e.job.background and not e.job.terminal
+                    if e.shell.background and not e.shell.terminal
                 )
             )
 
@@ -413,9 +415,9 @@ class ShellController:
             self._quota_fd = -1
         if not self.storage.persistent:
             for entry in self._entries.values():
-                if entry.job.output_path is not None:
-                    entry.job.output_path.unlink(missing_ok=True)
+                if entry.shell.output_path is not None:
+                    entry.shell.output_path.unlink(missing_ok=True)
                     with suppress(FileNotFoundError):
-                        entry.job.output_path.parent.rmdir()
+                        entry.shell.output_path.parent.rmdir()
             if self._temporary is not None:
                 self._temporary.cleanup()

@@ -1401,16 +1401,16 @@ class Agent:
         """Continue a claimed, persisted shell notice without inserting it twice.
 
         The host must serialize this with other runs for the session and claim
-        the notice through ShellJobStore before resuming. No ordinary history
+        the notice through ShellStore before resuming. No ordinary history
         row or model-supplied message ID can authorize this path.
         """
-        from .session.shell_jobs import ShellJobStore
+        from .session.shells import ShellStore
 
         self._check_channel_access()
         if self.batch:
             raise ValueError("Shell notice continuation requires a text agent")
         await self._ensure_initialized()
-        message = await ShellJobStore(self.session).notice_message(session_id, message_id)
+        message = await ShellStore(self.session).notice_message(session_id, message_id)
         self._active_runs += 1
         try:
             with self._execution_bridge.turn(session_id) if self._execution_bridge else nullcontext():
@@ -1599,9 +1599,9 @@ class Agent:
         if not persisted_notice_id:
             await self.session.add_message(session_id, processed_message)
         else:
-            from .session.shell_jobs import ShellJobStore
+            from .session.shells import ShellStore
 
-            await ShellJobStore(self.session).transform_notice(session_id, persisted_notice_id, processed_message)
+            await ShellStore(self.session).transform_notice(session_id, persisted_notice_id, processed_message)
 
         session_usage = self._session_usage.setdefault(session_id, TokenUsage())
         last_usage = Usage()

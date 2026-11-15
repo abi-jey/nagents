@@ -36,7 +36,7 @@ export function useClient() {
   const { operating, error, setError } = operations;
   const [panel, setPanel] = useState<"none" | "tools">("none");
   const voice = useVoicePresence();
-  const [shellJobsOpen, setShellJobsOpen] = useState(false);
+  const [shellsOpen, setShellsOpen] = useState(false);
   const [commandHelp, setCommandHelp] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [navigationRequest, setNavigationRequest] = useState(0);
@@ -138,13 +138,13 @@ export function useClient() {
     if (uploadState.items.length) throw new Error("Remove draft attachments before running a command. Your draft is kept.");
     if (["login", "settings", "model", "agent", "provider"].includes(name) && !access().settings)
       throw new Error("Close the current dialog or wait for the pending request. Your draft is kept.");
-    if (name === "jobs") {
+    if (name === "shells") {
       if (argument) {
         const parts = argument.split(/\s+/);
-        if (parts.length !== 2 || parts[0] !== "stop") throw new Error("Usage: /jobs [stop <job-id>]");
-        await request(`sessions/${encodeURIComponent(sessions.sessionId)}/shell-jobs/${encodeURIComponent(parts[1])}/stop`, token, {});
+        if (parts.length !== 2 || parts[0] !== "stop") throw new Error("Usage: /shells [stop <job-id>]");
+        await request(`sessions/${encodeURIComponent(sessions.sessionId)}/shells/${encodeURIComponent(parts[1])}/stop`, token, {});
       }
-      setShellJobsOpen(true); return true;
+      setShellsOpen(true); return true;
     }
     if (name === "help") { setCommandHelp(true); return true; }
     if (name === "dashboard") { openDashboard(); return true; }
@@ -272,7 +272,7 @@ export function useClient() {
   return {
     ...membership,
     available: access(),
-    shellJobsOpen, closeShellJobs: () => setShellJobsOpen(false),
+    shellsOpen, closeShells: () => setShellsOpen(false),
     commandHelp, closeCommandHelp: () => setCommandHelp(false),
     loginOpen, closeLogin: () => setLoginOpen(false),
     navigationRequest,

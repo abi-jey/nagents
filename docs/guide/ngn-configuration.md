@@ -43,8 +43,8 @@ poetry run ngn --config examples/harness/config.json --demo
 ## Managed background shells
 
 The shell tool accepts `background: true` when the host enables this capability.
-It returns a job ID and a live output-file path instead of waiting. Use `/jobs`
-to inspect jobs and `/jobs stop JOB_ID` to stop one without running the model.
+It returns a job ID and a live output-file path instead of waiting. Use `/shells`
+to inspect jobs and `/shells stop JOB_ID` to stop one without running the model.
 The shell remains a non-sandboxed POSIX tool and still requires approval.
 Background execution is currently available only to root agents. Delegated child
 agents retain foreground shells, but their schema omits `background` and stale
@@ -52,19 +52,25 @@ background calls are rejected because their runtime closes after a normal reply.
 
 ```json
 {
-  "allow_background_shell": true,
-  "shell_timeout": 600,
-  "shell_max_log_bytes": 67108864,
-  "shell_max_total_log_bytes": 268435456,
-  "shell_max_concurrent": 8,
-  "shell_max_concurrent_per_owner": 4
+  "shell": {
+    "allow_background": true,
+    "max_log_bytes": 67108864,
+    "max_total_log_bytes": 268435456,
+    "max_concurrent": 8,
+    "max_concurrent_per_owner": 4
+  },
+  "shell_timeout": 600
 }
 ```
 
-Set `allow_background_shell` to `false` to remove the background argument from
+Set `shell.allow_background` to `false` to remove the background argument from
 advertised schemas and reject stale background requests at execution. The
 standalone shell library defaults to background disabled; ngn explicitly opts in.
-These settings also accept their uppercase `NGN_` environment-variable names.
+Shell fields merge individually across configuration layers. Unknown fields and
+incorrect types are rejected. Environment defaults use `NGN_SHELL_ALLOW_BACKGROUND`,
+`NGN_SHELL_MAX_LOG_BYTES`, `NGN_SHELL_MAX_TOTAL_LOG_BYTES`,
+`NGN_SHELL_MAX_CONCURRENT`, and `NGN_SHELL_MAX_CONCURRENT_PER_OWNER`.
+The existing top-level `shell_timeout` setting remains unchanged.
 Per-owner concurrency cannot exceed the total concurrency; total log capacity
 cannot be smaller than a single job's limit. Background jobs retain the existing
 `shell_timeout` ceiling (at most 600 seconds), rather than running indefinitely.

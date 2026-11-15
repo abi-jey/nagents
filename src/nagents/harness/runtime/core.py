@@ -77,7 +77,7 @@ from ..tools.execution import host_run_id
 from ..tools.execution import observe_host_event
 from ..tools.execution import publish_anchor
 from ..tools.resources import HarnessResources
-from ..tools.shell import ShellJobs
+from ..tools.shell import Shells
 from ..tools.timing import current_clock
 from ..types import ApprovalRequest
 from ..types import HarnessEvent
@@ -318,8 +318,8 @@ class Harness:
         self.commands = CommandRegistry(self)
         self.tasks = SubagentManager(self)
         self.followups = RunInputs()
-        self.shell_jobs = ShellJobs(self)
-        self.followups.shell_reader = self.shell_jobs.next_input
+        self.shells = Shells(self)
+        self.followups.shell_reader = self.shells.next_input
         self.tasks.register()
         self.resources = HarnessResources(self)
         self.agent.tool_executor = HarnessExecutor(self, self.tools)
@@ -1105,185 +1105,186 @@ class Harness:
         status and explicit continuation handles within this process. This is not a durable job queue.
         """
         with self.operation("run"):
-            prompt_text = _prompt_text(prompt)
-            if not prompt_text.strip():
-                raise ValueError("Prompt must not be empty")
-            await self.initialize()
-            if trigger == "shell_notice":
-                initial_input = await self.shell_jobs.next_input()
-                if initial_input is None:
-                    return
-            if self.followups in self.agent.plugins:
-                self.agent.plugins.remove(self.followups)
-            self.agent.plugins.append(self.followups)  # Boundary signal follows every normal host/plugin hook.
-            # Client capabilities and workspace selections may change between runs.
-            # Preserve callers' authored prompt overrides.
-            if self.agent.system_prompt == self._generated_system_prompt:
-                self.refresh_instructions()
-            if not self._is_subagent:
-                await self._write_session_metadata(
-                    "UPDATE harness_sessions SET title = ? WHERE id = ? AND title = ''",
-                    (" ".join(prompt_text.split())[:80], self.session_id),
-                )
-            if self._closed:
-                raise RuntimeError("Harness was closed before the run started")
-            queue: asyncio.Queue[HarnessEvent | RunTurn] = asyncio.Queue(maxsize=64)
-            self._queue = queue
-            session_id = self.session_id
-            run_id = host_run_id(self)
-            self.shell_jobs.run_id = run_id
-            if trigger == "human":
-                self.shell_jobs._automatic_turns = 0
-
-            async def produce() -> None:
-                self.tasks.begin(
-                    session_id,
-                    reset_budget=not self._is_subagent
-                    and not target_session_id
-                    and not start_profile
-                    and trigger == "human",
-                )
-                self.followups.begin(session_id)
-                message: RunInput | None = initial_input or self.followups.first(prompt)
-                final: DoneEvent | None = None
-                try:
-                    await self.tasks.refresh_limits()
-                    if not self._is_subagent and _is_owned_adapter(self.agent.session):
-                        self.agent._execution_bridge = ExecutionBridge(self, self.agent.session, run_id)
-                    if start_profile:
-                        await self.tasks.start_task(
-                            prompt_text,
-                            start_profile,
-                            title=start_title,
-                            options=start_options,
-                            message=initial_input,
-                        )
-                        message = await self.followups.next(self.tasks, wait_for_tasks=True)
-                    elif target_session_id:
-                        await self.tasks.continue_task(
-                            target_session_id, prompt_text, trigger=trigger, message=initial_input
-                        )
-                        message = await self.followups.next(self.tasks, wait_for_tasks=True)
-                    elif notifications:
-                        self.tasks._ready.extend(notifications)
-                        message = await self.followups.next(self.tasks)
-                    elif trigger == "wakeup":
-                        message = RunInput(await self.tasks.wakeup_notification(prompt_text), kind="wakeup")
-                    while message is not None:
-                        failed = False
-                        await queue.put(self.followups.start_turn(message))
-                        try:
-                            async with (
-                                message.context(),
-                                aclosing(
-                                    self._generation_events(
-                                        message.prompt, persisted_notice_id=message.persisted_notice_id
-                                    )
-                                ) as events,
-                            ):
-                                async for event in events:
-                                    if isinstance(event, DoneEvent):
-                                        if event.session_id == session_id:
-                                            final = event
-                                    else:
-                                        if isinstance(event, ErrorEvent) and not event.recoverable:
-                                            failed = True
-                                        if isinstance(event, ToolResultEvent) and event.name == "shell":
-                                            await self.shell_jobs.process_notifications(session_id)
-                                        await self.tasks.flush_observed()
-                                        await self.emit(event)
-                        except FollowupReady as boundary:
-                            if boundary.owner is not self.followups:
-                                raise
-                        if message.persisted_notice_id:
-                            await self.shell_jobs.store.finish_wake(
-                                session_id, message.persisted_notice_id, uncertain=failed
-                            )
-                        if failed:
-                            # Preserve completed-task lifecycle evidence without
-                            # constructing notifications or making another model call.
-                            await self.tasks.flush_observed()
-                            break
-                        # A new Agent.run preserves all configured hooks and repairs
-                        # incomplete persisted calls before adding the user notification.
-                        message = await self.followups.next(self.tasks)
-                    await self.tasks.end()
-                    if final is not None:
-                        await self.emit(final)
-                except (asyncio.CancelledError, GeneratorExit):
-
-                    async def cancel_shells() -> None:
-                        if message is not None and message.persisted_notice_id:
-                            await self.shell_jobs.store.finish_wake(
-                                session_id, message.persisted_notice_id, uncertain=True
-                            )
-                        await self.shell_jobs.cancel_owner(
-                            session_id, "host_shutdown" if self._closed else "owner_cancelled"
-                        )
-
-                    await _await_cleanup(asyncio.create_task(cancel_shells()))
-                    raise
-                finally:
-                    self.followups.end()
-                    self.agent._execution_bridge = None
-                    await self.tasks.end()
-
-            worker = asyncio.create_task(produce(), name=f"ngn-run-{self.session_id}")
-            self._worker = worker
-            pending: asyncio.Task[HarnessEvent | RunTurn] | None = None
-            observed = False
-            try:
-                if self.config.demo:
-                    yield Notice(
-                        "OFFLINE DEMO: no network, workspace writes, shell, or Python plugins. Sessions are stored locally."
+            async with self.shells.notice_admission(enabled=trigger == "shell_notice"):
+                prompt_text = _prompt_text(prompt)
+                if not prompt_text.strip():
+                    raise ValueError("Prompt must not be empty")
+                await self.initialize()
+                if trigger == "shell_notice":
+                    initial_input = await self.shells.next_input()
+                    if initial_input is None:
+                        return
+                if self.followups in self.agent.plugins:
+                    self.agent.plugins.remove(self.followups)
+                self.agent.plugins.append(self.followups)  # Boundary signal follows every normal host/plugin hook.
+                # Client capabilities and workspace selections may change between runs.
+                # Preserve callers' authored prompt overrides.
+                if self.agent.system_prompt == self._generated_system_prompt:
+                    self.refresh_instructions()
+                if not self._is_subagent:
+                    await self._write_session_metadata(
+                        "UPDATE harness_sessions SET title = ? WHERE id = ? AND title = ''",
+                        (" ".join(prompt_text.split())[:80], self.session_id),
                     )
-                while True:
-                    if worker.done() and queue.empty():
-                        observed = True
-                        await worker
-                        break
-                    pending = asyncio.create_task(queue.get())
-                    await asyncio.wait((pending, worker), return_when=asyncio.FIRST_COMPLETED)
-                    if pending.done():
-                        event = pending.result()
-                        self.tasks.drain_activity()
-                        if isinstance(event, RunTurn):
-                            self.followups.notify(event)
+                if self._closed:
+                    raise RuntimeError("Harness was closed before the run started")
+                queue: asyncio.Queue[HarnessEvent | RunTurn] = asyncio.Queue(maxsize=64)
+                self._queue = queue
+                session_id = self.session_id
+                run_id = host_run_id(self)
+                self.shells.run_id = run_id
+                if trigger == "human":
+                    self.shells._automatic_turns = 0
+
+                async def produce() -> None:
+                    self.tasks.begin(
+                        session_id,
+                        reset_budget=not self._is_subagent
+                        and not target_session_id
+                        and not start_profile
+                        and trigger == "human",
+                    )
+                    self.followups.begin(session_id)
+                    message: RunInput | None = initial_input or self.followups.first(prompt)
+                    final: DoneEvent | None = None
+                    try:
+                        await self.tasks.refresh_limits()
+                        if not self._is_subagent and _is_owned_adapter(self.agent.session):
+                            self.agent._execution_bridge = ExecutionBridge(self, self.agent.session, run_id)
+                        if start_profile:
+                            await self.tasks.start_task(
+                                prompt_text,
+                                start_profile,
+                                title=start_title,
+                                options=start_options,
+                                message=initial_input,
+                            )
+                            message = await self.followups.next(self.tasks, wait_for_tasks=True)
+                        elif target_session_id:
+                            await self.tasks.continue_task(
+                                target_session_id, prompt_text, trigger=trigger, message=initial_input
+                            )
+                            message = await self.followups.next(self.tasks, wait_for_tasks=True)
+                        elif notifications:
+                            self.tasks._ready.extend(notifications)
+                            message = await self.followups.next(self.tasks)
+                        elif trigger == "wakeup":
+                            message = RunInput(await self.tasks.wakeup_notification(prompt_text), kind="wakeup")
+                        while message is not None:
+                            failed = False
+                            await queue.put(self.followups.start_turn(message))
+                            try:
+                                async with (
+                                    message.context(),
+                                    aclosing(
+                                        self._generation_events(
+                                            message.prompt, persisted_notice_id=message.persisted_notice_id
+                                        )
+                                    ) as events,
+                                ):
+                                    async for event in events:
+                                        if isinstance(event, DoneEvent):
+                                            if event.session_id == session_id:
+                                                final = event
+                                        else:
+                                            if isinstance(event, ErrorEvent) and not event.recoverable:
+                                                failed = True
+                                            if isinstance(event, ToolResultEvent) and event.name == "shell":
+                                                await self.shells.process_notifications(session_id)
+                                            await self.tasks.flush_observed()
+                                            await self.emit(event)
+                            except FollowupReady as boundary:
+                                if boundary.owner is not self.followups:
+                                    raise
+                            if message.persisted_notice_id:
+                                await self.shells.store.finish_wake(
+                                    session_id, message.persisted_notice_id, uncertain=failed
+                                )
+                            if failed:
+                                # Preserve completed-task lifecycle evidence without
+                                # constructing notifications or making another model call.
+                                await self.tasks.flush_observed()
+                                break
+                            # A new Agent.run preserves all configured hooks and repairs
+                            # incomplete persisted calls before adding the user notification.
+                            message = await self.followups.next(self.tasks)
+                        await self.tasks.end()
+                        if final is not None:
+                            await self.emit(final)
+                    except (asyncio.CancelledError, GeneratorExit):
+
+                        async def cancel_shells() -> None:
+                            if message is not None and message.persisted_notice_id:
+                                await self.shells.store.finish_wake(
+                                    session_id, message.persisted_notice_id, uncertain=True
+                                )
+                            await self.shells.cancel_owner(
+                                session_id, "host_shutdown" if self._closed else "owner_cancelled"
+                            )
+
+                        await _await_cleanup(asyncio.create_task(cancel_shells()))
+                        raise
+                    finally:
+                        self.followups.end()
+                        self.agent._execution_bridge = None
+                        await self.tasks.end()
+
+                worker = asyncio.create_task(produce(), name=f"ngn-run-{self.session_id}")
+                self._worker = worker
+                pending: asyncio.Task[HarnessEvent | RunTurn] | None = None
+                observed = False
+                try:
+                    if self.config.demo:
+                        yield Notice(
+                            "OFFLINE DEMO: no network, workspace writes, shell, or Python plugins. Sessions are stored locally."
+                        )
+                    while True:
+                        if worker.done() and queue.empty():
+                            observed = True
+                            await worker
+                            break
+                        pending = asyncio.create_task(queue.get())
+                        await asyncio.wait((pending, worker), return_when=asyncio.FIRST_COMPLETED)
+                        if pending.done():
+                            event = pending.result()
+                            self.tasks.drain_activity()
+                            if isinstance(event, RunTurn):
+                                self.followups.notify(event)
+                            else:
+                                yield event
+                            pending = None
                         else:
-                            yield event
-                        pending = None
-                    else:
+                            pending.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await pending
+                            pending = None
+                finally:
+                    if pending is not None:
                         pending.cancel()
                         with suppress(asyncio.CancelledError):
                             await pending
-                        pending = None
-            finally:
-                if pending is not None:
-                    pending.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await pending
-                # Stop may already be joining asynchronous provider cleanup.
-                if not worker.done() and not worker.cancelling():
-                    worker.cancel()
-                try:
-                    if not observed:
-                        with suppress(asyncio.CancelledError):
-                            await _await_cleanup(worker)
-                finally:
-                    self._worker = None
-                    self._queue = None
-                    if (
-                        self.shell_jobs.on_work_pending is not None
-                        and not self._closed
-                        and await self.shell_jobs.wake_pending()
-                    ):
-                        await self.shell_jobs.on_work_pending(session_id)
+                    # Stop may already be joining asynchronous provider cleanup.
+                    if not worker.done() and not worker.cancelling():
+                        worker.cancel()
+                    try:
+                        if not observed:
+                            with suppress(asyncio.CancelledError):
+                                await _await_cleanup(worker)
+                    finally:
+                        self._worker = None
+                        self._queue = None
+                        if (
+                            self.shells.on_work_pending is not None
+                            and not self._closed
+                            and await self.shells.wake_pending()
+                        ):
+                            await self.shells.on_work_pending(session_id)
 
-    async def resume_shell_jobs(self, *, session_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
+    async def resume_shells(self, *, session_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
         """Admit existing notices through the host's normal serialized run gate."""
         if session_id and session_id != self.session_id:
             raise ValueError("Shell notifications require their exact owning runtime")
-        async with aclosing(self._run("Shell job notification", trigger="shell_notice")) as events:
+        async with aclosing(self._run("Shell notification", trigger="shell_notice")) as events:
             async for event in events:
                 yield event
 
@@ -1869,7 +1870,7 @@ class Harness:
                     finally:
                         try:
                             try:
-                                await self.shell_jobs.close()
+                                await self.shells.close()
                             finally:
                                 await self.agent.close()
                         finally:

@@ -10,10 +10,10 @@ from nagents import SessionManager
 from nagents.events import TextDoneEvent
 from nagents.extensions import AgentPlugin
 from nagents.extensions import RunContext
-from nagents.session.shell_jobs import ShellJobOwner
-from nagents.session.shell_jobs import ShellJobRecord
-from nagents.session.shell_jobs import ShellJobStore
-from nagents.session.shell_jobs import ShellJobTerminal
+from nagents.session.shells import ShellRecord
+from nagents.session.shells import ShellRecordOwner
+from nagents.session.shells import ShellStore
+from nagents.session.shells import ShellTerminal
 from nagents.types import Message
 from nagents.types import ToolCall
 from tests.agent.test_extensions import OfflineProvider
@@ -36,11 +36,11 @@ async def test_resume_claimed_notice_does_not_duplicate_history(tmp_path: Path, 
         agent.plugins.append(RedactNotice())
     try:
         await session.get_or_create_session("owner", "user")
-        store = ShellJobStore(session)
+        store = ShellStore(session)
         await store.register(
-            ShellJobRecord(
+            ShellRecord(
                 "job",
-                ShellJobOwner(str(tmp_path), "owner", "owner", "run", "call", "host"),
+                ShellRecordOwner(str(tmp_path), "owner", "owner", "run", "call", "host"),
                 "echo hello",
                 str(tmp_path / "output.log"),
             )
@@ -49,10 +49,10 @@ async def test_resume_claimed_notice_does_not_duplicate_history(tmp_path: Path, 
             "owner", Message(role="assistant", tool_calls=[ToolCall(id="call", name="shell", arguments={})])
         )
         await session.add_message(
-            "owner", Message(role="tool", tool_call_id="call", content=json.dumps({"job_id": "job"}))
+            "owner", Message(role="tool", tool_call_id="call", content=json.dumps({"shell_id": "job"}))
         )
         await store.mark_receipt_committed("owner", "call")
-        await store.terminal("owner", "job", ShellJobTerminal("completed", "exit", "hello", 0))
+        await store.terminal("owner", "job", ShellTerminal("completed", "exit", "hello", 0))
         message_id = await store.claim_wake("owner")
         assert message_id > 0
         events = [event async for event in agent.resume_notice(message_id, session_id="owner")]

@@ -1,4 +1,4 @@
-import { ShellJobsDialog } from "../features/chat/ShellJobsDialog.js";
+import { ShellsDialog } from "../features/chat/ShellsDialog.js";
 import { CommandHelp } from "../features/chat/CommandHelp.js";
 import { SkillsDialog } from "../features/chat/SkillsDialog.js";
 import { skillCommand } from "../features/chat/commands.js";
@@ -22,7 +22,7 @@ export function WorkspaceDialogs({ client, select }: {
   const config = sessions.config;
   function openRestored(id: string) { client.trashController.close(); void select(id); }
   return <>
-    {client.shellJobsOpen && config && <ShellJobsDialog token={config.token} sessionId={sessions.sessionId} close={client.closeShellJobs} />}
+    {client.shellsOpen && config && <ShellsDialog token={config.token} sessionId={sessions.sessionId} close={client.closeShells} />}
     {client.commandHelp && <CommandHelp close={client.closeCommandHelp} />}
     {client.skills.open && <SkillsDialog skills={client.skills} choose={skill => {
       client.chat.setPrompt(`/${skillCommand(skill)} `); client.skills.close();

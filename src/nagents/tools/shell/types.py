@@ -1,4 +1,4 @@
-"""Host-independent contracts for managed POSIX shell jobs."""
+"""Host-independent contracts for managed POSIX shells."""
 
 from __future__ import annotations
 
@@ -71,8 +71,8 @@ class ShellStorage:
 
 
 @dataclass(frozen=True)
-class ShellJob:
-    job_id: str
+class ShellInstance:
+    shell_id: str
     owner: ShellOwner
     command: str
     background: bool
@@ -99,10 +99,10 @@ class ShellJob:
 @dataclass(frozen=True)
 class ShellEvent:
     kind: Literal["started", "output", "completed"]
-    job: ShellJob
+    shell: ShellInstance
     text: str = ""
 
 
 ShellCallback: TypeAlias = Callable[[ShellEvent], Awaitable[None]]
-ShellJobCallback: TypeAlias = Callable[[ShellJob], Awaitable[None]]
+ShellInstanceCallback: TypeAlias = Callable[[ShellInstance], Awaitable[None]]
 ShellOutputCallback: TypeAlias = Callable[[str], Awaitable[None]]

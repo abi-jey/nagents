@@ -272,7 +272,7 @@ class WebState:
         self.session_revision = 0
         self.executions = Executions(self, factory or type(harness))
         self._shell_pending: dict[str, Harness] = {}
-        self.bind_shell_jobs(harness)
+        self.bind_shells(harness)
         self.mutating = False
         self.mutation_released = asyncio.Event()
         self.mutation_released.set()
@@ -378,7 +378,7 @@ class WebState:
 
     def changed(self) -> None:
         if self._shell_pending:
-            asyncio.get_running_loop().call_soon(self._drain_shell_jobs)
+            asyncio.get_running_loop().call_soon(self._drain_shells)
         self.wakeups.changed.set()
         self.channels.changed.set()
 
@@ -736,7 +736,7 @@ class WebState:
             await self.channels.activity(run.session_id, True, run.source)
             await notices.start(live=True)
             if shell_resume:
-                source = self.running_harness.resume_shell_jobs(session_id=run.session_id)
+                source = self.running_harness.resume_shells(session_id=run.session_id)
             elif task_input is not None:
                 assert isinstance(prompt, str)
                 source = (
@@ -1039,22 +1039,22 @@ class WebState:
         self.channels.management.run_finished(run)
         self.publish(run, {"event": "run_finished", "status": run.outcome})
         self.executions.release(run)
-        asyncio.get_running_loop().call_soon(self._drain_shell_jobs)
+        asyncio.get_running_loop().call_soon(self._drain_shells)
         self.status()
         self.changed()
 
-    def bind_shell_jobs(self, harness: Harness) -> None:
-        jobs = getattr(harness, "shell_jobs", None)
+    def bind_shells(self, harness: Harness) -> None:
+        jobs = getattr(harness, "shells", None)
         if jobs is None:
             return
 
         async def pending(session_id: str) -> None:
             self._shell_pending[session_id] = harness
-            asyncio.get_running_loop().call_soon(self._drain_shell_jobs)
+            asyncio.get_running_loop().call_soon(self._drain_shells)
 
         jobs.on_work_pending = pending
 
-    def _drain_shell_jobs(self) -> None:
+    def _drain_shells(self) -> None:
         if self.executions.closed or self.mutating or self.channels.closed:
             return
         for session_id, harness in tuple(self._shell_pending.items()):
@@ -1069,9 +1069,9 @@ class WebState:
             run = Run(session_id, background=True, server_owned=True)
             self.executions.reserve(run)
             self._shell_pending.pop(session_id, None)
-            run.task = asyncio.create_task(self._resume_shell_jobs(run, harness), name=f"ngn-shell-{run.id}")
+            run.task = asyncio.create_task(self._resume_shells(run, harness), name=f"ngn-shell-{run.id}")
 
-    async def _resume_shell_jobs(self, run: Run, harness: Harness) -> None:
+    async def _resume_shells(self, run: Run, harness: Harness) -> None:
         try:
             with self.executions.scope(run):
                 self.running_harness = harness
