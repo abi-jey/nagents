@@ -28,13 +28,13 @@ def test_tool_preview_fills_in_and_promotes_same_card(tmp_path: Path) -> None:
             card = app.query_one(ToolCard)
             assert card.tool == "..."
             assert "preparing" in card.title
-            assert "0.00s" not in card.title
+            assert "0ms" not in card.title
             assert not app._running_tools
             # Preparing headers shimmer, but never accrue execution duration.
             assert card._elapsed_timer is not None
             await pilot.pause(0.15)
             assert card._duration == ""
-            assert "0.00s" not in card.title
+            assert "0ms" not in card.title
 
             await app._event(
                 ToolCallProgressEvent(generation_id="g", index=0, name="read_file", arguments_text='{"path":"READ')

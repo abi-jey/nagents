@@ -92,6 +92,7 @@ class _Entry:
     task: asyncio.Task[None] | None = None
     process: asyncio.subprocess.Process | None = None
     stop_reason: str = ""
+    group_killed: bool = False
     terminal_error: Exception | None = None
 
 
@@ -222,12 +223,19 @@ class ShellController:
             await finish_on_cancel(self.stop(shell_id, reason="owner_cancelled"))
             raise
 
+    @staticmethod
+    def _kill_group(entry: _Entry) -> None:
+        if entry.process is not None and not entry.group_killed:
+            with suppress(ProcessLookupError):
+                os.killpg(entry.process.pid, signal.SIGKILL)
+            # A second kill can hit a zombie-only group (EPERM on macOS), or a reused PGID.
+            entry.group_killed = True
+
     async def _reap(self, entry: _Entry) -> None:
         process = entry.process
         if process is None:
             return
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
+        self._kill_group(entry)
         if process.stdout is not None:
             while await process.stdout.read(65536):
                 pass
@@ -360,9 +368,7 @@ class ShellController:
         entry = self._entries[shell_id]
         if not entry.shell.terminal and not entry.stop_reason:
             entry.stop_reason = reason
-            if entry.process is not None:
-                with suppress(ProcessLookupError):
-                    os.killpg(entry.process.pid, signal.SIGKILL)
+            self._kill_group(entry)
         if entry.task is not None:
             await join_owned(entry.task)
         return self.get(shell_id)

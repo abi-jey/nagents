@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import stat
 from typing import TYPE_CHECKING
 
@@ -86,6 +87,52 @@ async def test_stop_owner_timeout_limit(tmp_path: Path) -> None:
     finally:
         await controller.close()
     assert controller.get(second.shell_id).reason == "host_shutdown"
+
+
+async def test_stop_kills_group_once_before_reaping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = ShellController(ShellPolicy(allow_background=True))
+    real_killpg = os.killpg
+    killed: list[int] = []
+
+    def killpg(pgid: int, sig: int) -> None:
+        assert sig == signal.SIGKILL
+        if pgid in killed:
+            # Darwin can report EPERM when only zombies remain in the group.
+            raise PermissionError("zombie-only process group")
+        real_killpg(pgid, sig)
+        killed.append(pgid)
+
+    try:
+        job = await controller.execute("sleep 20 & wait", owner=owner(tmp_path), background=True)
+        monkeypatch.setattr(os, "killpg", killpg)
+        async with asyncio.timeout(5):
+            stopped = await controller.stop(job.shell_id)
+        assert stopped.state == "cancelled" and stopped.exit_code == -signal.SIGKILL
+        assert len(killed) == 1
+        await controller.stop(job.shell_id)
+        assert len(killed) == 1
+    finally:
+        await controller.close()
+
+
+async def test_live_group_permission_error_is_not_suppressed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = ShellController(ShellPolicy(allow_background=True))
+
+    def denied(pgid: int, sig: int) -> None:
+        raise PermissionError("live group")
+
+    try:
+        job = await controller.execute("sleep 20", owner=owner(tmp_path), background=True)
+        entry = controller._entries[job.shell_id]
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "killpg", denied)
+            with pytest.raises(PermissionError, match="live group"):
+                controller._kill_group(entry)
+        assert not entry.group_killed
+        async with asyncio.timeout(5):
+            assert (await controller.stop(job.shell_id)).state == "cancelled"
+    finally:
+        await controller.close()
 
 
 async def test_subscriber_is_nonblocking(tmp_path: Path) -> None:

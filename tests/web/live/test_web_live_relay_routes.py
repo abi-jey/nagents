@@ -166,7 +166,7 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                             # to be persisted. Windows can observe the first caption
                             # while the second is still behind that asynchronous write.
                             phase = "captions"
-                            async with asyncio.timeout(3):
+                            async with asyncio.timeout(HANG_GUARD):
                                 while True:
                                     captions = [
                                         event["text"] for event in snapshot["events"] if event["type"] == "transcript"

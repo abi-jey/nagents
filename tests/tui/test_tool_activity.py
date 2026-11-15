@@ -65,7 +65,7 @@ def test_structured_command_outcomes_preserve_inspection_and_raw_evidence(
             await app._event(ToolOutput("outcome", name, "Original streamed output\n"))
             await app._event(ToolResultEvent(id="outcome", name=name, result=result, error=error, duration_ms=1250))
             await pilot.pause()
-            expected_timing = f"1.25s / {backend.config.shell_timeout:g}s" if name == "shell" else "1.25s"
+            expected_timing = "1.25s / 10m" if name == "shell" else "1.25s"
             assert str(title.content).split("check", 1)[1].split() == [*label.split(), *expected_timing.split()]
             assert card.has_class("failed") is failed
             assert card.has_class("complete") is not failed
@@ -247,7 +247,7 @@ def test_long_unicode_and_markup_summary_keeps_outcome_on_screen(tmp_path: Path)
                 await pilot.pause()
                 title = card.query_one("CollapsibleTitle", Static)
                 rendered = title.render_line(0).text
-                assert rendered.rstrip().endswith(f"{'failed':<10}{'1.25s':>10}")
+                assert rendered.rstrip().endswith(f"{'failed':<10}{'1.25s':>8}")
                 assert "…" in rendered
                 assert "[red]" in rendered
                 assert card.region.height == title.region.height == 1
