@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nagents.exceptions import ModelListError
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
@@ -372,3 +373,28 @@ def test_openai_auto_prefers_named_environment_without_codex_files(
     assert provider.api_key == "rotated-account"
     with pytest.raises(CodexConfigError):
         build_provider(sample(auth="codex", api_key_env=""), config, OpenAIAuth())
+
+
+@pytest.mark.parametrize("kind", ["openai", "foundry", "azure_openai_compatible_v1"])
+@pytest.mark.parametrize("key", ["", "   "])
+def test_named_catalog_missing_credentials_raise_model_list_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, key: str
+) -> None:
+    profile = sample(
+        kind=kind,
+        api="responses",
+        base_url="" if kind == "openai" else "https://example.test/openai",
+    )
+    config = HarnessConfig(workspace=tmp_path, providers=connection())
+    monkeypatch.setenv("TEST_NGN_KEY", key)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-account")
+    provider = build_provider(profile, config, OpenAIAuth())
+
+    async def check() -> None:
+        try:
+            with pytest.raises(ModelListError, match="credentials are unavailable"):
+                await provider.get_model_list()
+        finally:
+            await provider.close()
+
+    asyncio.run(check())

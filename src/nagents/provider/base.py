@@ -149,6 +149,8 @@ class Provider:
                 Empty disables it. Agent supplies the ID; direct callers use
                 set_session_id() or session_context(). Only generation requests carry it.
         """
+        if provider_type == ProviderType.OPENAI and base_url and base_url.rstrip("/") != "https://api.openai.com/v1":
+            provider_type = ProviderType.OPENAI_COMPATIBLE
         self.session_id_header = session_id_header
         self.context_window = validate_context_window(context_window)
         self.model_context_windows: dict[str, int] = {}
