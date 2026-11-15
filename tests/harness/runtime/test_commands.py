@@ -64,6 +64,7 @@ def test_builtin_metadata_and_frozen_command(harness: Harness) -> None:
         "skills",
         "context",
         "quit",
+        "shells",
         "tasks",
         "queue",
         "dashboard",

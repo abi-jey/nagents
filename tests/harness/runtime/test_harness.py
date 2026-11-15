@@ -886,7 +886,7 @@ def test_shell_default_deadline_and_advertised_contract(
             help_text = definition.parameters["properties"]["timeout"]["description"]
             assert "default of 600" in help_text and "cannot exceed 600" in help_text
             monkeypatch.setattr(asyncio, "timeout", capture_timeout)
-            result = await harness.tools.shell("printf completed", **arguments)
+            result = await harness.tools.shell("printf completed", timeout=arguments.get("timeout", 0.0))
             assert result["output"] == "completed" and not result["timed_out"]
             assert deadlines == [expected]
             assert requests[0].arguments["timeout"] == expected

@@ -35,6 +35,7 @@ class RunInput:
     context: Callable[[], AbstractAsyncContextManager[None]] = field(default=nullcontext, repr=False)
     voice_session_id: str = ""
     message_id: str = ""
+    persisted_notice_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class RunInputs(AgentPlugin):
         self._reader: Callable[[], Awaitable[RunInput | None]] | None = None
         self._changed = False
         self._origin = ("", "")
+        self.shell_reader: Callable[[], Awaitable[RunInput | None]] | None = None
 
     @property
     def pending(self) -> bool:
@@ -123,6 +125,10 @@ class RunInputs(AgentPlugin):
         self._changed = False
         if self._reader is not None and not self._pending:
             message = await self._reader()
+            if message is not None:
+                self._pending.append(message)
+        if self.shell_reader is not None and not self._pending:
+            message = await self.shell_reader()
             if message is not None:
                 self._pending.append(message)
 

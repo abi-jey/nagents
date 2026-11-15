@@ -36,6 +36,7 @@ export function useClient() {
   const { operating, error, setError } = operations;
   const [panel, setPanel] = useState<"none" | "tools">("none");
   const voice = useVoicePresence();
+  const [shellsOpen, setShellsOpen] = useState(false);
   const [commandHelp, setCommandHelp] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [navigationRequest, setNavigationRequest] = useState(0);
@@ -137,6 +138,14 @@ export function useClient() {
     if (uploadState.items.length) throw new Error("Remove draft attachments before running a command. Your draft is kept.");
     if (["login", "settings", "model", "agent", "provider"].includes(name) && !access().settings)
       throw new Error("Close the current dialog or wait for the pending request. Your draft is kept.");
+    if (name === "shells") {
+      if (argument) {
+        const parts = argument.split(/\s+/);
+        if (parts.length !== 2 || parts[0] !== "stop") throw new Error("Usage: /shells [stop <job-id>]");
+        await request(`sessions/${encodeURIComponent(sessions.sessionId)}/shells/${encodeURIComponent(parts[1])}/stop`, token, {});
+      }
+      setShellsOpen(true); return true;
+    }
     if (name === "help") { setCommandHelp(true); return true; }
     if (name === "dashboard") { openDashboard(); return true; }
     if (name === "skills") { skills.show(argument); return true; }
@@ -263,6 +272,7 @@ export function useClient() {
   return {
     ...membership,
     available: access(),
+    shellsOpen, closeShells: () => setShellsOpen(false),
     commandHelp, closeCommandHelp: () => setCommandHelp(false),
     loginOpen, closeLogin: () => setLoginOpen(false),
     navigationRequest,

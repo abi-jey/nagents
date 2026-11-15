@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+import stat
 from contextlib import closing
 from contextlib import suppress
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
@@ -154,7 +157,61 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str, tables: set[str
         pass
 
 
+def _purge_shells(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
+    if "ngn_shells" not in tables:
+        return
+    jobs = db.execute(
+        "SELECT shell_id,output_path,terminal_json FROM ngn_shells WHERE root_session_id=? OR session_id=?",
+        (session_id, session_id),
+    ).fetchall()
+    if any(not row[2] for row in jobs):
+        raise HTTPException(409, "Shells are still stopping. Retry permanent deletion.")
+    database = next((row[2] for row in db.execute("PRAGMA database_list") if row[1] == "main"), "")
+    root = Path(database).parent / "shells"
+    for shell_id, output_path, _ in jobs:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", shell_id) or output_path != str(root / shell_id / "output.log"):
+            raise HTTPException(409, "Shell output allocation is inconsistent. Deletion was not performed.")
+        if os.name != "posix":
+            if Path(output_path).exists():
+                raise HTTPException(409, "Private shell output cleanup requires POSIX.")
+            continue
+        descriptors: list[int] = []
+        try:
+            parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            descriptors.append(parent)
+            directory = os.open(shell_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            descriptors.append(directory)
+            for descriptor in descriptors:
+                info = os.fstat(descriptor)
+                if info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    raise OSError("Shell allocation is not private")
+            try:
+                info = os.stat("output.log", dir_fd=directory, follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    raise OSError("Shell output is not a private regular file")
+                os.unlink("output.log", dir_fd=directory)
+            except FileNotFoundError:
+                pass
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise HTTPException(409, "Shell output could not be safely removed. Retry permanent deletion.") from error
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+        if "ngn_shell_outbox" in tables:
+            db.execute("DELETE FROM ngn_shell_outbox WHERE shell_id=?", (shell_id,))
+    if "ngn_shell_outbox" in tables:
+        db.execute(
+            "DELETE FROM ngn_shell_outbox WHERE shell_id IN "
+            "(SELECT shell_id FROM ngn_shells WHERE root_session_id=? OR session_id=?)",
+            (session_id, session_id),
+        )
+    db.execute("DELETE FROM ngn_shells WHERE root_session_id=? OR session_id=?", (session_id, session_id))
+
+
 def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
+    _purge_shells(db, session_id, tables)
     cleanup_deliveries(db, session_id)
     children: set[str] = set()
     if "ngn_web_agent_sessions" in tables:
@@ -251,6 +308,8 @@ async def _release_process(state: WebState, session_id: str, *, journal: bool = 
     harness = state.harness_for(session_id)
     run = state.run_for(session_id)
     state.wakeups.cancel_session(session_id)
+    state._shell_pending.pop(session_id, None)
+    await harness.shells.cancel_owner(session_id, "session_deleted")
     if run is not None:
         await state.stop(run)
     if claim := state.channels.work_tasks.get(session_id):
