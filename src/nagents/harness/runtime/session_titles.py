@@ -28,6 +28,7 @@ from nagents.types import TextContent
 
 from ..agents.updates import NOTIFICATION_PREFIX
 from ..agents.updates import WAKEUP_PREFIX
+from ..providers.connection import _EnvOpenAIProvider
 from ..providers.connection import build_provider
 from ..providers.factory import HarnessProvider
 from ..providers.factory import UnavailableModelProvider
@@ -158,6 +159,9 @@ async def generate_title(harness: Harness, session_id: str) -> str:
     provider: Provider
     if isinstance(active, HarnessProvider):
         provider = HarnessProvider(config, active.login_store, request_timeout=profile.request_timeout)
+    elif isinstance(active, _EnvOpenAIProvider):
+        # Keep the accepted named key source without rediscovering auto auth.
+        provider = _EnvOpenAIProvider(replace(profile, api_key_env=active._env), active.model)
     elif isinstance(active, OpenAIProvider):
         # Preserve the accepted account/route instead of rediscovering Codex's
         # files, which may have changed since this conversation was opened.
