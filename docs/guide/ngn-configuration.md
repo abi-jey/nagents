@@ -46,6 +46,9 @@ The shell tool accepts `background: true` when the host enables this capability.
 It returns a job ID and a live output-file path instead of waiting. Use `/jobs`
 to inspect jobs and `/jobs stop JOB_ID` to stop one without running the model.
 The shell remains a non-sandboxed POSIX tool and still requires approval.
+Background execution is currently available only to root agents. Delegated child
+agents retain foreground shells, but their schema omits `background` and stale
+background calls are rejected because their runtime closes after a normal reply.
 
 ```json
 {
