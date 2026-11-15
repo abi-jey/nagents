@@ -293,14 +293,14 @@ async def reply(request: web.Request, api: str, result: dict[str, object], strea
 
 @pytest.mark.parametrize("api", APIS)
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("prefix", ["", "/v1/", "/proxy/v1/"])
+@pytest.mark.parametrize("prefix", ["", "/v1/", "/proxy/v1/", "/proxy/api/"])
 def test_litellm_routes_real_http(api: str, stream: bool, prefix: str) -> None:
     async def scenario() -> None:
         seen: list[dict[str, object]] = []
 
         async def handle(request: web.Request) -> web.StreamResponse:
             route = "chat/completions" if api == "chat_completions" else api
-            expected = prefix.rstrip("/") + ("/v1" if api == "messages" and not prefix else "") + "/" + route
+            expected = prefix.rstrip("/") + "/" + route
             assert request.path == expected and "/v1/v1" not in request.path
             assert request.headers["Authorization"] == f"Bearer {KEY}"
             assert not {"x-api-key", "ChatGPT-Account-Id", "originator"} & request.headers.keys()
