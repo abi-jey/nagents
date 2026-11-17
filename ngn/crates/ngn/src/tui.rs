@@ -1,6 +1,6 @@
-use std::{io::stdout, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, io::stdout, sync::Arc, time::Duration};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use crossterm::{
     event::{
         DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
@@ -14,6 +14,7 @@ use ngn_core::{
     ApprovalMode, Host,
     host::Approval,
     queues::{QueueAction, QueueState},
+    steering::{SteeringState, SteeringStatus},
     store::{Run, Session},
 };
 use ngn_protocol::{EventRecord, TaskInfo};
@@ -35,6 +36,14 @@ impl Drop for Restore {
         let _ = disable_raw_mode();
         let _ = execute!(stdout(), DisableBracketedPaste, LeaveAlternateScreen);
     }
+}
+
+#[derive(Default)]
+struct SteeringSubmission {
+    session: String,
+    run: String,
+    prompt: String,
+    request: String,
 }
 
 #[derive(Default)]
@@ -62,6 +71,12 @@ struct App {
     queue_picker: bool,
     queue_index: usize,
     submission: Option<(String, String, String)>,
+    steering_submissions: Vec<SteeringSubmission>,
+    steering: Vec<SteeringState>,
+    steering_runs: BTreeSet<String>,
+    steering_dirty: bool,
+    steering_picker: bool,
+    steering_scroll: u16,
 }
 
 impl App {
@@ -71,6 +86,17 @@ impl App {
             let count = records.len();
             if let Some(last) = records.last() {
                 self.after = last.sequence;
+            }
+            for record in &records {
+                if matches!(
+                    record.event,
+                    ngn_protocol::Event::RunStarted { .. }
+                        | ngn_protocol::Event::SteeringUpdated { .. }
+                        | ngn_protocol::Event::RunFinished { .. }
+                ) {
+                    self.steering_dirty = true;
+                    self.steering_runs.insert(record.run_id.clone());
+                }
             }
             self.records.extend(records);
             if self.records.len() > 5000 {
@@ -84,11 +110,34 @@ impl App {
     }
 
     async fn state(&mut self, host: &Host) {
+        let previous = self.active.as_ref().map(|run| run.id.clone());
         self.active = host
             .active()
             .await
             .into_iter()
             .find(|run| run.session_id == self.session);
+        if self.steering_dirty || previous != self.active.as_ref().map(|run| run.id.clone()) {
+            let mut runs: Vec<String> = self
+                .steering_runs
+                .iter()
+                .cloned()
+                .chain(self.active.iter().map(|run| run.id.clone()))
+                .chain(self.steering.iter().map(|state| state.run_id.clone()))
+                .collect();
+            runs.sort();
+            runs.dedup();
+            for run in runs {
+                match host.steering(&run).await {
+                    Ok(state) if state.session_id == self.session => {
+                        self.steering.retain(|saved| saved.run_id != run);
+                        self.steering.push(state);
+                    }
+                    Ok(_) => (),
+                    Err(error) => self.status = format!("Cannot inspect steering: {error}"),
+                }
+            }
+            self.steering_dirty = false;
+        }
         let approval = host.approvals().await.into_iter().find(|approval| {
             approval.root_session_id == self.session || approval.session_id == self.session
         });
@@ -169,6 +218,10 @@ impl App {
         self.task_picker = false;
         self.task_detail = false;
         self.queue_picker = false;
+        self.steering_picker = false;
+        self.steering.clear();
+        self.steering_runs.clear();
+        self.steering_dirty = true;
         self.catch_up(host).await?;
         self.state(host).await;
         Ok(())
@@ -192,7 +245,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
     let rows = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(3),
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Length(5),
         Constraint::Length(1),
     ])
@@ -246,7 +299,8 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         &app.status
     };
     frame.render_widget(
-        Paragraph::new(view::plain(status)).style(Style::new().fg(muted)),
+        Paragraph::new(view::plain(&format!("{status}\n{}", app.status)))
+            .style(Style::new().fg(muted)),
         rows[2],
     );
     let input_lines = app.input.lines().count().max(1) as u16;
@@ -257,7 +311,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
             .block(
                 Block::bordered()
                     .title(format!(
-                        " Message · Enter send/queue · {} pending{} · F6 queue ",
+                        " Message · Enter send/queue · /steer TEXT active turn · {} pending{} ",
                         app.queue.entries.len(),
                         if app.queue.paused { " · PAUSED" } else { "" }
                     ))
@@ -266,7 +320,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         rows[3],
     );
     frame.render_widget(
-        Paragraph::new(" F2 sessions · F3 new · F4 tools · F5 agents · F6 queue · Ctrl+Q quit ")
+        Paragraph::new(" F2 sessions · F3 new · F4 tools · F5 agents · F6 queue · F7 steering receipts · Ctrl+Q quit ")
             .style(Style::new().fg(muted)),
         rows[4],
     );
@@ -382,7 +436,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         ))).highlight_style(Style::new().fg(accent)), area, &mut selection);
     }
     if let Some(approval) = &app.approval {
-        let area = center(frame.area(), 110, 32);
+        let area = center(rows[1], 110, 32);
         frame.render_widget(Clear, area);
         frame.render_widget(
             Paragraph::new(view::plain(&approval.preview))
@@ -401,6 +455,151 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
             area,
         );
     }
+    if app.steering_picker {
+        let area = center(frame.area(), 118, 30);
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(steering_text(app))
+                .wrap(Wrap { trim: false })
+                .scroll((app.steering_scroll, 0))
+                .block(
+                    Block::bordered()
+                        .title(" Steering receipts · F7/Esc close · PgUp/PgDn scroll · no replay "),
+                ),
+            area,
+        );
+    }
+}
+
+fn steering_status(status: SteeringStatus) -> &'static str {
+    match status {
+        SteeringStatus::Pending => "pending · admitted, not offered yet",
+        SteeringStatus::Offered => "offered · persistence not confirmed",
+        SteeringStatus::Applied => {
+            "applied · persistence acknowledged, not proof of model consumption"
+        }
+        SteeringStatus::Uncertain => {
+            "uncertain · may be persisted; inspect conversation, no replay"
+        }
+        SteeringStatus::Undelivered => {
+            "undelivered · turn ended before offer; not queued or replayed"
+        }
+    }
+}
+
+fn steering_text(app: &App) -> String {
+    let mut text = String::from(
+        "/steer TEXT explicitly targets the capable active root. Enter remains next-run FIFO.\n",
+    );
+    if let Some(run) = &app.active {
+        let accepting = app.steering.iter().any(|state| {
+            state.run_id == run.id
+                && state.session_id == app.session
+                && state.supported
+                && state.accepting
+        });
+        text.push_str(&format!(
+            "Exact active root {} · {}\n",
+            run.id,
+            if accepting {
+                "accepting at persisted safe boundaries"
+            } else {
+                "unsupported or closing; no new steering admitted"
+            }
+        ));
+    }
+    let mut receipts: Vec<_> = app
+        .steering
+        .iter()
+        .flat_map(|state| &state.receipts)
+        .collect();
+    receipts.sort_by_key(|receipt| receipt.position);
+    if receipts.is_empty() {
+        text.push_str("No steering receipts.\n");
+    }
+    for receipt in receipts {
+        text.push_str(&format!(
+            "\n#{} · {}\nRun {} · {}\n{}\n",
+            receipt.position,
+            steering_status(receipt.status),
+            receipt.run_id,
+            receipt.input_id,
+            receipt.prompt
+        ));
+    }
+    for binding in &app.steering_submissions {
+        if binding.session == app.session
+            || app
+                .input
+                .trim()
+                .strip_prefix("/steer ")
+                .is_some_and(|prompt| prompt.trim_start() == binding.prompt)
+        {
+            text.push_str(&format!("\nAdmission unconfirmed · retry /steer in its original session with the SAME text, exact run/UUID retained\nSession {} · Run {} · request {}\n{}\n", binding.session, binding.run, binding.request, binding.prompt));
+        }
+    }
+    view::plain(&text)
+}
+
+async fn steer(app: &mut App, host: &Host, prompt: &str) -> Result<()> {
+    ensure!(
+        !prompt.trim().is_empty(),
+        "Use /steer TEXT; draft retained, not queued"
+    );
+    ensure!(
+        app.submission
+            .as_ref()
+            .is_none_or(|(_, text, _)| text != prompt),
+        "This text has a FIFO submission binding; retry normal Enter, not steering"
+    );
+    ensure!(
+        !app.steering_submissions
+            .iter()
+            .any(|binding| binding.prompt == prompt && binding.session != app.session),
+        "This steering draft is bound to its original session/run/UUID; resume that session to retry, never rebind"
+    );
+    if !app
+        .steering_submissions
+        .iter()
+        .any(|binding| binding.session == app.session && binding.prompt == prompt)
+    {
+        let run = app
+            .active
+            .as_ref()
+            .context("No active root; steering draft retained, not queued")?;
+        let state = host.steering(&run.id).await?;
+        ensure!(
+            state.run_id == run.id
+                && state.session_id == app.session
+                && state.supported
+                && state.accepting,
+            "Active root unsupported or closing; steering draft retained, not queued"
+        );
+        app.steering_submissions.push(SteeringSubmission {
+            session: app.session.clone(),
+            run: run.id.clone(),
+            prompt: prompt.to_owned(),
+            request: Uuid::new_v4().to_string(),
+        });
+    }
+    let binding = app
+        .steering_submissions
+        .iter()
+        .find(|binding| binding.session == app.session && binding.prompt == prompt)
+        .expect("steering binding initialized");
+    app.steering_dirty = true;
+    let receipt = host
+        .steer(&binding.run, &binding.prompt, &binding.request)
+        .await?;
+    app.status = format!(
+        "Steering {} · F7 inspect exact run",
+        steering_status(receipt.status)
+    );
+    app.steering_submissions
+        .retain(|binding| binding.session != app.session || binding.prompt != prompt);
+    app.steering_dirty = true;
+    app.input.clear();
+    Ok(())
 }
 
 async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
@@ -410,6 +609,23 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     }
     if matches!(input.as_str(), "/quit" | "/exit") {
         return Ok(true);
+    }
+    if input == "/steering" {
+        app.steering_picker = true;
+        app.steering_scroll = 0;
+        app.steering_dirty = true;
+        app.state(host).await;
+        app.input.clear();
+        return Ok(false);
+    }
+    if input == "/steer" || input.starts_with("/steer ") {
+        steer(
+            app,
+            host,
+            input.strip_prefix("/steer").unwrap().trim_start(),
+        )
+        .await?;
+        return Ok(false);
     }
     if input == "/tasks" {
         app.task_picker = true;
@@ -447,9 +663,21 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     } else if let Some(id) = input.strip_prefix("/resume ") {
         app.switch(host, id.trim().to_owned()).await?;
     } else if input == "/help" {
-        app.status = "/new · /sessions · /resume ID · /tasks · /queue [pause|resume|clear] · /quit. Enter queues while busy; approvals remain per-call.".into();
+        app.status = "/new · /sessions · /resume ID · /tasks · /queue [pause|resume|clear] · /steer TEXT · /steering (F7 receipts) · /quit. Enter queues while busy; approvals remain per-call.".into();
     } else {
         ensure!(!input.starts_with('/'), "Unknown command; try /help");
+        ensure!(
+            !app.steering_submissions
+                .iter()
+                .any(|binding| binding.prompt == input),
+            "This text is bound to steering; retry /steer TEXT, never implicitly Queue"
+        );
+        ensure!(
+            !app.submission
+                .as_ref()
+                .is_some_and(|(session, prompt, _)| prompt == &input && session != &app.session),
+            "This FIFO draft is bound to its original session; resume there to retry, never rebind"
+        );
         if !app
             .submission
             .as_ref()
@@ -509,8 +737,10 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         queue_picker: false,
         queue_index: 0,
         submission: None,
+        ..App::default()
     };
     app.catch_up(&host).await?;
+    app.state(&host).await;
     enable_raw_mode()?;
     let restore = Restore;
     execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
@@ -535,15 +765,25 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if control && key.code == KeyCode::Char('q') { break; }
                         if control && key.code == KeyCode::Char('c') { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } else { break; } continue; }
-                        if let Some(approval) = &app.approval {
+                        if key.code == KeyCode::F(7) { app.steering_picker = !app.steering_picker; app.steering_scroll = 0; app.steering_dirty = true; app.state(&host).await; continue; }
+                        if app.steering_picker {
                             match key.code {
-                                KeyCode::Char('y') | KeyCode::Char('d') if control => { let result = host.decide(&approval.run_id, &approval.id, key.code == KeyCode::Char('y')).await; if let Err(error) = result { app.status = error.to_string(); } },
-                                KeyCode::Esc => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = host.cancel(id).await; },
-                                KeyCode::PageUp => app.preview_scroll = app.preview_scroll.saturating_sub(10),
-                                KeyCode::PageDown => app.preview_scroll = app.preview_scroll.saturating_add(10),
+                                KeyCode::Esc => app.steering_picker = false,
+                                KeyCode::PageUp => app.steering_scroll = app.steering_scroll.saturating_sub(10),
+                                KeyCode::PageDown => app.steering_scroll = app.steering_scroll.saturating_add(10),
                                 _ => (),
                             }
-                            app.state(&host).await; continue;
+                            continue;
+                        }
+                        if let Some(approval) = &app.approval {
+                            let handled = match key.code {
+                                KeyCode::Char('y') | KeyCode::Char('d') if control => { let result = host.decide(&approval.run_id, &approval.id, key.code == KeyCode::Char('y')).await; if let Err(error) = result { app.status = error.to_string(); } true },
+                                KeyCode::Esc => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = host.cancel(id).await; true },
+                                KeyCode::PageUp => { app.preview_scroll = app.preview_scroll.saturating_sub(10); true },
+                                KeyCode::PageDown => { app.preview_scroll = app.preview_scroll.saturating_add(10); true },
+                                _ => false,
+                            };
+                            if handled { app.state(&host).await; continue; }
                         }
                         if app.queue_picker {
                             let action = match key.code {
@@ -601,7 +841,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             _ => (),
                         }
                     }
-                    TerminalEvent::Paste(text) if app.approval.is_none() => { let text = view::plain(&text); if app.input.len() + text.len() <= 32_000 { app.input.push_str(&text); } else { app.status = "Paste exceeds 32000 UTF-8 bytes".into(); } },
+                    TerminalEvent::Paste(text) if !app.steering_picker && !app.picker && !app.task_picker && !app.queue_picker => { let text = view::plain(&text); if app.input.len() + text.len() <= 32_000 { app.input.push_str(&text); } else { app.status = "Paste exceeds 32000 UTF-8 bytes".into(); } },
                     _ => (),
                 }
             }
@@ -629,6 +869,137 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
 mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
+
+    #[tokio::test]
+    async fn unsupported_steering_preserves_draft_and_retries_do_not_rebind_to_a_new_root_or_fifo()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let session = host.store.create_session().await.unwrap().id;
+        let root = host
+            .start(
+                &session,
+                "demo hold",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Interactive,
+            )
+            .await
+            .unwrap();
+        let mut app = App {
+            session: session.clone(),
+            input: "/steer retained text".into(),
+            ..App::default()
+        };
+        app.state(&host).await;
+        assert!(
+            submit(&mut app, &host)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported or closing")
+        );
+        assert_eq!(app.input, "/steer retained text");
+        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        let request = Uuid::new_v4().to_string();
+        app.steering_submissions.push(SteeringSubmission {
+            session: session.clone(),
+            run: "original-exact-run".into(),
+            prompt: "retained text".into(),
+            request: request.clone(),
+        });
+        assert!(submit(&mut app, &host).await.is_err());
+        let binding = &app.steering_submissions[0];
+        assert_eq!(binding.run, "original-exact-run");
+        assert_eq!(binding.request, request);
+        app.input = "retained text".into();
+        assert!(
+            submit(&mut app, &host)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("never implicitly Queue")
+        );
+        assert_eq!(app.input, "retained text");
+        assert_eq!(app.active.as_ref().unwrap().id, root.id);
+        assert!(app.submission.is_none());
+        let other = host.store.create_session().await.unwrap().id;
+        app.session = other.clone();
+        app.input = "/steer retained text".into();
+        assert!(
+            submit(&mut app, &host)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("original session/run/UUID")
+        );
+        assert_eq!(app.input, "/steer retained text");
+        assert!(steering_text(&app).contains("original-exact-run"));
+        assert!(host.queue(&other).await.unwrap().entries.is_empty());
+        host.shutdown().await;
+    }
+
+    #[test]
+    fn receipt_view_retains_exact_identity_safe_text_and_honest_terminal_statuses() {
+        let mut app = App::default();
+        app.steering.push(SteeringState {
+            run_id: "exact-old-root".into(),
+            session_id: "session".into(),
+            run_status: ngn_protocol::RunStatus::Cancelled,
+            supported: false,
+            accepting: false,
+            receipts: [
+                SteeringStatus::Pending,
+                SteeringStatus::Offered,
+                SteeringStatus::Applied,
+                SteeringStatus::Uncertain,
+                SteeringStatus::Undelivered,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, status)| ngn_core::steering::SteeringReceipt {
+                input_id: format!("receipt-{index}"),
+                request_id: Uuid::new_v4().to_string(),
+                run_id: "exact-old-root".into(),
+                session_id: "session".into(),
+                position: index as i64 + 1,
+                prompt: "operator text\x1b[2J".into(),
+                status,
+                boundary_id: String::new(),
+                accepted_at_ms: 0,
+                updated_at_ms: 0,
+            })
+            .collect(),
+            run_limit: 32,
+            host_limit: 256,
+            prompt_byte_limit: 32_000,
+        });
+        let text = steering_text(&app);
+        for expected in [
+            "Run exact-old-root",
+            "operator text",
+            "pending",
+            "offered",
+            "persistence acknowledged, not proof of model consumption",
+            "uncertain",
+            "may be persisted",
+            "undelivered",
+            "not queued or replayed",
+        ] {
+            assert!(text.contains(expected), "{expected}");
+        }
+        assert!(!text.contains('\x1b'));
+        assert!(text.find("#1").unwrap() < text.find("#5").unwrap());
+    }
 
     #[tokio::test]
     async fn tui_submissions_queue_while_busy_and_controls_do_not_cancel_the_active_run() {
@@ -725,6 +1096,7 @@ mod tests {
             queue_picker: false,
             queue_index: 0,
             submission: None,
+            ..App::default()
         };
         for (width, height) in [(1, 1), (20, 6), (40, 12), (120, 40)] {
             let mut terminal =
@@ -818,6 +1190,7 @@ mod tests {
             queue_picker: false,
             queue_index: 0,
             submission: None,
+            ..App::default()
         };
         app.state(&host).await;
         let approval = app.approval.as_ref().unwrap();

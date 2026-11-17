@@ -1,9 +1,9 @@
 # Bounded active-run steering · development 0.100.2
 
-This is an explicit host/API boundary, **not legacy UI parity**. Browser and TUI
-steering controls are not wired in this change. Existing Enter/submit behavior
-remains the durable **next-run FIFO**. `run --json` still starts one activation;
-it does not consume additional steering from stdin.
+This is an explicit host/API/client boundary, **not legacy UI parity**. The browser
+has a separate **Steer active turn** button; the TUI uses **`/steer TEXT`**.
+Existing Enter/Send behavior remains the durable **next-run FIFO**. `run --json`
+still starts one activation; it does not consume additional steering from stdin.
 
 ## Operator API
 
@@ -44,6 +44,58 @@ sensitive local conversation data, never bootstrap/provider credentials.
 | `applied` | Runtime acknowledged after conversation persistence; not proof of model consumption or task success |
 | `uncertain` | An offered input was interrupted without confirmation; it **may** be persisted |
 | `undelivered` | Activation ended/stopped before the input was offered |
+
+## Deliberate client controls
+
+### Browser
+
+**Steer active turn** uses the composer text but is distinct from **Send / Queue**.
+It is enabled only after an exact active-root snapshot says `supported` and
+`accepting`; the host still makes the authoritative admission decision. A child
+inspector never becomes the steering target. Open **Active-turn steering · receipts**
+to inspect original text, exact run/input identities and host-position ordering.
+All prompt/receipt content is rendered as text, never HTML.
+
+Network failure keeps the draft and a separate steering binding. **Check / retry
+exact run** reuses both the original UUID and original run, even after activation
+changes. It inspects/retries admission, not runtime delivery. A bound draft cannot
+silently switch to Queue or another root. An accepted response cannot erase a
+newer edited draft or replace another session's state. **Clear bound draft** is an
+explicit local action for a confirmed binding; it never cancels or replays input.
+**Release rejected draft** only forgets a definite host rejection, leaves the text
+local and requires a separate next action; it does not convert or submit it.
+An unsupported/closing/racing-final rejection retains the draft, without FIFO
+fallback. Touch Return still inserts a newline; deliberate Send/Steer/Stop gestures
+preserve composer focus. Mobile conversation controls and child inspection remain
+independent.
+
+### Native TUI
+
+Type **`/steer TEXT`** and Enter to steer the exact capable active root, including
+while a tool approval is pending. Ordinary text + Enter still queues a next run.
+**F7** (or **`/steering`**) opens receipts with exact run, status and original text;
+**PgUp/PgDn** scroll, **F7/Esc** closes the view. F2–F6 sessions/new/tools/agents/queue,
+Ctrl+Y/Ctrl+D approvals and Esc/Ctrl+C Stop retain their roles. The approval preview
+leaves the composer visible so steering remains deliberate rather than a hidden
+keypress. Failed steering keeps its command/draft and its own retry UUID/run
+binding, separate from FIFO submission identity. Retrying the same text reuses that
+binding, never the latest root. No active/capable root means no new admission.
+
+### Durable updates and reconnect
+
+`steering_updated` is an additive, host-only durable **client event**, with an
+`input_id` (empty for capability or admission closure). Its envelope supplies the
+exact run/session and ordered cursor. Negotiation, admission, offer and persistence
+acknowledgment trigger snapshots; final-empty sealing and Stop also invalidate admission.
+It is not a runtime message: model/runtime output cannot forge it. The admission
+lock and atomic final-empty boundary are unchanged. `run_finished` refreshes final
+receipt settlement as well.
+
+Reconnect uses protected GET snapshots plus durable event replay, **never POST
+replay**. Terminal `applied`, `uncertain` and `undelivered` receipts stay inspectable
+after Stop/failure/reload. In-memory unconfirmed retry bindings are local to the
+open client, not persisted browser storage; after a reload inspect the host's
+receipts/conversation rather than resubmitting an ambiguous draft as a new input.
 
 ## Safe points and ownership
 
@@ -95,11 +147,29 @@ wrong acknowledgment, and SIGKILLs its own host in the offer/ack window to verif
 `uncertain`/`undelivered` recovery without replay. The existing `scripts/smoke.py`
 still covers local CLI, HTTP/WebSocket and real-PTY TUI/FIFO/subagent regressions.
 
-Run it in an explicit venv with private `TMPDIR` under `/tmp` and a debug binary:
+Run it in an explicit venv with a private `TMPDIR` and a debug binary:
 
 ```sh
 python ngn/scripts/steering_smoke.py --binary /path/to/target/debug/ngn
 ```
 
-Browser/TUI steering affordances, receipt displays and actual steering input over
-CLI/PTY are separate client gates; no full migration/parity claim is made here.
+`scripts/steering_clients_smoke.py` adds actual Chromium desktop/touch and real-PTY
+acceptance, using this checkout's core/adapter and two **native write tools**, each
+requiring approval. It admits steering through the actual controls during the
+first approval, checks pending state before/between both results, and verifies the
+next fixture model request contains the full persisted batch followed by both
+steering user messages in order. Separate busy Send remains FIFO. It also checks
+Stop/undelivered, wrong-ack failure/uncertain, receipt restoration without POST
+replay, `/steer` + F7 exact-root inspection and terminal-mode restoration. Evidence
+includes real screenshots, PTY bytes and fixture request payloads, not a mock DOM.
+
+```sh
+# Activate an explicit venv containing aiohttp and Playwright; use private caches.
+python ngn/scripts/steering_clients_smoke.py \
+  --binary /path/to/private-target/debug/ngn \
+  --runtime-python /path/to/runtime-venv/bin/python \
+  --browser /usr/bin/google-chrome --output /path/to/private-evidence
+```
+
+These are offline local-client gates, not full legacy parity, headless stdin
+steering, installed-package acceptance or live-provider/Codex validation.

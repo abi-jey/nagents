@@ -189,6 +189,11 @@ pub enum Event {
     RunStarted {
         prompt: String,
     },
+    /// Host-only snapshot invalidation. Empty input_id means capability/admission
+    /// changed; otherwise inspect the exact run's durable steering receipts.
+    SteeringUpdated {
+        input_id: String,
+    },
     TextDelta {
         text: String,
     },
@@ -294,5 +299,6 @@ mod tests {
         offer["message"]["input"]["approved"] = json!(true);
         assert!(serde_json::from_value::<HostFrame>(offer).is_err());
         assert!(serde_json::from_value::<HostFrame>(json!({"protocol_version":1,"run_id":"run","message":{"type":"steering_offer","boundary_id":"boundary"}})).is_err());
+        assert!(serde_json::from_value::<RuntimeFrame>(json!({"protocol_version":1,"run_id":"run","message":{"type":"steering_updated","input_id":"forged"}})).is_err());
     }
 }

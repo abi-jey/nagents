@@ -29,6 +29,7 @@ async function boot({ touch = false } = {}) {
   const submissions = [];
   const tasks = [];
   const queues = [];
+  const steerings = [], steeringPosts = [], steering = new Map();
   const session = { id: "ngn-test", title: "Test conversation" };
   const catalog = [session];
   const queue = { session_id: session.id, paused: false, entries: [] };
@@ -53,10 +54,19 @@ async function boot({ touch = false } = {}) {
       return response({ sessions: catalog });
     }
     if (path === "/api/state") return states.length ? states.shift() : response({ runs: [], approvals: [] });
+    if (path.endsWith("/steer")) {
+      const run = path.split("/").at(-2);
+      const state = steering.get(run) || { run_id: run, session_id: session.id, run_status: "running", supported: false, accepting: false, receipts: [] };
+      if (options.method === "GET") return steerings.length ? steerings.shift() : response({ steering: state });
+      if (steeringPosts.length) return steeringPosts.shift();
+      const body = JSON.parse(options.body), receipt = { ...body, input_id: `steer-${state.receipts.length}`, run_id: run, session_id: state.session_id, position: state.receipts.length + 1, status: "pending" };
+      state.receipts.push(receipt);
+      return response({ receipt });
+    }
     if (path.endsWith("/tasks")) return response({ tasks, limits: { max_depth: 2, max_concurrent: 3, max_executions: 8 } });
     if (path.endsWith("/queue")) {
       if (options.method === "POST") { const { action } = JSON.parse(options.body); queue.paused = action !== "resume"; if (action === "clear") queue.entries.length = 0; }
-      return queues.length ? queues.shift() : response({ queue, limit: 32 });
+      return queues.length ? queues.shift() : response({ queue: { ...queue, session_id: path.split("/").at(-2) }, limit: 32 });
     }
     if (path.endsWith("/cancel") || path === "/api/approvals") return response({ accepted: true });
     if (path.endsWith("/runs")) return submissions.length ? submissions.shift() : response({ run: { id: "run-test" } });
@@ -64,7 +74,15 @@ async function boot({ touch = false } = {}) {
   };
   const presentation = await import(`./app.js?test=${++bootCount}`);
   const emit = (sequence, event, data = {}) => sockets[0].onmessage({ data: JSON.stringify({ schema_version: 1, session_id: session.id, run_id: "run-test", sequence, event, ...data }) });
-  return { elements, requests, sockets, states, submissions, tasks, queues, queue, session, emit, presentation, pointer, catalog };
+  return { elements, requests, sockets, states, submissions, tasks, queues, queue, session, emit, presentation, pointer, catalog, steerings, steeringPosts, steering };
+}
+
+async function enableSteering(app, sequence = 1, run = "run-test") {
+  app.steering.set(run, { run_id: run, session_id: app.session.id, run_status: "running", supported: true, accepting: true, receipts: [] });
+  app.states.push(response({ runs: [{ id: run, session_id: app.session.id }], approvals: [] }));
+  app.emit(sequence, "run_started", { run_id: run, prompt: "active" });
+  await flush();
+  assert(app.elements.get("steering-status").textContent.includes(run));
 }
 
 test("browser client uses host schema and does not duplicate completed or replayed text", async () => {
@@ -306,4 +324,234 @@ test("mobile navigation creates and reopens the same host-owned sessions as desk
   assert.equal(app.elements.get("title").textContent, app.session.title);
   assert(app.sockets.at(-1).url.includes(`session_id=${app.session.id}`));
   assert.equal(app.requests.filter((request) => request.path === "/api/sessions" && request.options.method === "POST").length, 1);
+});
+
+test("only exact capable accepting roots enable deliberate steering; Send stays a separate FIFO kind", async () => {
+  const app = await boot();
+  app.elements.get("prompt").value = "retain unsupported draft";
+  assert.equal(app.elements.get("steer").disabled, true);
+  await app.elements.get("steer").onclick();
+  assert.equal(app.requests.filter((request) => request.path.endsWith("/steer") && request.options.method === "POST").length, 0);
+  assert.equal(app.elements.get("prompt").value, "retain unsupported draft");
+  await enableSteering(app);
+  app.elements.get("prompt").value = "steered input";
+  await app.elements.get("steer").onclick();
+  app.elements.get("prompt").value = "queued input";
+  await app.elements.get("composer").requestSubmit();
+  const steer = app.requests.find((request) => request.path.endsWith("/steer") && request.options.method === "POST");
+  const fifo = app.requests.find((request) => request.path.endsWith("/runs"));
+  assert.equal(steer.path, "/api/runs/run-test/steer");
+  assert.notEqual(JSON.parse(steer.options.body).request_id, JSON.parse(fifo.options.body).request_id);
+  assert.equal(JSON.parse(fifo.options.body).prompt, "queued input");
+});
+
+test("ambiguous steering retries keep exact UUID AND original run across activations, never implicitly Queue", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  app.steeringPosts.push(Promise.reject(new Error("connection lost after admission")));
+  app.elements.get("prompt").value = "possibly accepted";
+  await app.elements.get("steer").onclick();
+  await enableSteering(app, 2, "run-new");
+  await app.elements.get("composer").requestSubmit();
+  assert(!app.requests.some((request) => request.path.endsWith("/runs")));
+  await app.elements.get("steering-attempts").children[0].children[3].onclick();
+  const posts = app.requests.filter((request) => request.path.endsWith("/steer") && request.options.method === "POST");
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].path, posts[1].path);
+  assert.equal(posts[0].options.body, posts[1].options.body);
+  assert.equal(app.elements.get("steering-status").textContent.includes("run-new"), true);
+});
+
+test("an ambiguous FIFO draft cannot silently become steering", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  app.submissions.push(response({ detail: "network failure" }, 503));
+  app.elements.get("prompt").value = "bound FIFO";
+  await app.elements.get("composer").requestSubmit();
+  await app.elements.get("steer").onclick();
+  assert(!app.requests.some((request) => request.path.endsWith("/steer") && request.options.method === "POST"));
+  assert.equal(app.elements.get("prompt").value, "bound FIFO");
+});
+
+test("final-empty racing rejection preserves the draft, disables closure, and never falls back to FIFO", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  const state = app.steering.get("run-test");
+  state.accepting = false;
+  app.steeringPosts.push(response({ detail: "Run is closing; steering admission is sealed" }, 409));
+  app.elements.get("prompt").value = "racing final empty";
+  await app.elements.get("steer").onclick();
+  assert.equal(app.elements.get("prompt").value, "racing final empty");
+  assert.equal(app.elements.get("steer").disabled, true);
+  assert(app.elements.get("steering-attempts").textContent.includes("Request rejected"));
+  assert(!app.requests.some((request) => request.path.endsWith("/runs")));
+});
+
+test("durable capability and receipt events refresh exact snapshots without polling or child targeting", async () => {
+  const app = await boot();
+  app.steering.set("run-test", { run_id: "run-test", session_id: "ngn-test", run_status: "running", supported: false, accepting: false, receipts: [] });
+  app.states.push(response({ runs: [{ id: "run-test", session_id: "ngn-test" }], approvals: [] }));
+  app.emit(1, "run_started", { prompt: "active" });
+  await flush();
+  assert.equal(app.elements.get("steer").disabled, true);
+  Object.assign(app.steering.get("run-test"), { supported: true, accepting: true });
+  app.emit(2, "steering_updated", { input_id: "" });
+  await flush();
+  assert.equal(app.elements.get("steer").disabled, false);
+  const task = { run_id: "child", session_id: "child-session", root_session_id: "ngn-test", title: "Child", depth: 1, status: "running" };
+  app.tasks.push(task);
+  app.states.push(response({ runs: [{ id: "run-test", session_id: "ngn-test" }], approvals: [] }));
+  app.emit(3, "task_started", { task });
+  await flush();
+  app.elements.get("tasks").children[0].children[1].onclick();
+  app.elements.get("prompt").value = "root only";
+  await app.elements.get("steer").onclick();
+  assert(app.requests.some((request) => request.path === "/api/runs/run-test/steer" && request.options.method === "POST"));
+  assert(!app.requests.some((request) => request.path === "/api/runs/child/steer"));
+});
+
+test("stale same-run snapshots cannot undo terminal receipts and all statuses render as safe ordered text", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  const older = deferred(), newer = deferred();
+  app.steerings.push(older.promise, newer.promise);
+  app.emit(2, "steering_updated", { input_id: "receipt" });
+  app.emit(3, "steering_updated", { input_id: "receipt" });
+  const receipts = ["undelivered", "uncertain", "applied", "offered", "pending"].map((status, index) => ({ input_id: status, position: 5 - index, run_id: "run-test", session_id: "ngn-test", status, prompt: '<img src=x onerror="steal()">' }));
+  const base = app.steering.get("run-test");
+  newer.resolve(response({ steering: { ...base, receipts } }));
+  await flush();
+  older.resolve(response({ steering: { ...base, receipts: [] } }));
+  await flush();
+  const panel = app.elements.get("steering-receipts");
+  assert.deepEqual(panel.children.map((row) => row.children[0].textContent.split(" · ")[1]), ["pending", "offered", "applied", "uncertain", "undelivered"]);
+  assert(panel.textContent.includes("not proof of model consumption"));
+  assert(panel.textContent.includes("may be persisted"));
+  assert(panel.textContent.includes('<img src=x onerror="steal()">'));
+  app.steering.set("run-test", { ...base, run_status: "cancelled", supported: false, accepting: false, receipts });
+  app.emit(4, "run_finished", { status: "cancelled", error: "" });
+  await flush();
+  assert.equal(app.elements.get("steer").disabled, true);
+  assert.equal(panel.children.length, 5);
+  app.sockets[0].onopen();
+  await flush();
+  assert.equal(panel.children.length, 5);
+  assert(!app.requests.some((request) => request.options.method === "POST"));
+});
+
+test("a delayed old-run steering response cannot clear a newer draft or replace the newer root", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  const accepted = deferred();
+  app.steeringPosts.push(accepted.promise);
+  app.elements.get("prompt").value = "first steering";
+  const sending = app.elements.get("steer").onclick();
+  const sent = app.requests.find((request) => request.path.endsWith("/steer") && request.options.method === "POST");
+  app.elements.get("prompt").value = "newer draft";
+  app.elements.get("prompt").oninput();
+  await enableSteering(app, 2, "run-new");
+  accepted.resolve(response({ receipt: { ...JSON.parse(sent.options.body), run_id: "run-test", session_id: "ngn-test", input_id: "saved", status: "applied" } }));
+  await sending;
+  assert.equal(app.elements.get("prompt").value, "newer draft");
+  assert(app.elements.get("steering-status").textContent.includes("run-new"));
+});
+
+test("same-text newer edits and session switches are guarded against delayed accepted steering", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  const accepted = deferred();
+  app.steeringPosts.push(accepted.promise);
+  app.elements.get("prompt").value = "identical newer text";
+  const sending = app.elements.get("steer").onclick();
+  const sent = app.requests.find((request) => request.path.endsWith("/steer") && request.options.method === "POST");
+  app.elements.get("prompt").oninput();
+  await app.elements.get("mobile-new-session").onclick();
+  accepted.resolve(response({ receipt: { ...JSON.parse(sent.options.body), run_id: "run-test", session_id: "ngn-test", input_id: "saved", status: "pending" } }));
+  await sending;
+  assert.equal(app.elements.get("prompt").value, "identical newer text");
+  assert.equal(app.elements.get("steer").disabled, true);
+  assert.equal(app.elements.get("steering-receipts").children.length, 0);
+  assert.equal(app.elements.get("title").textContent, "New conversation");
+});
+
+test("foreign run/session receipt snapshots never enable steering or contaminate a newer session", async () => {
+  const app = await boot();
+  app.states.push(response({ runs: [{ id: "run-test", session_id: "ngn-test" }], approvals: [] }));
+  app.emit(1, "run_started", { prompt: "unsupported" });
+  await flush();
+  app.steerings.push(response({ steering: { run_id: "child", session_id: "ngn-test", run_status: "running", supported: true, accepting: true, receipts: [] } }));
+  app.emit(2, "steering_updated", { input_id: "" });
+  await flush();
+  assert.equal(app.elements.get("steer").disabled, true);
+  const old = deferred();
+  app.steerings.push(old.promise);
+  app.emit(3, "steering_updated", { input_id: "old" });
+  await app.elements.get("mobile-new-session").onclick();
+  old.resolve(response({ steering: { run_id: "run-test", session_id: "ngn-test", run_status: "running", supported: true, accepting: true, receipts: [{ run_id: "run-test", session_id: "ngn-test", input_id: "old", position: 1, prompt: "old session", status: "pending" }] } }));
+  await flush();
+  assert.equal(app.elements.get("steer").disabled, true);
+  assert.equal(app.elements.get("steering-receipts").children.length, 0);
+  assert.equal(app.elements.get("mobile-sessions").value, app.catalog[0].id);
+});
+
+test("simultaneous steering gestures admit once, and accepted responses respect same-text newer revisions", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  const accepted = deferred();
+  app.steeringPosts.push(accepted.promise);
+  app.elements.get("prompt").value = "same-text edit";
+  const sending = app.elements.get("steer").onclick();
+  await app.elements.get("steer").onclick();
+  app.elements.get("prompt").oninput();
+  const posts = app.requests.filter((request) => request.path.endsWith("/steer") && request.options.method === "POST");
+  assert.equal(posts.length, 1);
+  accepted.resolve(response({ receipt: { ...JSON.parse(posts[0].options.body), run_id: "run-test", session_id: "ngn-test", input_id: "saved", status: "applied" } }));
+  await sending;
+  assert.equal(app.elements.get("prompt").value, "same-text edit");
+  assert.equal(app.elements.get("steer").disabled, true);
+  await app.elements.get("composer").requestSubmit();
+  assert(!app.requests.some((request) => request.path.endsWith("/runs")));
+  assert(app.elements.get("steering-attempts").textContent.includes("Clear bound draft"));
+});
+
+test("switching sessions never rebinds an ambiguous steering draft, including explicit retries from its receipt row", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  app.steeringPosts.push(response({ detail: "connection failed after possible admission" }, 503));
+  app.elements.get("prompt").value = "ambiguous across sessions";
+  await app.elements.get("steer").onclick();
+  await app.elements.get("mobile-new-session").onclick();
+  const other = app.catalog[0];
+  app.steering.set("other-root", { run_id: "other-root", session_id: other.id, run_status: "running", supported: true, accepting: true, receipts: [] });
+  app.states.push(response({ runs: [{ id: "other-root", session_id: other.id }], approvals: [] }));
+  app.sockets.at(-1).onmessage({ data: JSON.stringify({ session_id: other.id, run_id: "other-root", sequence: 10, event: "run_started", prompt: "other active turn" }) });
+  await flush();
+  assert.equal(app.elements.get("steer").disabled, true);
+  await app.elements.get("steer").onclick();
+  await app.elements.get("composer").requestSubmit();
+  assert(app.elements.get("steering-attempts").textContent.includes("Session ngn-test"));
+  const row = app.elements.get("steering-attempts").children[0];
+  await row.children[3].onclick();
+  const posts = app.requests.filter((request) => request.path.endsWith("/steer") && request.options.method === "POST");
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].path, "/api/runs/run-test/steer");
+  assert.equal(posts[0].path, posts[1].path);
+  assert.equal(posts[0].options.body, posts[1].options.body);
+  assert(!app.requests.some((request) => request.path.endsWith("/runs")));
+  assert.equal(app.elements.get("prompt").value, "ambiguous across sessions");
+  assert.equal(app.elements.get("steering-receipts").children.length, 0);
+  assert(app.elements.get("steering-status").textContent.includes("other-root"));
+});
+
+test("releasing a definite host rejection is a separate local gesture, not an implicit FIFO conversion", async () => {
+  const app = await boot();
+  await enableSteering(app);
+  app.steeringPosts.push(response({ detail: "Admission sealed" }, 409));
+  app.elements.get("prompt").value = "host-rejected draft";
+  await app.elements.get("steer").onclick();
+  const count = app.requests.length;
+  app.elements.get("steering-attempts").children[0].children[4].onclick();
+  assert.equal(app.requests.length, count);
+  assert.equal(app.elements.get("prompt").value, "host-rejected draft");
+  assert.equal(app.elements.get("steering-attempts").children.length, 0);
 });
