@@ -10,7 +10,7 @@ not embedded Python and not a wrapper around the old Python harness.
 - Every envelope contains exactly `protocol_version`, `run_id`, `message`.
 - Maximum frame including newline: **1,048,576 bytes**. Oversized/incomplete frames,
   unknown fields, unknown message types, wrong versions and wrong run IDs fail closed.
-- Official baseline **0.100.0**, current patch **0.100.1**, runtime protocol **1**, and browser event
+- Official baseline **0.100.0**, development candidate **0.100.2**, runtime protocol **1**, and browser event
   `schema_version: 1` are independently versioned contracts.
 - v1 starts **one process per run**, not one per tool. Conversation storage survives
   process restart. No Python object, callable or pickle crosses the boundary.
@@ -176,3 +176,18 @@ records pause/resume for a session and has `run_id: ""`, including on empty
 conversations. Clients must still filter by `session_id` and durable cursor; an
 empty run identity grants no tool authority. Restart pauses unstarted inputs and
 marks claimed work interrupted without replaying either tools or model runs.
+
+## Host tool timing (0.100.2)
+
+`tool_approval_timing` is a durable **client** event, not a runtime message. Its
+`call_id`, `elapsed_ms` and `waiting` fields describe the active time of the exact
+host call before/after its approval decision. The run/session envelope and cursor
+remain host assigned. Tool output cannot supply this event or change its owner.
+`tool_completed.duration_ms` excludes that call's approval waiting, but includes
+validation, preparation and execution. This is elapsed active time, not CPU time;
+foreground delegation can still include time spent waiting for a child.
+
+The wire stores integer milliseconds. TUI/web format compact adjacent units such
+as `125ms`, `1.25s`, `1m 2s` or `1h 1m`; an approval snapshot stays fixed while
+waiting. Older clients can ignore the additive event and retain ordered replay.
+Runtime protocol v1 and host storage schema 3 are unchanged by these timing events.

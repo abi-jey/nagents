@@ -1,4 +1,4 @@
-# Rust migration status · official 0.100.1
+# Rust migration status · 0.100.2 development
 
 ## Decision
 

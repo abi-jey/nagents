@@ -160,6 +160,12 @@ pub enum Event {
         result: ToolResult,
         duration_ms: u64,
     },
+    /// Host-owned active time; excludes this exact call's approval waiting.
+    ToolApprovalTiming {
+        call_id: String,
+        elapsed_ms: u64,
+        waiting: bool,
+    },
     ApprovalRequested {
         approval_id: String,
         call: ToolCall,

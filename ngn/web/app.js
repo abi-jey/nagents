@@ -4,6 +4,31 @@ let taskRevision = 0, inspected, inspectorSocket, inspectorGeneration = 0;
 let queueRevision = 0, queueState = { paused: false, entries: [] };
 const turns = new Map(), toolCards = new Map();
 
+export function formatDuration(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "unknown";
+  milliseconds = Math.floor(milliseconds);
+  if (milliseconds < 1000) return `${milliseconds}ms`;
+  const scale = milliseconds < 10000 ? 100 : 10;
+  const rounded = Math.round(milliseconds / (scale === 100 ? 10 : 100));
+  if (rounded < 60 * scale) return `${(rounded / scale).toFixed(scale === 100 ? 2 : 1).replace(/\.?0+$/, "")}s`;
+  const seconds = Math.round(milliseconds / 1000);
+  for (const [size, unit, smaller, smallerUnit] of [[86400, "d", 3600, "h"], [3600, "h", 60, "m"], [60, "m", 1, "s"]]) {
+    if (seconds < size) continue;
+    const major = Math.floor(seconds / size), minor = Math.floor((seconds % size) / smaller);
+    const compact = `${major}${unit}`, text = compact + (minor ? ` ${minor}${smallerUnit}` : "");
+    return text.length <= 8 ? text : compact.length <= 8 ? compact : ">999999d";
+  }
+  return "1m";
+}
+export function toolTarget(call) {
+  const key = ({ shell: "command", skill: "name", read_file: "path", list_files: "path", write: "path", edit: "path", search: "query" })[call.name];
+  const value = key && call.arguments?.[key];
+  if (typeof value !== "string") return "";
+  const text = value.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().replace(/\s+/g, " ");
+  const characters = Array.from(text);
+  return text ? ` · ${characters.slice(0, 96).join("")}${characters.length > 96 ? "…" : ""}` : "";
+}
+
 async function api(path, body) {
   const response = await fetch(path, { method: body === undefined ? "GET" : "POST", headers: { "x-ngn-token": token, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const text = await response.text();
@@ -27,11 +52,16 @@ function render(record) {
     case "text_delta": if (!turn.current) turn.current = message("assistant"); turn.current.append(document.createTextNode(record.text)); break;
     case "text_completed": if (!turn.current) turn.current = message("assistant"); turn.current.textContent = record.text; turn.current = null; break;
     case "tool_started": {
-      const card = node("details", "tool"); const summary = node("summary", "", `${record.call.name} · running`); const pre = node("pre", "", JSON.stringify(record.call.arguments, null, 2)); card.append(summary, pre); append(card); toolCards.set(`${record.run_id}/${record.call.call_id}`, { summary, pre }); while (toolCards.size > 1000) toolCards.delete(toolCards.keys().next().value); turn.current = null; break;
+      const card = node("details", "tool"), hint = toolTarget(record.call); const summary = node("summary", "", `${record.call.name}${hint} · running`); const pre = node("pre", "", JSON.stringify(record.call.arguments, null, 2)); card.append(summary, pre); append(card); toolCards.set(`${record.run_id}/${record.call.call_id}`, { summary, pre, hint, name: record.call.name }); while (toolCards.size > 1000) toolCards.delete(toolCards.keys().next().value); turn.current = null; break;
     }
     case "tool_completed": {
       const card = toolCards.get(`${record.run_id}/${record.result.call_id}`);
-      if (card) { card.summary.textContent = `${record.result.name} · ${record.result.error ? "denied / failed" : "done"} · ${record.duration_ms} ms`; card.pre.textContent += "\n\n" + (record.result.error || JSON.stringify(record.result.result, null, 2)); }
+      if (card) { card.summary.textContent = `${record.result.name}${card.hint} · ${record.result.error ? "denied / failed" : "done"} · ${formatDuration(record.duration_ms)}`; card.pre.textContent += "\n\n" + (record.result.error || JSON.stringify(record.result.result, null, 2)); }
+      break;
+    }
+    case "tool_approval_timing": {
+      const card = toolCards.get(`${record.run_id}/${record.call_id}`);
+      if (card) card.summary.textContent = `${card.name}${card.hint} · ${record.waiting ? "waiting for approval" : "running"} · ${formatDuration(record.elapsed_ms)} active`;
       break;
     }
     case "notice": append(node("p", "notice", record.text)); break;

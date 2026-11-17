@@ -28,7 +28,7 @@ not submodules to publish, and not implicitly deleted.
 | --- | --- |
 | Provider backend facade/factory, Chat Completions, Responses, Messages and Gemini implementations | Retained Python core on main; used by the Rust runtime through public `Provider` APIs. Not translated into a second provider implementation in Rust. |
 | Direct Anthropic prompt caching and gateway-specific behavior | Retained core and regression tests; the installed local-core wheel carries this into a Rust live run. Provider/account validation remains separate. |
-| Active tool timing, compact durations, approval-wait exclusion and target summaries | Legacy Python behavior retained; native Rust counterparts are tracked independently and require host/UI acceptance. |
+| Active tool timing, compact durations, approval-wait exclusion and target summaries | Legacy Python behavior retained; 0.100.2 implements native call-owned clocks, exact approval snapshots, compact time units and recognized targets in both clients. Host/UI regressions exercise them independently. |
 | Root/nested instruction deduplication and ignore-aware discovery | Legacy Python behavior retained; Rust root instructions and tool results already avoid duplicated instruction payloads. Full nested/skill discovery must not be claimed without its own implementation. |
 | Safe-boundary steering, durable FIFO choices and touch composer behavior | Legacy implementation retained. Rust's durable FIFO is distinct from active-run steering; no silent Python-harness fallback is installed. |
 | Tests, usage dashboard work and existing branch commits | Already retained by current main; the preservation merge records provenance rather than reverting later fixes. |

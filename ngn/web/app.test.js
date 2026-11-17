@@ -55,9 +55,9 @@ async function boot() {
     if (path.endsWith("/runs")) return submissions.length ? submissions.shift() : response({ run: { id: "run-test" } });
     throw new Error(`Unexpected request: ${path}`);
   };
-  await import(`./app.js?test=${++bootCount}`);
+  const presentation = await import(`./app.js?test=${++bootCount}`);
   const emit = (sequence, event, data = {}) => sockets[0].onmessage({ data: JSON.stringify({ schema_version: 1, session_id: session.id, run_id: "run-test", sequence, event, ...data }) });
-  return { elements, requests, sockets, states, submissions, tasks, queues, queue, session, emit };
+  return { elements, requests, sockets, states, submissions, tasks, queues, queue, session, emit, presentation };
 }
 
 test("browser client uses host schema and does not duplicate completed or replayed text", async () => {
@@ -218,4 +218,30 @@ test("accepted inputs synchronize the conversation heading with the host title",
   await app.elements.get("composer").onsubmit({ preventDefault() {} });
   assert.equal(app.elements.get("title").textContent, "Updated host title");
   assert(app.elements.get("sessions").textContent.includes("Updated host title"));
+});
+
+test("compact durations keep adjacent units and never expand beyond eight cells", async () => {
+  const { presentation } = await boot();
+  for (const [value, expected] of [[0, "0ms"], [1, "1ms"], [999, "999ms"], [1000, "1s"], [1250, "1.25s"], [9990, "9.99s"], [10000, "10s"], [12340, "12.3s"], [59900, "59.9s"], [59960, "1m"], [60000, "1m"], [61400, "1m 1s"], [61600, "1m 2s"], [3599600, "1h"], [3661000, "1h 1m"], [86399600, "1d"], [90061000, "1d 1h"], [86400000 * 9999 + 3600000 * 23, "9999d"], [86400000 * 10000000, ">999999d"]]) {
+    assert.equal(presentation.formatDuration(value), expected);
+    assert(presentation.formatDuration(value).length <= 8);
+  }
+  assert.equal(presentation.formatDuration(NaN), "unknown");
+  assert.equal(presentation.formatDuration(Infinity), "unknown");
+});
+
+test("native tool summaries retain recognized targets and freeze at host approval snapshots", async () => {
+  const app = await boot();
+  const call = { call_id: "write-1", name: "write", arguments: { path: "hello.txt", content: "do not show arbitrary content in summary" } };
+  app.emit(1, "tool_started", { call });
+  const summary = app.elements.get("transcript").children.at(-1).children[0];
+  assert.equal(summary.textContent, "write · hello.txt · running");
+  app.emit(2, "tool_approval_timing", { call_id: call.call_id, elapsed_ms: 1250, waiting: true });
+  assert.equal(summary.textContent, "write · hello.txt · waiting for approval · 1.25s active");
+  app.emit(3, "tool_approval_timing", { call_id: call.call_id, elapsed_ms: 1250, waiting: false });
+  app.emit(4, "tool_completed", { result: { call_id: call.call_id, name: "write", result: {}, error: "" }, duration_ms: 1500 });
+  assert.equal(summary.textContent, "write · hello.txt · done · 1.5s");
+  assert.equal(app.presentation.toolTarget({ name: "custom", arguments: { name: "private" } }), "");
+  assert.equal(app.presentation.toolTarget({ name: "skill", arguments: { name: "ngn-\ncustomize\0" } }), " · ngn- customize");
+  assert.equal(app.presentation.toolTarget({ name: "shell", arguments: { command: "x".repeat(200) } }).length, 100);
 });

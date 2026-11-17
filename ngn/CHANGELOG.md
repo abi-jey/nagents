@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.100.2 — development, not yet released
+
+- Preserve and reconcile the original local Python work without reverting later
+  provider, cancellation, streaming and UI fixes already integrated on main.
+- `./ngn/dev` builds the optimized binary and installed wheels from current working
+  source, isolates development state and runs the extracted application. `--test`
+  exercises the real packaged CLI/HTTP/WebSocket/PTY paths, including dirty checkouts.
+- Native tool duration excludes its own approval waiting; durable timing snapshots
+  keep call attribution and active duration consistent in the TUI and browser.
+- Compact bounded durations and recognized tool targets in native client summaries.
+
+This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
+parity. Production deployment and paid-provider/Codex validation are separate gates.
+
 ## Official 0.100.1 — durable input queues
 
 - Rust-owned per-session FIFO, stable idempotent request IDs, 32 pending inputs per

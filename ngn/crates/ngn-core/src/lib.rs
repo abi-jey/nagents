@@ -4,6 +4,7 @@ pub mod queues;
 pub mod runner;
 pub mod store;
 pub mod subagents;
+mod timing;
 pub mod tools;
 
 pub use config::Config;

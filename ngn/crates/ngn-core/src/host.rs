@@ -26,6 +26,7 @@ use crate::{
     subagents::{
         self, ChildAdmission, DelegateInput, Execution, TaskInput, TaskOutcome, WaitInput,
     },
+    timing::ToolClock,
     tools::Tools,
 };
 
@@ -650,7 +651,7 @@ impl Host {
         );
         self.emit(run, Event::ToolStarted { call: call.clone() })
             .await?;
-        let started = Instant::now();
+        let mut clock = ToolClock::new(Instant::now());
         let result: Result<Value> = async {
             match call.name.as_str() {
                 "to_agent" => {
@@ -687,8 +688,12 @@ impl Host {
                 let approval = Approval { id:id.clone(), run_id:run.id.clone(), session_id:run.session_id.clone(), root_session_id:owner.root.session_id.clone(), agent_title:owner.task.as_ref().map_or_else(|| "Main".into(), |task| task.title.clone()), depth:owner.depth(), call:call.clone(), preview:prepared.preview.clone() };
                 self.pending.lock().await.insert(id.clone(), Pending { approval, answer });
                 if let Err(error) = self.emit(run, Event::ApprovalRequested { approval_id:id.clone(), call:call.clone(), preview:prepared.preview.clone() }).await { self.pending.lock().await.remove(&id); return Err(error); }
+                let elapsed_ms = clock.pause(Instant::now());
+                if let Err(error) = self.emit(run, Event::ToolApprovalTiming { call_id:call.call_id.clone(), elapsed_ms, waiting:true }).await { self.pending.lock().await.remove(&id); return Err(error); }
                 let allowed = tokio::select! { answer = receive => answer.unwrap_or(false), _ = owner.cancel.cancelled() => false, _ = tokio::time::sleep(Duration::from_secs(300)) => false };
+                let elapsed_ms = clock.resume(Instant::now());
                 self.pending.lock().await.remove(&id);
+                self.emit(run, Event::ToolApprovalTiming { call_id:call.call_id.clone(), elapsed_ms, waiting:false }).await?;
                 self.emit(run, Event::ApprovalResolved { approval_id:id, allowed }).await?;
                 ensure!(allowed && !owner.cancel.is_cancelled(), "Tool approval denied, expired or cancelled");
             }
@@ -708,7 +713,7 @@ impl Host {
             run,
             Event::ToolCompleted {
                 result: result.clone(),
-                duration_ms: started.elapsed().as_millis() as u64,
+                duration_ms: clock.elapsed(Instant::now()),
             },
         )
         .await?;
@@ -825,6 +830,91 @@ mod tests {
         assert!(!directory.path().join("demo.txt").exists());
         assert!(host.approvals().await.is_empty());
         host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn approval_timing_is_call_bound_and_human_wait_is_not_execution_time() {
+        for allow in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let host = host(directory.path());
+            let session = host.store.create_session().await.unwrap();
+            let run = host
+                .start(
+                    &session.id,
+                    "demo hold",
+                    &Uuid::new_v4().to_string(),
+                    ApprovalMode::Interactive,
+                )
+                .await
+                .unwrap();
+            let mut events = host.events.subscribe();
+            let owner = host.clone();
+            let owned_run = run.clone();
+            let wall = Instant::now();
+            let operation = tokio::spawn(async move {
+                owner
+                    .tool(
+                        &owned_run,
+                        ToolCall {
+                            call_id: "timed-call".into(),
+                            name: "demo_preview".into(),
+                            arguments: json!({}),
+                        },
+                    )
+                    .await
+            });
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let record = events.recv().await.unwrap();
+                    if matches!(record.event, Event::ToolApprovalTiming { ref call_id, waiting:true, .. } if call_id == "timed-call") { break; }
+                }
+            }).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            let approval = host
+                .approvals()
+                .await
+                .into_iter()
+                .find(|approval| approval.call.call_id == "timed-call")
+                .unwrap();
+            host.decide(&run.id, &approval.id, allow).await.unwrap();
+            let result = tokio::time::timeout(Duration::from_secs(10), operation)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.error.is_empty(), allow);
+            let records = host.store.events(&session.id, 0).await.unwrap();
+            let snapshots: Vec<_> = records
+                .iter()
+                .filter_map(|record| match &record.event {
+                    Event::ToolApprovalTiming {
+                        call_id,
+                        elapsed_ms,
+                        waiting,
+                    } if call_id == "timed-call" => Some((*elapsed_ms, *waiting)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(snapshots.len(), 2);
+            assert_eq!(snapshots[0], (snapshots[1].0, true));
+            assert!(!snapshots[1].1);
+            let duration = records
+                .iter()
+                .find_map(|record| match &record.event {
+                    Event::ToolCompleted {
+                        result,
+                        duration_ms,
+                    } if result.call_id == "timed-call" => Some(*duration_ms),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(
+                u128::from(duration) + 80 < wall.elapsed().as_millis(),
+                "human wait leaked into active duration"
+            );
+            assert!(host.approvals().await.is_empty());
+            host.shutdown().await;
+        }
     }
 
     async fn held(host: &Arc<Host>) -> Run {

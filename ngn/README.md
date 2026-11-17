@@ -1,4 +1,4 @@
-# ngn · 0.100.1
+# ngn · 0.100.2 development
 
 A standalone **Rust harness, TUI and local web server**, with a versioned agent
 runtime protocol. The optional **nagents** adapter runs the Python agent/model
