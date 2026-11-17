@@ -18,6 +18,8 @@ from nagents.tui.voice_audio import LocalAudio
 from nagents.tui.voice_audio import Microphone
 from nagents.tui.voice_audio import Speaker
 from tests.support.hang_guard import HANG_GUARD
+from tests.support.voice_audio import PlaybackLocalAudio
+from tests.support.voice_audio import PlaybackSpeaker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -73,6 +75,33 @@ def test_speaker_pcm_padding_interrupt_limits_and_idempotent_close() -> None:
         await speaker.close()
         await speaker.write(bytes(20))
         assert not speaker._buffer
+
+    asyncio.run(scenario())
+
+
+def test_headless_playback_consumes_more_than_the_real_speaker_buffer_without_a_clock() -> None:
+    async def scenario() -> None:
+        audio = PlaybackLocalAudio()
+        await audio.open()
+        assert audio.duplex.output is audio.output and isinstance(audio.output, PlaybackSpeaker)
+        output = audio.output
+        chunk = b"\x01\x00" * BLOCK
+        count = MAX_OUTPUT_BYTES * 2 // len(chunk) + 1
+        try:
+            for _ in range(count):
+                await output.write(chunk)
+            assert output.played.is_set() and output.samples == count * BLOCK
+            assert not output._buffer
+            with pytest.raises(AudioDeviceError):
+                await output.write(b"x")
+            with pytest.raises(AudioDeviceError):
+                await output.write(bytes(MAX_OUTPUT_BYTES + 2))
+        finally:
+            await audio.close()
+        assert audio.input.closed and output.closed
+        before = output.samples
+        await output.write(chunk)
+        assert output.samples == before
 
     asyncio.run(scenario())
 

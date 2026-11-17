@@ -41,6 +41,7 @@ from tests.providers.test_gateway_provider import endpoint
 from tests.providers.test_gateway_provider import frames
 from tests.providers.test_gateway_provider import payload
 from tests.providers.test_gateway_provider import reply
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
@@ -120,7 +121,7 @@ def test_shared_provider_interleaves_two_agents_and_keeps_tool_round_identity(
             if expected and counts[identity] == 1:
                 if expected == "chat-a":
                     first_arrived.set()
-                    await asyncio.wait_for(second_arrived.wait(), 5)
+                    await second_arrived.wait()
                 else:
                     second_arrived.set()
                 result = payload(api, "Working", (ToolCall("call-1", "work", {}),))
@@ -146,6 +147,11 @@ def test_shared_provider_interleaves_two_agents_and_keeps_tool_round_identity(
                 for i in range(2)
             ]
             try:
+                # Database migrations and model discovery are fixture setup,
+                # not part of the conversation interleaving being asserted.
+                async with asyncio.timeout(HANG_GUARD):
+                    for agent in agents:
+                        await agent.initialize()
 
                 async def run(index: int, suffix: str) -> None:
                     events = [
@@ -155,9 +161,12 @@ def test_shared_provider_interleaves_two_agents_and_keeps_tool_round_identity(
                     assert isinstance(events[-1], DoneEvent) and events[-1].final_text == "Finished"
 
                 # The first conversation is paused at the actual HTTP server while the second starts.
-                first = asyncio.create_task(run(0, "a"))
-                await asyncio.wait_for(first_arrived.wait(), 5)
-                await asyncio.gather(first, run(1, "b"))
+                # Own both consumers so a failed request interrupts readiness
+                # immediately and neither run can outlive provider cleanup.
+                async with asyncio.timeout(HANG_GUARD), asyncio.TaskGroup() as running:
+                    running.create_task(run(0, "a"))
+                    await first_arrived.wait()
+                    running.create_task(run(1, "b"))
                 assert counts == {"chat-a": 2, "chat-b": 2}
                 assert seen[0] == ("chat-a", "chat-a") and seen[1] == ("chat-b", "chat-b")
                 # Resuming the persisted conversation keeps its ID across another Agent.run.
@@ -167,6 +176,7 @@ def test_shared_provider_interleaves_two_agents_and_keeps_tool_round_identity(
                 assert isinstance([event async for event in provider.generate([], stream=stream)][-1], TextDoneEvent)
                 assert seen[-1] == ("", "")
             finally:
+                second_arrived.set()
                 for agent in agents:
                     await agent.close()
 
