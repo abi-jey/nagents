@@ -1,0 +1,976 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-11-17T22:24:40Z",
+  "purpose": "Redistribution notices and machine-readable component metadata for the pinned CPython runtime shipped by ngn. Every listed file was extracted from the same upstream release that produced the pinned install_only_stripped runtime; each SHA-256 was computed on the extracted bytes (none inferred from filenames).",
+  "pin": {
+    "runtime_asset": "cpython-3.13.18+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "runtime_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "runtime_size": 35596130,
+    "runtime_sha256": "f2d2199eb25880e07863b391cf7124e7ffa1338b0d65600dfcec117c4223a7fb",
+    "python_version": "3.13.18",
+    "target_triple": "x86_64-unknown-linux-gnu",
+    "threading": "gil-enabled (non-freethreaded)"
+  },
+  "full_archive": {
+    "role": "source of truth for PYTHON.json and notices; not shipped to end users",
+    "selection_rule": "docs/distributions.md: an install_only archive is built from the fastest available build of the same version/target/threading variant, preferring pgo+lto > pgo > lto > noopt; hence the matching full archive is the +pgo+lto-full asset of the same release.",
+    "asset": "cpython-3.13.18+20261110-x86_64-unknown-linux-gnu-pgo+lto-full.tar.zst",
+    "asset_id": 733713189,
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-x86_64-unknown-linux-gnu-pgo%2Blto-full.tar.zst",
+    "size": 113048202,
+    "sha256": "dec4f6d23031233beddfe91b99751977ef96e90642109836b1f9ad80b0019a68",
+    "release_tag": "20261110",
+    "release_id": 441136779,
+    "release_published_utc": "2026-11-11T01:51:17Z",
+    "release_immutable": true,
+    "release_commit": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+    "verification": [
+      "GitHub API asset digest == sha256:dec4f6d23031233beddfe91b99751977ef96e90642109836b1f9ad80b0019a68",
+      "release SHA256SUMS line == same hash (meta/SHA256SUMS-20261110.txt)",
+      "locally recomputed sha256 of the 113048202-byte download == same hash (meta/full-archive.sha256)"
+    ]
+  },
+  "python_json": {
+    "version": "8",
+    "python_version": "3.13.18",
+    "target_triple": "x86_64-unknown-linux-gnu",
+    "build_options": "pgo+lto",
+    "optimizations": "pgo+lto",
+    "libpython_link_mode": "shared",
+    "crt_features": [
+      "glibc-dynamic",
+      "glibc-max-symbol-version:2.17"
+    ],
+    "licenses": [
+      "Python-2.0",
+      "CNRI-Python"
+    ],
+    "license_path": "licenses/LICENSE.cpython.txt",
+    "path": "python/PYTHON.json",
+    "sha256": "53304e0a7215bbe05a08780b6d491e965e02814bf38820819ba26ac15fc54e40",
+    "size": 127836
+  },
+  "coverage": {
+    "referenced_license_paths": [
+      "licenses/LICENSE.bdb.txt",
+      "licenses/LICENSE.bzip2.txt",
+      "licenses/LICENSE.expat.txt",
+      "licenses/LICENSE.libX11.txt",
+      "licenses/LICENSE.libXau.txt",
+      "licenses/LICENSE.libedit.txt",
+      "licenses/LICENSE.libffi.txt",
+      "licenses/LICENSE.liblzma.txt",
+      "licenses/LICENSE.libuuid.txt",
+      "licenses/LICENSE.libxcb.txt",
+      "licenses/LICENSE.mpdecimal.txt",
+      "licenses/LICENSE.ncurses.txt",
+      "licenses/LICENSE.openssl-3.txt",
+      "licenses/LICENSE.sqlite.txt",
+      "licenses/LICENSE.tcl.txt",
+      "licenses/LICENSE.zlib-ng.txt",
+      "licenses/LICENSE.zlib.txt"
+    ],
+    "referenced_count": 17,
+    "present_license_files": [
+      "licenses/LICENSE.bdb.txt",
+      "licenses/LICENSE.bzip2.txt",
+      "licenses/LICENSE.cpython.txt",
+      "licenses/LICENSE.expat.txt",
+      "licenses/LICENSE.libedit.txt",
+      "licenses/LICENSE.libffi.txt",
+      "licenses/LICENSE.liblzma.txt",
+      "licenses/LICENSE.libuuid.txt",
+      "licenses/LICENSE.libX11.txt",
+      "licenses/LICENSE.libXau.txt",
+      "licenses/LICENSE.libxcb.txt",
+      "licenses/LICENSE.mpdecimal.txt",
+      "licenses/LICENSE.ncurses.txt",
+      "licenses/LICENSE.openssl-3.txt",
+      "licenses/LICENSE.sqlite.txt",
+      "licenses/LICENSE.tcl.txt",
+      "licenses/LICENSE.tix.txt",
+      "licenses/LICENSE.zlib-ng.txt",
+      "licenses/LICENSE.zlib.txt",
+      "licenses/LICENSE.zstd.txt"
+    ],
+    "present_count": 20,
+    "referenced_but_missing": [],
+    "shipped_but_unreferenced": [
+      "licenses/LICENSE.tix.txt",
+      "licenses/LICENSE.zstd.txt"
+    ],
+    "note": "All 17 license paths referenced by PYTHON.json extension records are present, plus the project-level license_path (licenses/LICENSE.cpython.txt). Two extra notices (LICENSE.tix.txt, LICENSE.zstd.txt) ship in the same upstream directory with no 3.13.18 extension reference; they are vendored because upstream distributes them with this release.",
+    "project_license_path": "licenses/LICENSE.cpython.txt"
+  },
+  "files": [
+    {
+      "vendor_path": "LICENSES/LICENSE.bdb.txt",
+      "archive_member": "python/licenses/LICENSE.bdb.txt",
+      "size": 7293,
+      "sha256": "3bdff06e69991c94664f2ef5c5f8096f60b7dbec071756ea6cc26b445e06ec5b",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "Sleepycat"
+      ],
+      "referenced_by": [
+        "_dbm"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.bdb.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.bzip2.txt",
+      "archive_member": "python/licenses/LICENSE.bzip2.txt",
+      "size": 1743,
+      "sha256": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "bzip2-1.0.6"
+      ],
+      "referenced_by": [
+        "_bz2"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.bzip2.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.cpython.txt",
+      "archive_member": "python/licenses/LICENSE.cpython.txt",
+      "size": 36164,
+      "sha256": "86e61415828a8b5b06ec8d024e6f086ce155a8b85fd0c419c0ba4dc004e74fdd",
+      "kind": "python-build-standalone-notices",
+      "spdx": null,
+      "referenced_by": [],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.cpython.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.expat.txt",
+      "archive_member": "python/licenses/LICENSE.expat.txt",
+      "size": 1144,
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT"
+      ],
+      "referenced_by": [
+        "pyexpat"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.expat.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.libedit.txt",
+      "archive_member": "python/licenses/LICENSE.libedit.txt",
+      "size": 1614,
+      "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "BSD-3-Clause",
+        "X11"
+      ],
+      "referenced_by": [
+        "readline"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.libedit.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.libffi.txt",
+      "archive_member": "python/licenses/LICENSE.libffi.txt",
+      "size": 1132,
+      "sha256": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT"
+      ],
+      "referenced_by": [
+        "_ctypes"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.libffi.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.liblzma.txt",
+      "archive_member": "python/licenses/LICENSE.liblzma.txt",
+      "size": 660,
+      "sha256": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "0BSD"
+      ],
+      "referenced_by": [
+        "_lzma"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.liblzma.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.libuuid.txt",
+      "archive_member": "python/licenses/LICENSE.libuuid.txt",
+      "size": 1432,
+      "sha256": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "BSD-3-Clause"
+      ],
+      "referenced_by": [
+        "_uuid"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.libuuid.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.libX11.txt",
+      "archive_member": "python/licenses/LICENSE.libX11.txt",
+      "size": 47018,
+      "sha256": "2daec087a88e7c9b8082557cdeebad5bbb8155a4137472f0b22e269cd99d0c1e",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT",
+        "TCL",
+        "X11",
+        "Zlib"
+      ],
+      "referenced_by": [
+        "_tkinter"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.libX11.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.libXau.txt",
+      "archive_member": "python/licenses/LICENSE.libXau.txt",
+      "size": 1148,
+      "sha256": "56abe29bb1d9806a9e04fa9f80fed2c0f18027594df3f098148d814aef6bddfa",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT",
+        "TCL",
+        "X11",
+        "Zlib"
+      ],
+      "referenced_by": [
+        "_tkinter"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.libXau.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.libxcb.txt",
+      "archive_member": "python/licenses/LICENSE.libxcb.txt",
+      "size": 1337,
+      "sha256": "c5ffbfeaa501071ceeb97b7de2c0d703fdaa35de01c0fb6cbac1c28453a3e9fd",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT",
+        "TCL",
+        "X11",
+        "Zlib"
+      ],
+      "referenced_by": [
+        "_tkinter"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.libxcb.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.mpdecimal.txt",
+      "archive_member": "python/licenses/LICENSE.mpdecimal.txt",
+      "size": 1284,
+      "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "BSD-2-Clause"
+      ],
+      "referenced_by": [
+        "_decimal"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.mpdecimal.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.ncurses.txt",
+      "archive_member": "python/licenses/LICENSE.ncurses.txt",
+      "size": 1447,
+      "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "X11",
+        "X11",
+        "BSD-3-Clause",
+        "X11"
+      ],
+      "referenced_by": [
+        "_curses",
+        "_curses_panel",
+        "readline"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.ncurses.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.openssl-3.txt",
+      "archive_member": "python/licenses/LICENSE.openssl-3.txt",
+      "size": 10175,
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "Apache-2.0",
+        "Apache-2.0"
+      ],
+      "referenced_by": [
+        "_hashlib",
+        "_ssl"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.openssl-3.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.sqlite.txt",
+      "archive_member": "python/licenses/LICENSE.sqlite.txt",
+      "size": 1481,
+      "sha256": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719",
+      "kind": "python-build-standalone-notices",
+      "spdx": null,
+      "referenced_by": [
+        "_sqlite3"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.sqlite.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.tcl.txt",
+      "archive_member": "python/licenses/LICENSE.tcl.txt",
+      "size": 2255,
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT",
+        "TCL",
+        "X11",
+        "Zlib"
+      ],
+      "referenced_by": [
+        "_tkinter"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.tcl.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.tix.txt",
+      "archive_member": "python/licenses/LICENSE.tix.txt",
+      "size": 2826,
+      "sha256": "3ac5cdd0bef6c43ce34c6a7ced452081d9e5a0bf94082b9f9147d23ec9e214f5",
+      "kind": "python-build-standalone-notices",
+      "spdx": null,
+      "referenced_by": [],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.tix.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.zlib-ng.txt",
+      "archive_member": "python/licenses/LICENSE.zlib-ng.txt",
+      "size": 867,
+      "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT",
+        "TCL",
+        "X11",
+        "Zlib",
+        "Zlib",
+        "Zlib"
+      ],
+      "referenced_by": [
+        "_tkinter",
+        "binascii",
+        "zlib"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.zlib-ng.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.zlib.txt",
+      "archive_member": "python/licenses/LICENSE.zlib.txt",
+      "size": 1002,
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+      "kind": "python-build-standalone-notices",
+      "spdx": [
+        "MIT",
+        "TCL",
+        "X11",
+        "Zlib",
+        "Zlib",
+        "Zlib"
+      ],
+      "referenced_by": [
+        "_tkinter",
+        "binascii",
+        "zlib"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.zlib.txt"
+      }
+    },
+    {
+      "vendor_path": "LICENSES/LICENSE.zstd.txt",
+      "archive_member": "python/licenses/LICENSE.zstd.txt",
+      "size": 1549,
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "kind": "python-build-standalone-notices",
+      "spdx": null,
+      "referenced_by": [],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE.zstd.txt"
+      }
+    },
+    {
+      "vendor_path": "PIP/AUTHORS.txt",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/AUTHORS.txt",
+      "size": 12239,
+      "sha256": "f8998e1ed3151771c2fbc899ccf0e18b0817d425dff4983eb0fede4e48db47e4",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "AUTHORS.txt"
+      }
+    },
+    {
+      "vendor_path": "PIP/LICENSE.txt",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/LICENSE.txt",
+      "size": 1093,
+      "sha256": "634300a669d49aeae65b12c6c48c924c51a4cdf3d1ff086dc3456dc8bcaa2104",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "LICENSE.txt"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/cachecontrol/LICENSE.txt",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/cachecontrol/LICENSE.txt",
+      "size": 558,
+      "sha256": "86eeee87be2a43f3ff1f56496f451f69243926f025fedbb033666c304c4c161b",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/cachecontrol/LICENSE.txt"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/certifi/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/certifi/LICENSE",
+      "size": 989,
+      "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/certifi/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/distlib/LICENSE.txt",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/distlib/LICENSE.txt",
+      "size": 14531,
+      "sha256": "808e10c8a6ab8deb149ff9b3fb19f447a808094606d712a9ca57fead3552599d",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/distlib/LICENSE.txt"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/distro/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/distro/LICENSE",
+      "size": 11325,
+      "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/distro/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/idna/LICENSE.md",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/idna/LICENSE.md",
+      "size": 1541,
+      "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/idna/LICENSE.md"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/msgpack/COPYING",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/msgpack/COPYING",
+      "size": 614,
+      "sha256": "492dedba85da5872f78e6091bcd1fea474d660d35acb4dee964b8aab3f007427",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/msgpack/COPYING"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/packaging/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/packaging/LICENSE",
+      "size": 197,
+      "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/packaging/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/packaging/LICENSE.APACHE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/packaging/LICENSE.APACHE",
+      "size": 10174,
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/packaging/LICENSE.APACHE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/packaging/LICENSE.BSD",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/packaging/LICENSE.BSD",
+      "size": 1344,
+      "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/packaging/LICENSE.BSD"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/pkg_resources/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/pkg_resources/LICENSE",
+      "size": 1023,
+      "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/pkg_resources/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/platformdirs/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/platformdirs/LICENSE",
+      "size": 1089,
+      "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/platformdirs/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/pygments/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/pygments/LICENSE",
+      "size": 1331,
+      "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/pygments/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/pyproject_hooks/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/pyproject_hooks/LICENSE",
+      "size": 1081,
+      "sha256": "1b22b049b5267d6dfc23a67bf4a84d8ec04b9fdfb1a51d360e42b4342c8b4154",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/pyproject_hooks/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/requests/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/requests/LICENSE",
+      "size": 10142,
+      "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/requests/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/resolvelib/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/resolvelib/LICENSE",
+      "size": 751,
+      "sha256": "f388fd38cad13112c1dc0f669bbe80e7f84541edbafb72f3030d2ca7642c3c9d",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/resolvelib/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/rich/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/rich/LICENSE",
+      "size": 1056,
+      "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/rich/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/tomli/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/tomli/LICENSE",
+      "size": 1072,
+      "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/tomli/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/tomli_w/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/tomli_w/LICENSE",
+      "size": 1072,
+      "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/tomli_w/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/truststore/LICENSE",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/truststore/LICENSE",
+      "size": 1086,
+      "sha256": "33be7b7e8fa4fd19b1760e1a8ed8a668bdab852c91b692dd41424bcb725a9fca",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/truststore/LICENSE"
+      }
+    },
+    {
+      "vendor_path": "PIP/src/pip/_vendor/urllib3/LICENSE.txt",
+      "archive_member": "python/install/lib/python3.13/site-packages/pip-26.3.dist-info/licenses/src/pip/_vendor/urllib3/LICENSE.txt",
+      "size": 1093,
+      "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686",
+      "kind": "pip-bundled",
+      "spdx": [
+        "pip-26.3"
+      ],
+      "referenced_by": [
+        "pip"
+      ],
+      "source": {
+        "repo": "pypa/pip",
+        "ref": "26.3",
+        "path": "src/pip/_vendor/urllib3/LICENSE.txt"
+      }
+    },
+    {
+      "vendor_path": "PYTHON.json",
+      "archive_member": "python/PYTHON.json",
+      "size": 127836,
+      "sha256": "53304e0a7215bbe05a08780b6d491e965e02814bf38820819ba26ac15fc54e40",
+      "kind": "metadata",
+      "spdx": null,
+      "referenced_by": [],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "python/PYTHON.json"
+      }
+    },
+    {
+      "vendor_path": "PYTHON-RUNTIME/LICENSE.txt",
+      "archive_member": "python/install/lib/python3.13/LICENSE.txt",
+      "size": 13809,
+      "sha256": "78b12c3a81360b357002334f0e70ea0e92eebf7a9b358805c03c48484945f3bb",
+      "kind": "shipped-python-license",
+      "spdx": [
+        "Python-2.0",
+        "CNRI-Python"
+      ],
+      "referenced_by": [
+        "shipped-with-runtime"
+      ],
+      "source": {
+        "repo": "python/cpython",
+        "ref": "v3.13.18",
+        "path": "LICENSE"
+      }
+    },
+    {
+      "vendor_path": "UPSTREAM/MPL-2.0.txt",
+      "archive_member": "REPO:git/astral-sh/python-build-standalone/LICENSE",
+      "size": 16725,
+      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+      "kind": "upstream-repo-license",
+      "spdx": [
+        "MPL-2.0"
+      ],
+      "referenced_by": [
+        "python-build-standalone"
+      ],
+      "source": {
+        "repo": "astral-sh/python-build-standalone",
+        "ref": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+        "path": "LICENSE"
+      }
+    }
+  ],
+  "cross_binding": {
+    "tarball_notices_vs_repo": "all 20 python/licenses/*.txt are byte-identical to the same-named files at the repo root of commit 9244801782b78e4c4afc5c82a4524aa2101d3298 (20/20 MATCH, see upstream/repo-root-licenses/)",
+    "pip": "all 22 pip dist-info license/AUTHORS files are byte-identical to https://raw.githubusercontent.com/pypa/pip/26.3/<same relative path> (22/22 MATCH, see upstream/pip-26.3/)",
+    "python_runtime_license": "PYTHON-RUNTIME/LICENSE.txt is the file actually shipped inside the stripped runtime at lib/python3.13/LICENSE.txt; it is NOT byte-identical to LICENSES/LICENSE.cpython.txt (the repo pointer used by PYTHON.json license_path) — both are retained"
+  },
+  "probe_3_13_18_stripped": {
+    "source_asset": "cpython-3.13.18+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "asset_sha256": "f2d2199eb25880e07863b391cf7124e7ffa1338b0d65600dfcec117c4223a7fb",
+    "raw_output": "probe/probe-output.txt",
+    "summary": {
+      "glibc_max_symbol_version_measured": "2.17",
+      "crt_features_declared": [
+        "glibc-dynamic",
+        "glibc-max-symbol-version:2.17"
+      ],
+      "openssl": "3.5.9 (29 Sep 2026), statically built into the interpreter; _ssl is a builtin module, no _ssl*.so in lib-dynload",
+      "ca_defaults": {
+        "cafile": null,
+        "capath": "/etc/ssl/certs",
+        "compiled_cafile": "/etc/ssl/cert.pem",
+        "compiled_capath": "/etc/ssl/certs",
+        "env_overrides": [
+          "SSL_CERT_FILE",
+          "SSL_CERT_DIR"
+        ],
+        "tls_handshake_with_system_store": "ok (TLSv1.3, pypi.org)"
+      },
+      "rpath": "$ORIGIN/../lib",
+      "bundled_pip": "26.3"
+    }
+  },
+  "gaps": [
+    "Upstream SHA256SUMS is an unsigned text asset; the trust anchor is the immutable GitHub release plus the locally recomputed hashes recorded here.",
+    "PYTHON.json project-level licenses are [Python-2.0, CNRI-Python]; extension-level SPDX identifiers are reproduced verbatim from upstream extension records, not re-derived by this collection.",
+    "The stripped runtime tarball ships only lib/python3.13/LICENSE.txt; PYTHON.json and the python/licenses/ tree exist only in full archives, hence this evidence root vendors them separately."
+  ],
+  "reproduction": {
+    "fetch": "curl -sSL -o full.tar.zst '<full_archive.url>'; sha256sum full.tar.zst   # expect dec4f6d2...",
+    "list": "zstd -dcq full.tar.zst | tar -tf - | grep -E '^python/(PYTHON.json|licenses/|install/lib/python3.13/LICENSE.txt)'",
+    "extract": "zstd -dcq full.tar.zst | tar -xf - -C out python/PYTHON.json python/licenses python/install/lib/python3.13/LICENSE.txt",
+    "verify_index": "cd <evidence root> && jq -r '.files[] | \"\\(.sha256)  vendor/\\(.vendor_path)\"' MANIFEST.json | sha256sum -c -"
+  }
+}
