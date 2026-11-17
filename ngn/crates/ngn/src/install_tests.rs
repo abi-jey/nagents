@@ -705,6 +705,44 @@ fn https_redirect_allowlist_excludes_http_userinfo_ports_and_lookalike_hosts() {
 }
 
 #[cfg(unix)]
+#[tokio::test]
+async fn old_same_version_native_asset_is_rejected_before_the_python_probe() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let source = local(directory.path(), &metadata("0.100.2", false), |_| {});
+    let stage = crate::test_support::private_tempdir().unwrap();
+    let (root, mut manifest) = unpack(
+        source.archive.as_ref().unwrap(),
+        stage.path(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    // A harmless old-CLI stand-in, not a Python/runtime fixture. The real native
+    // installer itself is covered separately by the CLI integration tests.
+    fs::write(
+        root.join("ngn"),
+        b"#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'ngn 0.100.2\\n'; else exit 2; fi\n",
+    )
+    .unwrap();
+    fs::set_permissions(root.join("ngn"), fs::Permissions::from_mode(0o700)).unwrap();
+    manifest
+        .files
+        .insert("ngn".into(), file_hash(&root.join("ngn")).unwrap());
+    fs::write(
+        root.join("bundle.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    manifest.verify_tree(&root).unwrap();
+    let error = RuntimeProbe.verify(&root, &manifest).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("lacks the required installer/update CLI")
+    );
+}
+
+#[cfg(unix)]
 #[test]
 fn prefix_and_lock_permissions_are_never_repaired_or_followed() {
     use std::os::unix::fs::{PermissionsExt, symlink};

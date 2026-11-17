@@ -186,6 +186,55 @@ fn paths_and_only_internal_cpython_links() {
 
 #[cfg(unix)]
 #[test]
+fn pbs_helper_man_and_terminfo_alias_chains_remain_inside_their_python_subtree() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let root = directory.path();
+    let mut manifest = fixture(root);
+    for name in [
+        "runtime/bin/idle3.13",
+        "runtime/bin/pydoc3.13",
+        "runtime/bin/python3.13-config",
+        "runtime/share/man/man1/python3.13.1",
+        "runtime/share/terminfo/a/adm1178",
+    ] {
+        fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
+        fs::write(root.join(name), b"inert CPython data fixture").unwrap();
+        manifest
+            .files
+            .insert(name.into(), file_hash(&root.join(name)).unwrap());
+    }
+    for (name, target) in [
+        ("runtime/bin/idle3", "idle3.13"),
+        ("runtime/bin/pydoc3", "pydoc3.13"),
+        ("runtime/bin/python3-config", "python3.13-config"),
+        ("runtime/share/man/man1/python.1", "python3.13.1"),
+        ("runtime/share/man/man1/python3.1", "python3.13.1"),
+        ("runtime/share/terminfo/1/1178", "../a/adm1178"),
+        ("runtime/share/terminfo/2/alias", "../1/1178"),
+    ] {
+        fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(target, root.join(name)).unwrap();
+        manifest.symlinks.insert(name.into(), target.into());
+    }
+    manifest.verify_tree(root).unwrap();
+    for target in [
+        "../../../bin/python3.13",
+        "../../../../outside",
+        "/usr/share/terminfo/a/adm1178",
+    ] {
+        let mut changed = manifest.clone();
+        changed
+            .symlinks
+            .insert("runtime/share/terminfo/1/1178".into(), target.into());
+        assert!(
+            changed.validate().is_err(),
+            "accepted terminfo escape {target}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn setid_and_hardlinked_files_are_rejected() {
     use std::os::unix::fs::PermissionsExt;
     let directory = crate::test_support::private_tempdir().unwrap();

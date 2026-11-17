@@ -896,6 +896,11 @@ impl Probe for RuntimeProbe {
             output(native).await? == format!("ngn {}\n", manifest.ngn_version).as_bytes(),
             "Native bundle version probe mismatch"
         );
+        for operation in ["install", "update"] {
+            let mut native = command(&root.join("ngn"));
+            native.args([operation, "--help"]);
+            output(native).await.context("Bundle native binary lacks the required installer/update CLI; use the matching new bundled release, not an older same-version native asset")?;
+        }
         let mut python = command(&root.join(&manifest.runner[0]));
         python.args(["-I", "-B", "-c", r#"
 import importlib.metadata as m, json, pathlib, platform, sys

@@ -272,13 +272,19 @@ impl BundleManifest {
                 name.as_str(),
                 "runtime/bin/python"
                     | "runtime/bin/python3"
+                    | "runtime/bin/python3-config"
+                    | "runtime/bin/idle3"
+                    | "runtime/bin/pydoc3"
                     | "runtime/lib/libpython3.13.so"
                     | "runtime/lib/libpython3.so"
                     | "runtime/lib/pkgconfig/python3.pc"
                     | "runtime/lib/pkgconfig/python3-embed.pc"
                     | "runtime/lib64"
+                    | "runtime/share/man/man1/python.1"
+                    | "runtime/share/man/man1/python3.1"
             ) || (name.starts_with("runtime/lib/python3.13/config-3.13-")
-                && name.ends_with("/libpython3.13.a"));
+                && name.ends_with("/libpython3.13.a"))
+                || (name.starts_with("runtime/share/terminfo/") && name.split('/').count() == 5);
             ensure!(cpython_link, "Only internal CPython symlinks are permitted");
             let destination = self.link_destination(name, target)?;
             let expected = match name.as_str() {
@@ -287,6 +293,11 @@ impl BundleManifest {
                     Some("runtime/bin/python3" | "runtime/bin/python3.13")
                 ),
                 "runtime/bin/python3" => destination == Path::new("runtime/bin/python3.13"),
+                "runtime/bin/python3-config" => {
+                    destination == Path::new("runtime/bin/python3.13-config")
+                }
+                "runtime/bin/idle3" => destination == Path::new("runtime/bin/idle3.13"),
+                "runtime/bin/pydoc3" => destination == Path::new("runtime/bin/pydoc3.13"),
                 "runtime/lib/libpython3.13.so" | "runtime/lib/libpython3.so" => matches!(
                     destination.to_str(),
                     Some("runtime/lib/libpython3.13.so.1.0" | "runtime/lib/libpython3.13.so")
@@ -298,6 +309,13 @@ impl BundleManifest {
                     destination == Path::new("runtime/lib/pkgconfig/python-3.13-embed.pc")
                 }
                 "runtime/lib64" => destination == Path::new("runtime/lib"),
+                "runtime/share/man/man1/python.1" | "runtime/share/man/man1/python3.1" => {
+                    destination == Path::new("runtime/share/man/man1/python3.13.1")
+                }
+                _ if name.starts_with("runtime/share/terminfo/") => {
+                    destination.starts_with("runtime/share/terminfo")
+                        && destination.components().count() == 5
+                }
                 _ => {
                     name.ends_with("/libpython3.13.a")
                         && destination == Path::new("runtime/lib/libpython3.13.a")
