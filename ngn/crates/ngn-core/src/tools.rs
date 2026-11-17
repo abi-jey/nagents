@@ -1,5 +1,7 @@
 //! Native, bounded tools. Capability-relative files are not an OS sandbox.
 
+mod discovery;
+
 use std::{
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -204,13 +206,13 @@ impl Tools {
             ),
             (
                 "list_files",
-                "List workspace files; skips symlinks, credential paths and common build directories.",
+                "List workspace files respecting nested .gitignore rules; skips links, credential paths and common build directories.",
                 json!({"path":string, "limit":integer}),
                 vec![],
             ),
             (
                 "search",
-                "Search for a literal string in bounded workspace text files.",
+                "Search for a literal string in bounded workspace text files, respecting nested .gitignore rules even for explicit file paths.",
                 json!({"query":string, "path":string, "limit":integer}),
                 vec!["query"],
             ),
@@ -347,57 +349,7 @@ impl Tools {
     }
 
     fn walk(&self, path: &str) -> Result<(Vec<String>, bool)> {
-        let path = self.relative(path, true)?;
-        let mut pending = vec![path];
-        let mut files = Vec::new();
-        let mut visited = 0;
-        while let Some(directory) = pending.pop() {
-            for entry in self.directory(&directory)?.entries()? {
-                visited += 1;
-                if visited > MAX_PATHS {
-                    files.sort();
-                    return Ok((files, true));
-                }
-                let entry = entry?;
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if denied_component(&name)
-                    || [
-                        "node_modules",
-                        "target",
-                        ".venv",
-                        "venv",
-                        "__pycache__",
-                        ".mypy_cache",
-                        ".pytest_cache",
-                        ".ruff_cache",
-                    ]
-                    .contains(&name.as_ref())
-                {
-                    continue;
-                }
-                let path = directory.join(name.as_ref());
-                if self.workspace.join(&path).starts_with(&self.protected) {
-                    continue;
-                }
-                let kind = entry.file_type()?;
-                if kind.is_symlink() {
-                    continue;
-                }
-                if kind.is_dir() {
-                    pending.push(path);
-                } else if kind.is_file() {
-                    files.push(
-                        path.strip_prefix(".")
-                            .unwrap_or(&path)
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
-                }
-            }
-        }
-        files.sort();
-        Ok((files, false))
+        discovery::walk(self, path, false)
     }
 
     pub fn prepare(&self, call: &ToolCall) -> Result<Prepared> {
@@ -438,10 +390,20 @@ impl Tools {
             "list_files" => {
                 let args: Listing = serde_json::from_value(call.arguments.clone())?;
                 ensure!((1..=1000).contains(&args.limit), "limit must be 1..1000");
-                let (mut files, capped) = self.walk(&args.path)?;
-                let truncated = capped || files.len() > args.limit;
-                files.truncate(args.limit);
-                Action::Result(json!({"paths":files, "truncated":truncated}))
+                let (files, capped) = self.walk(&args.path)?;
+                let mut selected = Vec::new();
+                let mut truncated = capped;
+                let mut output_bytes = 64; // Reserve the result envelope and separators.
+                for path in files {
+                    let size = serde_json::to_vec(&path)?.len() + 1;
+                    if selected.len() == args.limit || output_bytes + size > MAX_OUTPUT {
+                        truncated = true;
+                        break;
+                    }
+                    output_bytes += size;
+                    selected.push(path);
+                }
+                Action::Result(json!({"paths":selected, "truncated":truncated}))
             }
             "search" => {
                 let args: Search = serde_json::from_value(call.arguments.clone())?;
@@ -451,10 +413,11 @@ impl Tools {
                         && (1..=1000).contains(&args.limit),
                     "Invalid search query or limit"
                 );
-                let (files, capped) = self.walk(&args.path)?;
+                let (files, capped) = discovery::walk(self, &args.path, true)?;
                 let mut matches = Vec::new();
                 let mut bytes_read = 0;
                 let mut truncated = capped;
+                let mut output_bytes = 64;
                 'files: for path in files {
                     let Ok(bytes) = self.read(&path) else {
                         continue;
@@ -469,9 +432,15 @@ impl Tools {
                     };
                     for (number, line) in text.lines().enumerate() {
                         if line.contains(&args.query) {
-                            matches.push(
-                                json!({"path":path, "line":number + 1, "text":bounded(line, 500)}),
-                            );
+                            let found =
+                                json!({"path":path, "line":number + 1, "text":bounded(line, 500)});
+                            let size = serde_json::to_vec(&found)?.len() + 1;
+                            if output_bytes + size > MAX_OUTPUT {
+                                truncated = true;
+                                break 'files;
+                            }
+                            output_bytes += size;
+                            matches.push(found);
                             if matches.len() >= args.limit {
                                 truncated = true;
                                 break 'files;
