@@ -20,7 +20,9 @@ from nagents.types import GenerationConfig
 from nagents.types import Message
 from nagents.types import ToolDefinition
 
+from ngn_nagents.protocol import Emitter
 from ngn_nagents.protocol import ProtocolError
+from ngn_nagents.protocol import mapping
 from ngn_nagents.protocol import read
 from ngn_nagents.runtime import Definition
 from ngn_nagents.runtime import HostExecutor
@@ -64,7 +66,104 @@ def offer(boundary: object, position: int, prompt: str) -> dict[str, object]:
     }
 
 
+def legacy_start(database: Path) -> dict[str, object]:
+    return {
+        "type": "start",
+        "run": {
+            "session_id": "legacy-session",
+            "prompt": "initial",
+            "system_prompt": "policy",
+            "database": str(database),
+            "provider": {
+                "kind": "openai_compatible",
+                "model": "offline-only",
+                "api": "",
+                "base_url": "",
+                "api_key_env": "FIXTURE_KEY",
+            },
+            "tools": [{"name": "read_file", "description": "read", "parameters": {"type": "object"}}],
+            "max_tool_rounds": 10,
+        },
+    }
+
+
+def enqueue(messages: asyncio.Queue[dict[str, object]]) -> Emitter:
+    def emit(run: str, event: dict[str, object]) -> None:
+        messages.put_nowait(event)
+
+    return emit
+
+
 class SteeringTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_steering_acknowledgment_defaults_false_and_requires_strict_bool(self) -> None:
+        baseline = legacy_start(Path("/private/runtime.sqlite3"))
+        self.assertFalse(Start.parse(baseline).steering)
+        self.assertFalse(Start("s", "prompt", "policy", Path("/private/runtime.sqlite3"), {}, [], 10).steering)
+        for enabled in [False, True]:
+            message = deepcopy(baseline)
+            message["run"] = {**mapping(message["run"]), "steering": enabled}
+            self.assertIs(Start.parse(message).steering, enabled)
+        invalid_values: list[object] = [None, 0, 1, 1.0, "true", [], {}]
+        for invalid in invalid_values:
+            with self.subTest(invalid=invalid):
+                message = deepcopy(baseline)
+                message["run"] = {**mapping(message["run"]), "steering": invalid}
+                with self.assertRaises(ProtocolError):
+                    Start.parse(message)
+        baseline["run"] = {**mapping(baseline["run"]), "steering_approved": True}
+        with self.assertRaises(ProtocolError):
+            Start.parse(baseline)
+
+    async def test_legacy_host_start_finishes_tool_work_without_plugin_boundary_or_ack_channel(self) -> None:
+        for acknowledgment in [{}, {"steering": False}]:
+            with self.subTest(acknowledgment=acknowledgment), tempfile.TemporaryDirectory() as temporary:
+                provider = OfflineProvider(
+                    [
+                        [ToolCallEvent(id="legacy-call", name="read_file", arguments={})],
+                        [TextDoneEvent(text="ordinary final")],
+                    ]
+                )
+                message = legacy_start(Path(temporary) / "runtime.sqlite3")
+                message["run"] = {**mapping(message["run"]), **acknowledgment}
+                start = Start.parse(message)
+                messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+                executor = HostExecutor(ToolRegistry(), "legacy-run", enqueue(messages))
+                with self.assertRaises(ProtocolError):
+                    executor.steering.accept(offer(str(uuid4()), 1, "unsolicited"))
+                seen: list[str] = []
+                with (
+                    patch("ngn_nagents.runtime.create_provider", return_value=provider),
+                    patch("ngn_nagents.runtime._SteeringPlugin") as plugin,
+                ):
+                    task = asyncio.create_task(run_agent(start, executor, executor.emit))
+                    while True:
+                        event = await asyncio.wait_for(messages.get(), 10)
+                        seen.append(str(event["type"]))
+                        self.assertNotIn(event["type"], {"steering_boundary", "steering_applied"})
+                        if event["type"] == "tool_request":
+                            executor.accept(
+                                {
+                                    "type": "tool_result",
+                                    "result": {
+                                        "call_id": "legacy-call",
+                                        "name": "read_file",
+                                        "result": "ordinary result",
+                                        "error": "",
+                                    },
+                                }
+                            )
+                        elif event["type"] == "finished":
+                            self.assertEqual(event["status"], "completed", event)
+                            break
+                    await asyncio.wait_for(task, 10)
+                    plugin.assert_not_called()
+                self.assertEqual(seen.count("tool_request"), 1)
+                self.assertEqual(seen[-1], "finished")
+                self.assertEqual(
+                    [item.role for item in await SessionManager(start.database).get_history(start.session_id)],
+                    ["user", "assistant", "tool", "assistant"],
+                )
+
     async def test_duplicate_boundary_fields_are_rejected(self) -> None:
         reader = asyncio.StreamReader()
         reader.feed_data(
@@ -82,7 +181,16 @@ class SteeringTests(unittest.IsolatedAsyncioTestCase):
         )
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "runtime.sqlite3"
-            start = Start("s", "initial", "policy", path, {}, [Definition("read_file", "read", {"type": "object"})], 10)
+            start = Start(
+                "s",
+                "initial",
+                "policy",
+                path,
+                {},
+                [Definition("read_file", "read", {"type": "object"})],
+                10,
+                steering=True,
+            )
             messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
             executor = HostExecutor(ToolRegistry(), "run-exact", lambda run, message: messages.put_nowait(message))
             manager = SessionManager(path)
@@ -146,7 +254,7 @@ class SteeringTests(unittest.IsolatedAsyncioTestCase):
         provider = OfflineProvider([[TextDoneEvent(text="first final")], [TextDoneEvent(text="second final")]])
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "runtime.sqlite3"
-            start = Start("same-session", "initial", "policy", path, {}, [], 10)
+            start = Start("same-session", "initial", "policy", path, {}, [], 10, steering=True)
             messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
             executor = HostExecutor(ToolRegistry(), "same-run", lambda run, message: messages.put_nowait(message))
             manager = SessionManager(path)
@@ -204,7 +312,7 @@ class SteeringTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_continuation_persistence_never_acknowledges_or_retries(self) -> None:
         provider = OfflineProvider([[TextDoneEvent(text="first final")]])
         with tempfile.TemporaryDirectory() as temporary:
-            start = Start("s", "initial", "policy", Path(temporary) / "runtime.sqlite3", {}, [], 10)
+            start = Start("s", "initial", "policy", Path(temporary) / "runtime.sqlite3", {}, [], 10, steering=True)
             messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
             executor = HostExecutor(ToolRegistry(), "run", lambda run, message: messages.put_nowait(message))
             original = SessionManager.add_message

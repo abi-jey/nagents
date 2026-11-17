@@ -54,9 +54,16 @@ pub struct StartRun {
     pub provider: ProviderConfig,
     pub tools: Vec<ToolDefinition>,
     pub max_tool_rounds: u32,
+    /// Host acknowledgment, sent only after the runtime advertises safe_steering.
+    #[serde(default, skip_serializing_if = "disabled")]
+    pub steering: bool,
 }
 
-/// Optional v1 extension, negotiated by the runtime's `safe_steering` capability.
+fn disabled(enabled: &bool) -> bool {
+    !enabled
+}
+
+/// Optional v1 extension: runtime capability AND explicit host start acknowledgment.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SteeringBoundary {
@@ -294,5 +301,39 @@ mod tests {
         offer["message"]["input"]["approved"] = json!(true);
         assert!(serde_json::from_value::<HostFrame>(offer).is_err());
         assert!(serde_json::from_value::<HostFrame>(json!({"protocol_version":1,"run_id":"run","message":{"type":"steering_offer","boundary_id":"boundary"}})).is_err());
+    }
+
+    #[test]
+    fn steering_start_acknowledgment_is_strict_optional_and_omitted_when_disabled() {
+        let baseline = json!({"session_id":"session", "prompt":"user", "system_prompt":"policy",
+            "database":"/private/runtime.sqlite3", "provider":{"kind":"fixture", "model":"fixture", "api":"", "base_url":"", "api_key_env":"FIXTURE_KEY"}, "tools":[], "max_tool_rounds":10});
+        let start: StartRun = serde_json::from_value(baseline.clone()).unwrap();
+        assert!(!start.steering);
+        assert_eq!(serde_json::to_value(&start).unwrap(), baseline);
+        for enabled in [false, true] {
+            let mut explicit = baseline.clone();
+            explicit["steering"] = json!(enabled);
+            let start: StartRun = serde_json::from_value(explicit.clone()).unwrap();
+            assert_eq!(start.steering, enabled);
+            assert_eq!(
+                serde_json::to_value(start).unwrap(),
+                if enabled { explicit } else { baseline.clone() }
+            );
+        }
+        for invalid in [
+            json!(null),
+            json!(0),
+            json!(1),
+            json!("true"),
+            json!([]),
+            json!({}),
+        ] {
+            let mut value = baseline.clone();
+            value["steering"] = invalid;
+            assert!(serde_json::from_value::<StartRun>(value).is_err());
+        }
+        let mut unknown = baseline;
+        unknown["steering_approved"] = json!(true);
+        assert!(serde_json::from_value::<StartRun>(unknown).is_err());
     }
 }

@@ -283,6 +283,95 @@ async def http_checks(binary: Path, config: Path, workspace: Path, fixture: Fixt
                 )
 
 
+async def legacy_host_checks(config: Path, root: Path) -> None:
+    """Actual new adapter, old v1 host: ignore Ready extras, omit the start ack."""
+    settings = json.loads(config.read_text())
+    for name, prompt, expected_tools in [("final", "cli final", []), ("tools", "batch start", ["read_file", "write"])]:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "ngn_nagents",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            require(process.stdin is not None and process.stdout is not None, "Missing legacy-host protocol pipes")
+            assert process.stdin is not None and process.stdout is not None
+            ready = json.loads(await asyncio.wait_for(process.stdout.readline(), 10))
+            require(
+                ready["message"]["type"] == "ready" and "safe_steering" in ready["message"]["capabilities"],
+                "New adapter did not advertise its optional capability",
+            )
+            run = {
+                "session_id": f"legacy-{name}",
+                "prompt": prompt,
+                "system_prompt": "local fixture policy",
+                "database": str(root / f"legacy-{name}.sqlite3"),
+                "provider": settings["providers"][settings["provider"]],
+                "tools": [
+                    {"name": tool, "description": "legacy host tool", "parameters": {"type": "object"}}
+                    for tool in expected_tools
+                ],
+                "max_tool_rounds": 10,
+            }
+            run_id = f"legacy-host-{name}"
+            process.stdin.write(
+                (
+                    json.dumps({"protocol_version": 1, "run_id": run_id, "message": {"type": "start", "run": run}})
+                    + "\n"
+                ).encode()
+            )
+            await process.stdin.drain()
+            calls = []
+            while True:
+                line = await asyncio.wait_for(process.stdout.readline(), 10)
+                require(line, "New adapter exited without a baseline Finished result")
+                frame = json.loads(line)
+                require(frame["run_id"] == run_id, "Legacy host received a foreign runtime frame")
+                message = frame["message"]
+                require(
+                    not message["type"].startswith("steering_"),
+                    "New adapter sent an unnegotiated steering extension to a legacy host",
+                )
+                if message["type"] == "tool_request":
+                    call = message["call"]
+                    calls.append(call["name"])
+                    result = {
+                        "call_id": call["call_id"],
+                        "name": call["name"],
+                        "result": "ordinary legacy host result",
+                        "error": "",
+                    }
+                    process.stdin.write(
+                        (
+                            json.dumps(
+                                {
+                                    "protocol_version": 1,
+                                    "run_id": run_id,
+                                    "message": {"type": "tool_result", "result": result},
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
+                    await process.stdin.drain()
+                elif message["type"] == "finished":
+                    require(message["status"] == "completed", "Legacy-host work failed after its successful response")
+                    break
+            await asyncio.wait_for(process.wait(), 10)
+            require(
+                process.returncode == 0 and calls == expected_tools,
+                "Legacy host did not complete baseline tool/result flow",
+            )
+        finally:
+            if process.stdin is not None:
+                process.stdin.close()
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+
+
 def runtime_fixture(mode: str) -> None:
     """Deliberately incomplete trusted runtime, exclusively for failure acceptance."""
 
@@ -292,6 +381,17 @@ def runtime_fixture(mode: str) -> None:
     capabilities = ["host_tools", "cancel"] + ([] if mode == "legacy" else ["safe_steering"])
     emit("", {"type": "ready", "runtime": "offline-protocol-fixture", "capabilities": capabilities})
     start = json.loads(sys.stdin.readline())
+    activation = start["message"]["run"]
+    if mode == "legacy":
+        require(
+            set(activation)
+            == {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"},
+            "Runtime lacking safe_steering did not receive the identical old Start shape",
+        )
+    else:
+        require(
+            activation.get("steering") is True, "New host failed to explicitly acknowledge advertised safe_steering"
+        )
     run = start["run_id"]
     emit(
         run,
@@ -479,6 +579,7 @@ async def main() -> None:
             require(
                 json.loads(stdout.splitlines()[-1])["status"] == "completed", "CLI omitted final boundary completion"
             )
+            await legacy_host_checks(config, root)
             await http_checks(binary, config, workspace, fixture)
             await protocol_checks(binary, config, root)
         print(
@@ -486,6 +587,9 @@ async def main() -> None:
         )
         print(
             "PASS: baseline v1 runtime without safe_steering; wrong-ack rejection; cancel and real host SIGKILL in offer/ack window → uncertain/undelivered, no runtime/tool replay"
+        )
+        print(
+            "PASS: actual new adapter with legacy v1 host omitting Start.steering → ordinary final/tool-result/Finished, no unnegotiated boundaries or hang; new host acknowledges only capable runtimes"
         )
     finally:
         fixture.release_cancel.set()

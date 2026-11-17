@@ -15,6 +15,16 @@ admission fails. Unsupported, stopped or sealed runs fail with HTTP 409; there i
 **no conversion into FIFO input**. HTTP requires the existing exact Origin,
 JSON content type and per-host token. GET is token protected as well.
 
+Runtime enablement is **two-sided**: after observing the Ready capability, the
+host explicitly sends `start.run.steering: true`. The optional field is a strict
+boolean, defaults false, and is omitted from serialized Start when false. Thus
+runtimes lacking the capability receive the identical baseline v1 Start shape.
+When an older host ignores the Ready capability and omits the field (or sends
+false), the new adapter runs ordinary baseline `Agent.run`/Finished without a
+steering plugin, boundary messages or waiting for a steering acknowledgment.
+Only explicit true enables the safe-point extension. This leaves existing
+positional `Start` constructors and direct runtime/auth fixtures disabled by default.
+
 Limits are 1–32,000 UTF-8 bytes of nonblank prompt text, **32 lifetime admissions
 per run** (including applied inputs), and **256 pending/offered inputs per host**.
 The lifetime limit is deliberately stricter than an unbounded stream of small
@@ -50,7 +60,8 @@ sensitive local conversation data, never bootstrap/provider credentials.
 The private built-in adapter plugin uses only public `AgentPlugin` hooks and
 `SessionManager.add_message`. It does not load arbitrary plugins or import
 `nagents.harness`, TUI or web. `HostExecutor.execute` never injects inputs between
-tool calls. `after_tools` fires only after the complete tool batch is persisted;
+tool calls. The plugin is installed only when the host explicitly enables steering.
+`after_tools` fires only after the complete tool batch is persisted;
 inputs are appended as explicit user messages in host FIFO order at that boundary.
 
 Successful no-tools final responses use a separate outer final boundary. If an
@@ -94,6 +105,8 @@ It also runs a baseline v1 runtime without the capability, rejects a synthetic
 wrong acknowledgment, and SIGKILLs its own host in the offer/ack window to verify
 `uncertain`/`undelivered` recovery without replay. The existing `scripts/smoke.py`
 still covers local CLI, HTTP/WebSocket and real-PTY TUI/FIFO/subagent regressions.
+Legacy-host checks run the actual new adapter without the Start acknowledgment
+through both no-tool finals and ordinary tool/results to Finished without hanging.
 
 Run it in an explicit venv with private `TMPDIR` under `/tmp` and a debug binary:
 

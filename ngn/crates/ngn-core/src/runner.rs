@@ -91,6 +91,18 @@ async fn send(
     Ok(())
 }
 
+fn steering_capability(capabilities: &[String]) -> Result<bool> {
+    ensure!(
+        ["host_tools", "cancel"]
+            .iter()
+            .all(|required| capabilities.iter().any(|capability| capability == required)),
+        "Runtime lacks required host_tools/cancel capabilities"
+    );
+    Ok(capabilities
+        .iter()
+        .any(|capability| capability == "safe_steering"))
+}
+
 pub(crate) async fn stdio(
     host: &Arc<Host>,
     execution: &Execution,
@@ -125,17 +137,7 @@ pub(crate) async fn stdio(
         "Ready frame must not bind an unaccepted run"
     );
     let safe_steering = match ready.message {
-        RuntimeMessage::Ready { capabilities, .. } => {
-            ensure!(
-                ["host_tools", "cancel"]
-                    .iter()
-                    .all(|required| capabilities.iter().any(|capability| capability == required)),
-                "Runtime lacks required host_tools/cancel capabilities"
-            );
-            capabilities
-                .iter()
-                .any(|capability| capability == "safe_steering")
-        }
+        RuntimeMessage::Ready { capabilities, .. } => steering_capability(&capabilities)?,
         _ => bail!("Expected runtime ready handshake"),
     };
     host.negotiate_steering(run, safe_steering).await?;
@@ -173,6 +175,7 @@ pub(crate) async fn stdio(
         provider: host.config.selected_provider()?.clone(),
         tools: host.catalog(execution),
         max_tool_rounds: host.config.max_tool_rounds,
+        steering: safe_steering,
     };
     send(&mut writer, run, HostMessage::Start { run: start }).await?;
     let mut calls = HashSet::new();
@@ -481,6 +484,29 @@ mod tests {
         assert!(read_frame(&mut BufReader::new(&bytes[..])).await.is_err());
         let bytes = vec![b'x'; MAX_FRAME_BYTES + 1];
         assert!(read_frame(&mut BufReader::new(&bytes[..])).await.is_err());
+    }
+
+    #[test]
+    fn host_acknowledges_only_advertised_steering_and_preserves_legacy_start_shape() {
+        let baseline = json!({"session_id":"s", "prompt":"user", "system_prompt":"policy", "database":"/private/runtime.sqlite3",
+            "provider":{"kind":"fixture","model":"fixture","api":"","base_url":"","api_key_env":"FIXTURE_KEY"}, "tools":[],"max_tool_rounds":10});
+        for (optional, expected) in [
+            (None, false),
+            (Some("unknown_optional_capability"), false),
+            (Some("safe_steering"), true),
+        ] {
+            let mut capabilities = vec!["host_tools".into(), "cancel".into()];
+            capabilities.extend(optional.map(str::to_owned));
+            let mut start: StartRun = serde_json::from_value(baseline.clone()).unwrap();
+            start.steering = steering_capability(&capabilities).unwrap();
+            assert_eq!(start.steering, expected);
+            let mut wire = baseline.clone();
+            if expected {
+                wire["steering"] = json!(true);
+            }
+            assert_eq!(serde_json::to_value(start).unwrap(), wire);
+        }
+        assert!(steering_capability(&["safe_steering".into()]).is_err());
     }
 
     #[test]

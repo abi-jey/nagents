@@ -51,6 +51,7 @@ class Start:
     provider: dict[str, object]
     tools: list[Definition]
     max_tool_rounds: int
+    steering: bool = False
 
     @classmethod
     def parse(cls, message: dict[str, object]) -> Start:
@@ -58,7 +59,14 @@ class Start:
         if message["type"] != "start":
             raise ProtocolError("Expected a start message")
         run = mapping(message["run"])
-        fields(run, {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"})
+        fields(
+            run,
+            {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"},
+            frozenset({"steering"}),
+        )
+        steering = run.get("steering", False)
+        if type(steering) is not bool:
+            raise ProtocolError("Invalid host steering acknowledgment")
         provider = mapping(run["provider"])
         fields(provider, {"kind", "model", "api", "base_url", "api_key_env"})
         for key in provider:
@@ -93,6 +101,7 @@ class Start:
             provider,
             definitions,
             rounds,
+            steering,
         )
 
 
@@ -204,7 +213,7 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
     status = "failed"
     error = "Agent ended without a successful terminal event"
     try:
-        plugin = _SteeringPlugin(executor.steering, start.session_id)
+        plugin = _SteeringPlugin(executor.steering, start.session_id) if start.steering else None
         agent = create_agent(start, executor, plugin)
         failed = False
         prompt = start.prompt
@@ -228,6 +237,11 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
                     elif isinstance(event, DoneEvent):
                         completed = event.finish_reason is FinishReason.STOP
             if not completed or failed:
+                break
+            if plugin is None:
+                # An old host may ignore our Ready capability. Without its
+                # explicit Start acknowledgment, remain strictly baseline v1.
+                status, error = "completed", ""
                 break
             # No-tools final replies have no after_tools hook. Ask explicitly
             # after Agent.run is closed and its assistant response is persisted.

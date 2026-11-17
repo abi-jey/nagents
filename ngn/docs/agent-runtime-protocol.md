@@ -18,7 +18,8 @@ not embedded Python and not a wrapper around the old Python harness.
   it to avoid exposing raw provider payloads. Terminal errors are bounded and safe.
 - Version mismatch is fatal. No negotiation downgrade or automatic fallback.
 - Required capabilities are `host_tools` and `cancel`. The optional `safe_steering`
-  extension below adds a strictly negotiated boundary handshake; runtimes lacking
+  extension below requires both the Ready capability and `start.run.steering: true`
+  before using its boundary handshake; runtimes lacking
   it retain baseline v1 behavior and cannot admit steering. Other unknown optional
   capability labels may be ignored.
 
@@ -201,9 +202,26 @@ Runtime protocol v1 and host storage schema 3 are unchanged by these timing even
 The supplied adapter now advertises `safe_steering` alongside the required
 capabilities. Baseline runtimes are still accepted without it; steering is refused
 until this runtime capability has been observed for the exact root activation.
-There is no change to the baseline `start` shape.
+**Advertising the capability alone does not enable steering.** A supporting host
+acknowledges it with the optional strict boolean `steering` in `start.run`:
 
-Only the runtime's private built-in public-API plugin asks at `after_tools`, after
+```json
+{"steering":true}
+```
+
+This is an additional field on the existing run object, not a separate frame.
+The host sets it true **only** after observing `safe_steering` in Ready. Its default
+is false and the host **omits it entirely when false**, preserving the identical
+old Start shape for third-party runtimes without the capability. Strings, numbers,
+null and other nonboolean values are rejected; unknown fields remain rejected.
+
+An older v1 host may ignore the new Ready label and omit this acknowledgment. In
+that case (also for explicit false), the new adapter installs no steering plugin,
+runs one ordinary `Agent.run`, and emits Finished without any steering boundaries
+or acknowledgment wait. Existing positional `Start` constructors also default to
+false. Only a capability **and** explicit host true enable the extension below.
+
+When enabled, only the runtime's private built-in public-API plugin asks at `after_tools`, after
 the **whole** tool batch has been persisted. The outer adapter asks at `final`
 after a successful no-tools response is persisted and its iterator closed:
 
@@ -233,7 +251,7 @@ terminal message may end an unconfirmed offer without claiming application.
 An empty decision is `{"type":"steering_offer","boundary_id":"...","input":null}`.
 At `after_tools` this continues the current loop. At `final`, Rust atomically seals
 future admission under its active lock **before** writing the empty reply; only a
-terminal runtime message can follow. A capable runtime cannot complete without
+terminal runtime message can follow. A steering-enabled activation cannot complete without
 this final closure. When a final boundary instead offers input, the adapter
 explicitly calls `Agent.run(prompt, same_session_id)` within the same host run,
 and acknowledges from `before_generation` after the initial message is persisted.
