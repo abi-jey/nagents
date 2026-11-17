@@ -33,6 +33,9 @@
   Both installed archive paths include the checked-in ChatGPT example. Synthetic
   auth gates run explicitly; tag publication refuses a published core without its
   public auth API. Private test roots do not depend on the invoking shell's umask.
+- Create each missing default/custom development cache ancestor as 0700 without
+  changing existing unsafe paths. Acceptance also launches the extracted offline,
+  read-only app in the real cache ancestry, not only independent fixture state.
 
 This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
 parity. Production deployment and paid-provider/Codex validation are separate gates.

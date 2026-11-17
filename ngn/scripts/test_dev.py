@@ -5,16 +5,106 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from dev import Invocation, cargo_target, command, invocation, isolated_environment, runtime_config, source_snapshot
+from dev import (
+    Invocation,
+    cargo_target,
+    command,
+    ensure_private_cache,
+    invocation,
+    isolated_environment,
+    offline_cache_probe,
+    runtime_config,
+    source_snapshot,
+)
 
 
 class DevTests(unittest.TestCase):
+    def test_fresh_default_cache_creates_every_missing_ancestor_private_under_both_shell_umasks(self) -> None:
+        code = """import json, stat, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from dev import ensure_private_cache
+base = Path(sys.argv[1])
+cache = base / 'xdg/ngn-rust-dev/checkout'
+ensure_private_cache(cache)
+print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.parent, cache.parent, cache)]))
+"""
+        for mask in ("0002", "0022"):
+            with self.subTest(mask=mask), tempfile.TemporaryDirectory() as temporary:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'umask "$1"; shift; exec "$@"',
+                        "ngn-cache-test",
+                        mask,
+                        sys.executable,
+                        "-c",
+                        code,
+                        temporary,
+                        str(Path(__file__).resolve().parent),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                )
+                self.assertEqual(json.loads(result.stdout), [0o700] * 3)
+
+    def test_existing_unsafe_cache_ancestor_and_its_symlink_are_never_repaired(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            existing = root / "existing"
+            existing.mkdir(mode=0o700)
+            existing.chmod(0o775)
+            alias = root / "alias"
+            alias.symlink_to(existing, target_is_directory=True)
+            for parent in (existing, alias):
+                with (
+                    self.subTest(parent=parent),
+                    self.assertRaisesRegex(
+                        ValueError, "Existing paths were not changed; choose a private NGN_DEV_CACHE"
+                    ),
+                ):
+                    ensure_private_cache(parent / "checkout")
+            self.assertEqual(stat.S_IMODE(existing.stat().st_mode), 0o775)
+            self.assertTrue(alias.is_symlink())
+            self.assertFalse((existing / "checkout").exists())
+
+    def test_installed_cache_probe_is_always_offline_read_only_and_stage_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            with patch(
+                "dev.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"status":"completed"}\n', "")
+            ) as execute:
+                offline_cache_probe(stage)
+            argv = execute.call_args.args[0]
+            self.assertEqual(argv[:4], [str(stage / "app/ngn"), "--demo", "--read-only", "-C"])
+            self.assertEqual(argv[argv.index("--data-dir") + 1], str(stage / "offline-probe-state"))
+            self.assertNotIn("--config", argv)
+            self.assertEqual(execute.call_args.kwargs["env"], {"PATH": str(stage / "app")})
+            self.assertTrue((stage / "offline-probe-workspace").is_dir())
+
+    def test_installed_cache_probe_fails_closed_on_permission_rejection_or_missing_completion(self) -> None:
+        for code, stdout, stderr in (
+            (1, "", "Identity ownership requires non-writable parent directories"),
+            (0, "", ""),
+        ):
+            with (
+                self.subTest(code=code),
+                tempfile.TemporaryDirectory() as temporary,
+                patch("dev.subprocess.run", return_value=subprocess.CompletedProcess([], code, stdout, stderr)),
+                self.assertRaisesRegex(ValueError, "Offline installed cache/state probe"),
+            ):
+                offline_cache_probe(Path(temporary))
+
     def test_cli_paths_are_isolated_without_changing_other_rust_arguments(self) -> None:
         parsed = invocation(
             ["--config", "model.json", "-C", "/workspace", "serve", "--port", "18768", "--data-dir=/state"]

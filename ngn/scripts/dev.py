@@ -8,11 +8,13 @@ import json
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import tomllib
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -115,6 +117,61 @@ def cargo_target(root: Path, cache: Path, environ: dict[str, str]) -> Path:
     return target / f"ngn-dev-{identity}"
 
 
+def ensure_private_cache(path: Path) -> None:
+    """Create each missing canonical ancestor privately, never repair existing paths."""
+    path = path.expanduser().resolve()
+    for directory in (*reversed(path.parents), path):
+        with suppress(FileExistsError):
+            directory.mkdir(mode=0o700)
+        metadata = directory.lstat()
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(
+                f"Development cache requires real directories: {directory}; existing paths were not changed"
+            )
+        if os.name == "posix":
+            trusted_sticky = metadata.st_uid == 0 and bool(metadata.st_mode & stat.S_ISVTX)
+            if metadata.st_mode & 0o022 and not trusted_sticky:
+                raise ValueError(
+                    f"Development cache requires non-writable ancestors: {directory}. "
+                    "Existing paths were not changed; choose a private NGN_DEV_CACHE or explicitly secure that directory."
+                )
+
+
+def offline_cache_probe(stage: Path) -> None:
+    """Check real launcher ancestry, not only smoke fixtures; never use operator state."""
+    workspace = stage / "offline-probe-workspace"
+    workspace.mkdir(mode=0o700)
+    result = subprocess.run(
+        [
+            str(stage / "app/ngn"),
+            "--demo",
+            "--read-only",
+            "-C",
+            str(workspace),
+            "--data-dir",
+            str(stage / "offline-probe-state"),
+            "run",
+            "--json",
+            "offline development cache ancestry acceptance",
+        ],
+        # No Python or provider command is available. Demo is always explicit,
+        # even when --test was invoked with a live --config or --data-dir.
+        env={"PATH": str(stage / "app")},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode:
+        raise ValueError(f"Offline installed cache/state probe failed: {result.stderr[:4096]}")
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    if not events or events[-1].get("status") != "completed":
+        raise ValueError("Offline installed cache/state probe did not complete")
+    print(
+        "PASS: extracted offline/read-only launch in actual cache ancestry, without Python or model access", flush=True
+    )
+
+
 def source_snapshot(root: Path) -> tuple[str, str, bool]:
     # A hook may export its parent's index or worktree. Never let that context
     # redirect even read-only provenance queries into another repository.
@@ -140,7 +197,7 @@ def build(root: Path, cache: Path, *, published_core: bool) -> tuple[Path, Path,
     # Reuse only checkout-scoped compilation output, never a staged runtime or
     # installed Python package. Cargo locking alone does not isolate source trees.
     snapshot = source_snapshot(root)
-    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_private_cache(cache)
     stage = Path(tempfile.mkdtemp(prefix="candidate-", dir=cache))
     runtime = stage / "runtime"
     environment = isolated_environment(runtime, dict(os.environ))
@@ -269,6 +326,7 @@ def main() -> int:
     config.chmod(0o600)
     python = str(runtime / "bin/python")
     if options.test:
+        offline_cache_probe(stage)
         run(
             [python, str(ROOT / "ngn/scripts/smoke.py"), "--binary", str(stage / "app/ngn")],
             directory=stage,
@@ -287,6 +345,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(f"ngn dev: {error}", file=sys.stderr)
         raise SystemExit(1) from error

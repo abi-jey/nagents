@@ -215,6 +215,13 @@ an external override or `NGN_DEV_CACHE` do not share mutable Cargo artifacts.
 Symlinks are resolved before selecting the bucket; relative `CARGO_TARGET_DIR`
 and `NGN_DEV_CACHE` paths resolve from the launcher's working directory, not the
 Cargo manifest directory. This is artifact isolation, not an OS sandbox.
+Every missing cache ancestor is created with owner-only access, including on a
+first launch under umask 0002. Existing writable ancestors are rejected with an
+actionable error; the launcher does not chmod or repair existing directories or
+symlinks. Choose a private cache or secure the existing path deliberately.
+`--test` also launches the extracted offline/read-only app in its actual cache
+ancestry with a separate candidate-owned workspace/state and no Python on PATH;
+it never tests against an operator's configured state or contacts a live provider.
 
 Rust and embedded web assets are rebuilt on every invocation; Python wheels and
 the runtime environment are freshly built/installed. A source change during the
