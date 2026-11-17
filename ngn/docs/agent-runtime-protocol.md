@@ -166,3 +166,13 @@ HTTP APIs require `X-Ngn-Token`, except bootstrap. Mutations require the exact
 same-origin `Origin` and JSON content type. WebSockets require the exact origin
 and two subprotocols: `ngn.events.v1` and `ngn.token.<token>`. Tokens never go in
 URLs. Subscribe-before-replay and cursor de-duplication avoid event loss on reconnect.
+# Host queue events (0.100.1)
+
+The runtime still receives only protocol-v1 activations. Queuing is a host concern:
+`run_queued` records acceptance, `run_started` records the atomic claim, and
+`run_finished` records completion or cancellation. A pending run has host status
+`queued`, which a runtime cannot use as its terminal status. `queue_updated`
+records pause/resume for a session and has `run_id: ""`, including on empty
+conversations. Clients must still filter by `session_id` and durable cursor; an
+empty run identity grants no tool authority. Restart pauses unstarted inputs and
+marks claimed work interrupted without replaying either tools or model runs.

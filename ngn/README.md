@@ -1,4 +1,4 @@
-# ngn · 0.100.0
+# ngn · 0.100.1
 
 A standalone **Rust harness, TUI and local web server**, with a versioned agent
 runtime protocol. The optional **nagents** adapter runs the Python agent/model
@@ -10,6 +10,9 @@ The Rust application lives under `ngn/` in the **same repository** as the Python
 The earlier standalone local tags/artifacts were never published and remain
 untouched in their original checkout. This is **not yet full legacy feature
 parity**. See [migration status](docs/migration.md) and [release notes](docs/releases/0.100.0.md).
+
+`0.100.1` adds durable Rust-owned FIFO input queues with matching TUI/web controls.
+See the [patch notes](docs/releases/0.100.1.md) before upgrading important state.
 
 ## Run without Python
 
@@ -64,22 +67,32 @@ is imported.** The core agents library remains independently usable and unchange
 
 ## Controls
 
-- **Enter** sends; **Shift+Enter** inserts a newline where the terminal supports it.
-- **Esc** cancels active work. Completed tool actions are not rolled back.
+- **Enter** sends, or queues while busy/paused; **Shift+Enter** inserts a newline.
+- **Esc** cancels active work and pauses pending inputs. Completed actions are not rolled back.
 - **F2** lists sessions, **F3** creates one, **F4** toggles tool details.
 - **F5** opens the agent catalog; **Enter** inspects a child conversation and
   **Ctrl+X** cancels that child and its descendants, not its parent or siblings.
+- **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
+  selected input, **Ctrl+K** clears pending inputs and pauses. These do not cancel active work.
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+Q** quits and joins runners before restoring the terminal.
-- `/new`, `/sessions`, `/resume ID`, `/tasks`, `/help`, `/quit` are supported.
+- `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear]`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
 
 The browser also shows agent status, independent child transcripts, child-only
 cancellation, and correctly attributed child approvals in the root workspace.
-Prompts submitted to a busy session are rejected, not silently
-queued or replayed. Different sessions can run independently (eight root runs max).
+The browser also exposes the pending FIFO, pause/resume, per-input removal and
+clear-and-pause. Queues allow 32 pending inputs per session and 256 per host;
+different sessions can run independently (eight roots and 64 total active runs).
+
+Queued request IDs retain their identities after dispatch/cancellation; retrying
+the same UUID and text cannot execute twice or upgrade its stored approval mode.
+A completed turn dispatches the next input only after its children are cleaned up.
+Stop/failure/shutdown/restart pause pending inputs. **Resume is explicit**; started
+or interrupted work is never requeued/retried. `run --json` remains immediate and
+fails rather than jumping a paused/pending queue. This is FIFO, not model steering.
 
 ## Rust-supervised subagents
 
@@ -112,9 +125,9 @@ marked failed and those children are cancelled; use `agent_wait` before finishin
 Background results are **not** automatically injected into an unrelated model
 generation. Child text/reasoning is not relayed as root assistant output.
 
-The official baseline uses host schema 2 for immutable task topology and recovery.
+This patch upgrades host schema 2 to 3 for durable queues and session-scoped events.
 Stop the host and back up its workspace state before upgrading important data.
-Earlier standalone schema-1 prototypes cannot open schema 2; downgrading requires
+The official 0.100.0 and earlier standalone prototypes cannot open schema 3; downgrading requires
 restoring that backup. No legacy Python ngn data or runtime-owned database is migrated.
 
 ## Boundaries

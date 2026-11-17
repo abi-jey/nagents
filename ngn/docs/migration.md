@@ -1,4 +1,4 @@
-# Rust migration status · official 0.100.0
+# Rust migration status · official 0.100.1
 
 ## Decision
 
@@ -51,6 +51,10 @@ initial browser client proves the new shared lifecycle and tool boundary.
   cleanup of unjoined active children.
 - [x] TUI/web task catalogs, independent child inspectors, child-only cancellation
   and root-operator approval of correctly attributed child calls.
+- [x] Rust-owned durable per-session FIFO queues, transactional ordering/admission,
+  bounded backlog, stable request IDs and matching TUI/HTTP/WebSocket controls.
+- [x] Pending-input removal, clear/pause/resume and paused restart recovery without
+  replaying interrupted runs or transferring a prior tool approval.
 
 ## Explicitly not migrated yet
 
@@ -64,8 +68,9 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Full legacy delegation UX, agent profiles/model overrides, child follow-ups,
   automatic completion notifications at model boundaries and wake-up timers.
   Basic Rust supervision, inspection, budgets and explicit `agent_wait` delivery
-   exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
-- Input queueing and steering/interrupt delivery semantics during an active model run.
+  exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
+- Steering/interrupt delivery during an active model generation, queue reordering,
+  editing, attachments and scheduled/follow-up delivery. Plain FIFO exists in 0.100.1.
 - Skills, nested instructions, Git-ignore discovery, MCP and custom Python plugins.
 - Model context accounting, compaction controls, usage UI and model discovery UI.
 - OAuth/device login, ChatGPT/Codex routes, Foundry Entra integration and key storage.

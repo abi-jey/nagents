@@ -1,5 +1,22 @@
 # Changelog
 
+## Official 0.100.1 — durable input queues
+
+- Rust-owned per-session FIFO, stable idempotent request IDs, 32 pending inputs per
+  session/256 per host, admission within existing root/run limits and no backlog bypass.
+- TUI F6 and `/queue` controls, busy input acceptance, pause/resume, individual
+  removal and clear-and-pause; matching browser, HTTP and durable WebSocket controls.
+- Stop/failure/shutdown/restart pause pending work. Explicit resume only dispatches
+  unstarted inputs; interrupted runs and completed tool actions are never replayed.
+- Preserve each queued run's approval mode; a prior grant cannot authorize a future
+  turn. Child sessions remain inspect-only and cannot admit/control root queues.
+- Host schema 2→3 migration preserves journals and introduces session-scoped queue
+  events with an empty run ID. Runtime protocol v1 is unchanged.
+- FIFO/capacity/concurrency/recovery and TUI/web regressions, actual model-fixture
+  HTTP/WebSocket flows and real PTY removal/resume/clear/restart acceptance.
+
+Steering, follow-ups, original UI parity and the other migration gaps remain open.
+
 ## Official 0.100.0 — monorepo release
 
 - Consolidate the Rust application under `ngn/` in `abi-jey/nagents`, retaining the
