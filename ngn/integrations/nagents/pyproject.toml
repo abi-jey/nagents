@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.29"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ngn-nagents"
+version = "0.100.0"
+description = "Agent Runtime Protocol v1 adapter for the nagents Python library"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["nagents>=0.27.1,<0.29"]
+
+[project.scripts]
+ngn-nagents = "ngn_nagents.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ngn_nagents"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.mypy]
+strict = true

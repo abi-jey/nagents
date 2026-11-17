@@ -407,6 +407,45 @@ def test_event_stream_wakes_on_publish_and_replays_only_bounded_tail(tmp_path: P
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("operation", ["publish", "subscribe", "destroy"])
+def test_event_stream_enforces_supplied_context_before_access(tmp_path: Path, operation: str) -> None:
+    async def scenario() -> None:
+        store = await open_store(tmp_path / "a2a")
+        alice = owner("alice")
+        call = context(alice)
+        claim = await store.reserve(request("owned-stream-message"), alice)
+        previous = await store.get(claim.task_id, call)
+        assert previous is not None
+        working = task_copy(previous.task, TaskState.TASK_STATE_WORKING)
+        version = await store.save(
+            working, event=working, prev=previous.task, prev_version=previous.version, context=call
+        )
+        stream = SQLiteEventStream(store)
+
+        async def access(supplied: ServerCallContext) -> None:
+            if operation == "subscribe":
+                events = stream.subscribe(claim.task_id, after=TaskVersion(0), context=supplied)
+                try:
+                    item = await asyncio.wait_for(anext(events), timeout=1)
+                    assert item.version == version
+                finally:
+                    await events.aclose()
+            elif operation == "publish":
+                await stream.publish(claim.task_id, VersionedEvent(working, version), context=supplied)
+            else:
+                await stream.destroy(claim.task_id, context=supplied)
+
+        with pytest.raises(TaskNotFoundError):
+            await access(context(owner("bob")))
+        with pytest.raises(TaskNotFoundError):
+            await access(context(owner("alice", "another-tenant")))
+        with pytest.raises(PermissionError):
+            await access(ServerCallContext())
+        await access(call)
+
+    asyncio.run(scenario())
+
+
 def test_unsafe_directory_permissions_and_symlinked_database_are_rejected(tmp_path: Path) -> None:
     async def scenario() -> None:
         unsafe_directory = tmp_path / "unsafe"

@@ -1,0 +1,30 @@
+[package]
+name = "ngn"
+description = "A Rust agent harness, terminal client and local web server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+futures-util.workspace = true
+ngn-core.workspace = true
+ngn-protocol.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle = "2"
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

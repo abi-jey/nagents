@@ -32,6 +32,7 @@ from nagents.live import LiveEvent
 from nagents.live.controls import LiveControls
 from nagents.web.live import runtime
 from nagents.web.live.runtime import LiveService
+from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -307,7 +308,13 @@ def test_create_rejects_invalid_voice_values(rig: Rig, voice: object) -> None:
     asyncio.run(scenario())
 
 
-def test_concurrent_provisioning_and_connected_reservations_are_atomic(rig: Rig) -> None:
+def test_concurrent_provisioning_and_connected_reservations_are_atomic(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This tests admission ownership while a fake provider is deliberately gated,
+    # not a 250-ms provisioning deadline on a loaded cross-platform runner.
+    monkeypatch.setattr(runtime, "PROVISION_SECONDS", HANG_GUARD)
+
     async def scenario() -> None:
         rig.provision_release.clear()
         assert rig.service.active_session_id == ""
