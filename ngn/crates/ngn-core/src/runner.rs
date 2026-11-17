@@ -2,8 +2,8 @@ use std::{collections::HashSet, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
 use ngn_protocol::{
-    Event, HostFrame, HostMessage, MAX_FRAME_BYTES, RunStatus, RuntimeFrame, RuntimeMessage,
-    StartRun, ToolCall, VERSION,
+    Event, HostFrame, HostMessage, MAX_FRAME_BYTES, ProviderAuth, RunStatus, RuntimeFrame,
+    RuntimeMessage, StartRun, ToolCall, VERSION,
 };
 use serde_json::json;
 use tokio::{
@@ -123,13 +123,11 @@ pub(crate) async fn stdio(
         ready.run_id.is_empty(),
         "Ready frame must not bind an unaccepted run"
     );
+    let provider = host.config.selected_provider()?;
     match ready.message {
-        RuntimeMessage::Ready { capabilities, .. } => ensure!(
-            ["host_tools", "cancel"]
-                .iter()
-                .all(|required| capabilities.iter().any(|capability| capability == required)),
-            "Runtime lacks required host_tools/cancel capabilities"
-        ),
+        RuntimeMessage::Ready { capabilities, .. } => {
+            validate_capabilities(&capabilities, provider.auth)?
+        }
         _ => bail!("Expected runtime ready handshake"),
     }
     let mut system_prompt = host.config.system_prompt.clone();
@@ -163,7 +161,9 @@ pub(crate) async fn stdio(
             .join("nagents.sqlite3")
             .to_string_lossy()
             .into_owned(),
-        provider: host.config.selected_provider()?.clone(),
+        auth_store: (provider.auth == ProviderAuth::Chatgpt)
+            .then(|| host.config.auth_store().to_string_lossy().into_owned()),
+        provider: provider.clone(),
         tools: host.catalog(execution),
         max_tool_rounds: host.config.max_tool_rounds,
     };
@@ -238,6 +238,23 @@ pub(crate) async fn stdio(
         error: terminal.1,
         text: final_text,
     })
+}
+
+fn validate_capabilities(capabilities: &[String], auth: ProviderAuth) -> Result<()> {
+    ensure!(
+        ["host_tools", "cancel"]
+            .iter()
+            .all(|required| capabilities.iter().any(|capability| capability == required)),
+        "Runtime lacks required host_tools/cancel capabilities"
+    );
+    ensure!(
+        auth != ProviderAuth::Chatgpt
+            || capabilities
+                .iter()
+                .any(|capability| capability == "chatgpt_auth"),
+        "Runtime lacks chatgpt_auth. ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5; install a source-built core containing that API and this adapter. Official subscription release is blocked until a new core version is published."
+    );
+    Ok(())
 }
 
 pub(crate) async fn demo(
@@ -374,5 +391,23 @@ mod tests {
         assert!(read_frame(&mut BufReader::new(&bytes[..])).await.is_err());
         let bytes = vec![b'x'; MAX_FRAME_BYTES + 1];
         assert!(read_frame(&mut BufReader::new(&bytes[..])).await.is_err());
+    }
+
+    #[test]
+    fn subscription_requires_explicit_capability_before_start() {
+        let old = vec!["host_tools".into(), "cancel".into()];
+        assert!(validate_capabilities(&old, ProviderAuth::ApiKey).is_ok());
+        let error = validate_capabilities(&old, ProviderAuth::Chatgpt)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("chatgpt_auth")
+                && error.contains("0.28.5")
+                && error.contains("source-built")
+        );
+        let mut modern = old;
+        modern.push("chatgpt_auth".into());
+        assert!(validate_capabilities(&modern, ProviderAuth::Chatgpt).is_ok());
+        assert!(validate_capabilities(&[], ProviderAuth::Chatgpt).is_err());
     }
 }

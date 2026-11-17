@@ -16,8 +16,12 @@
 - Native list/search respect bounded workspace `.gitignore` rules, including nested
   origins, negation and explicit starting paths. Protected paths remain excluded.
 - The Python library exposes device authentication and guarded storage without a
-  harness/UI import, with cooperative cross-process refresh ownership. This does
-  not yet expose Codex login or subscription configuration in the Rust application.
+  harness/UI import, with cooperative cross-process refresh ownership.
+- Explicit development ChatGPT connections use a host-generated private store,
+  negotiated runtime capability and credentials callback without Codex discovery or
+  API-key fallback. Native CLI device login/status/logout use bounded redacted
+  frames and shared-host/exclusive-writer ownership. Browser login, live entitlement
+  checks and publication of the prerequisite core version remain separate gates.
 
 This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
 parity. Production deployment and paid-provider/Codex validation are separate gates.

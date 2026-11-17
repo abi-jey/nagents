@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, env, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use ngn_protocol::ProviderConfig;
+use ngn_protocol::{ProviderAuth, ProviderConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -78,9 +78,7 @@ impl Config {
             .canonicalize()
             .context("Workspace does not exist")?;
         ensure!(self.workspace.is_dir(), "Workspace must be a directory");
-        if self.data_dir.is_relative() {
-            self.data_dir = env::current_dir()?.join(&self.data_dir);
-        }
+        self.data_dir = std::path::absolute(&self.data_dir)?;
         ensure!(
             !self.runner.is_empty() && !self.runner[0].is_empty(),
             "Runner executable is required"
@@ -126,18 +124,49 @@ impl Config {
                     !provider.model.trim().is_empty(),
                     "Provider model is required"
                 );
-                ensure!(
-                    !provider.api_key_env.is_empty()
-                        && provider
-                            .api_key_env
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || c == b'_'),
-                    "api_key_env must be an environment variable name, not a key value"
-                );
+                if provider.auth == ProviderAuth::Chatgpt {
+                    ensure!(
+                        provider.kind == "openai",
+                        "ChatGPT auth requires kind openai"
+                    );
+                    ensure!(
+                        provider.api_key_env.is_empty(),
+                        "ChatGPT auth cannot use api_key_env; remove the API-key connection setting"
+                    );
+                    ensure!(
+                        matches!(
+                            provider.base_url.as_str(),
+                            "" | "https://api.openai.com/v1" | "https://api.openai.com/v1/"
+                        ),
+                        "ChatGPT auth cannot use a custom endpoint"
+                    );
+                    ensure!(
+                        matches!(provider.api.as_str(), "" | "auto" | "responses"),
+                        "ChatGPT auth requires auto/responses API"
+                    );
+                    ensure!(
+                        provider.model.len() <= 128
+                            && provider
+                                .model
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)),
+                        "ChatGPT model must be a bounded model ID (letters, digits, dot, underscore, hyphen)"
+                    );
+                } else {
+                    ensure!(
+                        !provider.api_key_env.is_empty()
+                            && provider
+                                .api_key_env
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || c == b'_'),
+                        "api_key_env must be an environment variable name, not a key value"
+                    );
+                }
                 ensure!(
                     matches!(
                         provider.kind.as_str(),
-                        "openai_compatible"
+                        "openai"
+                            | "openai_compatible"
                             | "anthropic"
                             | "gemini_native"
                             | "openrouter"
@@ -168,6 +197,11 @@ impl Config {
         let digest = Sha256::digest(self.workspace.to_string_lossy().as_bytes());
         self.data_dir.join("workspaces").join(format!("{digest:x}"))
     }
+
+    /// Never configured by a client/runtime, and never the legacy ngn/Codex store.
+    pub fn auth_store(&self) -> PathBuf {
+        self.data_dir.join("auth").join("openai.json")
+    }
 }
 
 #[cfg(test)]
@@ -185,5 +219,86 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.backend, Backend::Nagents);
         assert!(config.data_dir.ends_with("ngn-rust"));
+    }
+
+    fn chatgpt() -> serde_json::Value {
+        serde_json::json!({"provider":"subscription", "providers":{"subscription":{
+            "kind":"openai", "auth":"chatgpt", "model":"test-model", "api":"responses"
+        }}})
+    }
+
+    #[test]
+    fn explicit_subscription_and_fixed_host_storage() {
+        let config: Config = serde_json::from_value(chatgpt()).unwrap();
+        let config = config.resolve().unwrap();
+        assert_eq!(
+            config.selected_provider().unwrap().auth,
+            ProviderAuth::Chatgpt
+        );
+        assert!(config.auth_store().is_absolute());
+        assert_eq!(
+            config.auth_store(),
+            config.data_dir.join("auth/openai.json")
+        );
+        assert!(!config.auth_store().starts_with(config.state_dir()));
+        let mut value = chatgpt();
+        value["auth_store"] = serde_json::json!("/arbitrary/auth/openai.json");
+        assert!(serde_json::from_value::<Config>(value).is_err());
+    }
+
+    #[test]
+    fn subscription_rejects_ambiguous_keys_routes_and_models() {
+        for (key, value) in [
+            ("kind", "openai_compatible"),
+            ("kind", "anthropic"),
+            ("api_key_env", "OPENAI_API_KEY"),
+            ("api", "chat_completions"),
+            ("base_url", "https://example.invalid/v1"),
+            (
+                "base_url",
+                "https://chatgpt.com/backend-api/codex/responses",
+            ),
+            ("base_url", "https://api.openai.com/v1?secret=1"),
+            ("model", "test model"),
+            ("model", "test/model"),
+            ("model", ""),
+        ] {
+            let mut source = chatgpt();
+            source["providers"]["subscription"][key] = serde_json::json!(value);
+            let config: Config = serde_json::from_value(source).unwrap();
+            assert!(config.resolve().is_err(), "accepted {key}");
+        }
+        for key in ["api_key", "credentials", "auth_store", "home"] {
+            let mut source = chatgpt();
+            source["providers"]["subscription"][key] = serde_json::json!("not-allowed");
+            assert!(serde_json::from_value::<Config>(source).is_err());
+        }
+        let mut source = chatgpt();
+        source["providers"]["subscription"]["model"] = serde_json::json!("x".repeat(129));
+        assert!(
+            serde_json::from_value::<Config>(source)
+                .unwrap()
+                .resolve()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn old_api_key_config_still_resolves() {
+        let source = serde_json::json!({"providers":{"key":{
+            "kind":"openai_compatible", "model":"test", "api_key_env":"TEST_KEY", "base_url":"http://localhost:1234/v1"
+        }}, "provider":"key"});
+        let config = serde_json::from_value::<Config>(source)
+            .unwrap()
+            .resolve()
+            .unwrap();
+        let provider = config.selected_provider().unwrap();
+        assert_eq!(provider.auth, ProviderAuth::ApiKey);
+        assert!(
+            serde_json::to_value(provider)
+                .unwrap()
+                .get("auth")
+                .is_none()
+        );
     }
 }

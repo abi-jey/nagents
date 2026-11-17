@@ -1,0 +1,15 @@
+{
+  "config_version": 1,
+  "backend": "nagents",
+  "runner": ["python", "-m", "ngn_nagents"],
+  "provider": "chatgpt",
+  "providers": {
+    "chatgpt": {
+      "kind": "openai",
+      "auth": "chatgpt",
+      "model": "YOUR_CHATGPT_MODEL_ID",
+      "api": "responses",
+      "base_url": ""
+    }
+  }
+}

@@ -48,11 +48,13 @@ Six historical worktrees contained dirty work: two already-integrated fixes and
 four unwired UI prototypes. Those checkouts and branches are left untouched; an
 unmerged branch name alone is not evidence that its old implementation should win.
 
-The public Python device-authentication extraction is a prerequisite, not a Rust
-login feature. It keeps legacy imports compatible and serializes cooperative POSIX
+The public Python device-authentication extraction keeps legacy imports compatible
+and serializes cooperative POSIX
 refresh owners; ambiguous refresh attempts require fresh device login rather than
-retrying a possibly spent renewable token. Rust subscription configuration, UI and
-live account tests remain separate gates. Published `nagents 0.28.5` does not have
+retrying a possibly spent renewable token. Explicit Rust subscription configuration
+and bounded CLI login/status/logout now use that public API and enforce exclusive
+identity mutations against live hosts/runtimes. Browser auth UI and live account
+tests remain separate gates. Published `nagents 0.28.5` does not have
 this new public API; a future official adapter using it needs a tested core release.
 
 ## One-command development

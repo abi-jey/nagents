@@ -61,6 +61,9 @@ initial browser client proves the new shared lifecycle and tool boundary.
   scrollable approval previews, with real desktop/touch Chromium acceptance.
 - [x] Bounded workspace-root/nested `.gitignore` discovery and ancestor-aware search,
   retaining non-negatable protected paths and instruction-payload isolation.
+- [x] Explicit development ChatGPT subscription configuration, capability-gated
+  runtime credentials callback and bounded native `auth login|status|logout`.
+  Shared host/runtime identity guards exclude concurrent identity mutations.
 
 ## Explicitly not migrated yet
 
@@ -80,9 +83,10 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Skills, nested instruction loading, MCP and custom Python plugins. Native discovery
   supports workspace `.gitignore` only; user/global Git sources are not imported.
 - Model context accounting, compaction controls, usage UI and model discovery UI.
-- OAuth/device login, ChatGPT/Codex routes, Foundry Entra integration and key storage.
-  Public device auth/guarded storage are now available in the Python core; that
-  prerequisite is not yet an implemented Rust login or subscription connection.
+- Browser auth UI/HTTP mutations, live ChatGPT login/entitlement validation,
+  Foundry Entra integration and OS keyring storage. Explicit native CLI device
+  auth/subscription development is [bounded separately](chatgpt-auth.md); its
+  official release is blocked until the public core auth API is published.
 - Attachments, image/artifact delivery, session forks/rename/trash/grouping.
 - Voice, realtime/WebRTC, local audio devices, speech-driven delegation.
 - Channels/connectors (Telegram/Twilio/etc.), durable external inbox/routing ownership.
@@ -91,8 +95,9 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Legacy configuration/database import, complete platform compatibility and benchmarks.
 
 Provider API support inherited through nagents is separate from host integration:
-the adapter currently accepts environment API-key connections, not every legacy
-authentication or media mode. Local fixture coverage is not paid-provider validation.
+the adapter accepts environment API-key connections and an opt-in, capability-gated
+ChatGPT subscription extension, not every legacy authentication or media mode.
+Local fixture coverage is not paid-provider validation.
 
 ## Iteration order
 
