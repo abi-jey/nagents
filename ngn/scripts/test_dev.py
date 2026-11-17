@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -10,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from dev import Invocation, command, invocation, isolated_environment, runtime_config, source_snapshot
+from dev import Invocation, cargo_target, command, invocation, isolated_environment, runtime_config, source_snapshot
 
 
 class DevTests(unittest.TestCase):
@@ -49,6 +50,100 @@ class DevTests(unittest.TestCase):
         self.assertEqual(environment["PATH"], "/fresh/runtime/bin" + os.pathsep + "/usr/bin")
         self.assertEqual(environment["OPENAI_API_KEY"], original["OPENAI_API_KEY"])
         self.assertEqual(original["PYTHONPATH"], "/checkout/src")
+
+    def test_shared_external_target_is_namespaced_for_each_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            shared = base / "shared-target"
+            roots = [base / "checkout-a", base / "checkout-b"]
+            targets = [cargo_target(root, base / "cache", {"CARGO_TARGET_DIR": str(shared)}) for root in roots]
+            self.assertNotEqual(*targets)
+            for root, target in zip(roots, targets, strict=True):
+                identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+                self.assertEqual(target, shared / f"ngn-dev-{identity}")
+
+    def test_canonical_checkout_and_external_target_aliases_share_one_bucket(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, shared = base / "checkout", base / "shared-target"
+            root.mkdir()
+            shared.mkdir()
+            root_alias, target_alias = base / "checkout-alias", base / "target-alias"
+            root_alias.symlink_to(root, target_is_directory=True)
+            target_alias.symlink_to(shared, target_is_directory=True)
+            expected = cargo_target(root, base / "cache", {"CARGO_TARGET_DIR": str(shared)})
+            self.assertEqual(
+                cargo_target(root_alias / "ngn/..", base / "other-cache", {"CARGO_TARGET_DIR": str(target_alias)}),
+                expected,
+            )
+
+    def test_checkout_local_target_is_reused_including_ci_and_cache_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "ngn/target"
+            self.assertEqual(cargo_target(root, root / "cache", {"CARGO_TARGET_DIR": str(target)}), target)
+            self.assertEqual(cargo_target(root, root / "cache", {}), root / "cache/target")
+            target.mkdir(parents=True)
+            alias = root / "target-alias"
+            alias.symlink_to(target, target_is_directory=True)
+            self.assertEqual(cargo_target(root, root / "cache", {"CARGO_TARGET_DIR": str(alias)}), target)
+
+    def test_checkout_local_symlink_to_external_target_still_gets_a_bucket(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root, shared = base / "checkout", base / "shared-target"
+            root.mkdir()
+            shared.mkdir()
+            alias = root / "target"
+            alias.symlink_to(shared, target_is_directory=True)
+            selected = cargo_target(root, base / "cache", {"CARGO_TARGET_DIR": str(alias)})
+            self.assertEqual(selected.parent, shared)
+            self.assertRegex(selected.name, r"^ngn-dev-[0-9a-f]{16}$")
+            sibling = cargo_target(root, base / "cache", {"CARGO_TARGET_DIR": str(base / "checkout-other/target")})
+            self.assertEqual(sibling.parent, base / "checkout-other/target")
+
+    def test_custom_external_dev_cache_namespaces_its_default_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            cache = base / "shared-dev-cache"
+            environment = {"NGN_DEV_CACHE": str(cache)}
+            first = cargo_target(base / "checkout-a", cache, environment)
+            second = cargo_target(base / "checkout-b", cache, environment)
+            self.assertEqual(first.parent, cache / "target")
+            self.assertEqual(second.parent, cache / "target")
+            self.assertNotEqual(first, second)
+
+    def test_default_external_cache_target_has_a_checkout_bucket(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "checkout"
+            identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:16]
+            cache = base / ".cache/ngn-rust-dev" / identity
+            self.assertEqual(cargo_target(root, cache, {}), cache / "target" / f"ngn-dev-{identity}")
+
+    def test_relative_paths_resolve_from_launcher_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "checkout"
+            relative_root = Path(os.path.relpath(root))
+            selected = cargo_target(relative_root, Path("dev-cache"), {"CARGO_TARGET_DIR": "shared-target"})
+            self.assertEqual(selected, cargo_target(root, Path("dev-cache"), {"CARGO_TARGET_DIR": "shared-target"}))
+            self.assertEqual(selected.parent, Path.cwd() / "shared-target")
+            self.assertEqual(cargo_target(relative_root, Path("dev-cache"), {}).parent, Path.cwd() / "dev-cache/target")
+            local = root / "ngn/target"
+            self.assertEqual(
+                cargo_target(relative_root, Path("dev-cache"), {"CARGO_TARGET_DIR": os.path.relpath(local)}), local
+            )
+
+    def test_target_selection_does_not_mutate_environment_or_create_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            original = {"CARGO_TARGET_DIR": str(base / "shared-target"), "OPENAI_API_KEY": "not-a-real-key"}
+            environment = dict(original)
+            process_environment = dict(os.environ)
+            cargo_target(base / "checkout", base / "cache", environment)
+            self.assertEqual(environment, original)
+            self.assertEqual(dict(os.environ), process_environment)
+            self.assertEqual(list(base.iterdir()), [])
 
     def test_config_rebinds_only_runner_without_mutating_operator_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

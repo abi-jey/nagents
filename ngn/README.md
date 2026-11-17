@@ -181,10 +181,18 @@ Artifacts and state default to `$XDG_CACHE_HOME/ngn-rust-dev/<checkout-hash>/`
 stop one host before opening another on the same development state. Pass
 `--data-dir PATH` only when deliberately choosing another Rust state directory.
 `NGN_DEV_CACHE` overrides the cache; `NGN_DEV_PYTHON` chooses the bootstrap
-interpreter; `CARGO_TARGET_DIR` can reuse a trusted compilation cache. Rust and
-embedded web assets are rebuilt on every invocation; Python wheels and the runtime
-environment are freshly built/installed. A source change during the build aborts
-the candidate rather than mixing revisions.
+interpreter. A resolved `CARGO_TARGET_DIR` inside this checkout is reused directly
+(including `<checkout>/ngn/target` in CI). Every external target base, including
+the default `<cache>/target`, instead uses a child `ngn-dev-<checkout-hash>` bucket.
+The hash identifies the canonical checkout path, so different worktrees sharing
+an external override or `NGN_DEV_CACHE` do not share mutable Cargo artifacts.
+Symlinks are resolved before selecting the bucket; relative `CARGO_TARGET_DIR`
+and `NGN_DEV_CACHE` paths resolve from the launcher's working directory, not the
+Cargo manifest directory. This is artifact isolation, not an OS sandbox.
+
+Rust and embedded web assets are rebuilt on every invocation; Python wheels and
+the runtime environment are freshly built/installed. A source change during the
+build aborts the candidate rather than mixing revisions.
 
 “Latest” means the source currently checked out, including local edits. The command
 does **not** silently fetch, switch branches, pull, publish, or update an existing
