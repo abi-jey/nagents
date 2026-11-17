@@ -67,6 +67,32 @@ batch uploads or Live/Realtime connection headers.
         - session_context
         - close
 
+## Generation backend architecture
+
+`Provider(...)` remains the public facade. Its shared layer owns configuration,
+transport lifetime, session context, retries and error normalization. Each generation
+attempt is delegated through the `ProviderBackend` abstract interface, exported from
+`nagents.provider`.
+
+Wire implementations live in `provider/chat_completions.py`, `provider/responses.py`,
+`provider/anthropic.py` and `provider/gemini.py`. They own request construction and
+streaming/non-streaming response validation. Backend selection follows the configured
+HTTP contract, so a gateway using `api="messages"` reuses the Anthropic Messages
+implementation without acquiring Anthropic-specific authentication or cache defaults.
+Backends borrow the facade's transport; closing the facade releases that transport.
+They are selected per attempt, preserving changes to the configured route and model.
+
+Direct Anthropic requests enable automatic prompt caching with
+`cache_control={"type": "ephemeral"}` (the default five-minute TTL). Compatible
+Messages gateways do not receive this opt-in automatically. Cache hits still depend
+on matching prefixes, model minimum lengths and cache lifetime; cache writes have
+provider-specific pricing.
+
+The existing `OpenAIProvider` Codex subscription transport and `FoundryProvider`
+credential integration retain their public APIs. This backend interface concerns
+ordinary text-generation wire handling, not a new plugin-registration API or a
+replacement for Live, Realtime or batch interfaces.
+
 ## Context accounting
 
 `Provider.context_stats(...)` is the library's context-accounting entry point.

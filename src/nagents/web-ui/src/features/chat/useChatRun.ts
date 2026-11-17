@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { request, RequestError } from "../../api/client";
 import { text } from "../../api/events";
-import { MessageQueue, queueMessage, queuedMessageFailure, type QueuedCommand } from "../../api/messages";
+import { MessageQueue, queueMessage, queuedMessageFailure, type QueuedCommand, type MessageDelivery } from "../../api/messages";
 import { subscribeEvents, type EventFrame } from "../../api/subscription";
 import { readBootstrap } from "../../api/bootstrap";
 import type { Bootstrap, Snapshot } from "../../types";
@@ -107,15 +107,15 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     if (discardDraft) drafts.forget(id);
     if (id === selected.current) { approval.close(); setActivityError(""); }
   }
-  async function submit(value: string, attachments: string[] = [], command?: QueuedCommand) {
+  async function submit(value: string, attachments: string[] = [], command?: QueuedCommand, delivery?: MessageDelivery) {
     if (sending.current) return;
-    const failure = queuedMessageFailure(value, sessionId, attachments);
+    const failure = queuedMessageFailure(value, sessionId, attachments, delivery, command);
     if (failure) throw new Error(failure);
     sending.current = true;
     setSubmitting(true);
     const root = sessionId;
     const draft = drafts.get(root);
-    const message = queue.current.prepare(root, value, undefined, attachments, command);
+    const message = queue.current.prepare(root, value, undefined, attachments, command, delivery);
     setView(cache.current.enqueue(message)); setStatus("Queueing message");
     try {
       await queueMessage(token, message);

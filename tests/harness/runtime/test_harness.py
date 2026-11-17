@@ -403,7 +403,8 @@ def test_bounded_read_literal_search_globs_ignores_and_instructions(config: Harn
             result = await harness.tools.read_file("src/app.py", start_line=2, limit=1)
             assert result["content"] == "2: needle .*"
             assert result["total_lines"] == 3 and result["truncated"]
-            assert "Root policy" in str(result["instructions"]) and "Nested policy" in str(result["instructions"])
+            assert "instructions" not in result
+            assert "Root policy" in str(harness.agent.system_prompt)
             assert "Nested policy" in str(harness.agent.system_prompt)
             assert len(str((await harness.tools.read_file("long.txt"))["content"])) <= 1024
             result = await harness.tools.find("**/*.py")

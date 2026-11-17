@@ -42,3 +42,38 @@ test("command admission keeps a distinct retry identity from identical literal c
   assert.equal(queue.prepare("root", "/compact", () => "unused"), text);
   assert.equal(queue.prepare("root", "/compact", () => "next", [], "compact").message_id, "next");
 });
+
+test("delivery choices have separate retry identities and confirmation only clears its choice", async (context) => {
+  const queue = new MessageQueue();
+  const automatic = queue.prepare("root", "same", () => "automatic", ["file"]);
+  const steer = queue.prepare("root", "same", () => "steer", ["file"], undefined, "steer");
+  const queued = queue.prepare("root", "same", () => "queue", ["file"], undefined, "queue");
+  assert.equal(Object.hasOwn(automatic, "delivery"), false);
+  assert.equal(steer.delivery, "steer");
+  assert.equal(queued.delivery, "queue");
+  assert.equal(new Set([automatic.message_id, steer.message_id, queued.message_id]).size, 3);
+  context.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
+    assert.deepEqual(JSON.parse(options.body as string), steer);
+    throw new Error("lost acknowledgement");
+  });
+  await assert.rejects(queueMessage("token", steer));
+  assert.equal(queue.prepare("root", "same", () => "unused", ["file"], undefined, "steer"), steer);
+  queue.confirmed(steer);
+  assert.equal(queue.prepare("root", "same", () => "new", ["file"], undefined, "steer").message_id, "new");
+  assert.equal(queue.prepare("root", "same", () => "unused", ["file"]), automatic);
+  assert.equal(queue.prepare("root", "same", () => "unused", ["file"], undefined, "queue"), queued);
+  queue.forget("root");
+  assert.equal(queue.prepare("root", "same", () => "forgotten", ["file"], undefined, "queue").message_id, "forgotten");
+});
+
+test("request size includes delivery, attachments and command bytes at the exact boundary", () => {
+  for (const delivery of ["steer", "queue"] as const) {
+    const attachments = ["file-界"];
+    const envelope = { session_id: "root", prompt: "", message_id: MESSAGE_ID_RESERVE, attachments, delivery, command: "skill" };
+    const overhead = new TextEncoder().encode(JSON.stringify(envelope)).byteLength;
+    const exact = "x".repeat(65536 - overhead);
+    assert.equal(queuedMessageFailure(exact, "root", attachments, delivery, "skill"), "");
+    assert.match(queuedMessageFailure(exact + "x", "root", attachments, delivery, "skill"), /64 KiB/);
+    assert.equal(queuedMessageFailure(exact + "x", "root", attachments), "");
+  }
+});

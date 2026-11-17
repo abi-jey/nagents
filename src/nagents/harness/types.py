@@ -47,6 +47,15 @@ class ApprovalRequest:
 
 
 @dataclass
+class ToolApprovalTiming:
+    """Root invocation active seconds at entry to or exit from approval waiting."""
+
+    call_id: str
+    elapsed: float
+    waiting: bool
+
+
+@dataclass
 class ToolOutput:
     call_id: str
     tool: str
@@ -210,6 +219,7 @@ class TaskNotification:
 
 HarnessEvent = (
     Event
+    | ToolApprovalTiming
     | ToolOutput
     | Notice
     | TaskStarted

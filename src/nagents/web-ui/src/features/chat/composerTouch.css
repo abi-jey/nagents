@@ -1,0 +1,17 @@
+/* Stay in the viewport-owned composer above the keyboard: no overlapping fixed layer. */
+.has-touch-bar .composer-bottom { gap: 6px; }
+.has-touch-bar > .slash-menu { max-height: min(340px, 45dvh, var(--composer-menu-space, 45dvh)); }
+.has-touch-bar .composer-bottom button,
+.has-touch-bar .attachment-picker { min-height: 44px; min-width: 44px; }
+.has-touch-bar .composer-tools { flex: 1; }
+.has-delivery-choices .composer-tools { flex-basis: 100%; }
+.has-delivery-choices .composer-bottom > .cancel { margin-right: auto; }
+.has-touch-bar .composer-bottom > .run-status { flex-basis: 100%; order: -1; }
+.has-touch-bar .composer-bottom > .cancel { padding-inline: 10px; font-size: 12px; }
+.has-touch-bar .composer-bottom > .primary,
+.has-touch-bar .composer-queue { padding-inline: 14px; }
+.composer-command-key { font-family: monospace; font-size: 18px; }
+.composer-delivery-help { flex-basis: 100%; color: var(--text-secondary); font-size: 11px; text-align: right; }
+@media (hover: none) and (pointer: coarse) {
+  .composer-area { padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)); }
+}

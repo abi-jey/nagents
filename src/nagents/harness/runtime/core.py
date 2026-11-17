@@ -76,6 +76,7 @@ from ..tools.execution import host_run_id
 from ..tools.execution import observe_host_event
 from ..tools.execution import publish_anchor
 from ..tools.resources import HarnessResources
+from ..tools.timing import current_clock
 from ..types import ApprovalRequest
 from ..types import HarnessEvent
 from ..types import Notice
@@ -83,6 +84,7 @@ from ..types import SessionInfo
 from ..types import TaskActivity
 from ..types import TaskCompleted
 from ..types import TaskMessage
+from ..types import ToolApprovalTiming
 from ..types import ToolOutput
 from .commands import CommandRegistry
 from .followups import FollowupReady
@@ -864,24 +866,33 @@ class Harness:
                 task_info,
                 {"type": "status", "phase": "waiting_approval", "detail": f"Waiting for approval: {tool}"},
             )
-        async with root._approval_lock:
-            if self._closed or root._closed:
-                raise PermissionError("Harness closed before approval; no action was taken")
-            approved = await root.approval_handler(request)
-            if task_info is not None:
-                await self.tasks._emit_activity(task_info, {"type": "status", "phase": "running"})
-            task = asyncio.current_task()
-            if task is not None and task.cancelling():
-                raise asyncio.CancelledError
-            if self._closed or root._closed:
-                raise PermissionError("Harness closed during approval; no action was taken")
-            if approved is not True:
-                raise PermissionError(f"Approval denied for {tool}; no action was taken")
-            self.refresh_tool_policy()
-            if not self.tool_enabled(tool):
-                raise PermissionError(
-                    f"Tool {tool} is disabled for this agent by its inherited tool policy or .ngn/tools.yaml"
-                )
+        clock = current_clock(self)
+        with clock.pause() if clock is not None else nullcontext():
+            try:
+                if clock is not None and not self._is_subagent:
+                    await self.emit(ToolApprovalTiming(clock.call_id, clock.elapsed(), True))
+                # Queueing behind another decision is approval waiting too.
+                async with root._approval_lock:
+                    if self._closed or root._closed:
+                        raise PermissionError("Harness closed before approval; no action was taken")
+                    approved = await root.approval_handler(request)
+                    if task_info is not None:
+                        await self.tasks._emit_activity(task_info, {"type": "status", "phase": "running"})
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise asyncio.CancelledError
+                    if self._closed or root._closed:
+                        raise PermissionError("Harness closed during approval; no action was taken")
+                    if approved is not True:
+                        raise PermissionError(f"Approval denied for {tool}; no action was taken")
+                    self.refresh_tool_policy()
+                    if not self.tool_enabled(tool):
+                        raise PermissionError(
+                            f"Tool {tool} is disabled for this agent by its inherited tool policy or .ngn/tools.yaml"
+                        )
+            finally:
+                if clock is not None and not self._is_subagent:
+                    await self.emit(ToolApprovalTiming(clock.call_id, clock.elapsed(), False))
 
     async def emit(self, event: HarnessEvent) -> None:
         if self._queue is not None:

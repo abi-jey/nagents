@@ -93,7 +93,7 @@ class RoutingStore(InboxStore):
             if "attachments" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}:
                 db.execute("ALTER TABLE ngn_web_inbox ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
             fields = {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}
-            for name in ("voice_session_id", "voice_delegation_id", "voice_display"):
+            for name in ("voice_session_id", "voice_delegation_id", "voice_display", "delivery"):
                 if name not in fields:
                     db.execute(f"ALTER TABLE ngn_web_inbox ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
             db.execute(
@@ -345,11 +345,14 @@ class RoutingStore(InboxStore):
         supported_media_types: tuple[str, ...] = (),
         *,
         command: Literal["", "compact", "skill"] = "",
+        delivery: Literal["", "steer", "queue"] = "",
         voice_session_id: str = "",
         voice_delegation_id: str = "",
         voice_display: str = "",
     ) -> tuple[str, bool]:
         """Return the root and whether this is newly admitted (not an HTTP retry)."""
+        if delivery not in {"", "steer", "queue"}:
+            raise HTTPException(422, "Delivery must be steer or queue.")
         if command not in {"", "compact", "skill"} or (command == "compact" and (prompt != "/compact" or attachments)):
             raise HTTPException(422, "The compact command accepts no arguments or attachments.")
         if command == "skill" and attachments:
@@ -371,7 +374,7 @@ class RoutingStore(InboxStore):
         def admit(db: sqlite3.Connection) -> tuple[str, bool]:
             self.execution_root(db, session_id)
             row = db.execute(
-                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, voice_display "
+                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, voice_display, delivery "
                 "FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
                 (message_id,),
             ).fetchone()
@@ -380,14 +383,14 @@ class RoutingStore(InboxStore):
                     row[:2] != (session_id, prompt)
                     or tuple(json.loads(row[2])) != attachments
                     or row[3] != command
-                    or row[4:] != (voice_session_id, voice_delegation_id, voice_display)
+                    or row[4:] != (voice_session_id, voice_delegation_id, voice_display, delivery)
                 ):
                     raise HTTPException(409, "Message ID already belongs to a different submission.")
                 return session_id, False
             self.capacity(db)
             cursor = db.execute(
                 "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, attachments, command, "
-                "voice_session_id, voice_delegation_id, voice_display) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?)",
+                "voice_session_id, voice_delegation_id, voice_display, delivery) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     session_id,
                     message_id,
@@ -397,6 +400,7 @@ class RoutingStore(InboxStore):
                     voice_session_id,
                     voice_delegation_id,
                     voice_display,
+                    delivery,
                 ),
             )
             assert cursor.lastrowid is not None
@@ -405,19 +409,21 @@ class RoutingStore(InboxStore):
 
         return await self._transaction(admit)
 
-    async def skill_retry(self, session_id: str, message_id: str, prompt: str) -> bool:
+    async def skill_retry(
+        self, session_id: str, message_id: str, prompt: str, *, delivery: Literal["", "steer", "queue"] = ""
+    ) -> bool:
         """Existing immutable receipts precede mutable skill discovery or policy."""
 
         def check(db: sqlite3.Connection) -> bool:
             self.execution_root(db, session_id)
             row = db.execute(
-                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, voice_display "
+                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, voice_display, delivery "
                 "FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
                 (message_id,),
             ).fetchone()
             if row is None:
                 return False
-            if row != (session_id, prompt, "[]", "skill", "", "", ""):
+            if row != (session_id, prompt, "[]", "skill", "", "", "", delivery):
                 raise HTTPException(409, "Message ID already belongs to a different submission.")
             return True
 
@@ -600,14 +606,16 @@ class RoutingStore(InboxStore):
             self._quarantine_work(db)
             row = db.execute(
                 "SELECT id, session_id, channel, message_id, prompt, conversation_id, thread_id, reply_to, "
-                f"acknowledgement, command, attachments, voice_session_id, voice_delegation_id, voice_display "
+                f"acknowledgement, command, attachments, voice_session_id, voice_delegation_id, voice_display, delivery "
                 f"FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
                 parameters,
             ).fetchone()
             if row is None:
                 return None
-            if session_id and (row[8] or row[9] not in {"", "skill"}):
-                return None  # Commands are a FIFO barrier until the current run is idle.
+            if session_id and (row[8] or row[9] not in {"", "skill"} or row[14] == "queue"):
+                # Commands and explicit queue inputs are FIFO barriers until the
+                # active outer run finishes, including child notifications.
+                return None
             db.execute("UPDATE ngn_web_inbox SET status = 'running' WHERE id = ?", (row[0],))
             return Work(
                 id=row[0],

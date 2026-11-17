@@ -71,6 +71,7 @@ class QueuedInputs:
         supported_media_types: tuple[str, ...] = (),
         *,
         command: Literal["", "compact", "skill"] = "",
+        delivery: Literal["", "steer", "queue"] = "",
         voice_session_id: str = "",
         voice_delegation_id: str = "",
         voice_display: str = "",
@@ -79,7 +80,7 @@ class QueuedInputs:
             if command == "skill":
                 if attachments or any((voice_session_id, voice_delegation_id, voice_display)):
                     raise HTTPException(422, "Skill commands accept only a typed invocation without attachments.")
-                if await self.state.channels.store.skill_retry(session_id, message_id, prompt):
+                if await self.state.channels.store.skill_retry(session_id, message_id, prompt, delivery=delivery):
                     return session_id, False
                 await skills.validate(self.state, session_id, prompt)
             root, admitted = await self.state.channels.store.web(
@@ -89,6 +90,7 @@ class QueuedInputs:
                 attachments,
                 supported_media_types,
                 command=command,
+                delivery=delivery,
                 voice_session_id=voice_session_id,
                 voice_delegation_id=voice_delegation_id,
                 voice_display=voice_display,
@@ -103,7 +105,8 @@ class QueuedInputs:
                 and not active.task.done()
             ):
                 if (
-                    self.state.harness.config.submit_mode == "interrupt"
+                    not delivery
+                    and self.state.harness.config.submit_mode == "interrupt"
                     and not active.voice
                     and not self.voice_attachments.get(root)
                 ):

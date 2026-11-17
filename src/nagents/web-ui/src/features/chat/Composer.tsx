@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import type { ComponentProps, ReactNode, Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ComponentProps, MouseEvent, ReactNode, Ref } from "react";
+import type { MessageDelivery } from "../../api/messages.js";
 import { Icon } from "../../components/Icon.js";
 import { commandMatches } from "./commands.js";
 import type { SkillItem } from "./skills.js";
@@ -66,6 +67,7 @@ export function Composer({
   recipient = "ngn",
   commandsEnabled = true,
   maxLength = 32000,
+  deliveryEnabled = true,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -74,7 +76,7 @@ export function Composer({
   disabled: boolean;
   canSubmit: boolean;
   running: boolean;
-  submit: () => void;
+  submit: (delivery?: MessageDelivery) => void;
   cancel: () => void;
   status?: ReactNode;
   attachments?: ReactNode;
@@ -94,8 +96,22 @@ export function Composer({
   recipient?: string;
   commandsEnabled?: boolean;
   maxLength?: number;
+  deliveryEnabled?: boolean;
 }) {
   const form = useRef<HTMLFormElement>(null);
+  const [touch, setTouch] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
+  useEffect(() => {
+    const media = window.matchMedia?.("(hover: none) and (pointer: coarse)");
+    if (!media) return;
+    const update = () => setTouch(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const deliveryChoices = touch && running && deliveryEnabled && !prompt.trimStart().startsWith("/");
+  const ready = canSubmit && !submitting && !stopping && !!(prompt.trim() || hasAttachments);
+  const keepFocus = (event: MouseEvent) => event.preventDefault();
+
   const [dismissed, setDismissed] = useState("");
   const [selection, setSelection] = useState({ prompt: "", index: 0 });
   const suggesting = commandsEnabled && !disabled && prompt !== dismissed && /^\/[A-Za-z0-9:_-]*$/.test(prompt);
@@ -103,9 +119,9 @@ export function Composer({
   const selected = selection.prompt === prompt ? Math.min(selection.index, matches.length - 1) : 0;
   useLayoutEffect(() => {
     const element = form.current;
-    if (!voiceLayout || !matches.length || !element) return;
-    // An open voice inspector can make the composer taller than the space
-    // below the keyboard. Keep the slash list within the visible area above it.
+    if ((!voiceLayout && !touch) || !matches.length || !element) return;
+    // Voice controls and the touch keyboard can leave little vertical space.
+    // Keep suggestions inside the visible area above the composer.
     const update = () => {
       const top = element.getBoundingClientRect().top - (window.visualViewport?.offsetTop || 0);
       element.style.setProperty("--composer-menu-space", `${Math.max(44, Math.floor(top - 16))}px`);
@@ -120,7 +136,7 @@ export function Composer({
       window.visualViewport?.removeEventListener("resize", update);
       element.style.removeProperty("--composer-menu-space");
     };
-  }, [voiceLayout, matches.length]);
+  }, [voiceLayout, touch, matches.length]);
   useLayoutEffect(() => {
     const command = matches[selected];
     if (command) document.getElementById(`slash-command-${command.name}`)?.scrollIntoView?.({ block: "nearest" });
@@ -134,7 +150,7 @@ export function Composer({
   return (
     <form
       ref={form}
-      className={`chat-composer${voiceLayout ? " has-live-voice" : ""}`}
+      className={`chat-composer${voiceLayout ? " has-live-voice" : ""}${touch ? " has-touch-bar" : ""}${deliveryChoices ? " has-delivery-choices" : ""}`}
       onPaste={(event) => {
         const files = [...event.clipboardData.files];
         if (files.length && addAttachments && !attachmentsDisabled) { event.preventDefault(); addAttachments(files); }
@@ -143,7 +159,7 @@ export function Composer({
       onDrop={(event) => { if (event.dataTransfer.files.length) { event.preventDefault(); if (!attachmentsDisabled) addAttachments?.([...event.dataTransfer.files]); } }}
       onSubmit={(event) => {
         event.preventDefault();
-        if (canSubmit && (prompt.trim() || hasAttachments)) submit();
+        if (ready) submit(deliveryChoices ? "steer" : undefined);
       }}
     >
       {suggesting && (!!matches.length || skillsLoading || skillsError) && <div className="slash-menu">
@@ -179,10 +195,13 @@ export function Composer({
         value={prompt}
         maxLength={maxLength}
         rows={1}
+        enterKeyHint={touch ? "enter" : "send"}
         disabled={disabled}
         onChange={(event) => { setDismissed(""); setPrompt(event.target.value); }}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
+          // Touch Return is always a newline, even while suggestions are open.
+          if (touch && event.key === "Enter" && !event.ctrlKey && !event.metaKey) return;
           if (suggesting && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
             if (event.key === "Escape") { event.preventDefault(); setDismissed(prompt); return; }
             if (matches.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
@@ -198,7 +217,7 @@ export function Composer({
             !event.nativeEvent.isComposing
           ) {
             event.preventDefault();
-            if (canSubmit && (prompt.trim() || hasAttachments)) submit();
+            if (ready) submit(deliveryChoices ? "steer" : undefined);
           }
         }}
       />
@@ -207,6 +226,8 @@ export function Composer({
       {attachments}
       <div className="composer-bottom">
         <div className="composer-tools">
+        {touch && commandsEnabled && <button type="button" className="composer-command-key" aria-label="Commands and skills" disabled={disabled}
+          onMouseDown={keepFocus} onClick={() => { setDismissed(""); setPrompt(prompt.startsWith("/") ? prompt : `/${prompt}`); }}> / </button>}
         {!!attachmentTypes.length && <label className="attachment-picker"><Icon name="paperclip" size={17} /><span>Attach</span>
           <input type="file" aria-label="Attach files" multiple accept={attachmentTypes.join(",")} disabled={attachmentsDisabled}
             onChange={(event) => { addAttachments?.([...event.currentTarget.files || []]); event.currentTarget.value = ""; }} />
@@ -215,19 +236,24 @@ export function Composer({
         <div className="composer-voice-controls" ref={voiceRefs?.controls} hidden={!voiceLayout} />
         </div>
         {status}
-        <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.{commandsEnabled && " Type / for commands; use arrows and Tab or Enter to choose, then Enter to run. Escape closes suggestions."}</span>
+        <span id="composer-help" className="sr-only">{touch ? "Return adds a new line. Use Send, or Steer after current tools and Queue after current work." : "Enter to send. Shift+Enter for a new line."}{commandsEnabled && " Type / for commands; use arrows and Tab to choose. Escape closes suggestions."}</span>
         {running && (
-          <button type="button" className="cancel" onClick={cancel} disabled={stopping}>
+          <button type="button" className="cancel" onMouseDown={touch ? keepFocus : undefined} onClick={cancel} disabled={stopping} aria-label="Stop run">
             {stopping ? "Stopping…" : "Stop run"}
           </button>
         )}
+        {deliveryChoices && <button type="button" className="composer-queue" disabled={!ready}
+          title="Wait until current work finishes" onMouseDown={keepFocus} onClick={() => { if (ready) submit("queue"); }}>Queue</button>}
         <button
           type="submit"
           className="primary"
-          disabled={!canSubmit || (!prompt.trim() && !hasAttachments)}
+          disabled={!ready}
+          onMouseDown={touch ? keepFocus : undefined}
+          title={deliveryChoices ? "Steer after current tools finish, without interrupting" : "Send message"}
         >
-          {submitting ? "Sending…" : "Send"}
+          {submitting ? "Sending…" : deliveryChoices ? "Steer" : "Send"}
         </button>
+        {deliveryChoices && <span className="composer-delivery-help">Steer after current tools · Queue after current work</span>}
       </div>
       <div className="composer-voice-details" ref={voiceRefs?.details} hidden={!voiceLayout} />
     </form>

@@ -57,6 +57,35 @@ def bounded(text: str) -> str:
     return text
 
 
+def format_duration(seconds: float) -> str:
+    """Format a duration in at most eight cells, with up to two adjacent units."""
+    seconds = max(0.0, seconds)
+    if not math.isfinite(seconds):
+        return "unknown"
+    if seconds < 1:
+        milliseconds = int(seconds * 1000 + 0.5)
+        if milliseconds < 1000:
+            return f"{milliseconds}ms"
+        seconds = 1.0
+    if seconds < 60:
+        precision = 2 if seconds < 10 else 1
+        rounded = round(seconds, precision)
+        if rounded < 60:
+            return f"{rounded:.{precision}f}".rstrip("0").rstrip(".") + "s"
+    whole = int(seconds + 0.5)
+    for size, unit, smaller_size, smaller_unit in ((86400, "d", 3600, "h"), (3600, "h", 60, "m"), (60, "m", 1, "s")):
+        if whole < size:
+            continue
+        major, remainder = divmod(whole, size)
+        minor = remainder // smaller_size
+        text = f"{major}{unit}" + (f" {minor}{smaller_unit}" if minor else "")
+        if len(text) <= 8:
+            return text
+        # Very long durations lose the secondary unit rather than shift columns.
+        return f"{major}d" if major <= 9_999_999 else ">999999d"
+    return "1m"
+
+
 def format_value(value: object) -> str:
     if isinstance(value, ToolOutput):
         return str(value)
@@ -323,7 +352,7 @@ class ToolCard(Collapsible):
         self._started_at = 0.0 if restored else monotonic()
         self._default_timeout = default_timeout
         self._timeout = 0.0 if preview else self._argument_timeout(arguments)
-        self._duration = "" if preview or restored else "0.00s"
+        self._duration = "" if preview or restored else format_duration(0)
         self.output_text = ""
         self._summary_text = Text()
         self._completion_source = Text()
@@ -368,6 +397,7 @@ class ToolCard(Collapsible):
         self._update_summary()
 
     _elapsed_timer: Timer | None = None
+    _approval_waiting: bool = False
     _allocated_width: int = 0
 
     def on_mount(self) -> None:
@@ -412,8 +442,9 @@ class ToolCard(Collapsible):
         self.tool_name.update(tool)
         self._file_change = tool in {"edit", "write"}
         self._outcome = "running"
+        self._approval_waiting = False
         self._started_at = monotonic()
-        self._duration = "0.00s"
+        self._duration = format_duration(0)
         self.arguments.display = not self._file_change
         self.output_text = ""
         self.output.update("Waiting for output")
@@ -477,9 +508,18 @@ class ToolCard(Collapsible):
             self._elapsed_timer.stop()
             self._elapsed_timer = None
 
+    def set_approval_timing(self, elapsed: float, *, waiting: bool) -> None:
+        """Rebase the live clock to host active time, freezing it during approval."""
+        if self._outcome != "running":
+            return
+        self._approval_waiting = waiting
+        self._started_at = monotonic() - elapsed
+        self._duration = format_duration(elapsed)
+        self._update_summary()
+
     def _tick_elapsed(self) -> None:
-        if self._outcome == "running":
-            self._duration = f"{max(0, monotonic() - self._started_at):.2f}s"
+        if self._outcome == "running" and not self._approval_waiting:
+            self._duration = format_duration(monotonic() - self._started_at)
         if self._outcome in {"preparing", "ready", "running"}:
             self._update_summary()
 
@@ -504,14 +544,14 @@ class ToolCard(Collapsible):
             "".join(char for char in text if char.isprintable() or char.isspace() or char == "\u200d").split()
         )
 
-    @classmethod
-    def _argument_hint(cls, arguments: object) -> str:
+    def _argument_hint(self, arguments: object) -> str:
         # Only recognizable targets; never summarize arbitrary payloads or errors.
+        keys = ("name",) if self.tool == "skill" else ("command", "path", "file_path", "pattern", "url")
         if isinstance(arguments, dict):
-            for key in ("command", "path", "file_path", "pattern", "url"):
+            for key in keys:
                 value = arguments.get(key)
                 if isinstance(value, str) and value.strip():
-                    return cls._plain_line(value)
+                    return self._plain_line(value)
         return ""
 
     @staticmethod
@@ -526,9 +566,9 @@ class ToolCard(Collapsible):
         width = max(0, (self._allocated_width or self.content_size.width or 72) - 4)
         suffix = f"  {self._outcome:<10}"
         preview = self._outcome in {"preparing", "ready"}
-        timing = "" if preview else self._duration
-        if not preview and self._timeout > 0:
-            timing += f" / {self._timeout:g}s"
+        elapsed = "" if preview else self._duration
+        timeout = format_duration(self._timeout) if not preview and self._timeout > 0 else ""
+        timing = elapsed.rjust(8) + (f" / {timeout:>8}" if timeout else " " * 11)
         if width < len(suffix) + len(timing) + 4:
             # Outcome wins on tiny terminals; timeout is supplementary metadata.
             suffix = self._shorten(self._outcome, width)
@@ -545,13 +585,6 @@ class ToolCard(Collapsible):
             return
         # Use the same elapsed and timeout slots for every row, even when no
         # timeout applies, so neither the outcome nor elapsed column shifts.
-        elapsed = "" if preview else self._duration
-        timeout = f" / {self._timeout:g}s" if not preview and self._timeout > 0 else ""
-        timing_width = min(22, max(len(timing), width - len(suffix) - 8))
-        if timing_width >= 22:
-            timing = elapsed.rjust(10) + timeout.ljust(max(12, len(timeout)))
-        else:
-            timing = timing.rjust(timing_width)
         timer_width = Text(timing).cell_len + 2 if timing else 0
         available = max(0, width - Text(suffix).cell_len - timer_width)
         name = self._plain_line(self.tool)
@@ -672,7 +705,7 @@ class ToolCard(Collapsible):
         failed = bool(error or process_outcome)
         state = "failed" if error else process_outcome or "complete"
         self._stop_elapsed()
-        self._duration = f"{duration_ms / 1000:.2f}s" if duration_ms > 0 else ""
+        self._duration = format_duration(duration_ms / 1000) if duration_ms > 0 else ""
         self._outcome = state
         animate_completion = (
             state == "complete"
