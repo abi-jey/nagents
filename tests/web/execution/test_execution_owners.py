@@ -15,6 +15,8 @@ from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.auth import _Tokens
 from nagents.harness.runtime.core import Harness
 from nagents.provider.codex.openai import OpenAIProvider
+from tests.support.device_auth import MemoryAuthStore
+from tests.support.device_auth import owned_credentials
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.web.execution.test_web_subscription_lifecycle import until
@@ -93,39 +95,35 @@ def test_borrowed_chatgpt_auth_coalesces_refresh_and_clone_close_preserves_share
             state = app.state.web
             parent = state.harness
             auth = parent.openai_auth
+            memory = MemoryAuthStore(_Tokens("expired-fixture", "refresh-fixture", "identity-fixture", 0))
+            memory.install(auth, monkeypatch)
             clone = Harness(deepcopy(parent.config))
-            await clone.agent.provider.close()
-            clone.agent.provider = OpenAIProvider(clone.openai_auth.credentials, model="gpt-6-luna")
-            clone.agent.session = state.history
-            await state.executions.borrow_auth(clone)
-            assert clone.openai_auth is auth and not clone._owns_auth
-            assert clone.agent.provider._credentials == auth.credentials
-            tokens = _Tokens("expired-fixture", "refresh-fixture", "identity-fixture", 0)
-            refreshes = 0
-            entered, release = asyncio.Event(), asyncio.Event()
+            try:
+                await clone.agent.provider.close()
+                clone.agent.provider = OpenAIProvider(clone.openai_auth.credentials, model="gpt-6-luna")
+                clone.agent.session = state.history
+                await state.executions.borrow_auth(clone)
+                assert clone.openai_auth is auth and not clone._owns_auth
+                assert clone.agent.provider._credentials == auth.credentials
+                refreshes = 0
+                entered, release = asyncio.Event(), asyncio.Event()
 
-            async def exchange(form: dict[str, str], deadline: float, previous: _Tokens | None = None) -> _Tokens:
-                nonlocal refreshes
-                refreshes += 1
-                entered.set()
-                await release.wait()
-                return _Tokens("fresh-fixture", "refresh-fixture", "identity-fixture", time() + 3600)
+                async def exchange(form: dict[str, str], deadline: float, previous: _Tokens | None = None) -> _Tokens:
+                    nonlocal refreshes
+                    refreshes += 1
+                    entered.set()
+                    await release.wait()
+                    return _Tokens("fresh-fixture", "refresh-fixture", "identity-fixture", time() + 3600)
 
-            def save(value: _Tokens) -> None:
-                nonlocal tokens
-                tokens = value
-
-            monkeypatch.setattr(auth, "_load", lambda: tokens)
-            monkeypatch.setattr(auth, "_exchange", exchange)
-            monkeypatch.setattr(auth, "_save", save)
-            first = asyncio.create_task(auth.credentials())
-            async with asyncio.timeout(HANG_GUARD):
-                await entered.wait()
-                second = asyncio.create_task(clone.agent.provider._credentials())
-                release.set()
-                await asyncio.gather(first, second)
-            assert refreshes == 1
-            await clone.close()
+                monkeypatch.setattr(auth, "_exchange", exchange)
+                async with asyncio.timeout(HANG_GUARD), owned_credentials(auth, entered) as (tasks, first):
+                    second = tasks.create_task(clone.agent.provider._credentials())
+                    release.set()
+                assert refreshes == 1
+                assert first.result().access_token == second.result().access_token == "fresh-fixture"
+                assert memory.private_accesses == 0
+            finally:
+                await clone.close()
             assert auth not in closed
             assert await state.history.snapshot(state.selected_session_id) == []
         assert closed.count(auth) == 1

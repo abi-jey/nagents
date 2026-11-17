@@ -101,6 +101,20 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def cargo_target(root: Path, cache: Path, environ: dict[str, str]) -> Path:
+    """Reuse checkout-local targets; namespace external bases by canonical checkout.
+
+    Relative paths resolve from the launcher's working directory, not the manifest.
+    No directories are created and the supplied environment is left unchanged.
+    """
+    checkout = root.expanduser().resolve()
+    target = Path(environ.get("CARGO_TARGET_DIR", str(cache / "target"))).expanduser().resolve()
+    if target.is_relative_to(checkout):
+        return target
+    identity = hashlib.sha256(str(checkout).encode()).hexdigest()[:16]
+    return target / f"ngn-dev-{identity}"
+
+
 def source_snapshot(root: Path) -> tuple[str, str, bool]:
     # A hook may export its parent's index or worktree. Never let that context
     # redirect even read-only provenance queries into another repository.
@@ -123,14 +137,14 @@ def source_snapshot(root: Path) -> tuple[str, str, bool]:
 def build(root: Path, cache: Path, *, published_core: bool) -> tuple[Path, Path, dict[str, str]]:
     if (platform.system(), platform.machine()) != ("Linux", "x86_64"):
         raise ValueError("Release-shaped binary packaging is currently validated only on Linux x86_64")
-    # Reuse compilation output, never a staged runtime or installed Python package.
-    # Cargo serializes its own target access; every invocation gets a fresh stage.
+    # Reuse only checkout-scoped compilation output, never a staged runtime or
+    # installed Python package. Cargo locking alone does not isolate source trees.
     snapshot = source_snapshot(root)
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     stage = Path(tempfile.mkdtemp(prefix="candidate-", dir=cache))
     runtime = stage / "runtime"
     environment = isolated_environment(runtime, dict(os.environ))
-    target = Path(os.environ.get("CARGO_TARGET_DIR", str(cache / "target"))).resolve()
+    target = cargo_target(root, cache, environment)
     environment["CARGO_TARGET_DIR"] = str(target)
     # Use the bootstrap interpreter only to create the isolated installed runtime.
     run([sys.executable, "-m", "venv", str(runtime)], directory=root, environment=environment)

@@ -43,6 +43,12 @@ jobs:
         run: |
           cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
           python ngn/scripts/release.py package --output artifacts --binary ngn/target/release/ngn
+      - name: Exercise native authentication with a synthetic issuer and no skipped cases
+        env:
+          NGN_TEST_BINARY: ${{ github.workspace }}/ngn/target/release/ngn
+        run: |
+          python -I -c 'from ngn_nagents.auth import available; assert available(), "The source core must expose public device authentication for this gate"'
+          python -m unittest discover -s ngn/integrations/nagents/tests -p test_native_auth.py -v
       - name: Test the packaged binary and adapter, not editable adapter imports
         working-directory: ngn
         run: |

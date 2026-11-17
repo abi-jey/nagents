@@ -8,6 +8,12 @@ with that published core. Subscription development requires a source-built core
 containing `OpenAIAuth`, `DeviceAuthorization`, `OpenAIAuthError`, and
 `OpenAIProvider(credentials=auth.credentials, model=...)`, plus this adapter.
 
+The tag-release build enforces this boundary in a fresh, non-editable environment:
+the exact published core version and packaged adapter must expose the public auth
+API and pass both synthetic native login/ownership tests before publication. Source
+CI runs those tests explicitly as well; an unset optional binary selector cannot
+silently skip them. These synthetic issuer tests do not validate a real account.
+
 ## Explicit connection and CLI
 
 Copy `config.chatgpt.example.json`, choose a model your subscription can use, and

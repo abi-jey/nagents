@@ -170,14 +170,18 @@ def test_actual_web_stream_reports_budget_failure_without_an_extra_model_turn(
 def test_child_budget_explanation_keeps_failed_lifecycle_and_retained_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cause: str, round_limit: int
 ) -> None:
-    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-        assert provider.index == 1, "A child failure must not start a parent model turn on its own"
-        if cause == "other":
-            yield ErrorEvent(message="SECRET provider response", code="OTHER")
-        else:
-            yield ToolCallEvent(id=f"list-{len(provider.requests)}", name="list_files", arguments={"limit": 1})
-
     async def scenario() -> None:
+        progressed = asyncio.Event()
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            assert provider.index == 1, "A child failure must not start a parent model turn on its own"
+            assert len(provider.requests) <= (round_limit if cause == "budget" else 1), "An extra model turn ran"
+            progressed.set()
+            if cause == "other":
+                yield ErrorEvent(message="SECRET provider response", code="OTHER")
+            else:
+                yield ToolCallEvent(id=f"list-{len(provider.requests)}", name="list_files", arguments={"limit": 1})
+
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         assert harness.config.max_tool_rounds == 3000
         harness.config.max_tool_rounds = round_limit
@@ -185,7 +189,21 @@ def test_child_budget_explanation_keeps_failed_lifecycle_and_retained_history(
         harness.tasks.begin(harness.session_id)
         try:
             ack = await harness.tasks.to_agent("offline child budget probe")
-            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
+
+            async def finished() -> None:
+                try:
+                    await asyncio.gather(*harness.tasks._workers.values())
+                finally:
+                    progressed.set()
+
+            # All 150 real rounds include growing history snapshots and durable
+            # tool writes. Bound a lack of progress, not their cumulative CPU/I/O
+            # time on a loaded runner. The script rejects any extra model turn.
+            async with asyncio.TaskGroup() as joining:
+                completion = joining.create_task(finished())
+                while not completion.done():
+                    await asyncio.wait_for(progressed.wait(), HANG_GUARD)
+                    progressed.clear()
             info = harness.tasks.list()[0]
             assert info.session_id == ack["session_id"] and info.status == "failed" and info.result == ""
             assert info.error == (

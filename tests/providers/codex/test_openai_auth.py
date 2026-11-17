@@ -23,6 +23,7 @@ from nagents.harness.providers.auth import CLIENT_ID
 from nagents.harness.providers.auth import OpenAIAuth
 from nagents.harness.providers.auth import OpenAIAuthError
 from nagents.harness.providers.auth import _tokens
+from tests.support.device_auth import MemoryAuthStore
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
@@ -185,6 +186,8 @@ def test_rate_limits_slow_down_and_bounded_deadline(monkeypatch: pytest.MonkeyPa
 
         async with issuer(monkeypatch, handle):
             auth = OpenAIAuth()
+            memory = MemoryAuthStore()
+            memory.install(auth, monkeypatch)
             authorization = await auth.start_device_login()
             with pytest.raises(OpenAIAuthError, match="expired"):
                 await auth.complete_device_login(authorization)
@@ -192,6 +195,7 @@ def test_rate_limits_slow_down_and_bounded_deadline(monkeypatch: pytest.MonkeyPa
             with pytest.raises(OpenAIAuthError, match="expired"):
                 await auth.complete_device_login(replace(authorization, expires_at=monotonic() - 1))
             assert polls == 3
+            assert memory.tokens is None and memory.private_accesses == 0
 
     asyncio.run(scenario())
 
@@ -205,10 +209,13 @@ def test_deadline_interrupts_pending_poll(monkeypatch: pytest.MonkeyPatch) -> No
 
         async with issuer(monkeypatch, handle):
             auth = OpenAIAuth()
+            memory = MemoryAuthStore()
+            memory.install(auth, monkeypatch)
             authorization = replace(await auth.start_device_login(), expires_at=monotonic() + 0.03)
             with pytest.raises(OpenAIAuthError, match="expired"):
                 await asyncio.wait_for(auth.complete_device_login(authorization), HANG_GUARD)
             assert not auth.path.exists()
+            assert memory.tokens is None and memory.private_accesses == 0
 
     asyncio.run(scenario())
 

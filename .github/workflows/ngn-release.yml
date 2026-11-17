@@ -50,6 +50,17 @@ jobs:
           export PYTHONPATH="$(find "$GITHUB_WORKSPACE/artifacts" -name 'ngn_nagents-*.whl' -print):$GITHUB_WORKSPACE/src"
           python scripts/smoke.py --binary target/release/ngn
           python scripts/release.py verify --output ../artifacts
+      - name: Require the matching published core and non-editable auth integration
+        env:
+          NGN_TEST_BINARY: ${{ github.workspace }}/ngn/target/release/ngn
+        run: |
+          unset PYTHONPATH PYTHONHOME
+          core_version=$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')
+          python -m venv "$RUNNER_TEMP/ngn-published-runtime"
+          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m pip install --disable-pip-version-check "nagents==$core_version" artifacts/ngn_nagents-*.whl
+          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m pip check
+          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -I -c 'from ngn_nagents.auth import available; assert available(), "Release blocked: publish the core with its public device-auth API and coordinate the adapter dependency first"'
+          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m unittest discover -s ngn/integrations/nagents/tests -p test_native_auth.py -v
       - name: Accept installed source and the real desktop/touch browser before publication
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/ngn/target
