@@ -1,3 +1,6 @@
+# Preserve hash-verified upstream notices byte-for-byte; never reformat legal texts.
+exclude: ^ngn/runtime-licenses/
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

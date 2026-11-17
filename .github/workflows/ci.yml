@@ -667,7 +667,7 @@ jobs:
       - name: Get previous stable tag
         id: prev_tag
         run: |
-          PREV_TAG=$(git tag --merged HEAD -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx 'v${{ steps.version.outputs.version }}' | head -1 || true)
+          PREV_TAG=$(git tag --merged HEAD -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vE '^v0\.100\.[0-9]+$' | grep -vx 'v${{ steps.version.outputs.version }}' | head -1 || true)
           if [ -z "$PREV_TAG" ]; then
             PREV_TAG=$(git rev-list --max-parents=0 HEAD)
           fi

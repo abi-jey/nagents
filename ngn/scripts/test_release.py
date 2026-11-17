@@ -10,6 +10,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 import release
+import yaml
+
+
+class WorkflowTests(unittest.TestCase):
+    def test_native_ci_keeps_full_pr_main_and_manual_gates_without_duplicate_feature_push_runs(self) -> None:
+        workflow = yaml.load((release.ROOT / ".github/workflows/ngn-ci.yml").read_text(), Loader=yaml.BaseLoader)
+        triggers = workflow["on"]
+        self.assertEqual(triggers["push"]["branches"], ["main"])
+        self.assertIn("pull_request", triggers)
+        self.assertIn("workflow_dispatch", triggers)
+        steps = workflow["jobs"]["acceptance"]["steps"]
+        self.assertTrue(any("check.sh all" in step.get("run", "") for step in steps))
+        self.assertTrue(any("install_smoke.py" in step.get("run", "") for step in steps))
 
 
 class ReleaseTests(unittest.TestCase):
@@ -50,6 +63,46 @@ class ReleaseTests(unittest.TestCase):
         self.manifest["commit"] = "0" * 40
         self.save_manifest()
         with self.assertRaisesRegex(AssertionError, "exact tested commit"):
+            release.verify(self.output)
+
+    def test_publication_requires_a_self_contained_bundle_not_the_legacy_native_archive(self) -> None:
+        with self.assertRaisesRegex(AssertionError, "self-contained runtime bundle"):
+            release.verify(self.output, require_bundle=True)
+
+    def test_boolean_or_unknown_schema_cannot_satisfy_the_release_gate(self) -> None:
+        for schema in (True, 0, 3):
+            with self.subTest(schema=schema):
+                self.manifest["schema_version"] = schema
+                self.save_manifest()
+                with self.assertRaisesRegex(AssertionError, "exact tested commit"):
+                    release.verify(self.output)
+
+    def test_development_bundle_cannot_be_relabelled_as_an_official_published_runtime(self) -> None:
+        metadata = {
+            "bundle_schema": 1,
+            "ngn_version": self.version,
+            "adapter_version": self.version,
+            "nagents_version": self.manifest["nagents_version"],
+            "source_commit": self.manifest["commit"],
+            "runtime_protocol": 1,
+            "platform": "linux-x86_64",
+            "runner": ["runtime/bin/python3", "-I", "-B", "-m", "ngn_nagents"],
+            "official": False,
+        }
+        release.validate_bundle_metadata(metadata, self.manifest)
+        with self.assertRaisesRegex(AssertionError, "matching published core"):
+            release.validate_bundle_metadata(metadata, self.manifest, require_published=True)
+        for key in ("ngn_version", "adapter_version", "nagents_version", "source_commit", "platform"):
+            with self.subTest(key=key):
+                foreign = {**metadata, key: "foreign"}
+                with self.assertRaisesRegex(AssertionError, "provenance mismatch"):
+                    release.validate_bundle_metadata(foreign, self.manifest)
+
+    def test_bundle_archive_name_is_fixed_and_cannot_point_outside_assets(self) -> None:
+        self.manifest["schema_version"] = 2
+        self.manifest["bundle"] = "../escape.tar.gz"
+        self.save_manifest()
+        with self.assertRaisesRegex(AssertionError, "Invalid bundled archive name"):
             release.verify(self.output)
 
     def test_foreign_python_core_is_rejected(self) -> None:

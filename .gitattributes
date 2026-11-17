@@ -1,0 +1,2 @@
+# Hash-bound upstream notices must retain their original whitespace byte-for-byte.
+ngn/runtime-licenses/** -whitespace

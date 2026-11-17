@@ -213,8 +213,10 @@ the protocol. The conversation database remains independent.
 The host verifies this capability **before sending start**. Without it, a
 subscription run fails with a safe installation error. API-key starts omit both
 new fields, preserving their original v1 wire representation and compatibility
-with published nagents 0.28.5. Missing public core auth never triggers Codex cache
-discovery, legacy imports, API-key fallback, or an implicit login.
+with earlier runtimes. This adapter's package now requires the public-auth core
+`nagents>=0.28.6,<0.29`; the previous 0.100.1 API-key adapter remains unchanged.
+Missing public core auth never triggers Codex cache discovery, legacy imports,
+API-key fallback, or an implicit login.
 
 ## Optional safe steering (0.100.2 development)
 

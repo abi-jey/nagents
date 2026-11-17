@@ -95,6 +95,31 @@ def test_stable_tag_must_equal_distribution_version() -> None:
     assert 'test "$TAG_SHA" = "$RELEASE_SHA"' in verify["run"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Release notes use the Linux publish job's POSIX shell")
+@pytest.mark.parametrize(
+    "tags,expected",
+    [
+        ("v0.100.2\nv0.100.1\nv0.100.0\nv0.28.6\nv0.28.5\nv0.28.4\n", "v0.28.5"),
+        ("v0.100.2\nv0.100.1\nv0.28.6\nv0.28.5rc1\n", ""),
+    ],
+)
+def test_python_release_notes_exclude_reserved_rust_tags(tags: str, expected: str) -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    step = next(step for step in workflow["jobs"]["publish-stable"]["steps"] if step.get("id") == "prev_tag")
+    assignment = next(line for line in step["run"].splitlines() if line.strip().startswith("PREV_TAG=$("))
+    pipeline = assignment.strip().removeprefix("PREV_TAG=$(").removesuffix(")")
+    # Execute the workflow's real filtering, supplying already-sorted tags instead
+    # of invoking Git or inheriting fixture repository/index configuration.
+    filters = pipeline.split(" | ", 1)[1].replace("${{ steps.version.outputs.version }}", "0.28.6")
+    result = subprocess.run(
+        ["bash", "-c", 'printf "%s" "$1" | ' + filters, "ngn-previous-python-tag", tags],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == expected
+
+
 @pytest.mark.parametrize(
     "ref,expected,success",
     [

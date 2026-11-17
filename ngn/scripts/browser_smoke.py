@@ -203,7 +203,7 @@ async def main(binary: Path, runtime_python: Path, executable: str, output: Path
                     {
                         "workspace": str(workspace),
                         "data_dir": str(root / "state"),
-                        "runner": [str(runtime_python), "-I", "-m", "ngn_nagents"],
+                        "runner": [str(runtime_python), "-I", "-B", "-m", "ngn_nagents"],
                         "provider": "fixture",
                         "providers": {
                             "fixture": {

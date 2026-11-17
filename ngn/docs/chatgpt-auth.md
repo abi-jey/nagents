@@ -1,10 +1,11 @@
 # ChatGPT device authentication · development only
 
-**Official subscription release is blocked until a new Python core version is
-published.** Published `nagents==0.28.5` does **not** contain the public
-`nagents.provider.device_auth` API. No dependency versions have been changed or
-published compatibility implied. Existing API-key connections remain supported
-with that published core. Subscription development requires a source-built core
+**Official subscription release requires the matching published Python core.**
+The adapter now requires `nagents>=0.28.6,<0.29`; that core must be published and
+pass the fresh installed release gate first. Published `nagents==0.28.5` does
+**not** contain the public `nagents.provider.device_auth` API. No compatibility
+with that older core is implied for this adapter; the previous 0.100.1 API-key
+release remains unchanged. Subscription development requires a source-built core
 containing `OpenAIAuth`, `DeviceAuthorization`, `OpenAIAuthError`, and
 `OpenAIProvider(credentials=auth.credentials, model=...)`, plus this adapter.
 
@@ -16,8 +17,10 @@ silently skip them. These synthetic issuer tests do not validate a real account.
 
 ## Explicit connection and CLI
 
-Copy `config.chatgpt.example.json`, choose a model your subscription can use, and
-set `runner` to the trusted environment's absolute Python executable and argv.
+Copy `config.chatgpt.example.json` and choose a model your subscription can use.
+The self-contained installed bundle supplies its own runtime when `runner` is
+omitted. For a source/small-native installation, set `runner` to the trusted
+environment's absolute Python executable and argv.
 The host executes argv directly, never through a shell. It does not import old
 configuration, discover `CODEX_HOME`, read `~/.codex`, copy credentials, or use a
 cached/environment API key as a subscription fallback.
