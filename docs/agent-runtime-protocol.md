@@ -10,7 +10,7 @@ not embedded Python and not a wrapper around the old Python harness.
 - Every envelope contains exactly `protocol_version`, `run_id`, `message`.
 - Maximum frame including newline: **1,048,576 bytes**. Oversized/incomplete frames,
   unknown fields, unknown message types, wrong versions and wrong run IDs fail closed.
-- Application version **0.100.0**, runtime protocol **1**, and browser event
+- Initial application version **0.100.0** (current patch **0.100.1**), runtime protocol **1**, and browser event
   `schema_version: 1` are independently versioned contracts.
 - v1 starts **one process per run**, not one per tool. Conversation storage survives
   process restart. No Python object, callable or pickle crosses the boundary.
@@ -68,6 +68,12 @@ The catalog is an immutable snapshot for this run. v1 does not dynamically reloa
 tools, register arbitrary Python tools, or carry approval grants to the runtime.
 API keys are looked up by the runtime from its inherited environment, not passed
 in frames. Runtime storage is opaque: the host never opens nagents message tables.
+
+Since 0.100.1, the catalog can include Rust-hosted `to_agent`, `agent_status`,
+`agent_wait` and `agent_cancel`. No new agent message types are required. Rust
+assigns child ancestry, intersects read-only permissions and approval mode with
+the parent, and supplies a separate run/session to the same configured runtime.
+The runtime cannot request a wider provider, process command, workspace or policy.
 
 ## Streaming events
 
@@ -147,6 +153,7 @@ talks only to the Rust host's same-origin API:
 | --- | --- |
 | `GET /api/bootstrap` | Non-secret metadata and per-host web token |
 | `GET /api/sessions` | Workspace session catalog |
+| `GET /api/sessions/{id}/tasks` | Metadata-only task catalog and configured root budgets |
 | `POST /api/sessions` with `{}` | Create a session |
 | `POST /api/sessions/{id}/runs` | Submit `{prompt, request_id}` (UUID idempotency key) |
 | `GET /api/sessions/{id}/events?after=0` | Durable bounded cursor replay |

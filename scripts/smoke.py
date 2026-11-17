@@ -40,36 +40,115 @@ async def fixture(request: web.Request) -> web.StreamResponse:
         await asyncio.sleep(30)
     response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
     await response.prepare(request)
-    if last["role"] == "user":
-        writing = "write" in last.get("content", "")
-        name = "write" if writing else "read_file"
-        arguments = (
-            {
-                "path": "changed.txt",
-                "content": "written by an approved Rust host tool\n",
-            }
-            if writing
-            else {"path": "hello.txt"}
-        )
-        delta = {
+
+    def tool_delta(calls: list[tuple[str, dict[str, object]]]) -> dict[str, object]:
+        return {
             "tool_calls": [
                 {
-                    "index": 0,
+                    "index": index,
                     "id": f"call-{uuid.uuid4().hex}",
                     "type": "function",
                     "function": {"name": name, "arguments": json.dumps(arguments)},
                 }
+                for index, (name, arguments) in enumerate(calls)
             ]
         }
+
+    def tool_name(message: dict[str, object]) -> str:
+        if message.get("name"):
+            return message["name"]
+        for prior in reversed(messages):
+            for call in prior.get("tool_calls", []):
+                if call["id"] == message.get("tool_call_id"):
+                    return call["function"]["name"]
+        return ""
+
+    if last["role"] == "user":
+        prompt = last.get("content", "")
+        if prompt == "delegate two background reads":
+            delta = tool_delta(
+                [
+                    (
+                        "to_agent",
+                        {
+                            "prompt": "read hello.txt",
+                            "title": f"Background reader {index + 1}",
+                            "read_only": True,
+                            "background": True,
+                        },
+                    )
+                    for index in range(2)
+                ]
+            )
+        elif prompt.startswith("delegate "):
+            holding = "hold" in prompt
+            delta = tool_delta(
+                [
+                    (
+                        "to_agent",
+                        {
+                            "prompt": "wait for cancellation"
+                            if holding
+                            else "write a delegated file",
+                            "title": "Waiting delegate"
+                            if holding
+                            else "Delegate writer",
+                            "read_only": "read-only" in prompt,
+                            "background": "orphan" in prompt,
+                        },
+                    )
+                ]
+            )
+        else:
+            writing = "write" in prompt
+            name = "write" if writing else "read_file"
+            arguments = (
+                {
+                    "path": "delegated.txt" if "delegated" in prompt else "changed.txt",
+                    "content": "written by an approved Rust host tool\n",
+                }
+                if writing
+                else {"path": "hello.txt"}
+            )
+            delta = tool_delta([(name, arguments)])
         reason = "tool_calls"
     else:
         require(
             last["role"] == "tool", "Fixture expected an actual persisted tool result"
         )
-        delta = {
-            "content": "The tool result was returned through the Rust host boundary."
-        }
-        reason = "stop"
+        user_prompt = next(
+            message.get("content", "")
+            for message in reversed(messages)
+            if message["role"] == "user"
+        )
+        if (
+            user_prompt == "delegate two background reads"
+            and tool_name(last) == "to_agent"
+        ):
+            tool_results = []
+            for message in reversed(messages):
+                if message["role"] == "user":
+                    break
+                if message["role"] == "tool" and tool_name(message) == "to_agent":
+                    tool_results.append(json.loads(message["content"]))
+            require(
+                len(tool_results) == 2, "Expected two distinct Rust-owned delegations"
+            )
+            delta = tool_delta(
+                [
+                    (
+                        "agent_wait",
+                        {"run_id": result["task"]["run_id"], "timeout_seconds": 30},
+                    )
+                    for result in tool_results
+                ]
+            )
+            reason = "tool_calls"
+        else:
+            delta = {
+                "content": "The tool result was returned through the Rust host boundary."
+            }
+            reason = "stop"
     for choice in [
         {"index": 0, "delta": delta, "finish_reason": None},
         {"index": 0, "delta": {}, "finish_reason": reason},
@@ -162,7 +241,8 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
 
             async with client.get(url + "/") as response:
                 require(
-                    response.status == 200 and "0.100.0" in await response.text(),
+                    response.status == 200
+                    and bootstrap["version"] in await response.text(),
                     "Bundled client missing",
                 )
             async with client.get(
@@ -493,6 +573,16 @@ async def main() -> None:
             print(
                 "PASS: HTTP security, authenticated WebSocket events/replay, approval binding, native writes, idempotency and cancellation"
             )
+            from subagent_smoke import http_checks as subagent_http_checks
+            from subagent_smoke import tui_check as subagent_tui_check
+
+            subagent_workspace = root / "subagent-workspace"
+            subagent_workspace.mkdir()
+            (subagent_workspace / "hello.txt").write_text("hello from a Rust tool\n")
+            await subagent_http_checks(binary, config, subagent_workspace)
+            print(
+                "PASS: real nagents subagents, native child approvals, permission ceilings, background result delivery, WS isolation/replay and subtree cancellation"
+            )
             if not arguments.skip_tui:
                 await asyncio.to_thread(tui_check, binary, workspace, root / "tui-data")
                 print("PASS: real-PTY Rust TUI, native approval and clean exit")
@@ -504,6 +594,15 @@ async def main() -> None:
                 )
                 print(
                     "PASS: real-PTY TUI → nagents Agent.run → approved native Rust write; terminal mode restored"
+                )
+                await asyncio.to_thread(
+                    subagent_tui_check,
+                    binary,
+                    subagent_workspace,
+                    root / "subagent-tui-data",
+                )
+                print(
+                    "PASS: real-PTY subagent inspection, child-only cancel, parent continuity, tree shutdown and terminal restoration"
                 )
     finally:
         await runner.cleanup()

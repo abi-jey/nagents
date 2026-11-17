@@ -42,6 +42,6 @@ fn version_is_the_requested_first_rust_release() {
         .unwrap();
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
-        "ngn 0.100.0"
+        format!("ngn {}", env!("CARGO_PKG_VERSION"))
     );
 }

@@ -2,6 +2,7 @@ pub mod config;
 pub mod host;
 pub mod runner;
 pub mod store;
+pub mod subagents;
 pub mod tools;
 
 pub use config::Config;

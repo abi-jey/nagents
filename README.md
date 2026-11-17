@@ -1,12 +1,13 @@
-# ngn · 0.100.0
+# ngn · 0.100.1
 
 A standalone **Rust harness, TUI and local web server**, with a versioned agent
 runtime protocol. The optional **nagents** adapter runs the Python agent/model
 loop; **all workspace tools and approvals execute in Rust**.
 
-This is the first Rust migration baseline, **not feature parity** with the Python
-ngn application. See [migration status](docs/migration.md) before using it on an
-important workspace. No release has been published automatically.
+The original Rust baseline is tagged `v0.100.0`; `0.100.1` adds Rust-supervised
+subagents and fixes successful tool-result delivery to the model. This is **not
+yet full legacy feature parity**. See [migration status](docs/migration.md) and
+[patch notes](docs/releases/0.100.1.md). No remote release is published automatically.
 
 ## Run without Python
 
@@ -22,9 +23,10 @@ cargo build --release -p ngn
 
 The offline demo uses native Rust tools and scripted text. It makes no model or
 network requests, never writes workspace files, and does not launch Python. It
-does persist conversations in its own data directory. Try **demo approval**.
+does persist conversations in its own data directory. Try **demo approval**,
+**demo subagents**, or **demo subagents wait** (then inspect/cancel the child with F5).
 
-The web client is at `http://127.0.0.1:8765`. The first release is **loopback-only**;
+The web client is at `http://127.0.0.1:8765`. Web serving is **loopback-only**;
 use the exact printed address. It is a trusted local operator application, not a
 multi-user service or sandbox.
 
@@ -61,16 +63,55 @@ is imported.** The core agents library remains independently usable and unchange
 - **Enter** sends; **Shift+Enter** inserts a newline where the terminal supports it.
 - **Esc** cancels active work. Completed tool actions are not rolled back.
 - **F2** lists sessions, **F3** creates one, **F4** toggles tool details.
+- **F5** opens the agent catalog; **Enter** inspects a child conversation and
+  **Ctrl+X** cancels that child and its descendants, not its parent or siblings.
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+Q** quits and joins runners before restoring the terminal.
-- `/new`, `/sessions`, `/resume ID`, `/help`, `/quit` are supported.
+- `/new`, `/sessions`, `/resume ID`, `/tasks`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
 
-The browser provides sessions, streamed responses, tool results, one-time approval
-and cancellation. Prompts submitted to a busy session are rejected, not silently
+The browser also shows agent status, independent child transcripts, child-only
+cancellation, and correctly attributed child approvals in the root workspace.
+Prompts submitted to a busy session are rejected, not silently
 queued or replayed. Different sessions can run independently (eight root runs max).
+
+## Rust-supervised subagents
+
+`to_agent` starts a separate protocol-compatible runner with an isolated session.
+The default is foreground delegation: its final public result returns through the
+same tool call. With `background: true`, it returns a child `run_id` immediately;
+the parent can do other work and later use `agent_status`, `agent_wait`, or
+`agent_cancel`. Only the immediate owning run can receive/control that result.
+
+Limits are shared by the whole root activation, including nested children:
+
+```json
+"subagents": {
+  "max_depth": 2,
+  "max_concurrent": 3,
+  "max_executions": 8,
+  "timeout_seconds": 300
+}
+```
+
+This is a field inside the explicit JSON configuration. `max_depth: 0` disables
+delegation. Saturated slots are rejected, not secretly queued. Completed/failed
+executions do not refund the execution budget. Read-only permissions and
+non-interactive approval denials cannot be relaxed by a child. Children inherit
+the selected provider/runtime; profiles and model overrides are not implemented yet.
+
+Cancelling a parent stops its subtree and joins it before publishing parent
+completion. A model that finishes while background children are still active is
+marked failed and those children are cancelled; use `agent_wait` before finishing.
+Background results are **not** automatically injected into an unrelated model
+generation. Child text/reasoning is not relayed as root assistant output.
+
+The host database upgrades from schema 1 to 2 for immutable task topology and
+recovery. Stop the host and back up its workspace state before upgrading important
+data. `0.100.0` deliberately refuses schema 2; downgrading requires restoring that
+backup. No legacy Python ngn data or runtime-owned database is migrated.
 
 ## Boundaries
 

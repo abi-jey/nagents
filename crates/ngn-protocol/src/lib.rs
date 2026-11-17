@@ -116,6 +116,22 @@ pub enum RunStatus {
     Interrupted,
 }
 
+/// Host-owned topology. An agent/runtime cannot supply or change these identities.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskInfo {
+    pub run_id: String,
+    pub session_id: String,
+    pub parent_run_id: String,
+    pub parent_session_id: String,
+    pub root_run_id: String,
+    pub root_session_id: String,
+    pub call_id: String,
+    pub title: String,
+    pub depth: u8,
+    pub read_only: bool,
+    pub status: RunStatus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
@@ -146,6 +162,16 @@ pub enum Event {
     },
     Notice {
         text: String,
+    },
+    TaskStarted {
+        task: TaskInfo,
+    },
+    TaskUpdated {
+        task: TaskInfo,
+    },
+    TaskFinished {
+        task: TaskInfo,
+        error: String,
     },
     RunFinished {
         status: RunStatus,

@@ -14,5 +14,11 @@
   },
   "read_only": false,
   "max_tool_rounds": 100,
-  "shell_timeout_seconds": 120
+  "shell_timeout_seconds": 120,
+  "subagents": {
+    "max_depth": 2,
+    "max_concurrent": 3,
+    "max_executions": 8,
+    "timeout_seconds": 300
+  }
 }

@@ -10,7 +10,7 @@
 </head>
 <body>
   <aside>
-    <div class="brand">ngn <span>0.100.0</span></div>
+    <div class="brand">ngn <span id="version">0.100.1</span></div>
     <p class="eyebrow">YOUR WORKSPACE</p>
     <p id="workspace"></p>
     <button id="new-session">+ New conversation</button>
@@ -19,7 +19,9 @@
   </aside>
   <main>
     <header><div><p class="eyebrow">AGENT WORKSPACE</p><h1 id="title">Let's build something.</h1></div><span id="connection" role="status">Connecting</span></header>
-    <div class="migration">First Rust release. Native tools, approvals, TUI and web host. Legacy voice, channels, plugins and delegation are not migrated yet.</div>
+    <div class="migration">Rust-supervised agents, native tools and one-time approvals. Legacy voice, channels, profiles and advanced UI parity remain in progress.</div>
+    <section id="tasks-panel" hidden aria-label="Delegated agents"><h2>Agents</h2><p id="task-limits"></p><div id="tasks"></div></section>
+    <section id="task-inspector" hidden aria-label="Subagent conversation"><div class="actions"><button id="close-task">Back to conversation</button><button id="cancel-task">Stop this agent</button></div><h2 id="task-title"></h2><pre id="task-transcript"></pre></section>
     <section id="transcript" aria-label="Conversation" aria-live="polite"></section>
     <section id="approval" hidden aria-label="Tool approval">
       <h2>Permission required</h2><p id="approval-label"></p><pre id="preview"></pre>

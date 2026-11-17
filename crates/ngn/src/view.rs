@@ -53,6 +53,24 @@ pub fn transcript(records: &[EventRecord], details: bool) -> String {
                 }
             }
             Event::Notice { text } => output.push_str(&format!("\n{text}\n")),
+            Event::TaskStarted { task } => output.push_str(&format!(
+                "\n  ↳ Agent {} [{}] started · depth {}{}\n",
+                task.title,
+                task.run_id,
+                task.depth,
+                if task.read_only { " · read only" } else { "" }
+            )),
+            Event::TaskFinished { task, error } => output.push_str(&format!(
+                "\n  ↳ Agent {} [{}]: {:?}{}\n",
+                task.title,
+                task.run_id,
+                task.status,
+                if error.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {error}")
+                }
+            )),
             Event::RunFinished { status, error } => output.push_str(&format!(
                 "\n— {status:?}{}\n",
                 if error.is_empty() {

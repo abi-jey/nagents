@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.100.1 — 2026-11-17
+
+### Added
+
+- Rust-owned subagent admission, isolated sessions, immutable parent/root topology,
+  per-root depth/concurrency/execution budgets and child execution deadlines.
+- `to_agent` foreground/background delegation, `agent_status`, `agent_wait` and
+  `agent_cancel`; result/control authorization is scoped to the immediate parent.
+- Subtree cancellation and structured cleanup before a parent's terminal event;
+  unjoined active children cause failure rather than being silently orphaned.
+- TUI F5 agent inspection and Ctrl+X child-only cancellation; browser agent catalog,
+  independent child transcript streams, cancellation and attributed child approvals.
+- Metadata-only task HTTP endpoint, durable task lifecycle events and interrupted
+  child recovery without replay. Host database schema upgrades from 1 to 2.
+- Supervisor policy/concurrency/recovery tests and matching TUI, browser, real
+  HTTP/WebSocket and PTY regressions using the actual nagents adapter.
+
+### Fixed
+
+- Translate empty wire errors to `ToolResultEvent.error=None`: nagents otherwise
+  treated successful Rust tool results as errors in saved/model context. The new
+  background-result fixture verifies that the model receives actual tool JSON.
+- A cancelled activation does not start a fresh runtime during graceful cleanup.
+- Task inspection retains the selected identity while new children are admitted.
+
+Full legacy queues, follow-ups, profiles/settings, voice, channels and original UI
+parity remain incomplete. See the migration checklist, not a blanket parity claim.
+
 ## 0.100.0 — 2026-11-17
 
 First standalone Rust migration baseline.

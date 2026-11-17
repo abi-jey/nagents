@@ -7,10 +7,76 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
-use ngn_protocol::{Event, EventRecord, RunStatus, VERSION};
+use ngn_protocol::{Event, EventRecord, RunStatus, TaskInfo, VERSION};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::{
+    subagents::{ChildAdmission, TaskOutcome},
+    tools::bounded,
+};
+
+const TASK_SELECT: &str = "SELECT t.child_run_id, t.child_session_id, t.parent_run_id, t.parent_session_id, t.root_run_id, t.root_session_id, t.call_id, t.title, t.depth, t.read_only, r.status, t.result, t.error FROM subagents t JOIN runs r ON r.id = t.child_run_id";
+
+fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskOutcome> {
+    let status: String = row.get(10)?;
+    let status = serde_json::from_value(serde_json::Value::String(status)).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(TaskOutcome {
+        task: TaskInfo {
+            run_id: row.get(0)?,
+            session_id: row.get(1)?,
+            parent_run_id: row.get(2)?,
+            parent_session_id: row.get(3)?,
+            root_run_id: row.get(4)?,
+            root_session_id: row.get(5)?,
+            call_id: row.get(6)?,
+            title: row.get(7)?,
+            depth: row.get(8)?,
+            read_only: row.get(9)?,
+            status,
+        },
+        result: row.get(11)?,
+        error: row.get(12)?,
+    })
+}
+
+fn insert_event(db: &Connection, run: &Run, event: Event) -> Result<EventRecord> {
+    let timestamp_ms = now_ms();
+    db.execute(
+        "INSERT INTO events(run_id, session_id, timestamp_ms, payload) VALUES (?, ?, ?, ?)",
+        params![
+            run.id,
+            run.session_id,
+            timestamp_ms,
+            serde_json::to_string(&event)?
+        ],
+    )?;
+    let sequence = db.last_insert_rowid();
+    db.execute(
+        "UPDATE sessions SET updated_at_ms = ? WHERE id = ?",
+        params![timestamp_ms, run.session_id],
+    )?;
+    Ok(EventRecord {
+        schema_version: VERSION,
+        sequence,
+        run_id: run.id.clone(),
+        session_id: run.session_id.clone(),
+        timestamp_ms,
+        event,
+    })
+}
+
+fn task_run(id: &str, session: &str) -> Run {
+    Run {
+        id: id.into(),
+        session_id: session.into(),
+        request_id: String::new(),
+        status: RunStatus::Running,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -110,15 +176,23 @@ impl Store {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            version <= 1,
+            version <= 2,
             "Rust host database was created by a newer unsupported schema version"
         );
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
             CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), request_id TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, UNIQUE(session_id, request_id));
             CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id), session_id TEXT NOT NULL REFERENCES sessions(id), timestamp_ms INTEGER NOT NULL, payload TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS session_events ON events(session_id, sequence);")?;
-        connection.pragma_update(None, "user_version", 1)?;
+            CREATE INDEX IF NOT EXISTS session_events ON events(session_id, sequence);
+            CREATE TABLE IF NOT EXISTS subagents (
+                child_run_id TEXT PRIMARY KEY REFERENCES runs(id), child_session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id),
+                parent_run_id TEXT NOT NULL REFERENCES runs(id), parent_session_id TEXT NOT NULL REFERENCES sessions(id),
+                root_run_id TEXT NOT NULL REFERENCES runs(id), root_session_id TEXT NOT NULL REFERENCES sessions(id),
+                call_id TEXT NOT NULL, title TEXT NOT NULL, depth INTEGER NOT NULL, read_only INTEGER NOT NULL,
+                result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', UNIQUE(parent_run_id, call_id));
+            CREATE INDEX IF NOT EXISTS subagent_root ON subagents(root_run_id);
+            CREATE INDEX IF NOT EXISTS subagent_parent ON subagents(parent_run_id);")?;
+        connection.pragma_update(None, "user_version", 2)?;
         // Recovery is observable and never re-executes a tool or prompt.
         let transaction = connection.transaction()?;
         let interrupted: Vec<(String, String)> = {
@@ -139,6 +213,39 @@ impl Store {
             "UPDATE runs SET status = 'interrupted' WHERE status = 'running'",
             [],
         )?;
+        let recovered: Vec<TaskOutcome> = {
+            let mut statement = transaction.prepare(&format!(
+                "{TASK_SELECT} WHERE r.status = 'interrupted' AND t.error = ''"
+            ))?;
+            statement
+                .query_map([], task_row)?
+                .collect::<Result<_, _>>()?
+        };
+        for mut outcome in recovered {
+            outcome.error =
+                "Host stopped before the subagent completed; it was not replayed.".into();
+            transaction.execute(
+                "UPDATE subagents SET result = '', error = ? WHERE child_run_id = ?",
+                params![outcome.error, outcome.task.run_id],
+            )?;
+            let parent = task_run(&outcome.task.parent_run_id, &outcome.task.parent_session_id);
+            insert_event(
+                &transaction,
+                &parent,
+                Event::TaskFinished {
+                    task: outcome.task.clone(),
+                    error: outcome.error,
+                },
+            )?;
+            if outcome.task.root_run_id != outcome.task.parent_run_id {
+                let root = task_run(&outcome.task.root_run_id, &outcome.task.root_session_id);
+                insert_event(
+                    &transaction,
+                    &root,
+                    Event::TaskUpdated { task: outcome.task },
+                )?;
+            }
+        }
         transaction.commit()?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -183,7 +290,7 @@ impl Store {
 
     pub async fn sessions(&self) -> Result<Vec<Session>> {
         self.with(|db| {
-            let mut statement = db.prepare("SELECT id, title, updated_at_ms FROM sessions ORDER BY updated_at_ms DESC, rowid DESC LIMIT 200")?;
+            let mut statement = db.prepare("SELECT id, title, updated_at_ms FROM sessions WHERE NOT EXISTS (SELECT 1 FROM subagents t WHERE t.child_session_id = sessions.id) ORDER BY updated_at_ms DESC, rowid DESC LIMIT 200")?;
             Ok(statement.query_map([], |row| Ok(Session { id: row.get(0)?, title: row.get(1)?, updated_at_ms: row.get(2)? }))?.collect::<Result<_, _>>()?)
         }).await
     }
@@ -308,6 +415,147 @@ impl Store {
         .await
     }
 
+    pub async fn is_child_session(&self, session: &str) -> Result<bool> {
+        let session = session.to_owned();
+        self.with(move |db| {
+            Ok(db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM subagents WHERE child_session_id = ?)",
+                [session],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+    }
+
+    pub(crate) async fn admit_child(
+        &self,
+        admission: ChildAdmission,
+    ) -> Result<(Run, TaskInfo, Vec<EventRecord>)> {
+        self.with(move |db| {
+            let transaction = db.transaction()?;
+            for owner in [&admission.parent, &admission.root] {
+                let status: String = transaction.query_row("SELECT status FROM runs WHERE id = ? AND session_id = ?", params![owner.id, owner.session_id], |row| row.get(0))?;
+                ensure!(status == "running", "Delegation owner is no longer running");
+            }
+            ensure!(admission.depth <= admission.limits.max_depth, "Subagent depth limit reached");
+            let (executions, running): (u16, u16) = transaction.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(r.status = 'running'), 0) FROM subagents t JOIN runs r ON r.id = t.child_run_id WHERE t.root_run_id = ?", [&admission.root.id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            ensure!(executions < admission.limits.max_executions, "Subagent execution budget exhausted for this root run");
+            ensure!(running < admission.limits.max_concurrent, "Subagent concurrency budget exhausted for this root run");
+            let session_id = format!("ngn-{}", Uuid::new_v4().simple());
+            transaction.execute("INSERT INTO sessions VALUES (?, ?, ?)", params![session_id, admission.title, now_ms()])?;
+            let run = Run { id: format!("run-{}", Uuid::new_v4().simple()), session_id: session_id.clone(), request_id: Uuid::new_v4().to_string(), status: RunStatus::Running };
+            transaction.execute("INSERT INTO runs VALUES (?, ?, ?, ?, 'running')", params![run.id, session_id, run.request_id, admission.prompt])?;
+            let task = TaskInfo {
+                run_id: run.id.clone(), session_id, parent_run_id: admission.parent.id.clone(), parent_session_id: admission.parent.session_id.clone(), root_run_id: admission.root.id.clone(), root_session_id: admission.root.session_id.clone(), call_id: admission.call_id,
+                title: admission.title, depth: admission.depth, read_only: admission.read_only, status: RunStatus::Running,
+            };
+            transaction.execute("INSERT INTO subagents(child_run_id, child_session_id, parent_run_id, parent_session_id, root_run_id, root_session_id, call_id, title, depth, read_only) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params![task.run_id, task.session_id, task.parent_run_id, task.parent_session_id, task.root_run_id, task.root_session_id, task.call_id, task.title, task.depth, task.read_only])?;
+            let mut records = vec![
+                insert_event(&transaction, &run, Event::RunStarted { prompt: admission.prompt })?,
+                insert_event(&transaction, &admission.parent, Event::TaskStarted { task: task.clone() })?,
+            ];
+            if task.root_run_id != task.parent_run_id {
+                records.push(insert_event(&transaction, &admission.root, Event::TaskUpdated { task: task.clone() })?);
+            }
+            transaction.commit()?;
+            Ok((run, task, records))
+        }).await
+    }
+
+    pub async fn tasks(&self, session: &str) -> Result<Vec<TaskInfo>> {
+        let session = session.to_owned();
+        self.with(move |db| {
+            // Catalogs are metadata-only; polling a task pane must not repeatedly
+            // load every child's potentially large final response.
+            let select = TASK_SELECT.replace("t.result, t.error", "'', ''");
+            let mut statement = db.prepare(&format!("{select} WHERE t.root_session_id = ? OR t.parent_session_id = ? ORDER BY t.rowid DESC LIMIT 1000"))?;
+            Ok(statement.query_map(params![session, session], |row| Ok(task_row(row)?.task))?.collect::<Result<_, _>>()?)
+        }).await
+    }
+
+    pub async fn task(&self, run_id: &str) -> Result<TaskOutcome> {
+        let run_id = run_id.to_owned();
+        self.with(move |db| {
+            db.query_row(
+                &format!("{TASK_SELECT} WHERE t.child_run_id = ?"),
+                [run_id],
+                task_row,
+            )
+            .optional()?
+            .context("Subagent not found")
+        })
+        .await
+    }
+
+    pub(crate) async fn finish(
+        &self,
+        run: &Run,
+        status: RunStatus,
+        text: &str,
+        error: &str,
+    ) -> Result<Vec<EventRecord>> {
+        let (run, text, error) = (run.clone(), bounded(text, 32_000), bounded(error, 4096));
+        self.with(move |db| {
+            let transaction = db.transaction()?;
+            let status_text = serde_json::to_value(status)?
+                .as_str()
+                .context("Invalid run status")?
+                .to_owned();
+            transaction.execute(
+                "UPDATE runs SET status = ? WHERE id = ?",
+                params![status_text, run.id],
+            )?;
+            let mut records = vec![insert_event(
+                &transaction,
+                &run,
+                Event::RunFinished {
+                    status,
+                    error: error.clone(),
+                },
+            )?];
+            let changed = transaction.execute(
+                "UPDATE subagents SET result = ?, error = ? WHERE child_run_id = ?",
+                params![
+                    if status == RunStatus::Completed {
+                        &text
+                    } else {
+                        ""
+                    },
+                    error,
+                    run.id
+                ],
+            )?;
+            if changed != 0 {
+                let outcome = transaction.query_row(
+                    &format!("{TASK_SELECT} WHERE t.child_run_id = ?"),
+                    [&run.id],
+                    task_row,
+                )?;
+                let parent = task_run(&outcome.task.parent_run_id, &outcome.task.parent_session_id);
+                records.push(insert_event(
+                    &transaction,
+                    &parent,
+                    Event::TaskFinished {
+                        task: outcome.task.clone(),
+                        error: error.clone(),
+                    },
+                )?);
+                if outcome.task.root_run_id != outcome.task.parent_run_id {
+                    let root = task_run(&outcome.task.root_run_id, &outcome.task.root_session_id);
+                    records.push(insert_event(
+                        &transaction,
+                        &root,
+                        Event::TaskUpdated { task: outcome.task },
+                    )?);
+                }
+            }
+            transaction.commit()?;
+            Ok(records)
+        })
+        .await
+    }
+
     /// Bounded durable cursor replay. Subscribe before calling, then de-duplicate.
     pub async fn events(&self, session: &str, after: i64) -> Result<Vec<EventRecord>> {
         let session = session.to_owned();
@@ -347,5 +595,72 @@ mod tests {
             }
         ));
         assert_eq!(events.last().unwrap().run_id, run.id);
+    }
+
+    #[tokio::test]
+    async fn subagent_recovery_preserves_topology_without_replay_or_success_claims() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let session = store.create_session().await.unwrap();
+        let (parent, _) = store.accept(&session.id, "parent", "hold").await.unwrap();
+        let (child, _, _) = store
+            .admit_child(ChildAdmission {
+                parent: parent.clone(),
+                root: parent.clone(),
+                call_id: "call".into(),
+                prompt: "work".into(),
+                title: "Reviewer".into(),
+                depth: 1,
+                read_only: true,
+                limits: crate::subagents::SubagentLimits::default(),
+            })
+            .await
+            .unwrap();
+        drop(store);
+        let reopened = Store::open(directory.path()).unwrap();
+        let recovered = reopened.task(&child.id).await.unwrap();
+        assert_eq!(recovered.task.status, RunStatus::Interrupted);
+        assert_eq!(recovered.task.parent_run_id, parent.id);
+        assert!(recovered.task.read_only);
+        assert!(recovered.result.is_empty());
+        assert!(recovered.error.contains("not replayed"));
+        assert_eq!(reopened.sessions().await.unwrap().len(), 1);
+        assert!(
+            reopened
+                .events(&session.id, 0)
+                .await
+                .unwrap()
+                .iter()
+                .any(|record| matches!(record.event, Event::TaskFinished { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn version_one_host_state_migrates_without_touching_the_runtime_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Connection::open(directory.path().join("host.sqlite3")).unwrap();
+        database.execute_batch("PRAGMA user_version=1;
+            CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);
+            CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), request_id TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, UNIQUE(session_id, request_id));
+            CREATE TABLE events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id), session_id TEXT NOT NULL REFERENCES sessions(id), timestamp_ms INTEGER NOT NULL, payload TEXT NOT NULL);
+            INSERT INTO sessions VALUES ('ngn-legacy', 'Existing title', 1);").unwrap();
+        drop(database);
+        std::fs::write(
+            directory.path().join("nagents.sqlite3"),
+            b"opaque-runtime-data",
+        )
+        .unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        assert_eq!(store.sessions().await.unwrap()[0].title, "Existing title");
+        assert!(store.tasks("ngn-legacy").await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(directory.path().join("nagents.sqlite3")).unwrap(),
+            b"opaque-runtime-data"
+        );
+        let version: u32 = store
+            .with(|db| Ok(db.pragma_query_value(None, "user_version", |row| row.get(0))?))
+            .await
+            .unwrap();
+        assert_eq!(version, 2);
     }
 }

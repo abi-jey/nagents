@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let token = "", selected = "", socket, cursor = 0, generation = 0, stateRevision = 0, submitting = false, activeRun, pendingApproval, pendingSubmission;
+let taskRevision = 0, inspected, inspectorSocket, inspectorGeneration = 0;
 const turns = new Map(), toolCards = new Map();
 
 async function api(path, body) {
@@ -33,12 +34,58 @@ function render(record) {
       break;
     }
     case "notice": append(node("p", "notice", record.text)); break;
+    case "task_started": append(node("p", "notice", `Agent ${record.task.title} started · depth ${record.task.depth}${record.task.read_only ? " · read only" : ""}`)); break;
+    case "task_finished": append(node("p", record.error ? "notice error" : "notice", `Agent ${record.task.title}: ${record.task.status}${record.error ? ": " + record.error : ""}`)); break;
     case "run_finished": append(node("p", record.error ? "notice error" : "notice", `${record.status}${record.error ? ": " + record.error : ""}`)); break;
   }
   const transcript = $("transcript");
   if (transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 220) transcript.scrollTop = transcript.scrollHeight;
-  if (["run_started", "run_finished", "approval_requested", "approval_resolved"].includes(record.event)) refreshState().catch((error) => status(error.message));
+  if (["run_started", "run_finished", "approval_requested", "approval_resolved", "task_started", "task_updated", "task_finished"].includes(record.event)) refreshState().catch((error) => status(error.message));
+  if (["task_started", "task_updated", "task_finished"].includes(record.event)) refreshTasks().catch((error) => status(error.message));
 }
+function closeTask() { inspectorGeneration++; inspected = undefined; if (inspectorSocket) { inspectorSocket.onclose = null; inspectorSocket.close(); } $("task-inspector").hidden = true; }
+function inspectTask(task) {
+  closeTask(); inspected = task; $("task-inspector").hidden = false; $("task-title").textContent = `${task.title} · ${task.status} · depth ${task.depth}${task.read_only ? " · read only" : ""}`; $("cancel-task").hidden = task.status !== "running"; $("task-transcript").textContent = "";
+  const mine = inspectorGeneration;
+  let after = 0, streamed = false, text = "";
+  function connect() {
+    if (mine !== inspectorGeneration || inspected?.run_id !== task.run_id) return;
+    inspectorSocket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events?session_id=${encodeURIComponent(task.session_id)}&after=${after}`, ["ngn.events.v1", `ngn.token.${token}`]);
+    inspectorSocket.onmessage = ({ data }) => {
+      if (mine !== inspectorGeneration || inspected?.run_id !== task.run_id) return;
+      try {
+        const record = JSON.parse(data); if (record.session_id !== task.session_id || record.run_id !== task.run_id || record.sequence <= after) return; after = record.sequence;
+        if (record.event === "run_started") text += `ASSIGNMENT\n${record.prompt}\n\n`;
+        else if (record.event === "text_delta") { text += record.text; streamed = true; }
+        else if (record.event === "text_completed") { if (!streamed) text += record.text; text += "\n"; streamed = false; }
+        else if (record.event === "tool_started") { text += `\n[${record.call.name}]\n`; streamed = false; }
+        else if (record.event === "tool_completed") text += record.result.error ? `[${record.result.error}]\n` : `[${record.result.name}: done]\n`;
+        else if (record.event === "run_finished") { text += `\n${record.status}${record.error ? ": " + record.error : ""}\n`; $("cancel-task").hidden = true; }
+        text = text.slice(-256000); $("task-transcript").textContent = text;
+      } catch { status("Invalid child event received"); }
+    };
+    inspectorSocket.onclose = () => { if (mine === inspectorGeneration && inspected?.run_id === task.run_id) setTimeout(connect, 1200); };
+  }
+  connect();
+}
+async function stopTask(task) { await api(`/api/runs/${task.run_id}/cancel`, {}); status(`Stopping agent ${task.title}`); }
+async function refreshTasks() {
+  const revision = ++taskRevision, session = selected;
+  const { tasks, limits } = await api(`/api/sessions/${session}/tasks`);
+  if (revision !== taskRevision || session !== selected) return;
+  $("tasks").replaceChildren(); $("tasks-panel").hidden = !tasks.length;
+  if (limits) $("task-limits").textContent = `Per root run: ${limits.max_concurrent} concurrent · ${limits.max_executions} executions · depth ${limits.max_depth}`;
+  for (const task of tasks) {
+    if (task.root_session_id !== session && task.parent_session_id !== session) continue;
+    const row = node("div", "task-row"), label = node("span", "", `${"↳ ".repeat(Math.min(task.depth, 8))}${task.title} · ${task.status}${task.read_only ? " · read only" : ""}`);
+    const inspect = node("button", "", "Inspect"); inspect.onclick = () => inspectTask(task); row.append(label, inspect);
+    if (task.status === "running") { const cancel = node("button", "", "Stop"); cancel.onclick = () => stopTask(task).catch((error) => status(error.message)); row.append(cancel); }
+    $("tasks").append(row);
+    if (inspected?.run_id === task.run_id) { inspected = task; $("task-title").textContent = `${task.title} · ${task.status} · depth ${task.depth}`; $("cancel-task").hidden = task.status !== "running"; }
+  }
+}
+$("close-task").onclick = closeTask;
+$("cancel-task").onclick = () => { if (inspected) stopTask(inspected).catch((error) => status(error.message)); };
 async function refreshSessions() {
   const { sessions } = await api("/api/sessions");
   $("sessions").replaceChildren();
@@ -50,17 +97,18 @@ async function refreshState() {
   const { runs, approvals } = await api("/api/state");
   if (revision !== stateRevision || session !== selected) return;
   activeRun = runs.find((run) => run.session_id === selected);
-  pendingApproval = approvals.find((approval) => approval.session_id === selected);
+  pendingApproval = approvals.find((approval) => approval.session_id === selected || approval.root_session_id === selected);
   $("cancel").hidden = !activeRun; $("send").disabled = Boolean(activeRun) || submitting;
   $("approval").hidden = !pendingApproval;
-  if (pendingApproval) { $("approval-label").textContent = `${pendingApproval.call.name} · allow this exact call once?`; $("preview").textContent = pendingApproval.preview; }
+  if (pendingApproval) { $("approval-label").textContent = `Depth ${pendingApproval.depth || 0} · ${pendingApproval.agent_title || "Main"} · ${pendingApproval.call.name} · allow this exact call once?`; $("preview").textContent = pendingApproval.preview; }
   status(pendingApproval ? "Waiting for your decision" : activeRun ? "Agent working · Esc to stop" : "Ready");
 }
 async function select(id, title = "New conversation") {
   selected = id; cursor = 0; generation++; const mine = generation;
+  closeTask();
   if (socket) { socket.onclose = null; socket.close(); }
   turns.clear(); toolCards.clear(); $("transcript").replaceChildren(); $("title").textContent = title;
-  await refreshSessions(); await refreshState();
+  await refreshSessions(); await refreshState(); await refreshTasks();
   function connect() {
     if (mine !== generation) return;
     socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events?session_id=${encodeURIComponent(id)}&after=${cursor}`, ["ngn.events.v1", `ngn.token.${token}`]);
@@ -89,6 +137,7 @@ for (const [id, allow] of [["allow", true], ["deny", false]]) $(id).onclick = as
 
 try {
   const bootstrap = await api("/api/bootstrap"); token = bootstrap.token;
+  $("version").textContent = bootstrap.version;
   $("workspace").textContent = bootstrap.workspace;
   $("runtime").textContent = `${bootstrap.backend === "demo" ? "Offline Rust demo" : "nagents · " + (bootstrap.model || "provider not configured")}${bootstrap.read_only ? " · read only" : ""}`;
   const sessions = await refreshSessions();

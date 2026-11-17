@@ -26,6 +26,7 @@ async function boot() {
   const sockets = [];
   const states = [];
   const submissions = [];
+  const tasks = [];
   const session = { id: "ngn-test", title: "Test conversation" };
   globalThis.document = {
     getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
@@ -43,12 +44,14 @@ async function boot() {
     if (path === "/api/bootstrap") return response({ token: "host-token", workspace: "/workspace", backend: "demo", read_only: false });
     if (path === "/api/sessions") return response({ sessions: [session] });
     if (path === "/api/state") return states.length ? states.shift() : response({ runs: [], approvals: [] });
+    if (path.endsWith("/tasks")) return response({ tasks, limits: { max_depth: 2, max_concurrent: 3, max_executions: 8 } });
+    if (path.endsWith("/cancel") || path === "/api/approvals") return response({ accepted: true });
     if (path.endsWith("/runs")) return submissions.length ? submissions.shift() : response({ run: { id: "run-test" } });
     throw new Error(`Unexpected request: ${path}`);
   };
   await import(`./app.js?test=${++bootCount}`);
   const emit = (sequence, event, data = {}) => sockets[0].onmessage({ data: JSON.stringify({ schema_version: 1, session_id: session.id, run_id: "run-test", sequence, event, ...data }) });
-  return { elements, requests, sockets, states, submissions, emit };
+  return { elements, requests, sockets, states, submissions, tasks, emit };
 }
 
 test("browser client uses host schema and does not duplicate completed or replayed text", async () => {
@@ -110,4 +113,40 @@ test("replayed approval events do not revive an expired decision", async () => {
   app.emit(1, "approval_requested", { approval_id: "expired", call: { name: "shell" }, preview: "old" });
   await flush();
   assert.equal(app.elements.get("approval").hidden, true);
+});
+
+test("subagent inspection and cancellation use child identity without contaminating the parent transcript", async () => {
+  const app = await boot();
+  const task = { run_id: "run-child", session_id: "ngn-child", parent_run_id: "run-test", parent_session_id: "ngn-test", root_session_id: "ngn-test", title: "Reviewer", depth: 1, read_only: true, status: "running" };
+  app.tasks.push(task);
+  app.emit(1, "task_started", { task });
+  await flush();
+  assert.equal(app.elements.get("tasks-panel").hidden, false);
+  assert(app.elements.get("tasks").textContent.includes("Reviewer"));
+  app.elements.get("tasks").children[0].children[1].onclick();
+  assert.equal(app.sockets.length, 2);
+  assert(app.sockets[1].url.includes("session_id=ngn-child"));
+  app.sockets[1].onmessage({ data: JSON.stringify({ session_id: "ngn-child", run_id: "run-child", sequence: 2, event: "text_completed", text: "Child-only response" }) });
+  assert(app.elements.get("task-transcript").textContent.includes("Child-only response"));
+  assert(!app.elements.get("transcript").textContent.includes("Child-only response"));
+  app.elements.get("tasks").children[0].children[1].onclick();
+  app.sockets[1].onmessage({ data: JSON.stringify({ session_id: "ngn-child", run_id: "run-child", sequence: 3, event: "text_completed", text: "Stale inspector response" }) });
+  assert(!app.elements.get("task-transcript").textContent.includes("Stale inspector response"));
+  app.elements.get("cancel-task").onclick();
+  await flush();
+  assert(app.requests.some((request) => request.path === "/api/runs/run-child/cancel"));
+  app.elements.get("close-task").onclick();
+  assert.equal(app.elements.get("task-inspector").hidden, true);
+});
+
+test("a root operator can approve a child call, bound to the actual child run", async () => {
+  const app = await boot();
+  app.states.push(response({ runs: [{ id: "run-test", session_id: "ngn-test" }], approvals: [{ id: "approval-child", run_id: "run-child", session_id: "ngn-child", root_session_id: "ngn-test", agent_title: "Writer", depth: 1, call: { name: "write" }, preview: "exact child change" }] }));
+  app.emit(1, "task_updated", { task: { run_id: "run-child" } });
+  await flush();
+  assert.equal(app.elements.get("approval").hidden, false);
+  assert(app.elements.get("approval-label").textContent.includes("Writer"));
+  await app.elements.get("allow").onclick();
+  const decision = app.requests.find((request) => request.path === "/api/approvals");
+  assert.deepEqual(JSON.parse(decision.options.body), { run_id: "run-child", approval_id: "approval-child", allow: true });
 });

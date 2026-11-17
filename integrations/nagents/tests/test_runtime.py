@@ -35,6 +35,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await task
         self.assertEqual(result.result, {"content": "hello"})
+        self.assertIsNone(
+            result.error, "Successful host results must remain successful in Agent.run's persisted/model context"
+        )
         with self.assertRaises(ProtocolError):
             await executor.execute(ToolCall(id="call-1", name="read_file", arguments={}))
 

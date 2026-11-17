@@ -31,6 +31,20 @@ stop an arbitrary malicious process from making its own system calls.
 
 ## Persistence and execution
 
+Rust owns subagent ancestry and shares depth, occupied-slot, execution and deadline
+budgets across a root activation. Delegated sessions are isolated and inspect-only
+to external root submission. Permissions and approval mode cannot widen; a child
+may tighten to read-only but cannot choose a different executable/provider/policy.
+Agent status/result/cancel tools authorize the exact immediate parent run, not a
+model-supplied session or claimed title. Human UIs show the actual child identity
+and depth for approvals, while decisions stay bound to the child call.
+
+Cancelling an owner cascades through its subtree; publishing its terminal event
+follows child cleanup. Active unjoined children fail their owner's completion and
+are cancelled. Child streams are not root assistant messages; final public results
+reach the owning model only through its explicit delegation/status/wait tool result.
+No provider private reasoning is added to lifecycle notices or task catalogs.
+
 State lives under a separate `ngn-rust` namespace, in private workspace directories
 and regular private database files on Unix. Host/runtime databases have separate
 owners and schemas. Host events include conversation and tool contents and should

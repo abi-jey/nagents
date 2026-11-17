@@ -12,11 +12,31 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    host::{ApprovalMode, Host},
-    store::Run,
-    tools::ProcessGroup,
-};
+use crate::{host::Host, store::Run, subagents::Execution, tools::ProcessGroup};
+
+#[derive(Debug)]
+pub(crate) struct RunOutput {
+    pub status: RunStatus,
+    pub error: String,
+    pub text: String,
+}
+
+impl RunOutput {
+    pub fn cancelled() -> Self {
+        Self {
+            status: RunStatus::Cancelled,
+            error: String::new(),
+            text: String::new(),
+        }
+    }
+    pub fn failed(error: String) -> Self {
+        Self {
+            status: RunStatus::Failed,
+            error,
+            text: String::new(),
+        }
+    }
+}
 
 pub async fn read_frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<Option<RuntimeFrame>> {
     let mut frame = Vec::new();
@@ -70,13 +90,16 @@ async fn send(
     Ok(())
 }
 
-pub async fn stdio(
+pub(crate) async fn stdio(
     host: &Arc<Host>,
-    run: &Run,
+    execution: &Execution,
     prompt: &str,
-    approval: ApprovalMode,
-    cancel: CancellationToken,
-) -> Result<(RunStatus, String)> {
+) -> Result<RunOutput> {
+    let run = &execution.run;
+    let cancel = execution.cancel.clone();
+    if cancel.is_cancelled() {
+        return Ok(RunOutput::cancelled());
+    }
     let mut command = Command::new(&host.config.runner[0]);
     command
         .args(&host.config.runner[1..])
@@ -94,7 +117,7 @@ pub async fn stdio(
     let mut reader = BufReader::new(child.stdout.take().context("No runner stdout")?);
     let ready = tokio::select! {
         ready = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut reader)) => ready.context("Agent runner handshake timed out")??.context("Agent runner exited before ready; verify `python -m ngn_nagents` is installed in the configured runner environment")?,
-        _ = cancel.cancelled() => return Ok((RunStatus::Cancelled, String::new())),
+        _ = cancel.cancelled() => return Ok(RunOutput::cancelled()),
     };
     ensure!(
         ready.run_id.is_empty(),
@@ -110,6 +133,9 @@ pub async fn stdio(
         _ => bail!("Expected runtime ready handshake"),
     }
     let mut system_prompt = host.config.system_prompt.clone();
+    if let Some(task) = &execution.task {
+        system_prompt.push_str(&format!("\n\nYou are a delegated subagent (depth {}, title {:?}). Work only on your assignment. Permission ceiling: {}. Report a concise final result to your immediate parent using your normal final response; do not address other sessions. Any background subagents must be awaited with agent_wait before you finish.", task.depth, task.title, if execution.read_only { "read only" } else { "build; mutations require separate host approval" }));
+    }
     // Root instructions are plain data, read with the same native path policy.
     if host.config.workspace.join("AGENTS.md").exists() {
         let call = ToolCall {
@@ -117,7 +143,7 @@ pub async fn stdio(
             name: "read_file".into(),
             arguments: json!({"path":"AGENTS.md", "limit":1000}),
         };
-        let tools = host.tools.clone();
+        let tools = host.tools.restricted(execution.read_only);
         let prepared = tokio::task::spawn_blocking(move || tools.prepare(&call)).await??;
         let instructions = host.tools.execute(prepared, cancel.clone()).await?;
         if let Some(content) = instructions["content"].as_str() {
@@ -138,20 +164,21 @@ pub async fn stdio(
             .to_string_lossy()
             .into_owned(),
         provider: host.config.selected_provider()?.clone(),
-        tools: host.tools.definitions(),
+        tools: host.catalog(execution),
         max_tool_rounds: host.config.max_tool_rounds,
     };
     send(&mut writer, run, HostMessage::Start { run: start }).await?;
     let mut calls = HashSet::new();
     let mut frames = 0;
     let mut total_text = 0;
+    let mut final_text = String::new();
     let terminal = loop {
         let frame = tokio::select! {
             frame = read_frame(&mut reader) => frame?.context("Agent runner exited without a terminal result; actions are not retried")?,
             _ = cancel.cancelled() => {
                 let _ = send(&mut writer, run, HostMessage::Cancel).await;
                 if tokio::time::timeout(Duration::from_secs(3), child.wait()).await.is_err() { child.kill().await.ok(); child.wait().await.ok(); }
-                return Ok((RunStatus::Cancelled, String::new()));
+                return Ok(RunOutput::cancelled());
             }
         };
         ensure!(frame.run_id == run.id, "Runtime frame has the wrong run_id");
@@ -168,6 +195,7 @@ pub async fn stdio(
             }
             RuntimeMessage::TextCompleted { text } => {
                 ensure!(text.len() <= 512_000, "Runtime completion exceeds limit");
+                final_text = text.clone();
                 host.emit(run, Event::TextCompleted { text }).await?;
             }
             RuntimeMessage::ToolRequest { call } => {
@@ -179,7 +207,7 @@ pub async fn stdio(
                     calls.len() <= host.config.max_tool_rounds as usize * 32,
                     "Runtime tool budget exceeded"
                 );
-                let result = host.tool(run, call, approval, cancel.clone()).await?;
+                let result = host.tool(run, call).await?;
                 send(&mut writer, run, HostMessage::ToolResult { result }).await?;
             }
             RuntimeMessage::Notice { text } => {
@@ -205,16 +233,23 @@ pub async fn stdio(
         .await
         .context("Agent runner failed to exit after its terminal result")??;
     ensure!(status.success(), "Agent runner exited unsuccessfully");
-    Ok(terminal)
+    Ok(RunOutput {
+        status: terminal.0,
+        error: terminal.1,
+        text: final_text,
+    })
 }
 
-pub async fn demo(
+pub(crate) async fn demo(
     host: &Arc<Host>,
     run: &Run,
     prompt: &str,
-    approval: ApprovalMode,
     cancel: CancellationToken,
-) -> Result<(RunStatus, String)> {
+) -> Result<RunOutput> {
+    if prompt == "demo hold" {
+        cancel.cancelled().await;
+        return Ok(RunOutput::cancelled());
+    }
     let result = host
         .tool(
             run,
@@ -223,8 +258,6 @@ pub async fn demo(
                 name: "list_files".into(),
                 arguments: json!({"limit":12}),
             },
-            approval,
-            cancel.clone(),
         )
         .await?;
     let listing = result.result["paths"]
@@ -239,8 +272,58 @@ pub async fn demo(
         })
         .unwrap_or_default();
     let mut text = format!(
-        "OFFLINE DEMO · ngn 0.100.0\n\nThe harness, tools, TUI and web server are running in Rust. No Python runtime, network or model request was used.\n\nWorkspace files:\n{listing}\n\nTry `demo approval` to inspect a no-write approval preview. For a live agent, install the nagents runtime adapter and select a provider in an explicit Rust configuration.\n"
+        "OFFLINE DEMO · ngn {}\n\nThe harness, tools, TUI and web server are running in Rust. No Python runtime, network or model request was used.\n\nWorkspace files:\n{listing}\n\nTry `demo approval` for a no-write approval preview or `demo subagents` for Rust-supervised background agents.\n",
+        env!("CARGO_PKG_VERSION")
     );
+    if prompt.starts_with("demo subagents") {
+        let waiting = prompt.contains("wait");
+        let mut tasks = Vec::new();
+        for index in 0..if waiting { 1 } else { 2 } {
+            let delegated = host.tool(run, ToolCall { call_id:format!("demo-delegate-{index}"), name:"to_agent".into(), arguments:json!({"prompt":if waiting { "demo hold" } else { "demo child" }, "title":format!("Workspace reviewer {}", index + 1), "read_only":true, "background":true}) }).await?;
+            if let Some(id) = delegated.result["task"]["run_id"].as_str() {
+                tasks.push(id.to_owned());
+            } else {
+                text.push_str(&format!("\nDelegation denied: {}\n", delegated.error));
+            }
+        }
+        for (index, id) in tasks.iter().enumerate() {
+            loop {
+                let outcome = host
+                    .tool(
+                        run,
+                        ToolCall {
+                            call_id: format!("demo-wait-{index}"),
+                            name: "agent_wait".into(),
+                            arguments: json!({"run_id":id, "timeout_seconds":60}),
+                        },
+                    )
+                    .await?;
+                if outcome.result["task"]["status"] == "running" {
+                    continue;
+                }
+                text.push_str(&format!(
+                    "\nRust-supervised subagent {}: {}\n",
+                    id,
+                    outcome.result["task"]["status"]
+                        .as_str()
+                        .unwrap_or("failed")
+                ));
+                break;
+            }
+        }
+    }
+    if prompt == "demo nested" {
+        let outcome = host.tool(run, ToolCall { call_id:"demo-nested".into(), name:"to_agent".into(), arguments:json!({"prompt":"demo subagents", "title":"Nested coordinator", "read_only":true}) }).await?;
+        text.push_str(&format!(
+            "\nNested supervisor result: {}\n",
+            outcome.result["task"]["status"]
+                .as_str()
+                .unwrap_or("denied")
+        ));
+    }
+    if prompt == "demo orphan" {
+        host.tool(run, ToolCall { call_id:"demo-unjoined".into(), name:"to_agent".into(), arguments:json!({"prompt":"demo hold", "title":"Unjoined demo child", "background":true}) }).await?;
+    }
     if prompt.to_lowercase().contains("demo approval") {
         let result = host
             .tool(
@@ -250,8 +333,6 @@ pub async fn demo(
                     name: "demo_preview".into(),
                     arguments: json!({}),
                 },
-                approval,
-                cancel.clone(),
             )
             .await?;
         text.push_str(if result.error.is_empty() {
@@ -263,7 +344,7 @@ pub async fn demo(
     let chars: Vec<char> = text.chars().collect();
     for chunk in chars.chunks(48) {
         if cancel.is_cancelled() {
-            return Ok((RunStatus::Cancelled, String::new()));
+            return Ok(RunOutput::cancelled());
         }
         host.emit(
             run,
@@ -274,8 +355,13 @@ pub async fn demo(
         .await?;
         tokio::time::sleep(Duration::from_millis(12)).await;
     }
-    host.emit(run, Event::TextCompleted { text }).await?;
-    Ok((RunStatus::Completed, String::new()))
+    host.emit(run, Event::TextCompleted { text: text.clone() })
+        .await?;
+    Ok(RunOutput {
+        status: RunStatus::Completed,
+        error: String::new(),
+        text,
+    })
 }
 
 #[cfg(test)]

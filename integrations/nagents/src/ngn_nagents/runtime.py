@@ -136,7 +136,9 @@ class HostExecutor(ToolExecutor):
                 id=call_id,
                 name=name,
                 result=cast("Json", result["result"]),
-                error=text(result, "error", 32_000, empty=True),
+                # The wire contract uses an empty error string for success;
+                # nagents persists success only when ToolResultEvent.error is None.
+                error=text(result, "error", 32_000, empty=True) or None,
             )
         )
 

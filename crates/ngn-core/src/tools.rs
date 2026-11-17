@@ -186,6 +186,12 @@ impl Tools {
         })
     }
 
+    pub(crate) fn restricted(&self, read_only: bool) -> Self {
+        let mut tools = self.clone();
+        tools.read_only |= read_only;
+        tools
+    }
+
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         let string = json!({"type":"string"});
         let integer = json!({"type":"integer", "minimum":1, "maximum":1000});

@@ -217,6 +217,7 @@ fn router(state: WebState) -> Router {
         .route("/api/sessions", get(sessions).post(create_session))
         .route("/api/sessions/{id}/events", get(history))
         .route("/api/sessions/{id}/runs", post(start))
+        .route("/api/sessions/{id}/tasks", get(tasks))
         .route("/api/runs/{id}/cancel", post(cancel))
         .route("/api/approvals", post(decide))
         .route("/api/events", get(events))
@@ -244,6 +245,12 @@ async fn sessions(State(state): State<WebState>) -> ApiResult {
 async fn create_session(State(state): State<WebState>, Json(_): Json<Empty>) -> ApiResult {
     Ok(Json(
         json!({"session":state.host.store.create_session().await.map_err(failure)?}),
+    ))
+}
+async fn tasks(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
+    state.host.store.session(&id).await.map_err(failure)?;
+    Ok(Json(
+        json!({"tasks":state.host.store.tasks(&id).await.map_err(failure)?, "limits":state.host.config.subagents}),
     ))
 }
 async fn history(
@@ -362,7 +369,7 @@ async fn stream(mut socket: WebSocket, state: WebState, input: Subscription) {
 pub async fn serve(host: Arc<Host>, address: SocketAddr) -> Result<()> {
     ensure!(
         address.ip().is_loopback(),
-        "0.100.0 web serving is loopback-only; remote deployment needs a separately authenticated boundary"
+        "Web serving is loopback-only; remote deployment needs a separately authenticated boundary"
     );
     let listener = tokio::net::TcpListener::bind(address).await?;
     let actual = listener.local_addr()?;
@@ -479,6 +486,81 @@ mod tests {
             assert_eq!(response.headers()["cache-control"], "no-store");
             assert_eq!(response.headers()["x-frame-options"], "DENY");
         }
+        state.host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn task_routes_preserve_topology_and_do_not_promote_children_to_roots() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let session = host.store.create_session().await.unwrap();
+        let root = host
+            .start(
+                &session.id,
+                "demo hold",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Deny,
+            )
+            .await
+            .unwrap();
+        let child = host.tool(&root, ngn_protocol::ToolCall { call_id:"http-child".into(), name:"to_agent".into(), arguments:json!({"prompt":"demo child", "title":"HTTP reviewer", "read_only":true}) }).await.unwrap();
+        assert!(child.error.is_empty());
+        let state = WebState {
+            host,
+            authority: "127.0.0.1:8765".into(),
+            token: "test-token".into(),
+            shutdown: CancellationToken::new(),
+        };
+        let app = router(state.clone());
+        let request = Request::builder()
+            .uri(format!("/api/sessions/{}/tasks", session.id))
+            .header("host", &state.authority)
+            .header("x-ngn-token", &state.token)
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["tasks"][0]["parent_run_id"], root.id);
+        assert_eq!(payload["tasks"][0]["read_only"], true);
+        assert_eq!(payload["tasks"][0]["status"], "completed");
+        assert!(
+            payload["tasks"][0].get("result").is_none(),
+            "Catalogs must remain metadata-only"
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/sessions/{}/runs",
+                child.result["task"]["session_id"].as_str().unwrap()
+            ))
+            .header("host", &state.authority)
+            .header("x-ngn-token", &state.token)
+            .header("origin", format!("http://{}", state.authority))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"prompt":"escalate", "request_id":Uuid::new_v4().to_string()}).to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
         state.host.shutdown().await;
     }
 }

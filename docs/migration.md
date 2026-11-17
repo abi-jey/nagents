@@ -1,4 +1,4 @@
-# Rust migration status · 0.100.0
+# Rust migration status · 0.100.1
 
 ## Decision
 
@@ -43,6 +43,12 @@ initial browser client proves the new shared lifecycle and tool boundary.
 - [x] Native bounded read/list/search/write/edit/shell tools and one-time approvals.
 - [x] Read-only mode, non-interactive fail-closed behavior, stale file detection.
 - [x] Cancellation, shutdown joins and Unix child-process-group cleanup.
+- [x] Rust-owned foreground/background subagent supervision with isolated sessions,
+  immutable ancestry, permission ceilings, shared budgets and child deadlines.
+- [x] Direct-parent result/control tools, subtree cancellation and fail-closed
+  cleanup of unjoined active children.
+- [x] TUI/web task catalogs, independent child inspectors, child-only cancellation
+  and root-operator approval of correctly attributed child calls.
 
 ## Explicitly not migrated yet
 
@@ -53,8 +59,10 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Original React application, full settings navigator and provider/model editors.
 - Global/workspace/agent preference inheritance and optimistic configuration revisions.
 - Agent Markdown definitions/profiles, hot reload and provider connection registry.
-- Native background subagents, delegation trees, follow-ups, shared depth/slot/execution
-  accounting, task inspection, parent completion delivery and wake-up timers.
+- Full legacy delegation UX, agent profiles/model overrides, child follow-ups,
+  automatic completion notifications at model boundaries and wake-up timers.
+  Basic Rust supervision, inspection, budgets and explicit `agent_wait` delivery
+  exist in 0.100.1; they are not the full old orchestration feature set.
 - Input queueing and steering/interrupt delivery semantics during an active model run.
 - Skills, nested instructions, Git-ignore discovery, MCP and custom Python plugins.
 - Model context accounting, compaction controls, usage UI and model discovery UI.
@@ -75,7 +83,8 @@ authentication or media mode. Local fixture coverage is not paid-provider valida
 1. **0.100.x:** validate the protocol boundary and first TUI/server with real user
    workflows; improve parity tests, logs, error presentation and keyboard behavior.
 2. Port trusted config/provider definitions and per-agent immutable run snapshots.
-3. Port delegation/queues/tasks with the original ownership and approval invariants.
+3. Extend supervised delegation with queues/follow-ups/automatic result delivery,
+   preserving the original ownership and approval invariants.
 4. Reconcile or port the full web experience, settings, artifacts and session actions.
 5. Port MCP/skills/extensions using explicit capability contracts, not Python imports
    inside the Rust host. Expose trusted Python behavior only as an optional runtime.
