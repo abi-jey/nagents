@@ -122,7 +122,7 @@ $("cancel-task").onclick = () => { if (inspected) stopTask(inspected).catch((err
 async function refreshSessions() {
   const { sessions } = await api("/api/sessions");
   $("sessions").replaceChildren();
-  for (const session of sessions) { const button = node("button", session.id === selected ? "selected" : "", session.title); button.title = session.id; button.onclick = () => select(session.id, session.title); $("sessions").append(button); }
+  for (const session of sessions) { if (session.id === selected) $("title").textContent = session.title; const button = node("button", session.id === selected ? "selected" : "", session.title); button.title = session.id; button.onclick = () => select(session.id, session.title); $("sessions").append(button); }
   return sessions;
 }
 async function refreshState() {

@@ -57,7 +57,7 @@ async function boot() {
   };
   await import(`./app.js?test=${++bootCount}`);
   const emit = (sequence, event, data = {}) => sockets[0].onmessage({ data: JSON.stringify({ schema_version: 1, session_id: session.id, run_id: "run-test", sequence, event, ...data }) });
-  return { elements, requests, sockets, states, submissions, tasks, queues, queue, emit };
+  return { elements, requests, sockets, states, submissions, tasks, queues, queue, session, emit };
 }
 
 test("browser client uses host schema and does not duplicate completed or replayed text", async () => {
@@ -209,4 +209,13 @@ test("a delayed accepted submission does not erase a newer draft", async () => {
   accepted.resolve(response({ run: { id: "accepted", status: "queued" } }));
   await sending;
   assert.equal(app.elements.get("prompt").value, "newer draft");
+});
+
+test("accepted inputs synchronize the conversation heading with the host title", async () => {
+  const app = await boot();
+  app.session.title = "Updated host title";
+  app.elements.get("prompt").value = "first input";
+  await app.elements.get("composer").onsubmit({ preventDefault() {} });
+  assert.equal(app.elements.get("title").textContent, "Updated host title");
+  assert(app.elements.get("sessions").textContent.includes("Updated host title"));
 });
