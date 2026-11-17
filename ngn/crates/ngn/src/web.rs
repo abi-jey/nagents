@@ -425,7 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_origin_token_and_security_headers_are_enforced() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),
@@ -511,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn task_routes_preserve_topology_and_do_not_promote_children_to_roots() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),
@@ -585,7 +585,7 @@ mod tests {
     }
     #[tokio::test]
     async fn queue_routes_accept_busy_inputs_and_validate_controls_and_identity() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),

@@ -1,5 +1,8 @@
 #![cfg(unix)]
 
+#[path = "../../ngn-core/src/test_support.rs"]
+mod test_support;
+
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 use ngn_core::{Config, Host, auth::IdentityGuard};
@@ -26,7 +29,7 @@ fn setup(directory: &Path, body: &str) -> (Config, std::path::PathBuf) {
 
 #[test]
 fn native_auth_executes_trusted_argv_and_only_presents_validated_status() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = test_support::private_tempdir().unwrap();
     let store = directory.path().join("state/auth/openai.json");
     let body = format!(
         "test \"$#\" -eq 4 && test \"$1\" = auth && test \"$2\" = status && test \"$3\" = --store && test \"$4\" = '{}' || exit 4\nprintf '%s\\n' '{{\"auth_protocol\":1,\"message\":{{\"type\":\"status\",\"status\":\"signed_out\"}}}}'",
@@ -59,7 +62,7 @@ fn secret_auth_frames_and_unknown_errors_are_never_presented() {
         json!({"type":"error", "code":"PRIVATE-SECRET"}),
         json!({"type":"challenge", "verification_url":"https://evil.invalid/PRIVATE-SECRET", "user_code":"TEST"}),
     ] {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = test_support::private_tempdir().unwrap();
         let frame = json!({"auth_protocol":1, "message":message});
         let (_, path) = setup(directory.path(), &format!("printf '%s\\n' '{frame}'"));
         let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
@@ -78,7 +81,7 @@ fn secret_auth_frames_and_unknown_errors_are_never_presented() {
 
 #[test]
 fn native_mutations_fail_before_exec_while_any_using_host_is_alive() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = test_support::private_tempdir().unwrap();
     let called = directory.path().join("called");
     let (config, path) = setup(directory.path(), &format!("touch '{}'", called.display()));
     let host = Host::open(config.clone()).unwrap();
@@ -106,7 +109,7 @@ fn native_mutations_fail_before_exec_while_any_using_host_is_alive() {
 
 #[test]
 fn old_v1_runtime_never_receives_a_subscription_extension_without_capability() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = test_support::private_tempdir().unwrap();
     let received = directory.path().join("received");
     let body = format!(
         "printf '%s\\n' '{{\"protocol_version\":1,\"run_id\":\"\",\"message\":{{\"type\":\"ready\",\"runtime\":\"old-v1\",\"capabilities\":[\"host_tools\",\"cancel\"]}}}}'\n/bin/cat > '{}'",

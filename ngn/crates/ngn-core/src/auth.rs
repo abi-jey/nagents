@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn ownership_excludes_mutators_and_keeps_all_workspace_hosts_shared() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let one = IdentityGuard::host(directory.path()).unwrap();
         let two = IdentityGuard::host(directory.path()).unwrap();
         assert!(IdentityGuard::mutation(directory.path()).is_err());
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn private_ownership_metadata_rejects_links_and_public_modes() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         drop(IdentityGuard::host(directory.path()).unwrap());
         let lock = directory.path().join(".identity/host.lock");
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
@@ -531,7 +531,7 @@ mod tests {
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
         fs::hard_link(&lock, directory.path().join("linked")).unwrap();
         assert!(IdentityGuard::host(directory.path()).is_err());
-        let other = tempfile::tempdir().unwrap();
+        let other = crate::test_support::private_tempdir().unwrap();
         symlink(directory.path(), other.path().join(".identity")).unwrap();
         assert!(IdentityGuard::host(other.path()).is_err());
     }
@@ -540,7 +540,7 @@ mod tests {
     #[tokio::test]
     async fn cancelling_auth_joins_the_child_and_waits_for_graceful_cleanup() {
         use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let script = directory.path().join("runner");
         let joined = directory.path().join("joined");
         let pid = directory.path().join("pid");
@@ -569,5 +569,40 @@ mod tests {
             Err(nix::errno::Errno::ESRCH)
         );
         assert!(IdentityGuard::mutation(&config.data_dir).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_private_fixture_has_exact_mode_and_passes_identity_guard() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = crate::test_support::private_tempdir().unwrap();
+        assert_eq!(
+            directory.path().metadata().unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        drop(IdentityGuard::host(directory.path()).unwrap());
+        assert!(IdentityGuard::mutation(directory.path()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicitly_public_fixture_ancestor_still_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let public = directory.path().join("public-parent");
+        fs::create_dir(&public).unwrap();
+        // Only this newly created, test-owned bad fixture is made public. This
+        // must remain unsafe even when the invoking shell uses umask 0022.
+        fs::set_permissions(&public, fs::Permissions::from_mode(0o775)).unwrap();
+        assert_eq!(
+            public.metadata().unwrap().permissions().mode() & 0o777,
+            0o775
+        );
+        let error = IdentityGuard::host(&public.join("state")).err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("non-writable parent directories")
+        );
     }
 }

@@ -340,7 +340,8 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
             base = Path(temporary)
             explicit = base / "native" / "auth" / "openai.json"
             legacy = base / "ngn" / "auth" / "openai.json"
-            legacy.parent.mkdir(parents=True, mode=0o700)
+            legacy.parent.parent.mkdir(mode=0o700)
+            legacy.parent.mkdir(mode=0o700)
             legacy.write_text("legacy sentinel")
             frames: list[dict[str, object]] = []
             with (
@@ -357,7 +358,8 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
                 await auth.operate("status", explicit, frames.append)
                 self.assertFalse(explicit.exists())
                 self.assertFalse(explicit.parent.exists())
-                explicit.parent.mkdir(parents=True, mode=0o700)
+                explicit.parent.parent.mkdir(mode=0o700)
+                explicit.parent.mkdir(mode=0o700)
                 explicit.write_text(
                     json.dumps(
                         {

@@ -608,7 +608,7 @@ mod tests {
 
     #[tokio::test]
     async fn recovery_and_exclusive_ownership() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
         assert!(Store::open(directory.path()).is_err());
         let session = store.create_session().await.unwrap();
@@ -634,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn subagent_recovery_preserves_topology_without_replay_or_success_claims() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
         let session = store.create_session().await.unwrap();
         let (parent, _) = store.accept(&session.id, "parent", "hold").await.unwrap();
@@ -672,7 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn version_one_host_state_migrates_without_touching_the_runtime_database() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let database = Connection::open(directory.path().join("host.sqlite3")).unwrap();
         database.execute_batch("PRAGMA user_version=1;
             CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);

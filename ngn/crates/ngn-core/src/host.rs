@@ -778,7 +778,7 @@ mod tests {
 
     #[tokio::test]
     async fn submissions_are_idempotent_and_concurrency_is_per_session() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let session = host.store.create_session().await.unwrap();
         let request = Uuid::new_v4().to_string();
@@ -806,7 +806,7 @@ mod tests {
 
     #[tokio::test]
     async fn noninteractive_modifications_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let session = host.store.create_session().await.unwrap();
         let run = host
@@ -838,7 +838,7 @@ mod tests {
     #[tokio::test]
     async fn approval_timing_is_call_bound_and_human_wait_is_not_execution_time() {
         for allow in [true, false] {
-            let directory = tempfile::tempdir().unwrap();
+            let directory = crate::test_support::private_tempdir().unwrap();
             let host = host(directory.path());
             let session = host.store.create_session().await.unwrap();
             let run = host
@@ -973,7 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn foreground_results_are_direct_parent_scoped_and_children_cannot_become_roots() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let parent = held(&host).await;
         let foreign = held(&host).await;
@@ -1055,7 +1055,7 @@ mod tests {
 
     #[tokio::test]
     async fn depth_concurrency_and_execution_budgets_are_shared_and_not_refunded() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let mut config = Config {
             workspace: directory.path().into(),
             data_dir: directory.path().join("state"),
@@ -1119,7 +1119,7 @@ mod tests {
 
     #[tokio::test]
     async fn permissions_only_tighten_and_parent_cancel_joins_the_entire_tree() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let parent = held(&host).await;
         let result = host
@@ -1195,7 +1195,7 @@ mod tests {
 
     #[tokio::test]
     async fn deadlines_and_unjoined_work_fail_closed_without_orphans() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let mut config = Config {
             workspace: directory.path().into(),
             data_dir: directory.path().join("state"),
@@ -1255,7 +1255,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_admission_is_atomic_and_other_roots_keep_their_own_budget() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let mut config = Config {
             workspace: directory.path().into(),
             data_dir: directory.path().join("state"),

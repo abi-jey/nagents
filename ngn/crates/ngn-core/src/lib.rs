@@ -5,6 +5,8 @@ pub mod queues;
 pub mod runner;
 pub mod store;
 pub mod subagents;
+#[cfg(test)]
+mod test_support;
 mod timing;
 pub mod tools;
 

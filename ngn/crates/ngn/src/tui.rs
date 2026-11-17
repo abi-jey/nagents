@@ -632,7 +632,7 @@ mod tests {
 
     #[tokio::test]
     async fn tui_submissions_queue_while_busy_and_controls_do_not_cancel_the_active_run() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn terminal_layout_renders_at_small_and_large_sizes() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),
@@ -757,7 +757,7 @@ mod tests {
 
     #[tokio::test]
     async fn root_ui_inspects_children_and_approves_only_the_actual_child_call() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),
