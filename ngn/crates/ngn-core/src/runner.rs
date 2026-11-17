@@ -3,7 +3,7 @@ use std::{collections::HashSet, process::Stdio, sync::Arc, time::Duration};
 use anyhow::{Context, Result, bail, ensure};
 use ngn_protocol::{
     Event, HostFrame, HostMessage, MAX_FRAME_BYTES, RunStatus, RuntimeFrame, RuntimeMessage,
-    StartRun, ToolCall, VERSION,
+    StartRun, SteeringBoundary, ToolCall, VERSION,
 };
 use serde_json::json;
 use tokio::{
@@ -11,6 +11,7 @@ use tokio::{
     process::Command,
 };
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::{host::Host, store::Run, subagents::Execution, tools::ProcessGroup};
 
@@ -123,15 +124,21 @@ pub(crate) async fn stdio(
         ready.run_id.is_empty(),
         "Ready frame must not bind an unaccepted run"
     );
-    match ready.message {
-        RuntimeMessage::Ready { capabilities, .. } => ensure!(
-            ["host_tools", "cancel"]
+    let safe_steering = match ready.message {
+        RuntimeMessage::Ready { capabilities, .. } => {
+            ensure!(
+                ["host_tools", "cancel"]
+                    .iter()
+                    .all(|required| capabilities.iter().any(|capability| capability == required)),
+                "Runtime lacks required host_tools/cancel capabilities"
+            );
+            capabilities
                 .iter()
-                .all(|required| capabilities.iter().any(|capability| capability == required)),
-            "Runtime lacks required host_tools/cancel capabilities"
-        ),
+                .any(|capability| capability == "safe_steering")
+        }
         _ => bail!("Expected runtime ready handshake"),
-    }
+    };
+    host.negotiate_steering(run, safe_steering).await?;
     let mut system_prompt = host.config.system_prompt.clone();
     if let Some(task) = &execution.task {
         system_prompt.push_str(&format!("\n\nYou are a delegated subagent (depth {}, title {:?}). Work only on your assignment. Permission ceiling: {}. Report a concise final result to your immediate parent using your normal final response; do not address other sessions. Any background subagents must be awaited with agent_wait before you finish.", task.depth, task.title, if execution.read_only { "read only" } else { "build; mutations require separate host approval" }));
@@ -172,18 +179,21 @@ pub(crate) async fn stdio(
     let mut frames = 0;
     let mut total_text = 0;
     let mut final_text = String::new();
+    let mut steering = SteeringHandshake::new(safe_steering);
     let terminal = loop {
         let frame = tokio::select! {
-            frame = read_frame(&mut reader) => frame?.context("Agent runner exited without a terminal result; actions are not retried")?,
+            biased;
             _ = cancel.cancelled() => {
                 let _ = send(&mut writer, run, HostMessage::Cancel).await;
                 if tokio::time::timeout(Duration::from_secs(3), child.wait()).await.is_err() { child.kill().await.ok(); child.wait().await.ok(); }
                 return Ok(RunOutput::cancelled());
             }
+            frame = read_frame(&mut reader) => frame?.context("Agent runner exited without a terminal result; actions are not retried")?,
         };
         ensure!(frame.run_id == run.id, "Runtime frame has the wrong run_id");
         frames += 1;
         ensure!(frames <= 100_000, "Runtime event budget exceeded");
+        steering.validate(&frame.message)?;
         match frame.message {
             RuntimeMessage::TextDelta { text } => {
                 total_text += text.len();
@@ -214,6 +224,27 @@ pub(crate) async fn stdio(
                 ensure!(text.len() <= 32_000, "Runtime notice exceeds limit");
                 host.emit(run, Event::Notice { text }).await?;
             }
+            RuntimeMessage::SteeringBoundary { boundary_id, kind } => {
+                steering.boundary(&boundary_id)?;
+                let input = host.steering_boundary(run, &boundary_id, kind).await?;
+                steering.offered = input
+                    .as_ref()
+                    .map(|input| (boundary_id.clone(), input.input_id.clone()));
+                steering.final_empty = input.is_none() && kind == SteeringBoundary::Final;
+                send(
+                    &mut writer,
+                    run,
+                    HostMessage::SteeringOffer { boundary_id, input },
+                )
+                .await?;
+            }
+            RuntimeMessage::SteeringApplied {
+                boundary_id,
+                input_id,
+            } => {
+                steering.acknowledge(&boundary_id, &input_id)?;
+                host.steering_applied(run, &boundary_id, &input_id).await?;
+            }
             RuntimeMessage::Finished { status, error } => {
                 ensure!(
                     matches!(
@@ -223,6 +254,10 @@ pub(crate) async fn stdio(
                     "Invalid runtime terminal status"
                 );
                 ensure!(error.len() <= 4096, "Runtime error exceeds limit");
+                ensure!(
+                    !safe_steering || status != RunStatus::Completed || steering.final_empty,
+                    "Runtime completed without closing its final steering boundary"
+                );
                 break (status, error);
             }
             RuntimeMessage::Ready { .. } => bail!("Runtime repeated its handshake"),
@@ -238,6 +273,78 @@ pub(crate) async fn stdio(
         error: terminal.1,
         text: final_text,
     })
+}
+
+/// A narrow stop-and-wait extension, not an asynchronous model-input channel.
+struct SteeringHandshake {
+    enabled: bool,
+    boundaries: HashSet<String>,
+    offered: Option<(String, String)>,
+    final_empty: bool,
+}
+
+impl SteeringHandshake {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            boundaries: HashSet::new(),
+            offered: None,
+            final_empty: false,
+        }
+    }
+
+    fn validate(&self, message: &RuntimeMessage) -> Result<()> {
+        // Failures may end an unacknowledged offer, but cannot claim application.
+        let failure = matches!(
+            message,
+            RuntimeMessage::Finished {
+                status: RunStatus::Failed | RunStatus::Cancelled,
+                ..
+            }
+        );
+        ensure!(
+            !self.final_empty || matches!(message, RuntimeMessage::Finished { .. }),
+            "Runtime continued after its final empty boundary"
+        );
+        ensure!(
+            self.offered.is_none()
+                || matches!(message, RuntimeMessage::SteeringApplied { .. })
+                || failure,
+            "Runtime continued before acknowledging steering persistence"
+        );
+        Ok(())
+    }
+
+    fn boundary(&mut self, id: &str) -> Result<()> {
+        ensure!(self.enabled, "Runtime has not negotiated safe_steering");
+        ensure!(id.len() <= 80, "Invalid runtime boundary_id");
+        let identity = Uuid::parse_str(id).context("Invalid runtime boundary_id")?;
+        ensure!(
+            identity.to_string() == id,
+            "Runtime boundary_id must be a canonical UUID"
+        );
+        ensure!(
+            self.boundaries.insert(id.to_owned()),
+            "Runtime repeated a boundary_id"
+        );
+        Ok(())
+    }
+
+    fn acknowledge(&mut self, boundary: &str, input: &str) -> Result<()> {
+        ensure!(
+            self.enabled
+                && self
+                    .offered
+                    .as_ref()
+                    .is_some_and(
+                        |(offered_boundary, offered_input)| offered_boundary == boundary
+                            && offered_input == input
+                    ),
+            "Runtime acknowledgment is not bound to its offered steering input"
+        );
+        self.offered = None;
+        Ok(())
+    }
 }
 
 pub(crate) async fn demo(
@@ -374,5 +481,37 @@ mod tests {
         assert!(read_frame(&mut BufReader::new(&bytes[..])).await.is_err());
         let bytes = vec![b'x'; MAX_FRAME_BYTES + 1];
         assert!(read_frame(&mut BufReader::new(&bytes[..])).await.is_err());
+    }
+
+    #[test]
+    fn steering_handshake_rejects_forged_ack_and_out_of_boundary_work() {
+        let boundary = Uuid::new_v4().to_string();
+        assert!(SteeringHandshake::new(false).boundary(&boundary).is_err());
+        let mut state = SteeringHandshake::new(true);
+        assert!(state.boundary("not-a-uuid").is_err());
+        state.boundary(&boundary).unwrap();
+        assert!(state.boundary(&boundary).is_err());
+        assert!(state.acknowledge(&boundary, "forged").is_err());
+        state.offered = Some((boundary.clone(), "host-id".into()));
+        assert!(
+            state
+                .validate(&RuntimeMessage::TextDelta {
+                    text: "too early".into()
+                })
+                .is_err()
+        );
+        assert!(state.acknowledge(&boundary, "wrong-id").is_err());
+        assert!(state.acknowledge("wrong-boundary", "host-id").is_err());
+        state.acknowledge(&boundary, "host-id").unwrap();
+        assert!(state.acknowledge(&boundary, "host-id").is_err());
+        state.final_empty = true;
+        assert!(
+            state
+                .validate(&RuntimeMessage::SteeringBoundary {
+                    boundary_id: Uuid::new_v4().to_string(),
+                    kind: SteeringBoundary::Final
+                })
+                .is_err()
+        );
     }
 }

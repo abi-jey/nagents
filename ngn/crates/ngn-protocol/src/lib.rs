@@ -56,11 +56,45 @@ pub struct StartRun {
     pub max_tool_rounds: u32,
 }
 
+/// Optional v1 extension, negotiated by the runtime's `safe_steering` capability.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SteeringBoundary {
+    AfterTools,
+    Final,
+}
+
+/// Only the host can create input identities, ordering and attribution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringInput {
+    pub input_id: String,
+    pub request_id: String,
+    pub position: i64,
+    pub prompt: String,
+}
+
+fn steering_input<'de, D>(deserializer: D) -> Result<Option<SteeringInput>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<SteeringInput>::deserialize(deserializer)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HostMessage {
-    Start { run: StartRun },
-    ToolResult { result: ToolResult },
+    Start {
+        run: StartRun,
+    },
+    ToolResult {
+        result: ToolResult,
+    },
+    SteeringOffer {
+        boundary_id: String,
+        #[serde(deserialize_with = "steering_input")]
+        input: Option<SteeringInput>,
+    },
     Cancel,
 }
 
@@ -90,6 +124,14 @@ pub enum RuntimeMessage {
     },
     Notice {
         text: String,
+    },
+    SteeringBoundary {
+        boundary_id: String,
+        kind: SteeringBoundary,
+    },
+    SteeringApplied {
+        boundary_id: String,
+        input_id: String,
     },
     Finished {
         status: RunStatus,
@@ -238,5 +280,19 @@ mod tests {
         };
         let encoded = serde_json::to_vec(&frame).unwrap();
         assert!(serde_json::from_slice::<HostFrame>(&encoded).is_ok());
+    }
+
+    #[test]
+    fn steering_extension_frames_are_typed_and_reject_extra_authority_fields() {
+        let boundary = json!({"protocol_version":1, "run_id":"run", "message":{"type":"steering_boundary", "boundary_id":"boundary", "kind":"after_tools"}});
+        assert!(serde_json::from_value::<RuntimeFrame>(boundary.clone()).is_ok());
+        let mut forged = boundary;
+        forged["message"]["request_id"] = json!("model-cannot-admit-input");
+        assert!(serde_json::from_value::<RuntimeFrame>(forged).is_err());
+        let mut offer = json!({"protocol_version":1, "run_id":"run", "message":{"type":"steering_offer", "boundary_id":"boundary", "input":{"input_id":"host", "request_id":"request", "position":1, "prompt":"user"}}});
+        assert!(serde_json::from_value::<HostFrame>(offer.clone()).is_ok());
+        offer["message"]["input"]["approved"] = json!(true);
+        assert!(serde_json::from_value::<HostFrame>(offer).is_err());
+        assert!(serde_json::from_value::<HostFrame>(json!({"protocol_version":1,"run_id":"run","message":{"type":"steering_offer","boundary_id":"boundary"}})).is_err());
     }
 }

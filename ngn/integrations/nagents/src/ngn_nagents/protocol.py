@@ -53,6 +53,15 @@ class HostFrame:
     message: dict[str, object]
 
 
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ProtocolError("Duplicate host JSON field")
+        result[key] = value
+    return result
+
+
 async def read(reader: asyncio.StreamReader) -> HostFrame:
     try:
         line = await reader.readline()
@@ -63,7 +72,7 @@ async def read(reader: asyncio.StreamReader) -> HostFrame:
     if len(line) > MAX_FRAME or not line.endswith(b"\n"):
         raise ProtocolError("Oversized or incomplete host frame")
     try:
-        value = mapping(json.loads(line))
+        value = mapping(json.loads(line, object_pairs_hook=_unique_object))
     except (ValueError, UnicodeError):
         raise ProtocolError("Invalid host JSON") from None
     fields(value, {"protocol_version", "run_id", "message"})

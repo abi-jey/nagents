@@ -55,6 +55,17 @@ Restart marks active runs interrupted. It does not replay tools. Submission UUID
 deduplicate identical retry requests; reusing one for different text is rejected.
 This is not an exactly-once side-effect guarantee after cancellation or a crash.
 
+Active-run steering is separate from the next-run FIFO and requires the exact
+running root plus its negotiated `safe_steering` runtime capability. Only the host
+admits/bounds inputs and assigns receipt identities/order. Offers are durable
+before IPC writes; acknowledgments follow actual persistence through the supplied
+adapter's public safe-point hooks. Unconfirmed offers become `uncertain` on
+interruption, pending inputs become `undelivered`, and neither is replayed or
+rebound. Cancellation and final-empty decisions seal admission under the same
+lock as operator steering. A trusted arbitrary runtime could lie about
+persistence; the host does not inspect its opaque database. See
+[steering](steering.md) for exact limits, API, schema upgrade and client gates.
+
 ## Web serving
 
 0.100.0 binds loopback only. Every request must carry the exact printed Host.

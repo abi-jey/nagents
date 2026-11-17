@@ -10,7 +10,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolDefinition, ToolResult};
+use ngn_protocol::{
+    Event, EventRecord, RunStatus, SteeringBoundary, SteeringInput, ToolCall, ToolDefinition,
+    ToolResult,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{Mutex, broadcast, oneshot, watch};
@@ -22,6 +25,7 @@ use crate::{
     config::Backend,
     queues::{QueueAction, QueueState},
     runner::{self, RunOutput},
+    steering::{self, SteeringReceipt, SteeringState},
     store::{Run, Store},
     subagents::{
         self, ChildAdmission, DelegateInput, Execution, TaskInput, TaskOutcome, WaitInput,
@@ -39,6 +43,8 @@ pub enum ApprovalMode {
 struct ActiveRun {
     execution: Execution,
     accepting_children: bool,
+    safe_steering: bool,
+    accepting_steering: bool,
     completed: watch::Receiver<bool>,
 }
 
@@ -174,6 +180,144 @@ impl Host {
         self.store.queue(session).await
     }
 
+    /// Admit only to this activation. Never silently turn steering into a queued run.
+    pub async fn steer(
+        &self,
+        run_id: &str,
+        prompt: &str,
+        request_id: &str,
+    ) -> Result<SteeringReceipt> {
+        ensure!(
+            !prompt.trim().is_empty() && prompt.len() <= steering::MAX_PROMPT_BYTES,
+            "Steering prompt must contain 1..32000 UTF-8 bytes"
+        );
+        let request = Uuid::parse_str(request_id)
+            .context("Steering request_id must be a UUID")?
+            .to_string();
+        let active = self.active.lock().await;
+        // Retry identity is independent of current liveness and queue identities.
+        if let Some(saved) = self
+            .store
+            .existing_steering(run_id, prompt, &request)
+            .await?
+        {
+            return Ok(saved);
+        }
+        ensure!(
+            !self.closed.load(Ordering::Acquire),
+            "Host is shutting down"
+        );
+        let owner = active
+            .get(run_id)
+            .context("Steering requires the exact running root in this host")?;
+        ensure!(
+            owner.execution.task.is_none(),
+            "Subagent runs cannot receive operator steering"
+        );
+        ensure!(
+            owner.safe_steering,
+            "Runtime has not negotiated safe_steering; no input was admitted"
+        );
+        ensure!(
+            owner.accepting_steering && !owner.execution.cancel.is_cancelled(),
+            "Run is closing; steering admission is sealed"
+        );
+        self.store
+            .admit_steering(&owner.execution.run, prompt, &request)
+            .await
+    }
+
+    pub async fn steering(&self, run_id: &str) -> Result<SteeringState> {
+        let active = self.active.lock().await;
+        let run = self.store.steering_run(run_id).await?;
+        let owner = active.get(run_id);
+        Ok(SteeringState {
+            run_id: run.id,
+            session_id: run.session_id,
+            run_status: run.status,
+            supported: owner
+                .is_some_and(|owner| owner.safe_steering && owner.execution.task.is_none()),
+            accepting: owner.is_some_and(|owner| {
+                owner.safe_steering
+                    && owner.accepting_steering
+                    && owner.execution.task.is_none()
+                    && !owner.execution.cancel.is_cancelled()
+                    && !self.closed.load(Ordering::Acquire)
+            }),
+            receipts: self.store.steering_receipts(run_id).await?,
+            run_limit: steering::MAX_RUN_INPUTS,
+            host_limit: steering::MAX_HOST_INPUTS,
+            prompt_byte_limit: steering::MAX_PROMPT_BYTES,
+        })
+    }
+
+    pub(crate) async fn negotiate_steering(&self, run: &Run, supported: bool) -> Result<()> {
+        let mut active = self.active.lock().await;
+        let owner = active
+            .get_mut(&run.id)
+            .context("Runtime activation is no longer active")?;
+        ensure!(
+            owner.execution.run.session_id == run.session_id,
+            "Runtime activation identity mismatch"
+        );
+        owner.safe_steering = supported;
+        // A handshake cannot reopen admission after cancellation or shutdown.
+        owner.accepting_steering &= supported
+            && !owner.execution.cancel.is_cancelled()
+            && !self.closed.load(Ordering::Acquire);
+        Ok(())
+    }
+
+    pub(crate) async fn steering_boundary(
+        &self,
+        run: &Run,
+        boundary_id: &str,
+        kind: SteeringBoundary,
+    ) -> Result<Option<SteeringInput>> {
+        let mut active = self.active.lock().await;
+        let owner = active
+            .get_mut(&run.id)
+            .context("Runtime activation is no longer active")?;
+        ensure!(
+            owner.execution.run.session_id == run.session_id && owner.safe_steering,
+            "Unnegotiated or foreign steering boundary"
+        );
+        ensure!(
+            owner.accepting_steering
+                && !owner.execution.cancel.is_cancelled()
+                && !self.closed.load(Ordering::Acquire),
+            "Run steering admission is sealed"
+        );
+        let offered = self.store.offer_steering(&run.id, boundary_id).await?;
+        if offered.is_none() && kind == SteeringBoundary::Final {
+            // Crucially, close under the SAME lock as steer(), BEFORE writing the
+            // empty reply. A later caller gets a conflict, never a lost receipt.
+            owner.accepting_steering = false;
+        }
+        Ok(offered.map(|receipt| receipt.input()))
+    }
+
+    pub(crate) async fn steering_applied(
+        &self,
+        run: &Run,
+        boundary_id: &str,
+        input_id: &str,
+    ) -> Result<()> {
+        let active = self.active.lock().await;
+        let owner = active
+            .get(&run.id)
+            .context("Runtime activation is no longer active")?;
+        ensure!(
+            owner.execution.run.session_id == run.session_id
+                && owner.safe_steering
+                && !owner.execution.cancel.is_cancelled(),
+            "Unnegotiated, cancelled or foreign steering acknowledgment"
+        );
+        self.store
+            .apply_steering(&run.id, boundary_id, input_id)
+            .await
+    }
+
     /// Accept an input exactly once. Busy or paused sessions retain it durably.
     pub async fn submit(
         self: &Arc<Self>,
@@ -270,6 +414,8 @@ impl Host {
             ActiveRun {
                 execution: execution.clone(),
                 accepting_children: true,
+                safe_steering: false,
+                accepting_steering: true,
                 completed: receiver,
             },
         );
@@ -359,6 +505,7 @@ impl Host {
                 let mut active = self.active.lock().await;
                 if let Some(owner) = active.get_mut(&execution.run.id) {
                     owner.accepting_children = false;
+                    owner.accepting_steering = false;
                 }
                 active
                     .values()
@@ -489,9 +636,11 @@ impl Host {
     }
 
     pub async fn cancel(&self, run: &str) -> Result<()> {
-        let active = self.active.lock().await;
+        let mut active = self.active.lock().await;
         let _emission = self.emission.lock().await;
-        if let Some(owner) = active.get(run) {
+        if let Some(owner) = active.get_mut(run) {
+            owner.accepting_steering = false;
+            self.store.settle_steering(run).await?;
             if owner.execution.task.is_none() {
                 for record in self
                     .store
@@ -576,6 +725,8 @@ impl Host {
             ActiveRun {
                 execution: execution.clone(),
                 accepting_children: true,
+                safe_steering: false,
+                accepting_steering: true,
                 completed: receiver,
             },
         );
@@ -722,7 +873,7 @@ impl Host {
 
     pub async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
-        let active = self.active.lock().await;
+        let mut active = self.active.lock().await;
         {
             let _emission = self.emission.lock().await;
             match self.store.pause_pending().await {
@@ -736,7 +887,18 @@ impl Host {
                 ),
             }
         }
-        for active in active.values() {
+        for active in active.values_mut() {
+            active.accepting_steering = false;
+            if self
+                .store
+                .settle_steering(&active.execution.run.id)
+                .await
+                .is_err()
+            {
+                eprintln!(
+                    "ngn: unable to settle steering receipts; recovery will mark them unconfirmed"
+                );
+            }
             active.execution.cancel.cancel();
         }
         drop(active);
@@ -1287,6 +1449,246 @@ mod tests {
                 .any(|run| run.id == independent.id)
         );
         assert_eq!(host.store.tasks(&first.session_id).await.unwrap().len(), 1);
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn steering_requires_capability_root_and_exact_activation_with_independent_receipts() {
+        use crate::steering::SteeringStatus;
+        let directory = tempfile::tempdir().unwrap();
+        let host = host(directory.path());
+        let root = held(&host).await;
+        let request = Uuid::new_v4().to_string();
+        assert!(host.steer(&root.id, "first", &request).await.is_err());
+        assert!(host.steering(&root.id).await.unwrap().receipts.is_empty());
+        host.negotiate_steering(&root, true).await.unwrap();
+        assert!(
+            host.steer(&root.id, &"é".repeat(16_001), &Uuid::new_v4().to_string())
+                .await
+                .is_err()
+        );
+        assert!(
+            host.steer(&root.id, " \n ", &Uuid::new_v4().to_string())
+                .await
+                .is_err()
+        );
+        let first = host.steer(&root.id, "first", &request).await.unwrap();
+        assert_eq!(first.status, SteeringStatus::Pending);
+        assert_eq!(
+            host.steer(&root.id, "first", &request.to_uppercase())
+                .await
+                .unwrap(),
+            first
+        );
+        assert_eq!(
+            host.steer(&root.id, "first", &request).await.unwrap(),
+            first
+        );
+        assert!(host.steer(&root.id, "changed", &request).await.is_err());
+        let other = held(&host).await;
+        host.negotiate_steering(&other, true).await.unwrap();
+        assert!(host.steer(&other.id, "first", &request).await.is_err());
+        assert!(
+            host.steer("foreign-run", "first", &Uuid::new_v4().to_string())
+                .await
+                .is_err()
+        );
+        let child = child(&host, &root, "steering-child", "demo hold").await;
+        host.negotiate_steering(&child, true).await.unwrap();
+        assert!(
+            host.steer(&child.id, "escalate", &Uuid::new_v4().to_string())
+                .await
+                .is_err()
+        );
+        assert!(host.steering(&child.id).await.unwrap().receipts.is_empty());
+        let forged = Run {
+            session_id: other.session_id.clone(),
+            ..root.clone()
+        };
+        assert!(
+            host.steering_boundary(&forged, "boundary", SteeringBoundary::AfterTools)
+                .await
+                .is_err()
+        );
+        let second = host
+            .steer(&root.id, "second", &Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        for expected in [&first, &second] {
+            let boundary = Uuid::new_v4().to_string();
+            let offered = host
+                .steering_boundary(&root, &boundary, SteeringBoundary::AfterTools)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(offered, expected.input());
+            assert!(
+                host.steering_applied(&root, &boundary, "wrong-id")
+                    .await
+                    .is_err()
+            );
+            assert!(
+                host.steering_applied(&other, &boundary, &offered.input_id)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                host.steering_applied(&root, "wrong-boundary", &offered.input_id)
+                    .await
+                    .is_err()
+            );
+            host.steering_applied(&root, &boundary, &offered.input_id)
+                .await
+                .unwrap();
+            assert!(
+                host.steering_applied(&root, &boundary, &offered.input_id)
+                    .await
+                    .is_err()
+            );
+        }
+        let receipts = host.steering(&root.id).await.unwrap().receipts;
+        assert_eq!(
+            receipts
+                .iter()
+                .map(|receipt| receipt.input_id.as_str())
+                .collect::<Vec<_>>(),
+            [first.input_id, second.input_id]
+        );
+        assert!(
+            receipts
+                .iter()
+                .all(|receipt| receipt.status == SteeringStatus::Applied)
+        );
+        assert!(
+            host.queue(&root.session_id)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn final_empty_seals_admission_before_the_reply_can_be_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = host(directory.path());
+        for _ in 0..16 {
+            let run = held(&host).await;
+            host.negotiate_steering(&run, true).await.unwrap();
+            let request = Uuid::new_v4().to_string();
+            // Exercise both contenders under the same admission mutex. There is
+            // intentionally no runtime writer here: closure must precede IO.
+            let gate = Arc::new(tokio::sync::Barrier::new(2));
+            let owner = host.clone();
+            let identity = run.clone();
+            let start = gate.clone();
+            let boundary = tokio::spawn(async move {
+                start.wait().await;
+                owner
+                    .steering_boundary(
+                        &identity,
+                        &Uuid::new_v4().to_string(),
+                        SteeringBoundary::Final,
+                    )
+                    .await
+            });
+            gate.wait().await;
+            let admitted = host.steer(&run.id, "racing", &request).await;
+            let offered = boundary.await.unwrap().unwrap();
+            if let Some(offered) = offered {
+                let receipt = admitted.unwrap();
+                assert_eq!(receipt.input_id, offered.input_id);
+                let state = host.steering(&run.id).await.unwrap();
+                host.steering_applied(&run, &state.receipts[0].boundary_id, &offered.input_id)
+                    .await
+                    .unwrap();
+                assert!(
+                    host.steering_boundary(
+                        &run,
+                        &Uuid::new_v4().to_string(),
+                        SteeringBoundary::Final
+                    )
+                    .await
+                    .unwrap()
+                    .is_none()
+                );
+            } else {
+                assert!(admitted.is_err());
+                assert!(host.steering(&run.id).await.unwrap().receipts.is_empty());
+            }
+            assert!(!host.steering(&run.id).await.unwrap().accepting);
+            assert!(
+                host.steer(&run.id, "too late", &Uuid::new_v4().to_string())
+                    .await
+                    .is_err()
+            );
+            host.cancel(&run.id).await.unwrap();
+            finished(&host, &run).await;
+        }
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn cancellation_seals_and_settles_without_rebinding_or_runtime_delivery() {
+        use crate::steering::SteeringStatus;
+        let directory = tempfile::tempdir().unwrap();
+        let host = host(directory.path());
+        let root = held(&host).await;
+        host.negotiate_steering(&root, true).await.unwrap();
+        let offered = host
+            .steer(&root.id, "possibly persisted", &Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        let pending = host
+            .steer(&root.id, "not delivered", &Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        let boundary = Uuid::new_v4().to_string();
+        host.steering_boundary(&root, &boundary, SteeringBoundary::AfterTools)
+            .await
+            .unwrap();
+        host.cancel(&root.id).await.unwrap();
+        assert!(
+            host.steer(&root.id, "cancel race", &Uuid::new_v4().to_string())
+                .await
+                .is_err()
+        );
+        assert!(
+            host.steering_applied(&root, &boundary, &offered.input_id)
+                .await
+                .is_err()
+        );
+        finished(&host, &root).await;
+        let state = host.steering(&root.id).await.unwrap();
+        assert_eq!(state.receipts[0].status, SteeringStatus::Uncertain);
+        assert_eq!(state.receipts[1].status, SteeringStatus::Undelivered);
+        assert_eq!(
+            host.steer(&root.id, &pending.prompt, &pending.request_id)
+                .await
+                .unwrap()
+                .input_id,
+            pending.input_id
+        );
+        host.control_queue(&root.session_id, QueueAction::Resume)
+            .await
+            .unwrap();
+        let next = host
+            .start(
+                &root.session_id,
+                "demo hold",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Deny,
+            )
+            .await
+            .unwrap();
+        host.negotiate_steering(&next, true).await.unwrap();
+        assert!(
+            host.steering_boundary(&next, &Uuid::new_v4().to_string(), SteeringBoundary::Final)
+                .await
+                .unwrap()
+                .is_none()
+        );
         host.shutdown().await;
     }
 }

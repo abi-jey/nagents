@@ -31,6 +31,8 @@ from .protocol import ProtocolError
 from .protocol import fields
 from .protocol import mapping
 from .protocol import text
+from .steering import _Steering
+from .steering import _SteeringPlugin
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,7 @@ class HostExecutor(ToolExecutor):
         self.emit = emit
         self.pending: dict[str, tuple[str, asyncio.Future[ToolResultEvent]]] = {}
         self.seen: set[str] = set()
+        self.steering = _Steering(run_id, emit)
 
     async def execute(self, tool_call: ToolCall) -> ToolResultEvent:
         if tool_call.id in self.seen or not tool_call.id or len(tool_call.id) > 200:
@@ -167,7 +170,7 @@ def _unbound(**arguments: object) -> None:
     raise RuntimeError("Host tools cannot execute inside Python")
 
 
-def create_agent(start: Start, executor: HostExecutor) -> Agent:
+def create_agent(start: Start, executor: HostExecutor, plugin: _SteeringPlugin | None = None) -> Agent:
     start.database.parent.mkdir(parents=True, exist_ok=True)
     if start.database.exists() or start.database.is_symlink():
         metadata = start.database.lstat()
@@ -185,6 +188,7 @@ def create_agent(start: Start, executor: HostExecutor) -> Agent:
         tool_executor=executor,
         save_tool_outputs=False,
         compaction_strategy=None,
+        plugins=(plugin,) if plugin is not None else (),
     )
     executor.bind_registry(agent.tool_registry)
     # Public registry API; functions are inert because the executor is host-backed.
@@ -200,28 +204,40 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
     status = "failed"
     error = "Agent ended without a successful terminal event"
     try:
-        agent = create_agent(start, executor)
-        completed = False
+        plugin = _SteeringPlugin(executor.steering, start.session_id)
+        agent = create_agent(start, executor, plugin)
         failed = False
-        async with aclosing(agent.run(start.prompt, session_id=start.session_id, user_id="ngn-rust")) as events:
-            async for event in events:
-                if isinstance(event, TextChunkEvent):
-                    emit(executor.run_id, {"type": "text_delta", "text": event.chunk})
-                elif isinstance(event, TextDoneEvent):
-                    emit(executor.run_id, {"type": "text_completed", "text": event.text})
-                elif isinstance(event, ErrorEvent):
-                    failed |= not event.recoverable
-                    emit(
-                        executor.run_id,
-                        {
-                            "type": "notice",
-                            "text": "Agent/provider reported an error. Check the selected provider, model and credentials; upstream payloads are not exposed.",
-                        },
-                    )
-                elif isinstance(event, DoneEvent):
-                    completed = event.finish_reason is FinishReason.STOP
-        if completed and not failed:
-            status, error = "completed", ""
+        prompt = start.prompt
+        while True:
+            completed = False
+            async with aclosing(agent.run(prompt, session_id=start.session_id, user_id="ngn-rust")) as events:
+                async for event in events:
+                    if isinstance(event, TextChunkEvent):
+                        emit(executor.run_id, {"type": "text_delta", "text": event.chunk})
+                    elif isinstance(event, TextDoneEvent):
+                        emit(executor.run_id, {"type": "text_completed", "text": event.text})
+                    elif isinstance(event, ErrorEvent):
+                        failed |= not event.recoverable
+                        emit(
+                            executor.run_id,
+                            {
+                                "type": "notice",
+                                "text": "Agent/provider reported an error. Check the selected provider, model and credentials; upstream payloads are not exposed.",
+                            },
+                        )
+                    elif isinstance(event, DoneEvent):
+                        completed = event.finish_reason is FinishReason.STOP
+            if not completed or failed:
+                break
+            # No-tools final replies have no after_tools hook. Ask explicitly
+            # after Agent.run is closed and its assistant response is persisted.
+            offer = await executor.steering.boundary("final")
+            if offer is None:
+                status, error = "completed", ""
+                break
+            plugin.continuation = offer
+            prompt = offer.prompt
+            # Explicitly continue the SAME persisted session and host activation.
     except asyncio.CancelledError:
         status, error = "cancelled", ""
     except ProtocolError as exception:

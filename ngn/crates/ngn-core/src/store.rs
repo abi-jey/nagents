@@ -185,7 +185,7 @@ impl Store {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            version <= 3,
+            version <= 4,
             "Rust host database was created by a newer unsupported schema version"
         );
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -214,7 +214,16 @@ impl Store {
         }
         transaction.execute_batch("CREATE TABLE IF NOT EXISTS session_queues (session_id TEXT PRIMARY KEY REFERENCES sessions(id), paused INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS input_queue (position INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL UNIQUE REFERENCES runs(id), interactive INTEGER NOT NULL CHECK(interactive IN (0, 1)));")?;
-        transaction.pragma_update(None, "user_version", 3)?;
+        transaction.execute_batch("CREATE TABLE IF NOT EXISTS steering_inputs (
+            position INTEGER PRIMARY KEY AUTOINCREMENT, input_id TEXT NOT NULL UNIQUE,
+            request_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL REFERENCES runs(id),
+            session_id TEXT NOT NULL REFERENCES sessions(id), prompt TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'offered', 'applied', 'uncertain', 'undelivered')),
+            boundary_id TEXT NOT NULL, accepted_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS steering_run ON steering_inputs(run_id, position);
+            CREATE INDEX IF NOT EXISTS steering_pending ON steering_inputs(status);")?;
+        transaction.pragma_update(None, "user_version", 4)?;
+        crate::steering::settle(&transaction, None)?;
         let interrupted: Vec<(String, String)> = {
             let mut statement =
                 transaction.prepare("SELECT id, session_id FROM runs WHERE status = 'running'")?;
@@ -523,6 +532,7 @@ impl Store {
                 .as_str()
                 .context("Invalid run status")?
                 .to_owned();
+            crate::steering::settle(&transaction, Some(&run.id))?;
             transaction.execute(
                 "UPDATE runs SET status = ? WHERE id = ?",
                 params![status_text, run.id],
@@ -696,6 +706,59 @@ mod tests {
             .with(|db| Ok(db.pragma_query_value(None, "user_version", |row| row.get(0))?))
             .await
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
+    }
+
+    #[tokio::test]
+    async fn schema_three_upgrades_preserving_queue_and_cursors_and_newer_state_is_never_downgraded()
+     {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.sqlite3");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(r#"PRAGMA user_version=3;
+            CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);
+            CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), request_id TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, UNIQUE(session_id, request_id));
+            CREATE TABLE events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT REFERENCES runs(id), session_id TEXT NOT NULL REFERENCES sessions(id), timestamp_ms INTEGER NOT NULL, payload TEXT NOT NULL);
+            CREATE TABLE session_queues(session_id TEXT PRIMARY KEY REFERENCES sessions(id), paused INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE input_queue(position INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL UNIQUE REFERENCES runs(id), interactive INTEGER NOT NULL CHECK(interactive IN (0,1)));
+            INSERT INTO sessions VALUES ('s3', 'Preserved', 1);
+            INSERT INTO runs VALUES ('r3', 's3', 'request3', 'next run only', 'queued');
+            INSERT INTO input_queue VALUES (9, 'r3', 0);
+            INSERT INTO session_queues VALUES ('s3', 1);
+            INSERT INTO events VALUES (42, NULL, 's3', 1, '{"event":"queue_updated","paused":true}');"#).unwrap();
+        drop(db);
+        std::fs::write(
+            directory.path().join("nagents.sqlite3"),
+            b"opaque schema; never open",
+        )
+        .unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        assert_eq!(store.events("s3", 0).await.unwrap()[0].sequence, 42);
+        assert_eq!(store.queue("s3").await.unwrap().entries[0].run.id, "r3");
+        assert!(store.steering_receipts("r3").await.unwrap().is_empty());
+        assert_eq!(
+            store
+                .with(|db| Ok(
+                    db.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))?
+                ))
+                .await
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("nagents.sqlite3")).unwrap(),
+            b"opaque schema; never open"
+        );
+        drop(store);
+        let db = Connection::open(&path).unwrap();
+        db.pragma_update(None, "user_version", 5).unwrap();
+        drop(db);
+        assert!(Store::open(directory.path()).is_err());
+        let db = Connection::open(&path).unwrap();
+        assert_eq!(
+            db.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            5
+        );
     }
 }
