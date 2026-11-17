@@ -524,18 +524,28 @@ class SQLiteTaskStore(VersionedTaskStore):
 
 
 class SQLiteEventStream(TaskEventStream):
-    """A bounded persistent tail. Access is checked by the SDK's task handler."""
+    """A bounded tail with handler and context-aware stream ownership checks."""
 
     def __init__(self, store: SQLiteTaskStore) -> None:
         self.store = store
         self._changed: dict[str, asyncio.Event] = {}
 
-    async def publish(self, task_id: str, event: VersionedEvent) -> None:
+    async def _authorize(self, task_id: str, context: ServerCallContext | None) -> None:
+        # SDK 1.2 calls streams without context after checking the task handler.
+        # SDK 1.3 forwards it: do not silently discard its ownership boundary.
+        if context is not None and await self.store.get(task_id, context) is None:
+            raise TaskNotFoundError()
+
+    async def publish(self, task_id: str, event: VersionedEvent, context: ServerCallContext | None = None) -> None:
+        await self._authorize(task_id, context)
         del event  # The store committed the event with its Task atomically.
         if task_id in self._changed:
             self._changed[task_id].set()
 
-    async def subscribe(self, task_id: str, *, after: TaskVersion) -> AsyncGenerator[VersionedEvent, None]:
+    async def subscribe(
+        self, task_id: str, *, after: TaskVersion, context: ServerCallContext | None = None
+    ) -> AsyncGenerator[VersionedEvent, None]:
+        await self._authorize(task_id, context)
         changed = self._changed.setdefault(task_id, asyncio.Event())
         while True:
             changed.clear()
@@ -553,7 +563,8 @@ class SQLiteEventStream(TaskEventStream):
             with suppress(TimeoutError):
                 await asyncio.wait_for(changed.wait(), timeout=0.5)
 
-    async def destroy(self, task_id: str) -> None:
+    async def destroy(self, task_id: str, context: ServerCallContext | None = None) -> None:
+        await self._authorize(task_id, context)
         changed = self._changed.pop(task_id, None)
         if changed is not None:
             changed.set()
