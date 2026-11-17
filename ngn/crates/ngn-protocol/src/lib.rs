@@ -109,6 +109,8 @@ pub struct RuntimeFrame {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
+    /// Host-owned pending input, not an executing runtime status.
+    Queued,
     Running,
     Completed,
     Failed,
@@ -135,6 +137,13 @@ pub struct TaskInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    RunQueued {
+        prompt: String,
+    },
+    /// Session-scoped control event; EventRecord.run_id is empty.
+    QueueUpdated {
+        paused: bool,
+    },
     RunStarted {
         prompt: String,
     },
@@ -184,6 +193,7 @@ pub struct EventRecord {
     pub schema_version: u16,
     /// Durable, host-assigned ordering; never supplied by a runtime or model.
     pub sequence: i64,
+    /// Empty for session-scoped queue controls; otherwise an exact run identity.
     pub run_id: String,
     pub session_id: String,
     pub timestamp_ms: u64,

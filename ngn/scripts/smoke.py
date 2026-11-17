@@ -529,6 +529,16 @@ async def main() -> None:
             print(
                 "PASS: real nagents subagents, native child approvals, permission ceilings, background result delivery, WS isolation/replay and subtree cancellation"
             )
+            from queue_smoke import http_checks as queue_http_checks
+            from queue_smoke import tui_check as queue_tui_check
+
+            queue_workspace = root / "queue-workspace"
+            queue_workspace.mkdir()
+            (queue_workspace / "hello.txt").write_text("hello from a Rust tool\n")
+            await queue_http_checks(binary, config, queue_workspace, root / "queue-data")
+            print(
+                "PASS: real nagents FIFO, queued idempotency/removal, per-run approvals, session-scoped WS controls, Stop/clear, crash recovery and explicit resume without replay"
+            )
             if not arguments.skip_tui:
                 await asyncio.to_thread(tui_check, binary, workspace, root / "tui-data")
                 print("PASS: real-PTY Rust TUI, native approval and clean exit")
@@ -545,6 +555,10 @@ async def main() -> None:
                 )
                 print(
                     "PASS: real-PTY subagent inspection, child-only cancel, parent continuity, tree shutdown and terminal restoration"
+                )
+                await asyncio.to_thread(queue_tui_check, binary, queue_workspace, root / "queue-tui-data")
+                print(
+                    "PASS: real-PTY busy submission, F6 FIFO inspection, remove/pause/resume/clear, Stop, durable restart and terminal restoration"
                 )
     finally:
         await runner.cleanup()

@@ -44,12 +44,21 @@ fn task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskOutcome> {
 }
 
 fn insert_event(db: &Connection, run: &Run, event: Event) -> Result<EventRecord> {
+    insert_record(db, &run.session_id, Some(&run.id), event)
+}
+
+pub(crate) fn insert_record(
+    db: &Connection,
+    session: &str,
+    run_id: Option<&str>,
+    event: Event,
+) -> Result<EventRecord> {
     let timestamp_ms = now_ms();
     db.execute(
         "INSERT INTO events(run_id, session_id, timestamp_ms, payload) VALUES (?, ?, ?, ?)",
         params![
-            run.id,
-            run.session_id,
+            run_id,
+            session,
             timestamp_ms,
             serde_json::to_string(&event)?
         ],
@@ -57,13 +66,13 @@ fn insert_event(db: &Connection, run: &Run, event: Event) -> Result<EventRecord>
     let sequence = db.last_insert_rowid();
     db.execute(
         "UPDATE sessions SET updated_at_ms = ? WHERE id = ?",
-        params![timestamp_ms, run.session_id],
+        params![timestamp_ms, session],
     )?;
     Ok(EventRecord {
         schema_version: VERSION,
         sequence,
-        run_id: run.id.clone(),
-        session_id: run.session_id.clone(),
+        run_id: run_id.unwrap_or_default().to_owned(),
+        session_id: session.to_owned(),
         timestamp_ms,
         event,
     })
@@ -176,7 +185,7 @@ impl Store {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            version <= 2,
+            version <= 3,
             "Rust host database was created by a newer unsupported schema version"
         );
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -192,9 +201,20 @@ impl Store {
                 result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', UNIQUE(parent_run_id, call_id));
             CREATE INDEX IF NOT EXISTS subagent_root ON subagents(root_run_id);
             CREATE INDEX IF NOT EXISTS subagent_parent ON subagents(parent_run_id);")?;
-        connection.pragma_update(None, "user_version", 2)?;
         // Recovery is observable and never re-executes a tool or prompt.
         let transaction = connection.transaction()?;
+        if version < 3 {
+            // Queue controls belong to sessions, including empty conversations.
+            // Preserve every durable cursor while permitting NULL run identities.
+            transaction.execute_batch("ALTER TABLE events RENAME TO old_events;
+                CREATE TABLE events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT REFERENCES runs(id), session_id TEXT NOT NULL REFERENCES sessions(id), timestamp_ms INTEGER NOT NULL, payload TEXT NOT NULL);
+                INSERT INTO events SELECT * FROM old_events;
+                DROP TABLE old_events;
+                CREATE INDEX session_events ON events(session_id, sequence);")?;
+        }
+        transaction.execute_batch("CREATE TABLE IF NOT EXISTS session_queues (session_id TEXT PRIMARY KEY REFERENCES sessions(id), paused INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS input_queue (position INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL UNIQUE REFERENCES runs(id), interactive INTEGER NOT NULL CHECK(interactive IN (0, 1)));")?;
+        transaction.pragma_update(None, "user_version", 3)?;
         let interrupted: Vec<(String, String)> = {
             let mut statement =
                 transaction.prepare("SELECT id, session_id FROM runs WHERE status = 'running'")?;
@@ -246,6 +266,7 @@ impl Store {
                 )?;
             }
         }
+        crate::queues::pause_pending(&transaction)?;
         transaction.commit()?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -253,7 +274,7 @@ impl Store {
         })
     }
 
-    async fn with<T, F>(&self, action: F) -> Result<T>
+    pub(crate) async fn with<T, F>(&self, action: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
@@ -514,6 +535,20 @@ impl Store {
                     error: error.clone(),
                 },
             )?];
+            if status != RunStatus::Completed {
+                let changed = transaction.execute(
+                    "UPDATE session_queues SET paused = 1 WHERE session_id = ? AND paused = 0",
+                    [&run.session_id],
+                )?;
+                if changed != 0 {
+                    records.push(insert_record(
+                        &transaction,
+                        &run.session_id,
+                        None,
+                        Event::QueueUpdated { paused: true },
+                    )?);
+                }
+            }
             let changed = transaction.execute(
                 "UPDATE subagents SET result = ?, error = ? WHERE child_run_id = ?",
                 params![
@@ -560,7 +595,7 @@ impl Store {
     pub async fn events(&self, session: &str, after: i64) -> Result<Vec<EventRecord>> {
         let session = session.to_owned();
         self.with(move |db| {
-            let mut statement = db.prepare("SELECT sequence, run_id, session_id, timestamp_ms, payload FROM events WHERE session_id = ? AND sequence > ? ORDER BY sequence LIMIT 1000")?;
+            let mut statement = db.prepare("SELECT sequence, COALESCE(run_id, ''), session_id, timestamp_ms, payload FROM events WHERE session_id = ? AND sequence > ? ORDER BY sequence LIMIT 1000")?;
             let rows = statement.query_map(params![session, after], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, u64>(3)?, row.get::<_, String>(4)?)))?;
             rows.map(|row| { let (sequence, run_id, session_id, timestamp_ms, payload) = row?; Ok(EventRecord { schema_version: VERSION, sequence, run_id, session_id, timestamp_ms, event: serde_json::from_str(&payload)? }) }).collect()
         }).await
@@ -661,6 +696,6 @@ mod tests {
             .with(|db| Ok(db.pragma_query_value(None, "user_version", |row| row.get(0))?))
             .await
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 }

@@ -15,7 +15,9 @@ case "${1:-all}" in
       python-lint) python -m ruff check integrations/nagents scripts ;;
       python-format) python -m ruff format --check integrations/nagents scripts ;;
       python-types) python -m mypy --strict integrations/nagents/src integrations/nagents/tests ;;
-      python-tests) python -m unittest discover -s integrations/nagents/tests -v ;;
+      python-tests)
+        python -m unittest discover -s integrations/nagents/tests -v
+        python -m unittest discover -s scripts -p 'test_*.py' -v ;;
       *) exit 2 ;;
     esac ;;
   all)

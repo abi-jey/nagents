@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::{
     Config,
     config::Backend,
+    queues::{QueueAction, QueueState},
     runner::{self, RunOutput},
     store::{Run, Store},
     subagents::{
@@ -125,6 +126,11 @@ impl Host {
         {
             return Ok(existing);
         }
+        let queue = self.store.queue(session).await?;
+        ensure!(
+            !queue.paused && queue.entries.is_empty(),
+            "Session has a paused or pending input queue; resume or clear it explicitly"
+        );
         ensure!(
             !active
                 .values()
@@ -145,6 +151,110 @@ impl Host {
         }
         let _emission = self.emission.lock().await;
         let (run, record) = self.store.accept(session, request_id, prompt).await?;
+        self.launch_root(&mut active, run.clone(), prompt.to_owned(), approval)
+            .await;
+        let _ = self.events.send(record);
+        Ok(run)
+    }
+
+    async fn root_session(&self, session: &str) -> Result<()> {
+        self.store.session(session).await?;
+        ensure!(
+            !self.store.is_child_session(session).await?,
+            "Subagent sessions are inspect-only; they cannot have root input queues"
+        );
+        Ok(())
+    }
+
+    pub async fn queue(&self, session: &str) -> Result<QueueState> {
+        self.root_session(session).await?;
+        // Serialize snapshots with admission, dispatch and operator controls.
+        let _active = self.active.lock().await;
+        self.store.queue(session).await
+    }
+
+    /// Accept an input exactly once. Busy or paused sessions retain it durably.
+    pub async fn submit(
+        self: &Arc<Self>,
+        session: &str,
+        prompt: &str,
+        request_id: &str,
+        approval: ApprovalMode,
+    ) -> Result<Run> {
+        ensure!(
+            !prompt.trim().is_empty() && prompt.len() <= 32_000,
+            "Prompt must contain 1..32000 UTF-8 bytes"
+        );
+        Uuid::parse_str(request_id).context(
+            "request_id must be a UUID; reuse it only when retrying the same submission",
+        )?;
+        self.root_session(session).await?;
+        let mut active = self.active.lock().await;
+        ensure!(
+            !self.closed.load(Ordering::Acquire),
+            "Host is shutting down"
+        );
+        if let Some(existing) = self
+            .store
+            .existing_request(session, request_id, prompt)
+            .await?
+        {
+            return Ok(existing);
+        }
+        if self.config.backend == Backend::Nagents {
+            self.config.selected_provider()?;
+        }
+        {
+            let _emission = self.emission.lock().await;
+            let (_, record) = self
+                .store
+                .enqueue(
+                    session,
+                    prompt,
+                    request_id,
+                    approval == ApprovalMode::Interactive,
+                )
+                .await?;
+            let _ = self.events.send(record);
+        }
+        self.dispatch(&mut active).await?;
+        self.store
+            .existing_request(session, request_id, prompt)
+            .await?
+            .context("Accepted input is missing")
+    }
+
+    pub async fn control_queue(
+        self: &Arc<Self>,
+        session: &str,
+        action: QueueAction,
+    ) -> Result<QueueState> {
+        self.root_session(session).await?;
+        let mut active = self.active.lock().await;
+        ensure!(
+            !self.closed.load(Ordering::Acquire),
+            "Host is shutting down"
+        );
+        if matches!(action, QueueAction::Resume) && self.config.backend == Backend::Nagents {
+            self.config.selected_provider()?;
+        }
+        {
+            let _emission = self.emission.lock().await;
+            for record in self.store.queue_control(session, action).await? {
+                let _ = self.events.send(record);
+            }
+        }
+        self.dispatch(&mut active).await?;
+        self.store.queue(session).await
+    }
+
+    async fn launch_root(
+        self: &Arc<Self>,
+        active: &mut HashMap<String, ActiveRun>,
+        run: Run,
+        prompt: String,
+        approval: ApprovalMode,
+    ) {
         let execution = Execution {
             run: run.clone(),
             root: run.clone(),
@@ -164,13 +274,48 @@ impl Host {
         );
         let mut workers = self.workers.lock().await;
         workers.retain(|worker| !worker.is_finished());
-        workers.push(tokio::spawn(self.clone().worker(
-            execution,
-            prompt.to_owned(),
-            completed,
-        )));
-        let _ = self.events.send(record);
-        Ok(run)
+        workers.push(tokio::spawn(
+            self.clone().worker(execution, prompt, completed),
+        ));
+    }
+
+    /// Always called under the admission lock; claiming and starting are atomic
+    /// with respect to pause, cancellation, shutdown and all other submissions.
+    async fn dispatch(self: &Arc<Self>, active: &mut HashMap<String, ActiveRun>) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        for input in self.store.ready_inputs().await? {
+            if self.closed.load(Ordering::Acquire)
+                || active.len() >= 64
+                || active
+                    .values()
+                    .filter(|run| run.execution.task.is_none())
+                    .count()
+                    >= 8
+            {
+                break;
+            }
+            let mut run = input.entry.run;
+            if active
+                .values()
+                .any(|active| active.execution.run.session_id == run.session_id)
+            {
+                continue;
+            }
+            let _emission = self.emission.lock().await;
+            let record = self.store.claim_input(&run).await?;
+            run.status = RunStatus::Running;
+            let approval = if input.interactive {
+                ApprovalMode::Interactive
+            } else {
+                ApprovalMode::Deny
+            };
+            self.launch_root(active, run, input.entry.prompt, approval)
+                .await;
+            let _ = self.events.send(record);
+        }
+        Ok(())
     }
 
     // Erase the worker future's type: a run may request a child which starts the
@@ -259,6 +404,12 @@ impl Host {
                     "ngn: unable to persist final run status; it will be marked interrupted on restart"
                 ),
             }
+            drop(_emission);
+            if self.dispatch(&mut active).await.is_err() {
+                eprintln!(
+                    "ngn: unable to dispatch pending inputs; inspect the queue before resuming"
+                );
+            }
         })
     }
 
@@ -337,14 +488,24 @@ impl Host {
     }
 
     pub async fn cancel(&self, run: &str) -> Result<()> {
-        self.active
-            .lock()
-            .await
-            .get(run)
-            .context("Run is not active")?
-            .execution
-            .cancel
-            .cancel();
+        let active = self.active.lock().await;
+        let _emission = self.emission.lock().await;
+        if let Some(owner) = active.get(run) {
+            if owner.execution.task.is_none() {
+                for record in self
+                    .store
+                    .queue_control(&owner.execution.run.session_id, QueueAction::Pause)
+                    .await?
+                {
+                    let _ = self.events.send(record);
+                }
+            }
+            owner.execution.cancel.cancel();
+        } else {
+            for record in self.store.cancel_input(run).await? {
+                let _ = self.events.send(record);
+            }
+        }
         Ok(())
     }
 
@@ -557,6 +718,19 @@ impl Host {
     pub async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
         let active = self.active.lock().await;
+        {
+            let _emission = self.emission.lock().await;
+            match self.store.pause_pending().await {
+                Ok(records) => {
+                    for record in records {
+                        let _ = self.events.send(record);
+                    }
+                }
+                Err(_) => eprintln!(
+                    "ngn: unable to persist paused queues; recovery will pause unstarted inputs"
+                ),
+            }
+        }
         for active in active.values() {
             active.execution.cancel.cancel();
         }

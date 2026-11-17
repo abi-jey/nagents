@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 import tomllib
 from pathlib import Path
+from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[2]
 NGN = ROOT / "ngn"
@@ -104,6 +105,10 @@ def verify(output: Path) -> None:
         "Artifacts do not belong to this exact tested commit"
     )
     assert manifest["ngn_version"] == version and manifest["runtime_protocol"] == 1
+    assert manifest["nagents_version"] == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"], (
+        "Python core provenance mismatch"
+    )
+    assert manifest["platform"] == "linux-x86_64", "Unsupported release platform"
     expected = {
         f"ngn-v{version}-linux-x86_64.tar.gz",
         f"ngn-v{version}-source.tar.gz",
@@ -119,6 +124,26 @@ def verify(output: Path) -> None:
     for name, checksum in checksums.items():
         assert digest(output / name) == checksum, f"Checksum failed: {name}"
     assert {path.name for path in output.iterdir()} == expected | {"release-manifest.json", "SHA256SUMS"}
+    with ZipFile(output / f"ngn_nagents-{version}-py3-none-any.whl") as wheel:
+        for source in (NGN / "integrations/nagents/src/ngn_nagents").glob("*.py"):
+            assert wheel.read(f"ngn_nagents/{source.name}") == source.read_bytes(), (
+                "Packaged adapter is not the tested source"
+            )
+    with tarfile.open(output / f"ngn-v{version}-source.tar.gz") as source:
+        prefix = f"nagents-ngn-{version}/"
+        for path, expected_version, component in [
+            ("pyproject.toml", manifest["nagents_version"], "project"),
+            ("ngn/Cargo.toml", version, "workspace"),
+        ]:
+            member = source.extractfile(prefix + path)
+            assert member is not None, "Missing component source"
+            metadata = tomllib.loads(member.read().decode())
+            actual = (
+                metadata["project"]["version"]
+                if component == "project"
+                else metadata["workspace"]["package"]["version"]
+            )
+            assert actual == expected_version, "Source archive component version mismatch"
     with tempfile.TemporaryDirectory(prefix="ngn-install-", dir=output.parent) as temporary:
         extracted = Path(temporary)
         with tarfile.open(output / f"ngn-v{version}-linux-x86_64.tar.gz") as archive:

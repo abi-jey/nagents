@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 let token = "", selected = "", socket, cursor = 0, generation = 0, stateRevision = 0, submitting = false, activeRun, pendingApproval, pendingSubmission;
 let taskRevision = 0, inspected, inspectorSocket, inspectorGeneration = 0;
+let queueRevision = 0, queueState = { paused: false, entries: [] };
 const turns = new Map(), toolCards = new Map();
 
 async function api(path, body) {
@@ -42,7 +43,39 @@ function render(record) {
   if (transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 220) transcript.scrollTop = transcript.scrollHeight;
   if (["run_started", "run_finished", "approval_requested", "approval_resolved", "task_started", "task_updated", "task_finished"].includes(record.event)) refreshState().catch((error) => status(error.message));
   if (["task_started", "task_updated", "task_finished"].includes(record.event)) refreshTasks().catch((error) => status(error.message));
+  if (["run_queued", "run_started", "run_finished", "queue_updated"].includes(record.event)) refreshQueue().catch((error) => status(error.message));
 }
+async function refreshQueue() {
+  const revision = ++queueRevision, session = selected;
+  const { queue, limit } = await api(`/api/sessions/${session}/queue`);
+  if (revision !== queueRevision || session !== selected || queue.session_id !== session) return;
+  queueState = queue;
+  $("queue-status").textContent = `${queue.paused ? "Paused · resume explicitly" : "FIFO · runs after the current turn"} · ${queue.entries.length}/${limit || 32} pending`;
+  $("pause-queue").textContent = queue.paused ? "Resume queue" : "Pause queue";
+  $("clear-queue").disabled = !queue.entries.length;
+  $("send").textContent = activeRun || queue.paused ? "Queue ↗" : "Send ↗";
+  $("queue").replaceChildren();
+  for (const [index, entry] of queue.entries.entries()) {
+    const row = node("div", "task-row");
+    row.append(node("span", "queued-prompt", `${index + 1}. ${entry.prompt}`));
+    const remove = node("button", "", "Remove");
+    remove.onclick = async () => {
+      if (session !== selected) return;
+      remove.disabled = true;
+      try { await api(`/api/runs/${entry.run.id}/cancel`, {}); if (session === selected) await refreshQueue(); }
+      catch (error) { status(error.message); }
+      finally { remove.disabled = false; }
+    };
+    row.append(remove); $("queue").append(row);
+  }
+}
+async function controlQueue(action) {
+  const session = selected;
+  await api(`/api/sessions/${session}/queue`, { action });
+  if (session === selected) await refreshQueue();
+}
+$("pause-queue").onclick = () => controlQueue(queueState.paused ? "resume" : "pause").catch((error) => status(error.message));
+$("clear-queue").onclick = () => controlQueue("clear").catch((error) => status(error.message));
 function closeTask() { inspectorGeneration++; inspected = undefined; if (inspectorSocket) { inspectorSocket.onclose = null; inspectorSocket.close(); } $("task-inspector").hidden = true; }
 function inspectTask(task) {
   closeTask(); inspected = task; $("task-inspector").hidden = false; $("task-title").textContent = `${task.title} · ${task.status} · depth ${task.depth}${task.read_only ? " · read only" : ""}`; $("cancel-task").hidden = task.status !== "running"; $("task-transcript").textContent = "";
@@ -89,7 +122,7 @@ $("cancel-task").onclick = () => { if (inspected) stopTask(inspected).catch((err
 async function refreshSessions() {
   const { sessions } = await api("/api/sessions");
   $("sessions").replaceChildren();
-  for (const session of sessions) { const button = node("button", session.id === selected ? "selected" : "", session.title); button.title = session.id; button.onclick = () => select(session.id, session.title); $("sessions").append(button); }
+  for (const session of sessions) { if (session.id === selected) $("title").textContent = session.title; const button = node("button", session.id === selected ? "selected" : "", session.title); button.title = session.id; button.onclick = () => select(session.id, session.title); $("sessions").append(button); }
   return sessions;
 }
 async function refreshState() {
@@ -98,7 +131,8 @@ async function refreshState() {
   if (revision !== stateRevision || session !== selected) return;
   activeRun = runs.find((run) => run.session_id === selected);
   pendingApproval = approvals.find((approval) => approval.session_id === selected || approval.root_session_id === selected);
-  $("cancel").hidden = !activeRun; $("send").disabled = Boolean(activeRun) || submitting;
+  $("cancel").hidden = !activeRun; $("send").disabled = submitting;
+  $("send").textContent = activeRun || queueState.paused ? "Queue ↗" : "Send ↗";
   $("approval").hidden = !pendingApproval;
   if (pendingApproval) { $("approval-label").textContent = `Depth ${pendingApproval.depth || 0} · ${pendingApproval.agent_title || "Main"} · ${pendingApproval.call.name} · allow this exact call once?`; $("preview").textContent = pendingApproval.preview; }
   status(pendingApproval ? "Waiting for your decision" : activeRun ? "Agent working · Esc to stop" : "Ready");
@@ -106,13 +140,14 @@ async function refreshState() {
 async function select(id, title = "New conversation") {
   selected = id; cursor = 0; generation++; const mine = generation;
   closeTask();
+  queueRevision++; queueState = { paused: false, entries: [] }; $("queue").replaceChildren(); $("queue-status").textContent = "Loading queue…";
   if (socket) { socket.onclose = null; socket.close(); }
   turns.clear(); toolCards.clear(); $("transcript").replaceChildren(); $("title").textContent = title;
-  await refreshSessions(); await refreshState(); await refreshTasks();
+  await refreshSessions(); await refreshState(); await refreshTasks(); await refreshQueue();
   function connect() {
     if (mine !== generation) return;
     socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events?session_id=${encodeURIComponent(id)}&after=${cursor}`, ["ngn.events.v1", `ngn.token.${token}`]);
-    socket.onopen = () => { $("connection").textContent = "Connected"; refreshState().catch((error) => status(error.message)); };
+    socket.onopen = () => { if (mine !== generation) return; $("connection").textContent = "Connected"; refreshState().catch((error) => status(error.message)); refreshQueue().catch((error) => status(error.message)); };
     socket.onmessage = ({ data }) => { if (mine !== generation) return; try { render(JSON.parse(data)); } catch { status("Invalid event received; reconnect to the host"); } };
     socket.onclose = () => { if (mine !== generation) return; $("connection").textContent = "Reconnecting…"; setTimeout(connect, 1200); };
   }
@@ -121,13 +156,14 @@ async function select(id, title = "New conversation") {
 async function createSession() { const { session } = await api("/api/sessions", {}); await select(session.id); }
 $("new-session").onclick = () => createSession().catch((error) => status(error.message));
 $("composer").onsubmit = async (event) => {
-  event.preventDefault(); if (activeRun || submitting) return;
+  event.preventDefault(); if (submitting) return;
   const prompt = $("prompt").value; if (!prompt.trim()) return;
   if (!pendingSubmission || pendingSubmission.prompt !== prompt || pendingSubmission.session !== selected) pendingSubmission = { id: crypto.randomUUID(), prompt, session: selected };
+  const submission = pendingSubmission;
   submitting = true; $("send").disabled = true;
-  try { await api(`/api/sessions/${selected}/runs`, { prompt, request_id: pendingSubmission.id }); pendingSubmission = null; $("prompt").value = ""; await refreshState(); await refreshSessions(); }
+  try { await api(`/api/sessions/${submission.session}/runs`, { prompt, request_id: submission.id }); if (pendingSubmission === submission) pendingSubmission = null; if (selected === submission.session && $("prompt").value === prompt) $("prompt").value = ""; await refreshState(); await refreshQueue(); await refreshSessions(); }
   catch (error) { status(error.message + " · retrying this message reuses its submission ID"); }
-  finally { submitting = false; $("send").disabled = Boolean(activeRun); }
+  finally { submitting = false; $("send").disabled = false; }
 };
 $("prompt").onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("composer").requestSubmit(); } };
 async function cancel() { if (activeRun) { await api(`/api/runs/${activeRun.id}/cancel`, {}); status("Stopping; completed actions are not rolled back"); } }
