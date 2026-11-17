@@ -12,15 +12,24 @@ axum.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
+flate2.workspace = true
+fs2.workspace = true
 ngn-core.workspace = true
 ngn-protocol.workspace = true
 ratatui.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 subtle = "2"
+tar.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["user", "signal", "process"] }
 
 [dev-dependencies]
 tempfile.workspace = true

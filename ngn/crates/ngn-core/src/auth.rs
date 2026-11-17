@@ -23,7 +23,7 @@ const MAX_AUTH_FRAME: usize = 2048;
 pub const VERIFICATION_URL: &str = "https://auth.openai.com/codex/device";
 const INVALID: &str = "Invalid private authentication response (contents redacted)";
 const BUSY: &str = "Authentication identity is in use. Stop all ngn hosts sharing this data directory and finish other auth commands before login/logout.";
-const MISSING_CORE: &str = "ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5. Install a source-built core containing that API and this adapter. Official subscription release is blocked until a new core version is published.";
+const MISSING_CORE: &str = "ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5. Install nagents>=0.28.6 and the matching adapter, or source-built equivalents containing that API.";
 
 /// Stable cooperative metadata lock, not a credential store. Never unlink it.
 /// Hosts hold shared ownership for their entire lifetime; identity writers hold
@@ -371,6 +371,7 @@ pub async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    config.runner_environment(&mut command);
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().context("Cannot start configured auth runner; install this adapter in its explicit Python environment")?;
