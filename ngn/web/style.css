@@ -5,3 +5,25 @@
 #queue-panel { padding: .65rem 1.5rem; border-bottom: 1px solid var(--line); max-height: 14rem; overflow: auto; }
 #queue-status { font-size: .8rem; opacity: .75; }
 .queued-prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 5rem; overflow: auto; }
+
+/* Keep decisions reachable when child inspection and a short viewport coexist.
+   The preview scrolls independently; action buttons never shrink out of view. */
+main { overflow-y: auto; }
+header, .migration, footer, #queue-panel, #tasks-panel, #task-inspector { flex-shrink: 0; }
+#transcript { min-height: 8rem; }
+#approval:not([hidden]) { display: flex; flex-direction: column; flex-shrink: 0; max-height: min(46dvh, 32rem); min-height: 10rem; }
+#approval h2, #approval p, #approval .actions { flex-shrink: 0; }
+#preview { overflow: auto; min-height: 0; flex: 1; }
+.mobile-navigation { display: none; }
+header > div { min-width: 0; }
+h1 { overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .mobile-navigation { display: flex; gap: 8px; padding-bottom: 12px; flex-shrink: 0; }
+  .mobile-navigation select { min-width: 0; flex: 1; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: inherit; font: inherit; }
+  .mobile-navigation button { font-size: 12px; }
+}
+@media (hover: none) and (pointer: coarse) {
+  button, select { min-height: 44px; }
+  #prompt { font-size: 16px; }
+  .composer-bar > div, .actions { flex-wrap: wrap; }
+}

@@ -10,6 +10,9 @@
 - Native tool duration excludes its own approval waiting; durable timing snapshots
   keep call attribution and active duration consistent in the TUI and browser.
 - Compact bounded durations and recognized tool targets in native client summaries.
+- Touch browser Return stays in the draft; deliberate Send/Queue and Stop preserve
+  composer focus. Mobile conversation controls, scrollable approval previews and
+  non-collapsing decision controls have optional real-Chromium acceptance coverage.
 
 This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
 parity. Production deployment and paid-provider/Codex validation are separate gates.
