@@ -10,7 +10,7 @@ not embedded Python and not a wrapper around the old Python harness.
 - Every envelope contains exactly `protocol_version`, `run_id`, `message`.
 - Maximum frame including newline: **1,048,576 bytes**. Oversized/incomplete frames,
   unknown fields, unknown message types, wrong versions and wrong run IDs fail closed.
-- Official application version **0.100.0**, runtime protocol **1**, and browser event
+- Official baseline **0.100.0**, current patch **0.100.1**, runtime protocol **1**, and browser event
   `schema_version: 1` are independently versioned contracts.
 - v1 starts **one process per run**, not one per tool. Conversation storage survives
   process restart. No Python object, callable or pickle crosses the boundary.
