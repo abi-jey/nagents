@@ -13,6 +13,7 @@ class Element {
   get firstChild() { return this.children[0]; }
   get scrollHeight() { return this.children.length * 50; }
   focus() {}
+  requestSubmit() { return this.onsubmit?.({ preventDefault() {} }); }
 }
 
 const response = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
@@ -20,7 +21,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise((answer) => { resolve = answer; }); return { promise, resolve }; }
 let bootCount = 0;
 
-async function boot() {
+async function boot({ touch = false } = {}) {
   const elements = new Map();
   const requests = [];
   const sockets = [];
@@ -29,7 +30,10 @@ async function boot() {
   const tasks = [];
   const queues = [];
   const session = { id: "ngn-test", title: "Test conversation" };
+  const catalog = [session];
   const queue = { session_id: session.id, paused: false, entries: [] };
+  const pointer = { matches: touch, addEventListener(_kind, handler) { this.changed = handler; } };
+  globalThis.matchMedia = () => pointer;
   globalThis.document = {
     getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
     createElement(tag) { return new Element(tag); },
@@ -44,7 +48,10 @@ async function boot() {
   globalThis.fetch = async (path, options) => {
     requests.push({ path, options });
     if (path === "/api/bootstrap") return response({ token: "host-token", workspace: "/workspace", backend: "demo", read_only: false });
-    if (path === "/api/sessions") return response({ sessions: [session] });
+    if (path === "/api/sessions") {
+      if (options.method === "POST") { const created = { id: `ngn-new-${catalog.length}`, title: "New conversation" }; catalog.unshift(created); return response({ session: created }); }
+      return response({ sessions: catalog });
+    }
     if (path === "/api/state") return states.length ? states.shift() : response({ runs: [], approvals: [] });
     if (path.endsWith("/tasks")) return response({ tasks, limits: { max_depth: 2, max_concurrent: 3, max_executions: 8 } });
     if (path.endsWith("/queue")) {
@@ -57,7 +64,7 @@ async function boot() {
   };
   const presentation = await import(`./app.js?test=${++bootCount}`);
   const emit = (sequence, event, data = {}) => sockets[0].onmessage({ data: JSON.stringify({ schema_version: 1, session_id: session.id, run_id: "run-test", sequence, event, ...data }) });
-  return { elements, requests, sockets, states, submissions, tasks, queues, queue, session, emit, presentation };
+  return { elements, requests, sockets, states, submissions, tasks, queues, queue, session, emit, presentation, pointer, catalog };
 }
 
 test("browser client uses host schema and does not duplicate completed or replayed text", async () => {
@@ -244,4 +251,59 @@ test("native tool summaries retain recognized targets and freeze at host approva
   assert.equal(app.presentation.toolTarget({ name: "custom", arguments: { name: "private" } }), "");
   assert.equal(app.presentation.toolTarget({ name: "skill", arguments: { name: "ngn-\ncustomize\0" } }), " · ngn- customize");
   assert.equal(app.presentation.toolTarget({ name: "shell", arguments: { command: "x".repeat(200) } }).length, 100);
+});
+
+test("touch Return keeps a draft local and deliberate gestures preserve composer focus", async () => {
+  const app = await boot({ touch: true });
+  const prompt = app.elements.get("prompt");
+  assert.equal(prompt.enterKeyHint, "enter");
+  prompt.value = "unsent draft";
+  let prevented = false;
+  prompt.onkeydown({ key: "Enter", preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.equal(prompt.value, "unsent draft");
+  assert.equal(app.requests.filter((request) => request.path.endsWith("/runs")).length, 0);
+  app.elements.get("send").onmousedown({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  prevented = false;
+  prompt.onkeydown({ key: "Enter", ctrlKey: true, preventDefault() { prevented = true; } });
+  await flush();
+  assert.equal(prevented, true);
+  assert.equal(app.requests.filter((request) => request.path.endsWith("/runs")).length, 1);
+});
+
+test("desktop send, newlines and IME remain distinct when pointer capabilities change", async () => {
+  const app = await boot();
+  const prompt = app.elements.get("prompt");
+  assert.equal(prompt.enterKeyHint, "send");
+  prompt.value = "draft";
+  prompt.onkeydown({ key: "Enter", shiftKey: true, preventDefault() { assert.fail("Shift+Enter is a newline"); } });
+  prompt.onkeydown({ key: "Enter", isComposing: true, preventDefault() { assert.fail("IME completion is not submission"); } });
+  assert.equal(app.requests.filter((request) => request.path.endsWith("/runs")).length, 0);
+  app.pointer.matches = true;
+  app.pointer.changed();
+  assert.equal(prompt.enterKeyHint, "enter");
+  app.pointer.matches = false;
+  app.pointer.changed();
+  let prevented = false;
+  prompt.onkeydown({ key: "Enter", preventDefault() { prevented = true; } });
+  await flush();
+  assert.equal(prevented, true);
+  assert.equal(app.requests.filter((request) => request.path.endsWith("/runs")).length, 1);
+});
+
+test("mobile navigation creates and reopens the same host-owned sessions as desktop", async () => {
+  const app = await boot({ touch: true });
+  const picker = app.elements.get("mobile-sessions");
+  assert.equal(picker.value, app.session.id);
+  assert.deepEqual(picker.children.map((option) => option.value), [app.session.id]);
+  await app.elements.get("mobile-new-session").onclick();
+  assert.equal(app.catalog.length, 2);
+  assert.equal(picker.value, app.catalog[0].id);
+  assert.equal(app.elements.get("title").textContent, app.catalog[0].title);
+  picker.value = app.session.id;
+  await picker.onchange();
+  assert.equal(app.elements.get("title").textContent, app.session.title);
+  assert(app.sockets.at(-1).url.includes(`session_id=${app.session.id}`));
+  assert.equal(app.requests.filter((request) => request.path === "/api/sessions" && request.options.method === "POST").length, 1);
 });

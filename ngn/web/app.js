@@ -3,6 +3,16 @@ let token = "", selected = "", socket, cursor = 0, generation = 0, stateRevision
 let taskRevision = 0, inspected, inspectorSocket, inspectorGeneration = 0;
 let queueRevision = 0, queueState = { paused: false, entries: [] };
 const turns = new Map(), toolCards = new Map();
+const pointerMedia = globalThis.matchMedia?.("(hover: none) and (pointer: coarse)");
+let touchComposer = Boolean(pointerMedia?.matches);
+function composerInputMode() {
+  touchComposer = Boolean(pointerMedia?.matches);
+  $("prompt").enterKeyHint = touchComposer ? "enter" : "send";
+  $("prompt").placeholder = touchComposer ? "Ask about your workspace… Return adds a new line; use Send or Queue" : "Ask about your workspace… Enter to send, Shift+Enter for a new line";
+}
+pointerMedia?.addEventListener?.("change", composerInputMode);
+composerInputMode();
+for (const id of ["send", "cancel"]) $(id).onmousedown = (event) => { if (touchComposer) event.preventDefault(); };
 
 export function formatDuration(milliseconds) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return "unknown";
@@ -151,8 +161,13 @@ $("close-task").onclick = closeTask;
 $("cancel-task").onclick = () => { if (inspected) stopTask(inspected).catch((error) => status(error.message)); };
 async function refreshSessions() {
   const { sessions } = await api("/api/sessions");
-  $("sessions").replaceChildren();
-  for (const session of sessions) { if (session.id === selected) $("title").textContent = session.title; const button = node("button", session.id === selected ? "selected" : "", session.title); button.title = session.id; button.onclick = () => select(session.id, session.title); $("sessions").append(button); }
+  $("sessions").replaceChildren(); $("mobile-sessions").replaceChildren();
+  for (const session of sessions) {
+    if (session.id === selected) $("title").textContent = session.title;
+    const button = node("button", session.id === selected ? "selected" : "", session.title); button.title = session.id; button.onclick = () => select(session.id, session.title).catch((error) => status(error.message)); $("sessions").append(button);
+    const option = node("option", "", session.title); option.value = session.id; $("mobile-sessions").append(option);
+  }
+  $("mobile-sessions").value = selected;
   return sessions;
 }
 async function refreshState() {
@@ -185,6 +200,8 @@ async function select(id, title = "New conversation") {
 }
 async function createSession() { const { session } = await api("/api/sessions", {}); await select(session.id); }
 $("new-session").onclick = () => createSession().catch((error) => status(error.message));
+$("mobile-new-session").onclick = $("new-session").onclick;
+$("mobile-sessions").onchange = () => select($("mobile-sessions").value).catch((error) => status(error.message));
 $("composer").onsubmit = async (event) => {
   event.preventDefault(); if (submitting) return;
   const prompt = $("prompt").value; if (!prompt.trim()) return;
@@ -195,7 +212,13 @@ $("composer").onsubmit = async (event) => {
   catch (error) { status(error.message + " · retrying this message reuses its submission ID"); }
   finally { submitting = false; $("send").disabled = false; }
 };
-$("prompt").onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("composer").requestSubmit(); } };
+$("prompt").onkeydown = (event) => {
+  if (event.isComposing) return;
+  // Touch Return belongs to the text editor, not network admission. Buttons and
+  // explicit Ctrl/Meta+Enter retain a deliberate send gesture.
+  if (touchComposer && !event.ctrlKey && !event.metaKey) return;
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("composer").requestSubmit(); }
+};
 async function cancel() { if (activeRun) { await api(`/api/runs/${activeRun.id}/cancel`, {}); status("Stopping; completed actions are not rolled back"); } }
 $("cancel").onclick = () => cancel().catch((error) => status(error.message));
 document.onkeydown = (event) => { if (event.key === "Escape") cancel().catch((error) => status(error.message)); };

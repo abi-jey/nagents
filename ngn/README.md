@@ -68,6 +68,9 @@ is imported.** The core agents library remains independently usable and unchange
 ## Controls
 
 - **Enter** sends, or queues while busy/paused; **Shift+Enter** inserts a newline.
+- On touch/coarse-pointer browsers, **Return inserts a newline**; tap Send/Queue
+  (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
+  Send and Stop preserve composer focus and Stop retains an unsent draft.
 - **Esc** cancels active work and pauses pending inputs. Completed actions are not rolled back.
 - **F2** lists sessions, **F3** creates one, **F4** toggles tool details.
 - **F5** opens the agent catalog; **Enter** inspects a child conversation and
@@ -211,6 +214,21 @@ python -m mypy --strict integrations/nagents/src integrations/nagents/tests
 `scripts/smoke.py` performs real local CLI/HTTP/WebSocket/TUI and nagents-protocol
 checks against a fixture model server, with no paid-provider requests. See its
 `--help`. The integration must be importable in the selected Python environment.
+
+For optional real-browser acceptance, install `playwright` and `aiohttp` into a
+separate testing venv and provide Chromium (or run `python -m playwright install
+chromium`). Reuse the candidate path printed by `./ngn/dev --test`:
+
+```sh
+python ngn/scripts/browser_smoke.py --binary CANDIDATE/app/ngn \
+  --runtime-python CANDIDATE/runtime/bin/python --output /path/to/evidence
+# Add --browser /path/to/chromium to use an existing browser executable.
+```
+
+This runs the actual embedded client in Chromium at desktop and touch viewport
+sizes against an owned local fixture. It tests Return/focus, conversation creation,
+native approvals, long preview scrolling and child attribution without paid requests
+or legacy state. It is separate from the dependency-free DOM regression tests.
 
 ## Repository layout
 
