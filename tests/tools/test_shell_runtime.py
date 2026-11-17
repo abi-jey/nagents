@@ -9,6 +9,7 @@ import stat
 from typing import TYPE_CHECKING
 
 import pytest
+from tests.support.hang_guard import HANG_GUARD
 
 from nagents.tools.shell import ShellController
 from nagents.tools.shell import ShellInstance
@@ -17,6 +18,8 @@ from nagents.tools.shell import ShellPolicy
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from nagents.tools.shell import ShellEvent
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.skipif(os.name != "posix", reason="POSIX")]
 
@@ -93,6 +96,13 @@ async def test_stop_kills_group_once_before_reaping(tmp_path: Path, monkeypatch:
     controller = ShellController(ShellPolicy(allow_background=True))
     real_killpg = os.killpg
     killed: list[int] = []
+    ready = asyncio.Event()
+
+    async def output(event: ShellEvent) -> None:
+        if event.kind == "output" and event.text == "ready":
+            ready.set()
+
+    controller.subscribe(output)
 
     def killpg(pgid: int, sig: int) -> None:
         assert sig == signal.SIGKILL
@@ -103,9 +113,14 @@ async def test_stop_kills_group_once_before_reaping(tmp_path: Path, monkeypatch:
         killed.append(pgid)
 
     try:
-        job = await controller.execute("sleep 20 & wait", owner=owner(tmp_path), background=True)
+        # Admission only confirms the shell PID, not that its child has started.
+        # Have the child announce itself before killing the group, so the test
+        # exercises reaping rather than racing the shell's fork/exec on Darwin.
+        # Its natural exit must not rescue a missed kill within the watchdog.
+        job = await controller.execute("(printf ready; exec sleep 120) & wait", owner=owner(tmp_path), background=True)
+        await asyncio.wait_for(ready.wait(), HANG_GUARD)
         monkeypatch.setattr(os, "killpg", killpg)
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(HANG_GUARD):
             stopped = await controller.stop(job.shell_id)
         assert stopped.state == "cancelled" and stopped.exit_code == -signal.SIGKILL
         assert len(killed) == 1
