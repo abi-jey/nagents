@@ -1,8 +1,10 @@
-# Rust migration status · 0.100.1
+# Rust migration status · official 0.100.0
 
 ## Decision
 
-`ngn` is its own repository and application. Rust owns the harness, interfaces and
+`ngn` is an independent application **in the same repository** as the Python core.
+Its Cargo workspace lives under `ngn/`; the Python package stays at `src/nagents/`.
+Rust owns the harness, interfaces and
 native tool bindings; `nagents` remains a reusable Python agents/integration
 library. The first live runtime is an optional adapter, **not** a Python ngn worker.
 Native Rust agent/model backends can implement the same protocol later without
@@ -62,7 +64,7 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Full legacy delegation UX, agent profiles/model overrides, child follow-ups,
   automatic completion notifications at model boundaries and wake-up timers.
   Basic Rust supervision, inspection, budgets and explicit `agent_wait` delivery
-  exist in 0.100.1; they are not the full old orchestration feature set.
+   exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
 - Input queueing and steering/interrupt delivery semantics during an active model run.
 - Skills, nested instructions, Git-ignore discovery, MCP and custom Python plugins.
 - Model context accounting, compaction controls, usage UI and model discovery UI.

@@ -39,6 +39,7 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+/artifacts/
 .Python
 build/
 develop-eggs/

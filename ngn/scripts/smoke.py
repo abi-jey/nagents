@@ -87,12 +87,8 @@ async def fixture(request: web.Request) -> web.StreamResponse:
                     (
                         "to_agent",
                         {
-                            "prompt": "wait for cancellation"
-                            if holding
-                            else "write a delegated file",
-                            "title": "Waiting delegate"
-                            if holding
-                            else "Delegate writer",
+                            "prompt": "wait for cancellation" if holding else "write a delegated file",
+                            "title": "Waiting delegate" if holding else "Delegate writer",
                             "read_only": "read-only" in prompt,
                             "background": "orphan" in prompt,
                         },
@@ -113,27 +109,16 @@ async def fixture(request: web.Request) -> web.StreamResponse:
             delta = tool_delta([(name, arguments)])
         reason = "tool_calls"
     else:
-        require(
-            last["role"] == "tool", "Fixture expected an actual persisted tool result"
-        )
-        user_prompt = next(
-            message.get("content", "")
-            for message in reversed(messages)
-            if message["role"] == "user"
-        )
-        if (
-            user_prompt == "delegate two background reads"
-            and tool_name(last) == "to_agent"
-        ):
+        require(last["role"] == "tool", "Fixture expected an actual persisted tool result")
+        user_prompt = next(message.get("content", "") for message in reversed(messages) if message["role"] == "user")
+        if user_prompt == "delegate two background reads" and tool_name(last) == "to_agent":
             tool_results = []
             for message in reversed(messages):
                 if message["role"] == "user":
                     break
                 if message["role"] == "tool" and tool_name(message) == "to_agent":
                     tool_results.append(json.loads(message["content"]))
-            require(
-                len(tool_results) == 2, "Expected two distinct Rust-owned delegations"
-            )
+            require(len(tool_results) == 2, "Expected two distinct Rust-owned delegations")
             delta = tool_delta(
                 [
                     (
@@ -145,9 +130,7 @@ async def fixture(request: web.Request) -> web.StreamResponse:
             )
             reason = "tool_calls"
         else:
-            delta = {
-                "content": "The tool result was returned through the Rust host boundary."
-            }
+            delta = {"content": "The tool result was returned through the Rust host boundary."}
             reason = "stop"
     for choice in [
         {"index": 0, "delta": delta, "finish_reason": None},
@@ -172,9 +155,7 @@ async def fixture(request: web.Request) -> web.StreamResponse:
     return response
 
 
-async def cli(
-    binary: Path, config: Path, workspace: Path, *arguments: str
-) -> list[dict[str, object]]:
+async def cli(binary: Path, config: Path, workspace: Path, *arguments: str) -> list[dict[str, object]]:
     process = await asyncio.create_subprocess_exec(
         str(binary),
         "--config",
@@ -186,9 +167,7 @@ async def cli(
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await asyncio.wait_for(process.communicate(), 30)
-    require(
-        process.returncode == 0, f"CLI failed: {stderr.decode()}\n{stdout.decode()}"
-    )
+    require(process.returncode == 0, f"CLI failed: {stderr.decode()}\n{stdout.decode()}")
     records = [json.loads(line) for line in stdout.splitlines()]
     require(
         records[-1]["status"] == "completed",
@@ -226,12 +205,8 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                 require(response.status == 200, "Bootstrap failed")
             headers = {"x-ngn-token": bootstrap["token"], "Origin": url}
 
-            async def api(
-                path: str, body: object, expected: int = 200
-            ) -> dict[str, object]:
-                async with client.post(
-                    url + path, json=body, headers=headers
-                ) as response:
+            async def api(path: str, body: object, expected: int = 200) -> dict[str, object]:
+                async with client.post(url + path, json=body, headers=headers) as response:
                     payload = await response.json()
                     require(
                         response.status == expected,
@@ -241,13 +216,10 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
 
             async with client.get(url + "/") as response:
                 require(
-                    response.status == 200
-                    and bootstrap["version"] in await response.text(),
+                    response.status == 200 and bootstrap["version"] in await response.text(),
                     "Bundled client missing",
                 )
-            async with client.get(
-                url + "/api/sessions", headers={"x-ngn-token": "invalid"}
-            ) as response:
+            async with client.get(url + "/api/sessions", headers={"x-ngn-token": "invalid"}) as response:
                 require(response.status == 403, "Invalid token accepted")
             async with client.post(
                 url + "/api/sessions",
@@ -321,8 +293,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                     "Events duplicated or reordered",
                 )
                 require(
-                    (workspace / "changed.txt").read_text()
-                    == "written by an approved Rust host tool\n",
+                    (workspace / "changed.txt").read_text() == "written by an approved Rust host tool\n",
                     "Approved native write missing",
                 )
                 repeated = await api(
@@ -346,8 +317,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
             ) as socket:
                 terminal = await asyncio.wait_for(socket.receive_json(), 5)
                 require(
-                    terminal["sequence"] == sequences[-1]
-                    and terminal["event"] == "run_finished",
+                    terminal["sequence"] == sequences[-1] and terminal["event"] == "run_finished",
                     "Cursor reconnect lost the terminal event",
                 )
             waiting = await api(
@@ -379,9 +349,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
         require(process.returncode == 0, "HTTP host did not shut down cleanly")
 
 
-def tui_check(
-    binary: Path, workspace: Path, data: Path, config: Path | None = None
-) -> None:
+def tui_check(binary: Path, workspace: Path, data: Path, config: Path | None = None) -> None:
     import fcntl
     import pty
     import select
@@ -414,12 +382,8 @@ def tui_check(
         while b"Welcome to ngn" not in visible() and time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
                 output += os.read(master, 65536)
-        require(
-            b"Welcome to ngn" in visible(), "Native TUI did not render on a real PTY"
-        )
-        os.write(
-            master, b"write a file\r" if config is not None else b"demo approval\r"
-        )
+        require(b"Welcome to ngn" in visible(), "Native TUI did not render on a real PTY")
+        os.write(master, b"write a file\r" if config is not None else b"demo approval\r")
         deadline = time.monotonic() + 10
         while b"Approval:" not in visible() and time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
@@ -434,26 +398,20 @@ def tui_check(
                 os.read(master, 65536)
             with sqlite3.connect(database) as connection:
                 completed = (
-                    connection.execute(
-                        "SELECT COUNT(*) FROM runs WHERE status = 'completed'"
-                    ).fetchone()[0]
-                    == 1
+                    connection.execute("SELECT COUNT(*) FROM runs WHERE status = 'completed'").fetchone()[0] == 1
                 )
             if completed:
                 break
         require(completed, "TUI demo did not complete after approving")
         if config is not None:
             require(
-                (workspace / "changed.txt").read_text()
-                == "written by an approved Rust host tool\n",
+                (workspace / "changed.txt").read_text() == "written by an approved Rust host tool\n",
                 "Live TUI did not execute its approved native Rust tool",
             )
         if config is None:
             os.write(master, b"\x11")  # Ctrl+Q: cleanup and terminal restoration.
         else:
-            process.send_signal(
-                signal.SIGTERM
-            )  # External shutdown must restore terminal state too.
+            process.send_signal(signal.SIGTERM)  # External shutdown must restore terminal state too.
         deadline = time.monotonic() + 10
         while process.poll() is None and time.monotonic() < deadline:
             if select.select([master], [], [], 0.05)[0]:
@@ -470,15 +428,9 @@ def tui_check(
             "TUI did not restore the terminal mode",
         )
         with sqlite3.connect(database) as connection:
-            payloads = [
-                json.loads(row[0])
-                for row in connection.execute("SELECT payload FROM events")
-            ]
+            payloads = [json.loads(row[0]) for row in connection.execute("SELECT payload FROM events")]
         require(
-            any(
-                event.get("event") == "approval_resolved" and event.get("allowed")
-                for event in payloads
-            ),
+            any(event.get("event") == "approval_resolved" and event.get("allowed") for event in payloads),
             "TUI did not record its bound approval",
         )
     finally:
@@ -528,14 +480,11 @@ async def main() -> None:
                     }
                 )
             )
-            records = await cli(
-                binary, config, workspace, "run", "--json", "read hello.txt"
-            )
+            records = await cli(binary, config, workspace, "run", "--json", "read hello.txt")
             require(
                 any(
                     record.get("event") == "tool_completed"
-                    and record["result"]["result"].get("content")
-                    == "1: hello from a Rust tool"
+                    and record["result"]["result"].get("content") == "1: hello from a Rust tool"
                     for record in records
                 ),
                 "nagents did not receive a native Rust file result",
@@ -551,13 +500,10 @@ async def main() -> None:
                 "--json",
                 "read hello.txt again",
             )
-            denied = await cli(
-                binary, config, workspace, "run", "--json", "write a file"
-            )
+            denied = await cli(binary, config, workspace, "run", "--json", "write a file")
             require(
                 any(
-                    record.get("event") == "tool_completed"
-                    and "non-interactive" in record["result"]["error"]
+                    record.get("event") == "tool_completed" and "non-interactive" in record["result"]["error"]
                     for record in denied
                 ),
                 "Headless write was not denied",
@@ -589,12 +535,8 @@ async def main() -> None:
                 live_workspace = root / "tui-live-workspace"
                 live_workspace.mkdir()
                 (live_workspace / "hello.txt").write_text("hello from a Rust tool\n")
-                await asyncio.to_thread(
-                    tui_check, binary, live_workspace, root / "tui-live-data", config
-                )
-                print(
-                    "PASS: real-PTY TUI → nagents Agent.run → approved native Rust write; terminal mode restored"
-                )
+                await asyncio.to_thread(tui_check, binary, live_workspace, root / "tui-live-data", config)
+                print("PASS: real-PTY TUI → nagents Agent.run → approved native Rust write; terminal mode restored")
                 await asyncio.to_thread(
                     subagent_tui_check,
                     binary,

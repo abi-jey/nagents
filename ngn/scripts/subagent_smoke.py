@@ -33,11 +33,7 @@ def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
             if match is None:
                 break
             raw, _, operation = match.groups()
-            parameters = (
-                [int(value or "0") for value in raw.split(";")]
-                if not raw.startswith("?")
-                else []
-            )
+            parameters = [int(value or "0") for value in raw.split(";")] if not raw.startswith("?") else []
             if operation in {"H", "f"}:
                 row = min(rows - 1, max(0, (parameters[0] if parameters else 1) - 1))
                 column = min(
@@ -66,9 +62,7 @@ def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
                 column = 0
             if not unicodedata.combining(character):
                 screen[row][column] = character
-                column += (
-                    2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
-                )
+                column += 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
     return " ".join("".join("".join(line) for line in screen).split()).encode()
 
 
@@ -100,9 +94,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                 bootstrap = await response.json()
             headers = {"x-ngn-token": bootstrap["token"], "Origin": url}
 
-            async def api(
-                path: str, body: object = None, expected: int = 200
-            ) -> dict[str, object]:
+            async def api(path: str, body: object = None, expected: int = 200) -> dict[str, object]:
                 async with client.request(
                     "GET" if body is None else "POST",
                     url + path,
@@ -142,8 +134,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                         record = await asyncio.wait_for(socket.receive_json(), 30)
                         records.append(record)
                         require(
-                            record["session_id"] == session
-                            and record["run_id"] == root_run,
+                            record["session_id"] == session and record["run_id"] == root_run,
                             "Child events escaped into the parent's stream",
                         )
                         if record["event"] == "task_started":
@@ -153,11 +144,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                                 "Child was not bound to its owning root",
                             )
                             if cancel:
-                                target = (
-                                    root_run
-                                    if cancel == "root"
-                                    else record["task"]["run_id"]
-                                )
+                                target = root_run if cancel == "root" else record["task"]["run_id"]
                                 await api(f"/api/runs/{target}/cancel", {})
                         if record["event"] == "task_updated" and approve:
                             state = await api("/api/state")
@@ -165,8 +152,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                                 if approval["root_session_id"] != session:
                                     continue
                                 require(
-                                    approval["session_id"] != session
-                                    and approval["depth"] == 1,
+                                    approval["session_id"] != session and approval["depth"] == 1,
                                     "Child approval was misattributed to the parent",
                                 )
                                 require(
@@ -223,9 +209,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                     ) as child_socket:
                         child_records = []
                         while True:
-                            child_record = await asyncio.wait_for(
-                                child_socket.receive_json(), 10
-                            )
+                            child_record = await asyncio.wait_for(child_socket.receive_json(), 10)
                             require(
                                 child_record["session_id"] == task["session_id"],
                                 "Child inspection crossed a conversation boundary",
@@ -247,15 +231,11 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
             delivered = [
                 record
                 for record in background
-                if record["event"] == "tool_completed"
-                and record["result"]["name"] == "agent_wait"
+                if record["event"] == "tool_completed" and record["result"]["name"] == "agent_wait"
             ]
             require(
                 len(delivered) == 2
-                and all(
-                    record["result"]["result"]["task"]["status"] == "completed"
-                    for record in delivered
-                ),
+                and all(record["result"]["result"]["task"]["status"] == "completed" for record in delivered),
                 "Parent did not receive both child results through agent_wait",
             )
             _, denied, approvals = await conversation("delegate read-only write")
@@ -263,15 +243,9 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                 not approvals and not (workspace / "delegated.txt").exists(),
                 "A child escaped its read-only permission ceiling",
             )
-            readonly = next(
-                record["task"] for record in denied if record["event"] == "task_started"
-            )
-            require(
-                readonly["read_only"], "Host did not persist the permission ceiling"
-            )
-            child_history = (
-                await api(f"/api/sessions/{readonly['session_id']}/events?after=0")
-            )["events"]
+            readonly = next(record["task"] for record in denied if record["event"] == "task_started")
+            require(readonly["read_only"], "Host did not persist the permission ceiling")
+            child_history = (await api(f"/api/sessions/{readonly['session_id']}/events?after=0"))["events"]
             require(
                 any(
                     record["event"] == "tool_completed"
@@ -284,15 +258,13 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
             _, written, approvals = await conversation("delegate a write", approve=True)
             require(
                 len(approvals) == 1
-                and (workspace / "delegated.txt").read_text()
-                == "written by an approved Rust host tool\n",
+                and (workspace / "delegated.txt").read_text() == "written by an approved Rust host tool\n",
                 "Child tool was not approved and executed by Rust",
             )
             returned = next(
                 record["result"]["result"]
                 for record in written
-                if record["event"] == "tool_completed"
-                and record["result"]["name"] == "to_agent"
+                if record["event"] == "tool_completed" and record["result"]["name"] == "to_agent"
             )
             require(
                 returned["task"]["status"] == "completed" and returned["result"],
@@ -301,20 +273,13 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
             _, cancelled, _ = await conversation("delegate hold", cancel="child")
             require(
                 any(
-                    record["event"] == "task_finished"
-                    and record["task"]["status"] == "cancelled"
+                    record["event"] == "task_finished" and record["task"]["status"] == "cancelled"
                     for record in cancelled
                 ),
                 "Child-only cancellation was not observed",
             )
-            _, tree_cancelled, _ = await conversation(
-                "delegate hold", cancel="root", expected="cancelled"
-            )
-            child_finishes = [
-                record["sequence"]
-                for record in tree_cancelled
-                if record["event"] == "task_finished"
-            ]
+            _, tree_cancelled, _ = await conversation("delegate hold", cancel="root", expected="cancelled")
+            child_finishes = [record["sequence"] for record in tree_cancelled if record["event"] == "task_finished"]
             require(
                 child_finishes and max(child_finishes) < tree_cancelled[-1]["sequence"],
                 "Parent terminated before recording child cancellation",
@@ -383,10 +348,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
 
         def started() -> bool:
             with sqlite3.connect(database) as connection:
-                return (
-                    connection.execute("SELECT COUNT(*) FROM subagents").fetchone()[0]
-                    == 1
-                )
+                return connection.execute("SELECT COUNT(*) FROM subagents").fetchone()[0] == 1
 
         wait_for(started, "TUI did not start a Rust-supervised child")
         os.write(master, b"\x1b[15~")  # F5 opens the shared task catalog.
@@ -395,9 +357,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
             "TUI task pane did not show supervised child controls",
         )
         os.write(master, b"\r")
-        wait_for(
-            lambda: b"Agent:" in visible(), "TUI did not inspect the child conversation"
-        )
+        wait_for(lambda: b"Agent:" in visible(), "TUI did not inspect the child conversation")
         os.write(master, b"\x18")  # Ctrl+X cancels this child only.
 
         def completed() -> bool:
@@ -410,9 +370,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
                 ).fetchone()[0]
                 return root == "completed" and child == "cancelled"
 
-        wait_for(
-            completed, "TUI child cancellation did not leave its parent able to finish"
-        )
+        wait_for(completed, "TUI child cancellation did not leave its parent able to finish")
         os.write(master, b"\x1b\x1b")  # Return to the root conversation.
         os.write(master, b"\x11")
         wait_for(

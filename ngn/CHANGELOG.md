@@ -1,5 +1,19 @@
 # Changelog
 
+## Official 0.100.0 — monorepo release
+
+- Consolidate the Rust application under `ngn/` in `abi-jey/nagents`, retaining the
+  Python core and its independent version. No new GitHub repository is used.
+- Roll up both local prototypes below, including Rust supervision and the
+  successful-tool-result adapter fix. Those standalone tags were local only.
+- Shared pre-commit gates and separate Rust CI/release jobs, real TUI/web acceptance,
+  adapter-wheel testing, extracted-install checks, commit-bound manifests and checksums.
+- The `v0.100.x` tag series is reserved for Rust; it cannot trigger Python/PyPI publishing.
+- Support the tested Python core 0.28.x as well as 0.27.1 through the public adapter boundary.
+
+The following entries record **unpublished standalone prototype history**, not
+official GitHub releases. Their original local tags/artifacts remain unchanged.
+
 ## 0.100.1 — 2026-11-17
 
 ### Added

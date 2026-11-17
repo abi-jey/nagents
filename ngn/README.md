@@ -1,19 +1,23 @@
-# ngn · 0.100.1
+# ngn · 0.100.0
 
 A standalone **Rust harness, TUI and local web server**, with a versioned agent
 runtime protocol. The optional **nagents** adapter runs the Python agent/model
 loop; **all workspace tools and approvals execute in Rust**.
 
-The original Rust baseline is tagged `v0.100.0`; `0.100.1` adds Rust-supervised
-subagents and fixes successful tool-result delivery to the model. This is **not
-yet full legacy feature parity**. See [migration status](docs/migration.md) and
-[patch notes](docs/releases/0.100.1.md). No remote release is published automatically.
+The Rust application lives under `ngn/` in the **same repository** as the Python
+`nagents` library (`../src/nagents/`). The first official monorepo release,
+`v0.100.0`, includes the tested local prototype and its subagent/tool-result fixes.
+The earlier standalone local tags/artifacts were never published and remain
+untouched in their original checkout. This is **not yet full legacy feature
+parity**. See [migration status](docs/migration.md) and [release notes](docs/releases/0.100.0.md).
 
 ## Run without Python
 
 Requires Rust 1.93+ and a C compiler for bundled SQLite. No Node build is needed.
 
 ```sh
+# From the repository root:
+cd ngn
 cargo run -p ngn -- --demo -C /path/to/workspace
 cargo run -p ngn -- --demo -C /path/to/workspace serve
 cargo run -p ngn -- --demo run --json "hello"
@@ -39,8 +43,8 @@ Python ngn installation:
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e integrations/nagents
-# To use a local nagents checkout instead of the published library:
-# python -m pip install -e ../nagents -e integrations/nagents
+# To use the Python core from this same repository:
+# python -m pip install -e .. -e integrations/nagents
 
 cp config.example.json config.local.json
 # Edit its provider/model and environment-variable reference for your own account.
@@ -108,10 +112,10 @@ marked failed and those children are cancelled; use `agent_wait` before finishin
 Background results are **not** automatically injected into an unrelated model
 generation. Child text/reasoning is not relayed as root assistant output.
 
-The host database upgrades from schema 1 to 2 for immutable task topology and
-recovery. Stop the host and back up its workspace state before upgrading important
-data. `0.100.0` deliberately refuses schema 2; downgrading requires restoring that
-backup. No legacy Python ngn data or runtime-owned database is migrated.
+The official baseline uses host schema 2 for immutable task topology and recovery.
+Stop the host and back up its workspace state before upgrading important data.
+Earlier standalone schema-1 prototypes cannot open schema 2; downgrading requires
+restoring that backup. No legacy Python ngn data or runtime-owned database is migrated.
 
 ## Boundaries
 
@@ -142,7 +146,8 @@ cargo test --workspace
 python -m unittest discover -s integrations/nagents/tests -v
 python -m ruff check integrations/nagents
 python -m mypy --strict integrations/nagents/src integrations/nagents/tests
-pre-commit run --all-files
+# Root pre-commit includes both Python-core and Rust-harness gates:
+(cd .. && pre-commit run --all-files)
 ```
 
 `scripts/smoke.py` performs real local CLI/HTTP/WebSocket/TUI and nagents-protocol
@@ -160,5 +165,6 @@ checks against a fixture model server, with no paid-provider requests. See its
 | `integrations/nagents` | Optional Python adapter using only the agents library |
 | `docs` | Protocol, trust model, architecture and migration inventory |
 
-MIT licensed. This repository was started independently from the Python nagents
-working tree; existing Python work and history are not modified or removed.
+MIT licensed. Rust development started independently, then its history was imported
+under `ngn/` in the existing nagents repository. The Python core, legacy clients,
+existing history and installed defaults are retained.

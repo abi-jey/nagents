@@ -5,6 +5,8 @@ on:
     branches: [main]
     tags:
       - 'v*'
+      # The Rust harness reserves v0.100.x; do not publish nagents to PyPI for it.
+      - '!v0.100.*'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -52,8 +54,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install pre-commit
-        run: pip install pre-commit
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Install pre-commit and runtime adapter in an explicit environment
+        run: |
+          python -m venv "$RUNNER_TEMP/lint-venv"
+          "$RUNNER_TEMP/lint-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents pre-commit ruff mypy
+          echo "$RUNNER_TEMP/lint-venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/lint-venv" >> "$GITHUB_ENV"
 
       - name: Run pre-commit
         run: pre-commit run --all-files
