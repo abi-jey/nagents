@@ -276,3 +276,10 @@ explicitly calls `Agent.run(prompt, same_session_id)` within the same host run,
 and acknowledges from `before_generation` after the initial message is persisted.
 It never appends that continuation twice. See [steering semantics](steering.md)
 for HTTP receipts, bounded admission and interruption guarantees.
+
+`steering_updated` is a host-only durable **client event**, not a runtime message.
+Its `input_id` identifies a receipt to refresh (empty for negotiation/admission
+closure); exact run/session attribution and cursor ordering come from the host.
+Native clients refresh protected receipt snapshots on this event and `run_finished`.
+Reconnect never resubmits steering. Browser Steer and TUI `/steer` are explicit
+active-root actions; ordinary Enter/Send remains the separate next-run FIFO.

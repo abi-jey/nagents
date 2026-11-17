@@ -67,6 +67,8 @@ initial browser client proves the new shared lifecycle and tool boundary.
 - [x] Bounded explicit active-root [steering API](steering.md), two-sided runtime
   negotiation, complete persisted tool-batch/final safe points and durable
   pending/offered/applied/uncertain/undelivered receipts without automatic replay.
+- [x] Separate browser Steer active turn and TUI `/steer TEXT`/F7 receipt controls,
+  exact-run retry bindings and terminal receipt snapshots. Enter/Send remains FIFO.
 
 Host storage now uses **schema 4**, upgraded transactionally from schema 3 while
 preserving FIFO state and event cursors. Stop the host and back up important state
@@ -87,9 +89,9 @@ These are **gaps**, not features hidden behind a compatibility fallback:
   automatic completion notifications at model boundaries and wake-up timers.
   Basic Rust supervision, inspection, budgets and explicit `agent_wait` delivery
   exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
-- Browser/TUI steering controls and receipts; interrupt delivery during active model
-  generation, queue reordering/editing, attachments and scheduled/follow-up delivery.
-  The explicit backend safe-point API exists; plain FIFO remains separate.
+- Interrupt delivery during active model generation, queue reordering/editing,
+  attachments and scheduled/follow-up delivery. Explicit safe-point steering exists
+  in the API and native clients; plain FIFO remains separate.
 - Skills, nested instruction loading, MCP and custom Python plugins. Native discovery
   supports workspace `.gitignore` only; user/global Git sources are not imported.
 - Model context accounting, compaction controls, usage UI and model discovery UI.

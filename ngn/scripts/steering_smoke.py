@@ -1,9 +1,9 @@
 """Offline real HTTP/CLI boundary acceptance; only a loopback fixture is contacted.
 
-Use an explicit venv and private TMPDIR under /tmp (not group-writable
-/tmp/opencode), then pass --binary pointing at a DEBUG build. This script uses
-this checkout's Python source runtime explicitly. TUI/browser steering controls
-are deliberately not implemented or claimed here.
+Use an explicit venv and private TMPDIR, then pass --binary pointing at the
+candidate. Default mode pins this checkout's Python source; --installed-runtime
+uses only non-editable packages in --runtime-python, checked with isolated imports.
+Synthetic legacy/wrong-ack/crash runtimes remain checked-in test fixtures.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import tempfile
 from collections.abc import AsyncIterator
@@ -26,6 +27,25 @@ import aiohttp
 from aiohttp import web
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+def adapter_runner(runtime_python: Path, *, installed: bool) -> list[str]:
+    python = str(runtime_python.absolute())  # Never resolve a venv's interpreter symlink.
+    if installed:
+        os.environ.pop("PYTHONPATH", None)
+        os.environ.pop("PYTHONHOME", None)
+        subprocess.run(
+            [
+                python,
+                "-I",
+                "-c",
+                "import pathlib,sys,nagents,ngn_nagents; root=pathlib.Path(sys.prefix).resolve(); assert all(pathlib.Path(m.__file__).resolve().is_relative_to(root) for m in (nagents,ngn_nagents)), 'Editable or external runtime imports detected'",
+            ],
+            check=True,
+        )
+        return [python, "-I", "-m", "ngn_nagents"]
+    os.environ["PYTHONPATH"] = f"{REPO / 'src'}:{REPO / 'ngn/integrations/nagents/src'}"
+    return [python, "-m", "ngn_nagents"]
 
 
 def require(condition: object, message: str) -> None:
@@ -288,9 +308,7 @@ async def legacy_host_checks(config: Path, root: Path) -> None:
     settings = json.loads(config.read_text())
     for name, prompt, expected_tools in [("final", "cli final", []), ("tools", "batch start", ["read_file", "write"])]:
         process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "ngn_nagents",
+            *settings["runner"],
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -525,8 +543,13 @@ async def protocol_checks(binary: Path, base: Path, root: Path) -> None:
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--runtime-python", type=Path, default=Path(sys.executable))
+    parser.add_argument(
+        "--installed-runtime", action="store_true", help="require isolated installed core/adapter imports"
+    )
     arguments = parser.parse_args()
     binary = arguments.binary.resolve()
+    adapter = adapter_runner(arguments.runtime_python, installed=arguments.installed_runtime)
     fixture = Fixture()
     app = web.Application()
     app.router.add_route("*", "/v1/{tail:.*}", fixture.handle)
@@ -536,7 +559,6 @@ async def main() -> None:
     await site.start()
     port = runner.addresses[0][1]
     os.environ["NGN_STEERING_FIXTURE_KEY"] = "local-fixture-only"
-    os.environ["PYTHONPATH"] = f"{REPO / 'src'}:{REPO / 'ngn/integrations/nagents/src'}"
     try:
         with tempfile.TemporaryDirectory(prefix="ngn-steering-smoke-") as temporary:
             root = Path(temporary)
@@ -548,7 +570,7 @@ async def main() -> None:
                 json.dumps(
                     {
                         "data_dir": str(root / "state"),
-                        "runner": [sys.executable, "-m", "ngn_nagents"],
+                        "runner": adapter,
                         "provider": "fixture",
                         "providers": {
                             "fixture": {
@@ -583,7 +605,7 @@ async def main() -> None:
             await http_checks(binary, config, workspace, fixture)
             await protocol_checks(binary, config, root)
         print(
-            "PASS: source-runtime CLI final boundary; real HTTP/native two-tool batch → FIFO steering → persistence acknowledgments; no-tools final continuation; cancel/late denial; durable retry across restart"
+            f"PASS: {'installed' if arguments.installed_runtime else 'source'}-runtime CLI final boundary; real HTTP/native two-tool batch → FIFO steering → persistence acknowledgments; no-tools final continuation; cancel/late denial; durable retry across restart"
         )
         print(
             "PASS: baseline v1 runtime without safe_steering; wrong-ack rejection; cancel and real host SIGKILL in offer/ack window → uncertain/undelivered, no runtime/tool replay"

@@ -5,6 +5,11 @@
 #queue-panel { padding: .65rem 1.5rem; border-bottom: 1px solid var(--line); max-height: 14rem; overflow: auto; }
 #queue-status { font-size: .8rem; opacity: .75; }
 .queued-prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 5rem; overflow: auto; }
+#steering-panel { flex-shrink: 0; border-bottom: 1px solid var(--line); padding: .6rem 0; max-height: 28vh; overflow: auto; font-size: 12px; }
+#steering-status, .receipt-identity { color: var(--muted); overflow-wrap: anywhere; }
+.steering-receipt { border-top: 1px solid var(--line); padding: .5rem 0; }
+.steering-receipt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8rem; overflow: auto; }
+.steering-receipt button { font-size: 11px; margin-right: .5rem; }
 
 /* Keep decisions reachable when child inspection and a short viewport coexist.
    The preview scrolls independently; action buttons never shrink out of view. */

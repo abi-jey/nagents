@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from release import version_check
+from release import binary_archive, version_check
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -207,10 +207,7 @@ def build(root: Path, cache: Path, *, published_core: bool) -> tuple[Path, Path,
         environment=environment,
     )
     archive = stage / f"ngn-v{version}-linux-x86_64.tar.gz"
-    with tarfile.open(archive, "w:gz") as output:
-        output.add(binary, arcname="ngn")
-        for name in ("LICENSE", "README.md", "CHANGELOG.md", "config.example.json", "docs"):
-            output.add(root / "ngn" / name, arcname=name)
+    binary_archive(archive, binary, root / "ngn")
     app = stage / "app"
     app.mkdir()
     with tarfile.open(archive, "r:gz") as source:

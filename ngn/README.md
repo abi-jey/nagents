@@ -83,10 +83,12 @@ published; it is **not available in nagents 0.28.5**. API-key connections are un
   **Ctrl+X** cancels that child and its descendants, not its parent or siblings.
 - **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
   selected input, **Ctrl+K** clears pending inputs and pauses. These do not cancel active work.
+- **`/steer TEXT`** targets the capable active root at its next persisted safe point;
+  **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+Q** quits and joins runners before restoring the terminal.
-- `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear]`, `/help`, `/quit` are supported.
+- `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
 
@@ -104,9 +106,13 @@ or interrupted work is never requeued/retried. `run --json` remains immediate an
 fails rather than jumping a paused/pending queue. This is FIFO, not model steering.
 
 Development 0.100.2 also has a separate, explicit
-[active-run steering host/API boundary](docs/steering.md). It requires the
-runtime's optional `safe_steering` capability; existing FIFO controls are unchanged.
-Browser/TUI steering controls and receipt displays are not wired in that change.
+[active-run steering boundary](docs/steering.md): browser **Steer active turn**,
+TUI **`/steer TEXT`**, and durable receipt inspection. It requires both the runtime's
+`safe_steering` capability and the host's explicit acknowledgment. Inputs apply
+only after a complete persisted tool batch or final response, never between tools
+or by interrupting model generation. Existing Enter/Send/FIFO controls are unchanged.
+Pending/offered/applied/uncertain/undelivered receipts report persistence state,
+not proof of model consumption. Stop/restart never replays steering or tool work.
 
 ## Rust-supervised subagents
 

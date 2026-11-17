@@ -225,9 +225,13 @@ impl Host {
             owner.accepting_steering && !owner.execution.cancel.is_cancelled(),
             "Run is closing; steering admission is sealed"
         );
-        self.store
+        let receipt = self
+            .store
             .admit_steering(&owner.execution.run, prompt, &request)
-            .await
+            .await?;
+        self.steering_updated(&owner.execution.run, &receipt.input_id)
+            .await?;
+        Ok(receipt)
     }
 
     pub async fn steering(&self, run_id: &str) -> Result<SteeringState> {
@@ -268,6 +272,26 @@ impl Host {
         owner.accepting_steering &= supported
             && !owner.execution.cancel.is_cancelled()
             && !self.closed.load(Ordering::Acquire);
+        if owner.execution.task.is_none() {
+            self.steering_updated(run, "").await?;
+        }
+        Ok(())
+    }
+
+    /// Called with admission locked: persist invalidation before broadcasting.
+    /// This is not a runtime message and conveys no model-supplied authority.
+    async fn steering_updated(&self, run: &Run, input_id: &str) -> Result<()> {
+        let _emission = self.emission.lock().await;
+        let record = self
+            .store
+            .append(
+                run,
+                Event::SteeringUpdated {
+                    input_id: input_id.to_owned(),
+                },
+            )
+            .await?;
+        let _ = self.events.send(record);
         Ok(())
     }
 
@@ -297,6 +321,15 @@ impl Host {
             // empty reply. A later caller gets a conflict, never a lost receipt.
             owner.accepting_steering = false;
         }
+        if offered.is_some() || kind == SteeringBoundary::Final {
+            self.steering_updated(
+                run,
+                offered
+                    .as_ref()
+                    .map_or("", |receipt| receipt.input_id.as_str()),
+            )
+            .await?;
+        }
         Ok(offered.map(|receipt| receipt.input()))
     }
 
@@ -318,7 +351,8 @@ impl Host {
         );
         self.store
             .apply_steering(&run.id, boundary_id, input_id)
-            .await
+            .await?;
+        self.steering_updated(run, input_id).await
     }
 
     /// Accept an input exactly once. Busy or paused sessions retain it durably.
@@ -645,6 +679,25 @@ impl Host {
             owner.accepting_steering = false;
             self.store.settle_steering(run).await?;
             if owner.execution.task.is_none() {
+                // Already holding emission and admission locks. Failure to notify
+                // must not prevent cancellation; final/recovery snapshots remain.
+                match self
+                    .store
+                    .append(
+                        &owner.execution.run,
+                        Event::SteeringUpdated {
+                            input_id: String::new(),
+                        },
+                    )
+                    .await
+                {
+                    Ok(record) => {
+                        let _ = self.events.send(record);
+                    }
+                    Err(_) => eprintln!(
+                        "ngn: unable to persist steering cancellation update; inspect final receipts"
+                    ),
+                }
                 for record in self
                     .store
                     .queue_control(&owner.execution.run.session_id, QueueAction::Pause)
@@ -1452,6 +1505,73 @@ mod tests {
                 .any(|run| run.id == independent.id)
         );
         assert_eq!(host.store.tasks(&first.session_id).await.unwrap().len(), 1);
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn steering_invalidations_are_durable_exact_root_and_do_not_reemit_on_retry() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = host(directory.path());
+        let root = held(&host).await;
+        let mut events = host.events.subscribe();
+        host.negotiate_steering(&root, true).await.unwrap();
+        let request = Uuid::new_v4().to_string();
+        let receipt = host
+            .steer(&root.id, "operator only", &request)
+            .await
+            .unwrap();
+        host.steer(&root.id, "operator only", &request)
+            .await
+            .unwrap();
+        host.steering_boundary(&root, "safe-batch", SteeringBoundary::AfterTools)
+            .await
+            .unwrap();
+        host.steering_applied(&root, "safe-batch", &receipt.input_id)
+            .await
+            .unwrap();
+        host.steering_boundary(&root, "sealed-final", SteeringBoundary::Final)
+            .await
+            .unwrap();
+        let durable = host.store.events(&root.session_id, 0).await.unwrap();
+        let updates: Vec<_> = durable
+            .iter()
+            .filter_map(|record| match &record.event {
+                Event::SteeringUpdated { input_id } => Some((record.sequence, input_id.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            updates.iter().map(|(_, input)| *input).collect::<Vec<_>>(),
+            vec![
+                "",
+                &receipt.input_id,
+                &receipt.input_id,
+                &receipt.input_id,
+                ""
+            ]
+        );
+        for (sequence, _) in updates {
+            loop {
+                let record = events.recv().await.unwrap();
+                if record.sequence == sequence {
+                    assert_eq!(record.run_id, root.id);
+                    assert_eq!(record.session_id, root.session_id);
+                    break;
+                }
+            }
+        }
+        assert!(!host.steering(&root.id).await.unwrap().accepting);
+        let child = child(&host, &root, "no-child-steering-events", "demo hold").await;
+        host.negotiate_steering(&child, true).await.unwrap();
+        assert!(
+            !host
+                .store
+                .events(&child.session_id, 0)
+                .await
+                .unwrap()
+                .iter()
+                .any(|record| matches!(record.event, Event::SteeringUpdated { .. }))
+        );
         host.shutdown().await;
     }
 

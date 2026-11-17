@@ -2,6 +2,8 @@ const $ = (id) => document.getElementById(id);
 let token = "", selected = "", socket, cursor = 0, generation = 0, stateRevision = 0, submitting = false, activeRun, pendingApproval, pendingSubmission;
 let taskRevision = 0, inspected, inspectorSocket, inspectorGeneration = 0;
 let queueRevision = 0, queueState = { paused: false, entries: [] };
+let sessionRevision = 0, draftRevision = 0;
+const steeringStates = new Map(), steeringRevisions = new Map(), steeringAttempts = new Map();
 const turns = new Map(), toolCards = new Map();
 const pointerMedia = globalThis.matchMedia?.("(hover: none) and (pointer: coarse)");
 let touchComposer = Boolean(pointerMedia?.matches);
@@ -12,7 +14,8 @@ function composerInputMode() {
 }
 pointerMedia?.addEventListener?.("change", composerInputMode);
 composerInputMode();
-for (const id of ["send", "cancel"]) $(id).onmousedown = (event) => { if (touchComposer) event.preventDefault(); };
+for (const id of ["send", "cancel", "steer"]) $(id).onmousedown = (event) => { if (touchComposer) event.preventDefault(); };
+$("prompt").oninput = () => { draftRevision++; renderSteering(); };
 
 export function formatDuration(milliseconds) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return "unknown";
@@ -44,7 +47,7 @@ async function api(path, body) {
   const text = await response.text();
   let value;
   try { value = JSON.parse(text); } catch { throw new Error(`HTTP ${response.status}: invalid server response`); }
-  if (!response.ok) throw new Error(typeof value.detail === "string" ? value.detail : `HTTP ${response.status}`);
+  if (!response.ok) { const error = new Error(typeof value.detail === "string" ? value.detail : `HTTP ${response.status}`); error.status = response.status; throw error; }
   return value;
 }
 function status(text) { $("status").textContent = text; }
@@ -84,11 +87,106 @@ function render(record) {
   if (["run_started", "run_finished", "approval_requested", "approval_resolved", "task_started", "task_updated", "task_finished"].includes(record.event)) refreshState().catch((error) => status(error.message));
   if (["task_started", "task_updated", "task_finished"].includes(record.event)) refreshTasks().catch((error) => status(error.message));
   if (["run_queued", "run_started", "run_finished", "queue_updated"].includes(record.event)) refreshQueue().catch((error) => status(error.message));
+  if (["run_started", "steering_updated", "run_finished"].includes(record.event)) refreshSteering(record.run_id, record.session_id).catch((error) => status(error.message));
 }
+
+const steeringWords = {
+  pending: "pending · admitted, not offered yet",
+  offered: "offered · persistence not confirmed",
+  applied: "applied · persistence acknowledged, not proof of model consumption",
+  uncertain: "uncertain · may be persisted; inspect conversation, no replay",
+  undelivered: "undelivered · turn ended before offer; not queued or replayed",
+};
+function steeringKey(session, prompt) { return `${session}\0${prompt}`; }
+function boundSteeringDraft(prompt = $("prompt").value) { return [...steeringAttempts.values()].find((attempt) => attempt.prompt === prompt); }
+function capableRoot() {
+  const state = steeringStates.get(activeRun?.id);
+  return state?.run_id === activeRun?.id && state?.session_id === selected && state?.run_status === "running" && state?.supported && state?.accepting;
+}
+function renderSteering() {
+  $("steer").disabled = !capableRoot() || Boolean(boundSteeringDraft()) || [...steeringAttempts.values()].some((attempt) => attempt.session === selected && attempt.inFlight);
+  $("steering-status").textContent = capableRoot() ? `Exact active root ${activeRun.id} · next persisted safe boundary, never between tools` : "Steering unavailable: requires an accepting, capable active root. Send / Enter still uses the next-run FIFO.";
+  const receipts = [...steeringStates.values()].filter((state) => state.session_id === selected).flatMap((state) => state.receipts).sort((a, b) => a.position - b.position);
+  $("steering-receipts").replaceChildren();
+  for (const receipt of receipts) {
+    const row = node("article", "steering-receipt");
+    row.append(node("strong", "", `#${receipt.position} · ${steeringWords[receipt.status] || "unknown · inspect host state"}`), node("div", "receipt-identity", `Run ${receipt.run_id} · ${receipt.input_id}`), node("pre", "", receipt.prompt));
+    $("steering-receipts").append(row);
+  }
+  $("steering-attempts").replaceChildren();
+  for (const attempt of steeringAttempts.values()) {
+    if (attempt.session !== selected && attempt.prompt !== $("prompt").value) continue;
+    const row = node("article", "steering-receipt");
+    row.append(node("strong", "", attempt.receipt ? steeringWords[attempt.receipt.status] : attempt.inFlight ? "Request in flight · admission not confirmed" : attempt.rejected ? "Request rejected · draft retained, never queued" : "Admission unconfirmed · never rebound or queued"), node("div", "receipt-identity", `Session ${attempt.session} · exact run ${attempt.run} · request ${attempt.id}`), node("pre", "", attempt.prompt));
+    const retry = node("button", "", "Check / retry exact run"); retry.disabled = attempt.inFlight;
+    retry.onclick = () => postSteering(attempt);
+    row.append(retry);
+    if (attempt.receipt) {
+      const clear = node("button", "", "Clear bound draft");
+      clear.onclick = () => { if ($("prompt").value === attempt.prompt) { $("prompt").value = ""; draftRevision++; } steeringAttempts.delete(steeringKey(attempt.session, attempt.prompt)); renderSteering(); };
+      row.append(clear);
+    } else if (attempt.rejected) {
+      const release = node("button", "", "Release rejected draft");
+      release.onclick = () => { steeringAttempts.delete(steeringKey(attempt.session, attempt.prompt)); renderSteering(); status("Host-rejected binding released locally · draft retained; choose the next action explicitly"); };
+      row.append(release);
+    }
+    $("steering-attempts").append(row);
+  }
+}
+async function refreshSteering(run, session = selected) {
+  if (!run || session !== selected) return;
+  const mine = generation, revision = (steeringRevisions.get(run) || 0) + 1;
+  steeringRevisions.set(run, revision);
+  const { steering } = await api(`/api/runs/${run}/steer`);
+  if (mine !== generation || session !== selected || steeringRevisions.get(run) !== revision || steering.run_id !== run || steering.session_id !== session) return;
+  // Attribution comes only from an exact host snapshot, never a child inspector.
+  steering.receipts = steering.receipts.filter((receipt) => receipt.run_id === run && receipt.session_id === session);
+  steeringStates.set(run, steering);
+  for (const attempt of steeringAttempts.values()) {
+    if (attempt.run !== run || attempt.session !== session) continue;
+    const receipt = steering.receipts.find((saved) => saved.request_id === attempt.id && saved.prompt === attempt.prompt);
+    if (receipt) attempt.receipt = receipt;
+  }
+  renderSteering();
+}
+async function postSteering(attempt) {
+  if (attempt.inFlight) return;
+  const mine = generation, revision = draftRevision;
+  attempt.inFlight = true; renderSteering();
+  try {
+    const { receipt } = await api(`/api/runs/${attempt.run}/steer`, { prompt: attempt.prompt, request_id: attempt.id });
+    if (receipt.run_id !== attempt.run || receipt.session_id !== attempt.session || receipt.request_id !== attempt.id || receipt.prompt !== attempt.prompt) throw new Error("Steering response identity mismatch");
+    attempt.receipt = receipt;
+    if (mine === generation && selected === attempt.session) {
+      const state = steeringStates.get(attempt.run);
+      // A delayed POST may carry an older status than an event-triggered GET.
+      if (state && !state.receipts.some((saved) => saved.input_id === receipt.input_id)) state.receipts.push(receipt);
+      if (revision === draftRevision && $("prompt").value === attempt.prompt) { $("prompt").value = ""; draftRevision++; steeringAttempts.delete(steeringKey(attempt.session, attempt.prompt)); }
+      else if ($("prompt").value !== attempt.prompt) steeringAttempts.delete(steeringKey(attempt.session, attempt.prompt));
+      status(steeringWords[receipt.status] || "Steering receipt saved; inspect exact run");
+      await refreshSteering(attempt.run, attempt.session).catch((error) => { if (mine === generation && selected === attempt.session) status(`Steering receipt saved · snapshot unavailable: ${error.message}`); });
+    }
+  } catch (error) {
+    attempt.rejected = error.status === 409;
+    if (mine === generation && selected === attempt.session) status(`${error.message} · draft retained; retry only the bound run/UUID, never Queue`);
+    if (attempt.rejected && mine === generation && selected === attempt.session) await refreshSteering(attempt.run, attempt.session).catch(() => {});
+  } finally { attempt.inFlight = false; renderSteering(); }
+}
+$("steer").onclick = async () => {
+  const prompt = $("prompt").value;
+  if (!prompt.trim()) return;
+  if (pendingSubmission?.prompt === prompt) { status("This draft has a FIFO submission binding; retry Send in its original conversation, not steering"); return; }
+  const key = steeringKey(selected, prompt);
+  if (boundSteeringDraft(prompt)) { status("This draft already has an exact run/UUID binding · use Check / retry exact run in receipts, not the active-turn button"); return; }
+  if (!capableRoot()) { status("Steering unavailable or closing · draft retained, not queued"); return; }
+  const attempt = { id: crypto.randomUUID(), session: selected, run: activeRun.id, prompt, inFlight: false };
+  steeringAttempts.set(key, attempt);
+  await postSteering(attempt);
+};
 async function refreshQueue() {
-  const revision = ++queueRevision, session = selected;
+  const revision = ++queueRevision, session = selected, mine = generation;
   const { queue, limit } = await api(`/api/sessions/${session}/queue`);
-  if (revision !== queueRevision || session !== selected || queue.session_id !== session) return;
+  if (mine !== generation || revision !== queueRevision || session !== selected || queue.session_id !== session) return;
   queueState = queue;
   $("queue-status").textContent = `${queue.paused ? "Paused · resume explicitly" : "FIFO · runs after the current turn"} · ${queue.entries.length}/${limit || 32} pending`;
   $("pause-queue").textContent = queue.paused ? "Resume queue" : "Pause queue";
@@ -143,9 +241,9 @@ function inspectTask(task) {
 }
 async function stopTask(task) { await api(`/api/runs/${task.run_id}/cancel`, {}); status(`Stopping agent ${task.title}`); }
 async function refreshTasks() {
-  const revision = ++taskRevision, session = selected;
+  const revision = ++taskRevision, session = selected, mine = generation;
   const { tasks, limits } = await api(`/api/sessions/${session}/tasks`);
-  if (revision !== taskRevision || session !== selected) return;
+  if (mine !== generation || revision !== taskRevision || session !== selected) return;
   $("tasks").replaceChildren(); $("tasks-panel").hidden = !tasks.length;
   if (limits) $("task-limits").textContent = `Per root run: ${limits.max_concurrent} concurrent · ${limits.max_executions} executions · depth ${limits.max_depth}`;
   for (const task of tasks) {
@@ -160,7 +258,9 @@ async function refreshTasks() {
 $("close-task").onclick = closeTask;
 $("cancel-task").onclick = () => { if (inspected) stopTask(inspected).catch((error) => status(error.message)); };
 async function refreshSessions() {
+  const revision = ++sessionRevision, sessionId = selected, mine = generation;
   const { sessions } = await api("/api/sessions");
+  if (mine !== generation || revision !== sessionRevision || sessionId !== selected) return sessions;
   $("sessions").replaceChildren(); $("mobile-sessions").replaceChildren();
   for (const session of sessions) {
     if (session.id === selected) $("title").textContent = session.title;
@@ -171,9 +271,9 @@ async function refreshSessions() {
   return sessions;
 }
 async function refreshState() {
-  const revision = ++stateRevision, session = selected;
+  const revision = ++stateRevision, session = selected, mine = generation;
   const { runs, approvals } = await api("/api/state");
-  if (revision !== stateRevision || session !== selected) return;
+  if (mine !== generation || revision !== stateRevision || session !== selected) return;
   activeRun = runs.find((run) => run.session_id === selected);
   pendingApproval = approvals.find((approval) => approval.session_id === selected || approval.root_session_id === selected);
   $("cancel").hidden = !activeRun; $("send").disabled = submitting;
@@ -181,18 +281,23 @@ async function refreshState() {
   $("approval").hidden = !pendingApproval;
   if (pendingApproval) { $("approval-label").textContent = `Depth ${pendingApproval.depth || 0} · ${pendingApproval.agent_title || "Main"} · ${pendingApproval.call.name} · allow this exact call once?`; $("preview").textContent = pendingApproval.preview; }
   status(pendingApproval ? "Waiting for your decision" : activeRun ? "Agent working · Esc to stop" : "Ready");
+  renderSteering();
+  if (activeRun) await refreshSteering(activeRun.id, session);
 }
 async function select(id, title = "New conversation") {
   selected = id; cursor = 0; generation++; const mine = generation;
+  activeRun = undefined; renderSteering();
+  pendingApproval = undefined; $("approval").hidden = true; $("cancel").hidden = true;
   closeTask();
   queueRevision++; queueState = { paused: false, entries: [] }; $("queue").replaceChildren(); $("queue-status").textContent = "Loading queue…";
   if (socket) { socket.onclose = null; socket.close(); }
   turns.clear(); toolCards.clear(); $("transcript").replaceChildren(); $("title").textContent = title;
-  await refreshSessions(); await refreshState(); await refreshTasks(); await refreshQueue();
+  await refreshSessions(); if (mine !== generation) return;
+  await Promise.all([refreshState(), refreshTasks(), refreshQueue()]); if (mine !== generation) return;
   function connect() {
     if (mine !== generation) return;
     socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events?session_id=${encodeURIComponent(id)}&after=${cursor}`, ["ngn.events.v1", `ngn.token.${token}`]);
-    socket.onopen = () => { if (mine !== generation) return; $("connection").textContent = "Connected"; refreshState().catch((error) => status(error.message)); refreshQueue().catch((error) => status(error.message)); };
+    socket.onopen = () => { if (mine !== generation) return; $("connection").textContent = "Connected"; refreshState().catch((error) => status(error.message)); refreshQueue().catch((error) => status(error.message)); for (const state of steeringStates.values()) if (state.session_id === selected) refreshSteering(state.run_id).catch((error) => status(error.message)); };
     socket.onmessage = ({ data }) => { if (mine !== generation) return; try { render(JSON.parse(data)); } catch { status("Invalid event received; reconnect to the host"); } };
     socket.onclose = () => { if (mine !== generation) return; $("connection").textContent = "Reconnecting…"; setTimeout(connect, 1200); };
   }
@@ -205,11 +310,14 @@ $("mobile-sessions").onchange = () => select($("mobile-sessions").value).catch((
 $("composer").onsubmit = async (event) => {
   event.preventDefault(); if (submitting) return;
   const prompt = $("prompt").value; if (!prompt.trim()) return;
+  if (boundSteeringDraft(prompt)) { status("This draft is bound to an exact steering run/UUID · inspect or retry its receipt; not converted to Queue"); return; }
+  if (pendingSubmission?.prompt === prompt && pendingSubmission.session !== selected) { status("This FIFO draft is bound to its original conversation · return there to retry; not rebound"); return; }
   if (!pendingSubmission || pendingSubmission.prompt !== prompt || pendingSubmission.session !== selected) pendingSubmission = { id: crypto.randomUUID(), prompt, session: selected };
   const submission = pendingSubmission;
+  const mine = generation, revision = draftRevision;
   submitting = true; $("send").disabled = true;
-  try { await api(`/api/sessions/${submission.session}/runs`, { prompt, request_id: submission.id }); if (pendingSubmission === submission) pendingSubmission = null; if (selected === submission.session && $("prompt").value === prompt) $("prompt").value = ""; await refreshState(); await refreshQueue(); await refreshSessions(); }
-  catch (error) { status(error.message + " · retrying this message reuses its submission ID"); }
+  try { await api(`/api/sessions/${submission.session}/runs`, { prompt, request_id: submission.id }); if (pendingSubmission === submission) pendingSubmission = null; if (mine === generation && selected === submission.session) { if (revision === draftRevision && $("prompt").value === prompt) { $("prompt").value = ""; draftRevision++; } await Promise.all([refreshState(), refreshQueue(), refreshSessions()]); } }
+  catch (error) { if (mine === generation && selected === submission.session) status(error.message + " · retrying this message reuses its submission ID"); }
   finally { submitting = false; $("send").disabled = false; }
 };
 $("prompt").onkeydown = (event) => {
