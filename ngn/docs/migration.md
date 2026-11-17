@@ -64,6 +64,15 @@ initial browser client proves the new shared lifecycle and tool boundary.
 - [x] Explicit development ChatGPT subscription configuration, capability-gated
   runtime credentials callback and bounded native `auth login|status|logout`.
   Shared host/runtime identity guards exclude concurrent identity mutations.
+- [x] Bounded explicit active-root [steering API](steering.md), two-sided runtime
+  negotiation, complete persisted tool-batch/final safe points and durable
+  pending/offered/applied/uncertain/undelivered receipts without automatic replay.
+
+Host storage now uses **schema 4**, upgraded transactionally from schema 3 while
+preserving FIFO state and event cursors. Stop the host and back up important state
+before upgrading. Schema-3 binaries refuse schema 4: downgrade with a separate
+state directory or restore the backup, never edit `user_version`. The runtime
+database remains opaque; no legacy Python data is implicitly imported.
 
 ## Explicitly not migrated yet
 
@@ -78,8 +87,9 @@ These are **gaps**, not features hidden behind a compatibility fallback:
   automatic completion notifications at model boundaries and wake-up timers.
   Basic Rust supervision, inspection, budgets and explicit `agent_wait` delivery
   exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
-- Steering/interrupt delivery during an active model generation, queue reordering,
-  editing, attachments and scheduled/follow-up delivery. Plain FIFO exists in 0.100.1.
+- Browser/TUI steering controls and receipts; interrupt delivery during active model
+  generation, queue reordering/editing, attachments and scheduled/follow-up delivery.
+  The explicit backend safe-point API exists; plain FIFO remains separate.
 - Skills, nested instruction loading, MCP and custom Python plugins. Native discovery
   supports workspace `.gitignore` only; user/global Git sources are not imported.
 - Model context accounting, compaction controls, usage UI and model discovery UI.

@@ -17,9 +17,12 @@ not embedded Python and not a wrapper around the old Python harness.
 - Stdout is protocol-only. Runtime logging uses stderr; the initial host discards
   it to avoid exposing raw provider payloads. Terminal errors are bounded and safe.
 - Version mismatch is fatal. No negotiation downgrade or automatic fallback.
-- Required capabilities are `host_tools` and `cancel`. Unknown optional capability
-  labels may be ignored. The optional `chatgpt_auth` extension below must be
-  negotiated before its extra start fields are sent.
+- Required capabilities are `host_tools` and `cancel`. The optional `safe_steering`
+  extension below requires both the Ready capability and `start.run.steering: true`
+  before using its boundary handshake; runtimes lacking it retain baseline v1
+  behavior and cannot admit steering. The independent `chatgpt_auth` extension
+  must be negotiated before its extra auth fields are sent. Other unknown optional
+  capability labels may be ignored.
 
 ## Handshake
 
@@ -160,6 +163,8 @@ talks only to the Rust host's same-origin API:
 | `GET /api/sessions/{id}/events?after=0` | Durable bounded cursor replay |
 | `GET /api/state` | Active runs and currently pending approvals |
 | `POST /api/runs/{id}/cancel` with `{}` | Cancel a run |
+| `GET /api/runs/{id}/steer` | Exact run steering state and durable receipts |
+| `POST /api/runs/{id}/steer` | Explicit active-root steering `{prompt, request_id}`; no FIFO fallback |
 | `POST /api/approvals` | `{run_id, approval_id, allow}`; exact pending decision |
 | `GET /api/events?session_id=ID&after=N` | WebSocket durable event stream |
 
@@ -191,7 +196,8 @@ foreground delegation can still include time spent waiting for a child.
 The wire stores integer milliseconds. TUI/web format compact adjacent units such
 as `125ms`, `1.25s`, `1m 2s` or `1h 1m`; an approval snapshot stays fixed while
 waiting. Older clients can ignore the additive event and retain ordered replay.
-Runtime protocol v1 and host storage schema 3 are unchanged by these timing events.
+Runtime protocol v1 is unchanged. Timing events do not require a storage upgrade;
+the separate steering extension below upgrades the host database to schema 4.
 
 ## Opt-in ChatGPT authentication extension
 
@@ -209,3 +215,64 @@ subscription run fails with a safe installation error. API-key starts omit both
 new fields, preserving their original v1 wire representation and compatibility
 with published nagents 0.28.5. Missing public core auth never triggers Codex cache
 discovery, legacy imports, API-key fallback, or an implicit login.
+
+## Optional safe steering (0.100.2 development)
+
+The supplied adapter now advertises `safe_steering` alongside the required
+capabilities. Baseline runtimes are still accepted without it; steering is refused
+until this runtime capability has been observed for the exact root activation.
+**Advertising the capability alone does not enable steering.** A supporting host
+acknowledges it with the optional strict boolean `steering` in `start.run`:
+
+```json
+{"steering":true}
+```
+
+This is an additional field on the existing run object, not a separate frame.
+The host sets it true **only** after observing `safe_steering` in Ready. Its default
+is false and the host **omits it entirely when false**, preserving the identical
+old Start shape for third-party runtimes without the capability. Strings, numbers,
+null and other nonboolean values are rejected; unknown fields remain rejected.
+
+An older v1 host may ignore the new Ready label and omit this acknowledgment. In
+that case (also for explicit false), the new adapter installs no steering plugin,
+runs one ordinary `Agent.run`, and emits Finished without any steering boundaries
+or acknowledgment wait. Existing positional `Start` constructors also default to
+false. Only a capability **and** explicit host true enable the extension below.
+
+When enabled, only the runtime's private built-in public-API plugin asks at `after_tools`, after
+the **whole** tool batch has been persisted. The outer adapter asks at `final`
+after a successful no-tools response is persisted and its iterator closed:
+
+```json
+{"type":"steering_boundary","boundary_id":"f1f5ec61-a3db-4909-95bd-e041d2c95bec","kind":"after_tools"}
+```
+
+Rust commits an offered receipt **before** sending its reply:
+
+```json
+{"type":"steering_offer","boundary_id":"f1f5ec61-a3db-4909-95bd-e041d2c95bec","input":{"input_id":"steer-01234567890123456789012345678901","request_id":"5579032c-b257-4948-80bb-605944cbbadc","position":1,"prompt":"Explicit operator input"}}
+```
+
+Only after actual conversation persistence does the runtime acknowledge:
+
+```json
+{"type":"steering_applied","boundary_id":"f1f5ec61-a3db-4909-95bd-e041d2c95bec","input_id":"steer-01234567890123456789012345678901"}
+```
+
+All examples are `message` objects inside the standard exact-run envelope. Fields
+are strict; frame bounds still apply. Boundary IDs are fresh canonical UUIDs,
+unique within the process across all its `Agent.run` calls. Rust rejects reused
+boundaries, foreign run envelopes, wrong input/boundary acknowledgments, and model
+or tool work before the persistence acknowledgment. An explicit failed/cancelled
+terminal message may end an unconfirmed offer without claiming application.
+
+An empty decision is `{"type":"steering_offer","boundary_id":"...","input":null}`.
+At `after_tools` this continues the current loop. At `final`, Rust atomically seals
+future admission under its active lock **before** writing the empty reply; only a
+terminal runtime message can follow. A steering-enabled activation cannot complete without
+this final closure. When a final boundary instead offers input, the adapter
+explicitly calls `Agent.run(prompt, same_session_id)` within the same host run,
+and acknowledges from `before_generation` after the initial message is persisted.
+It never appends that continuation twice. See [steering semantics](steering.md)
+for HTTP receipts, bounded admission and interruption guarantees.

@@ -75,13 +75,54 @@ pub struct StartRun {
     pub provider: ProviderConfig,
     pub tools: Vec<ToolDefinition>,
     pub max_tool_rounds: u32,
+    /// Host acknowledgment, sent only after the runtime advertises safe_steering.
+    #[serde(default, skip_serializing_if = "disabled")]
+    pub steering: bool,
+}
+
+fn disabled(enabled: &bool) -> bool {
+    !enabled
+}
+
+/// Optional v1 extension: runtime capability AND explicit host start acknowledgment.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SteeringBoundary {
+    AfterTools,
+    Final,
+}
+
+/// Only the host can create input identities, ordering and attribution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringInput {
+    pub input_id: String,
+    pub request_id: String,
+    pub position: i64,
+    pub prompt: String,
+}
+
+fn steering_input<'de, D>(deserializer: D) -> Result<Option<SteeringInput>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<SteeringInput>::deserialize(deserializer)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HostMessage {
-    Start { run: StartRun },
-    ToolResult { result: ToolResult },
+    Start {
+        run: StartRun,
+    },
+    ToolResult {
+        result: ToolResult,
+    },
+    SteeringOffer {
+        boundary_id: String,
+        #[serde(deserialize_with = "steering_input")]
+        input: Option<SteeringInput>,
+    },
     Cancel,
 }
 
@@ -111,6 +152,14 @@ pub enum RuntimeMessage {
     },
     Notice {
         text: String,
+    },
+    SteeringBoundary {
+        boundary_id: String,
+        kind: SteeringBoundary,
+    },
+    SteeringApplied {
+        boundary_id: String,
+        input_id: String,
     },
     Finished {
         status: RunStatus,
@@ -276,7 +325,60 @@ mod tests {
         let run: StartRun = serde_json::from_value(subscription.clone()).unwrap();
         assert_eq!(run.provider.auth, ProviderAuth::Chatgpt);
         assert_eq!(serde_json::to_value(run).unwrap(), subscription);
+        subscription["steering"] = json!(true);
+        let run: StartRun = serde_json::from_value(subscription.clone()).unwrap();
+        assert!(run.steering);
+        assert_eq!(run.auth_store.as_deref(), Some("/private/auth/openai.json"));
+        assert_eq!(serde_json::to_value(run).unwrap(), subscription);
         subscription["provider"]["auth"] = json!("codex_home");
         assert!(serde_json::from_value::<StartRun>(subscription).is_err());
+    }
+
+    #[test]
+    fn steering_extension_frames_are_typed_and_reject_extra_authority_fields() {
+        let boundary = json!({"protocol_version":1, "run_id":"run", "message":{"type":"steering_boundary", "boundary_id":"boundary", "kind":"after_tools"}});
+        assert!(serde_json::from_value::<RuntimeFrame>(boundary.clone()).is_ok());
+        let mut forged = boundary;
+        forged["message"]["request_id"] = json!("model-cannot-admit-input");
+        assert!(serde_json::from_value::<RuntimeFrame>(forged).is_err());
+        let mut offer = json!({"protocol_version":1, "run_id":"run", "message":{"type":"steering_offer", "boundary_id":"boundary", "input":{"input_id":"host", "request_id":"request", "position":1, "prompt":"user"}}});
+        assert!(serde_json::from_value::<HostFrame>(offer.clone()).is_ok());
+        offer["message"]["input"]["approved"] = json!(true);
+        assert!(serde_json::from_value::<HostFrame>(offer).is_err());
+        assert!(serde_json::from_value::<HostFrame>(json!({"protocol_version":1,"run_id":"run","message":{"type":"steering_offer","boundary_id":"boundary"}})).is_err());
+    }
+
+    #[test]
+    fn steering_start_acknowledgment_is_strict_optional_and_omitted_when_disabled() {
+        let baseline = json!({"session_id":"session", "prompt":"user", "system_prompt":"policy",
+            "database":"/private/runtime.sqlite3", "provider":{"kind":"fixture", "model":"fixture", "api":"", "base_url":"", "api_key_env":"FIXTURE_KEY"}, "tools":[], "max_tool_rounds":10});
+        let start: StartRun = serde_json::from_value(baseline.clone()).unwrap();
+        assert!(!start.steering);
+        assert_eq!(serde_json::to_value(&start).unwrap(), baseline);
+        for enabled in [false, true] {
+            let mut explicit = baseline.clone();
+            explicit["steering"] = json!(enabled);
+            let start: StartRun = serde_json::from_value(explicit.clone()).unwrap();
+            assert_eq!(start.steering, enabled);
+            assert_eq!(
+                serde_json::to_value(start).unwrap(),
+                if enabled { explicit } else { baseline.clone() }
+            );
+        }
+        for invalid in [
+            json!(null),
+            json!(0),
+            json!(1),
+            json!("true"),
+            json!([]),
+            json!({}),
+        ] {
+            let mut value = baseline.clone();
+            value["steering"] = invalid;
+            assert!(serde_json::from_value::<StartRun>(value).is_err());
+        }
+        let mut unknown = baseline;
+        unknown["steering_approved"] = json!(true);
+        assert!(serde_json::from_value::<StartRun>(unknown).is_err());
     }
 }

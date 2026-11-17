@@ -26,7 +26,7 @@ async def serve() -> int:
     task: asyncio.Task[None] | None = None
     incoming: asyncio.Task[HostFrame] | None = None
     try:
-        capabilities = ["host_tools", "cancel"]
+        capabilities = ["host_tools", "cancel", "safe_steering"]
         if auth.available():
             capabilities.append("chatgpt_auth")
         output("", {"type": "ready", "runtime": "nagents", "capabilities": capabilities})
@@ -49,6 +49,8 @@ async def serve() -> int:
             kind = message.get("type")
             if kind == "tool_result":
                 executor.accept(message)
+            elif kind == "steering_offer":
+                executor.steering.accept(message)
             elif kind == "cancel":
                 fields(message, {"type"})
                 task.cancel()

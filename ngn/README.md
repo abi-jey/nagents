@@ -103,6 +103,11 @@ Stop/failure/shutdown/restart pause pending inputs. **Resume is explicit**; star
 or interrupted work is never requeued/retried. `run --json` remains immediate and
 fails rather than jumping a paused/pending queue. This is FIFO, not model steering.
 
+Development 0.100.2 also has a separate, explicit
+[active-run steering host/API boundary](docs/steering.md). It requires the
+runtime's optional `safe_steering` capability; existing FIFO controls are unchanged.
+Browser/TUI steering controls and receipt displays are not wired in that change.
+
 ## Rust-supervised subagents
 
 `to_agent` starts a separate protocol-compatible runner with an isolated session.
@@ -134,10 +139,12 @@ marked failed and those children are cancelled; use `agent_wait` before finishin
 Background results are **not** automatically injected into an unrelated model
 generation. Child text/reasoning is not relayed as root assistant output.
 
-This patch upgrades host schema 2 to 3 for durable queues and session-scoped events.
+Host schema 3 added durable queues and session-scoped events; the development
+steering boundary now upgrades host state to schema **4** for durable receipts.
 Stop the host and back up its workspace state before upgrading important data.
-The official 0.100.0 and earlier standalone prototypes cannot open schema 3; downgrading requires
-restoring that backup. No legacy Python ngn data or runtime-owned database is migrated.
+Older schema-3 binaries cannot open schema 4; downgrade only using a separate
+state directory or that backup, never by changing `user_version`. No legacy
+Python ngn data or runtime-owned database is migrated.
 
 ## Boundaries
 

@@ -16,13 +16,21 @@ from unittest.mock import patch
 
 from nagents import Provider
 from nagents import ProviderType
+from nagents import SessionManager
+from nagents.events import Event
+from nagents.events import TextDoneEvent
 from nagents.provider.openai import CodexCredentials
 from nagents.tools import ToolRegistry
+from nagents.types import GenerationConfig
+from nagents.types import Message
+from nagents.types import ToolDefinition
 
 from ngn_nagents import auth
+from ngn_nagents.protocol import Emitter
 from ngn_nagents.protocol import ProtocolError
 from ngn_nagents.runtime import HostExecutor
 from ngn_nagents.runtime import Start
+from ngn_nagents.runtime import create_agent
 from ngn_nagents.runtime import create_provider
 from ngn_nagents.runtime import run_agent
 
@@ -52,6 +60,13 @@ def message(provider: dict[str, object], path: str) -> dict[str, object]:
             "auth_store": path,
         },
     }
+
+
+def queue_emitter(frames: asyncio.Queue[dict[str, object]]) -> Emitter:
+    def emit(run_id: str, frame: dict[str, object]) -> None:
+        frames.put_nowait(frame)
+
+    return emit
 
 
 @dataclass
@@ -110,6 +125,28 @@ class FakeAgent:
         self.closed = True
 
 
+class SteeringProvider(Provider):
+    """Real Agent/plugin lifecycle without authentication or inference network IO."""
+
+    def __init__(self) -> None:
+        super().__init__(ProviderType.OPENAI_COMPATIBLE, "synthetic", "test-model")
+        self.requests = 0
+
+    async def verify_model(self, force: bool = False) -> bool:
+        return True
+
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        config: GenerationConfig | None = None,
+        stream: bool = True,
+        verify_model: bool = False,
+    ) -> AsyncIterator[Event]:
+        self.requests += 1
+        yield TextDoneEvent(text="offline final")
+
+
 class AuthTests(unittest.IsolatedAsyncioTestCase):
     def private_store(self) -> str:
         return str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "auth/openai.json")
@@ -117,6 +154,15 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_strict_subscription_wire_and_api_key_unchanged(self) -> None:
         start = Start.parse(message(subscription(), "/host/auth/openai.json"))
         self.assertEqual(start.auth_store, Path("/host/auth/openai.json"))
+        self.assertFalse(start.steering)
+        for enabled in (False, True):
+            wire = message(subscription(), "/host/auth/openai.json")
+            run = wire["run"]
+            assert isinstance(run, dict)
+            run["steering"] = enabled
+            parsed = Start.parse(wire)
+            self.assertEqual(parsed.auth_store, start.auth_store)
+            self.assertIs(parsed.steering, enabled)
         for changes in (
             {"auth": "codex"},
             {"auth": ""},
@@ -332,6 +378,100 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         with auth.mutation_guard(start.auth_store):
             pass
         await provider.close()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX identity ownership")
+    async def test_subscription_steering_retains_one_agent_callback_and_guard_through_cleanup(self) -> None:
+        from uuid import uuid4
+
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                wire = message(subscription(), str(base / "auth/openai.json"))
+                run = wire["run"]
+                assert isinstance(run, dict)
+                run.update(database=str(base / "runtime.sqlite3"), steering=True)
+                start = Start.parse(wire)
+                assert start.auth_store is not None
+                fake = FakeAuth()
+                fake.close_release.clear()
+                provider = SteeringProvider()
+                close = AsyncMock(wraps=provider.close)
+                messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+                executor = HostExecutor(ToolRegistry(), "subscription-run", queue_emitter(messages))
+                with (
+                    patch(
+                        "ngn_nagents.runtime.auth_factory", return_value=lambda path, fake=fake: fake
+                    ) as auth_factory,
+                    patch("nagents.provider.openai.OpenAIProvider", return_value=provider) as constructor,
+                    patch("ngn_nagents.runtime.create_agent", wraps=create_agent) as agents,
+                    patch.object(provider, "close", close),
+                ):
+                    task = asyncio.create_task(run_agent(start, executor, executor.emit))
+                    boundaries = 0
+                    applied = 0
+                    try:
+                        while boundaries < 2:
+                            frame = await asyncio.wait_for(messages.get(), 10)
+                            self.assertNotEqual(frame["type"], "finished", frame)
+                            if frame["type"] == "steering_applied":
+                                applied += 1
+                                history = await SessionManager(start.database).get_history(start.session_id)
+                                self.assertEqual(
+                                    [item.content for item in history if item.role == "user"],
+                                    ["hello", "continue explicitly"],
+                                )
+                            if frame["type"] != "steering_boundary":
+                                continue
+                            boundaries += 1
+                            self.assertEqual(frame["kind"], "final")
+                            self.assertFalse(fake.closed)
+                            close.assert_not_awaited()
+                            with self.assertRaises(auth.AuthFailure), auth.mutation_guard(start.auth_store):
+                                self.fail("Final continuation released its authentication identity")
+                            if boundaries == 1:
+                                executor.steering.accept(
+                                    {
+                                        "type": "steering_offer",
+                                        "boundary_id": frame["boundary_id"],
+                                        "input": {
+                                            "input_id": "steer-" + uuid4().hex,
+                                            "request_id": str(uuid4()),
+                                            "position": 1,
+                                            "prompt": "continue explicitly",
+                                        },
+                                    }
+                                )
+                            elif cancel:
+                                task.cancel()
+                            else:
+                                executor.steering.accept(
+                                    {"type": "steering_offer", "boundary_id": frame["boundary_id"], "input": None}
+                                )
+                        await asyncio.wait_for(fake.close_started.wait(), 10)
+                        with self.assertRaises(auth.AuthFailure), auth.mutation_guard(start.auth_store):
+                            self.fail("Identity guard released before joined auth cleanup")
+                        if cancel:
+                            task.cancel()
+                            await asyncio.sleep(0)
+                            self.assertFalse(task.done())
+                    finally:
+                        fake.close_release.set()
+                        await asyncio.wait_for(task, 10)
+                    terminal = await asyncio.wait_for(messages.get(), 10)
+                    self.assertEqual(
+                        terminal,
+                        {"type": "finished", "status": "cancelled" if cancel else "completed", "error": ""},
+                    )
+                    auth_factory.assert_called_once_with()
+                    constructor.assert_called_once_with(credentials=fake.credentials, model="test-model")
+                    agents.assert_called_once()
+                    self.assertIs(agents.call_args.kwargs["provider"], provider)
+                    self.assertIsNotNone(agents.call_args.kwargs["plugin"])
+                    close.assert_awaited_once()
+                self.assertEqual((boundaries, applied, provider.requests), (2, 1, 2))
+                self.assertTrue(fake.closed)
+                with auth.mutation_guard(start.auth_store):
+                    pass
 
     async def test_real_status_is_network_free_and_logout_only_touches_explicit_store(self) -> None:
         if not auth.available():

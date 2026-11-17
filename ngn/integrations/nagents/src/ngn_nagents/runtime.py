@@ -38,6 +38,8 @@ from .protocol import ProtocolError
 from .protocol import fields
 from .protocol import mapping
 from .protocol import text
+from .steering import _Steering
+from .steering import _SteeringPlugin
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class Start:
     tools: list[Definition]
     max_tool_rounds: int
     auth_store: Path | None = None
+    steering: bool = False
 
     @classmethod
     def parse(cls, message: dict[str, object]) -> Start:
@@ -67,8 +70,11 @@ class Start:
         fields(
             run,
             {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"},
-            frozenset({"auth_store"}),
+            frozenset({"auth_store", "steering"}),
         )
+        steering = run.get("steering", False)
+        if type(steering) is not bool:
+            raise ProtocolError("Invalid host steering acknowledgment")
         provider = mapping(run["provider"])
         mode = validate_provider(provider)
         auth_store = None
@@ -109,6 +115,7 @@ class Start:
             definitions,
             rounds,
             auth_store,
+            steering,
         )
 
 
@@ -121,6 +128,7 @@ class HostExecutor(ToolExecutor):
         self.emit = emit
         self.pending: dict[str, tuple[str, asyncio.Future[ToolResultEvent]]] = {}
         self.seen: set[str] = set()
+        self.steering = _Steering(run_id, emit)
 
     async def execute(self, tool_call: ToolCall) -> ToolResultEvent:
         if tool_call.id in self.seen or not tool_call.id or len(tool_call.id) > 200:
@@ -208,7 +216,13 @@ def _unbound(**arguments: object) -> None:
     raise RuntimeError("Host tools cannot execute inside Python")
 
 
-def create_agent(start: Start, executor: HostExecutor, provider: Provider | None = None) -> Agent:
+def create_agent(
+    start: Start,
+    executor: HostExecutor,
+    *,
+    provider: Provider | None = None,
+    plugin: _SteeringPlugin | None = None,
+) -> Agent:
     start.database.parent.mkdir(parents=True, exist_ok=True)
     if start.database.exists() or start.database.is_symlink():
         metadata = start.database.lstat()
@@ -226,6 +240,7 @@ def create_agent(start: Start, executor: HostExecutor, provider: Provider | None
         tool_executor=executor,
         save_tool_outputs=False,
         compaction_strategy=None,
+        plugins=(plugin,) if plugin is not None else (),
     )
     executor.bind_registry(agent.tool_registry)
     # Public registry API; functions are inert because the executor is host-backed.
@@ -260,28 +275,45 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
             if start.auth_store is not None:
                 raise ProtocolError("auth_store is only allowed for ChatGPT authentication")
             provider = create_provider(start.provider)
-        agent = create_agent(start, executor, provider)
-        completed = False
+        plugin = _SteeringPlugin(executor.steering, start.session_id) if start.steering else None
+        agent = create_agent(start, executor, provider=provider, plugin=plugin)
         failed = False
-        async with aclosing(agent.run(start.prompt, session_id=start.session_id, user_id="ngn-rust")) as events:
-            async for event in events:
-                if isinstance(event, TextChunkEvent):
-                    emit(executor.run_id, {"type": "text_delta", "text": event.chunk})
-                elif isinstance(event, TextDoneEvent):
-                    emit(executor.run_id, {"type": "text_completed", "text": event.text})
-                elif isinstance(event, ErrorEvent):
-                    failed |= not event.recoverable
-                    emit(
-                        executor.run_id,
-                        {
-                            "type": "notice",
-                            "text": "Agent/provider reported an error. Check the selected provider, model and credentials; upstream payloads are not exposed.",
-                        },
-                    )
-                elif isinstance(event, DoneEvent):
-                    completed = event.finish_reason is FinishReason.STOP
-        if completed and not failed:
-            status, error = "completed", ""
+        prompt = start.prompt
+        while True:
+            completed = False
+            async with aclosing(agent.run(prompt, session_id=start.session_id, user_id="ngn-rust")) as events:
+                async for event in events:
+                    if isinstance(event, TextChunkEvent):
+                        emit(executor.run_id, {"type": "text_delta", "text": event.chunk})
+                    elif isinstance(event, TextDoneEvent):
+                        emit(executor.run_id, {"type": "text_completed", "text": event.text})
+                    elif isinstance(event, ErrorEvent):
+                        failed |= not event.recoverable
+                        emit(
+                            executor.run_id,
+                            {
+                                "type": "notice",
+                                "text": "Agent/provider reported an error. Check the selected provider, model and credentials; upstream payloads are not exposed.",
+                            },
+                        )
+                    elif isinstance(event, DoneEvent):
+                        completed = event.finish_reason is FinishReason.STOP
+            if not completed or failed:
+                break
+            if plugin is None:
+                # An old host may ignore our Ready capability. Without its
+                # explicit Start acknowledgment, remain strictly baseline v1.
+                status, error = "completed", ""
+                break
+            # No-tools final replies have no after_tools hook. Ask explicitly
+            # after Agent.run is closed and its assistant response is persisted.
+            offer = await executor.steering.boundary("final")
+            if offer is None:
+                status, error = "completed", ""
+                break
+            plugin.continuation = offer
+            prompt = offer.prompt
+            # Explicitly continue the SAME persisted session and host activation.
     except asyncio.CancelledError:
         status, error = "cancelled", ""
     except ProtocolError as exception:
