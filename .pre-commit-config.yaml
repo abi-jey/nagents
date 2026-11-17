@@ -1,0 +1,57 @@
+repos:
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: Rust formatting
+        entry: cargo fmt --all --check
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: clippy
+        name: Rust strict clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: rust-tests
+        name: Rust tests
+        entry: cargo test --workspace
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: python-lint
+        name: Python adapter lint
+        entry: python -m ruff check integrations/nagents scripts
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: python-format
+        name: Python adapter formatting
+        entry: python -m ruff format --check integrations/nagents scripts
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: python-types
+        name: Python adapter strict types
+        entry: python -m mypy --strict integrations/nagents/src integrations/nagents/tests
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: python-tests
+        name: Python adapter tests
+        entry: python -m unittest discover -s integrations/nagents/tests -v
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: browser-syntax
+        name: Browser JavaScript syntax
+        entry: node --check web/app.js
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: browser-tests
+        name: Browser client regression tests
+        entry: node --test web/app.test.js
+        language: system
+        pass_filenames: false
+        always_run: true

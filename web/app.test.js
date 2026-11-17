@@ -1,0 +1,113 @@
+import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
+import test from "node:test";
+
+class Element {
+  constructor(tag = "div") { this.tagName = tag; this.children = []; this._text = ""; this.value = ""; this.hidden = false; this.disabled = false; this.scrollTop = 0; this.clientHeight = 800; }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get textContent() { return this._text + this.children.map((child) => child.textContent).join(""); }
+  set innerHTML(_) { throw new Error("Untrusted content must never be assigned as HTML"); }
+  append(...children) { for (const child of children) { child.parent = this; this.children.push(child); } }
+  replaceChildren(...children) { this._text = ""; this.children = []; this.append(...children); }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); }
+  get firstChild() { return this.children[0]; }
+  get scrollHeight() { return this.children.length * 50; }
+  focus() {}
+}
+
+const response = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+function deferred() { let resolve; const promise = new Promise((answer) => { resolve = answer; }); return { promise, resolve }; }
+let bootCount = 0;
+
+async function boot() {
+  const elements = new Map();
+  const requests = [];
+  const sockets = [];
+  const states = [];
+  const submissions = [];
+  const session = { id: "ngn-test", title: "Test conversation" };
+  globalThis.document = {
+    getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
+    createElement(tag) { return new Element(tag); },
+    createTextNode(text) { const node = new Element("text"); node.textContent = text; return node; },
+  };
+  globalThis.location = { protocol: "http:", host: "127.0.0.1:8765" };
+  Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
+  globalThis.WebSocket = class {
+    constructor(url, protocols) { this.url = url; this.protocols = protocols; sockets.push(this); }
+    close() { this.onclose?.(); }
+  };
+  globalThis.fetch = async (path, options) => {
+    requests.push({ path, options });
+    if (path === "/api/bootstrap") return response({ token: "host-token", workspace: "/workspace", backend: "demo", read_only: false });
+    if (path === "/api/sessions") return response({ sessions: [session] });
+    if (path === "/api/state") return states.length ? states.shift() : response({ runs: [], approvals: [] });
+    if (path.endsWith("/runs")) return submissions.length ? submissions.shift() : response({ run: { id: "run-test" } });
+    throw new Error(`Unexpected request: ${path}`);
+  };
+  await import(`./app.js?test=${++bootCount}`);
+  const emit = (sequence, event, data = {}) => sockets[0].onmessage({ data: JSON.stringify({ schema_version: 1, session_id: session.id, run_id: "run-test", sequence, event, ...data }) });
+  return { elements, requests, sockets, states, submissions, emit };
+}
+
+test("browser client uses host schema and does not duplicate completed or replayed text", async () => {
+  const app = await boot();
+  assert.deepEqual(app.sockets[0].protocols, ["ngn.events.v1", "ngn.token.host-token"]);
+  assert(!app.sockets[0].url.includes("host-token"));
+  app.emit(1, "run_started", { prompt: "hello" });
+  app.emit(2, "text_delta", { text: "Hello" });
+  app.emit(3, "text_completed", { text: "Hello" });
+  app.emit(3, "text_completed", { text: "Hello" });
+  const assistants = app.elements.get("transcript").children.filter((node) => node.className === "message assistant");
+  assert.equal(assistants.length, 1);
+  assert.equal(assistants[0].children[1].textContent, "Hello");
+  app.emit(4, "text_completed", { text: '<img src=x onerror="steal()">' });
+  assert.equal(app.elements.get("transcript").children.at(-1).children[1].textContent, '<img src=x onerror="steal()">');
+  await flush();
+});
+
+test("stale state responses cannot overwrite newer finished state", async () => {
+  const app = await boot();
+  const older = deferred(), newer = deferred();
+  app.states.push(older.promise, newer.promise);
+  app.emit(1, "run_started", { prompt: "hello" });
+  app.emit(2, "run_finished", { status: "completed", error: "" });
+  newer.resolve(response({ runs: [], approvals: [] }));
+  await flush();
+  older.resolve(response({ runs: [{ id: "run-test", session_id: "ngn-test" }], approvals: [] }));
+  await flush();
+  assert.equal(app.elements.get("send").disabled, false);
+  assert.equal(app.elements.get("cancel").hidden, true);
+});
+
+test("concurrent send gestures produce one idempotent submission", async () => {
+  const app = await boot();
+  const accepted = deferred();
+  app.submissions.push(accepted.promise);
+  app.elements.get("prompt").value = "inspect files";
+  const first = app.elements.get("composer").onsubmit({ preventDefault() {} });
+  const second = app.elements.get("composer").onsubmit({ preventDefault() {} });
+  assert.equal(app.requests.filter((request) => request.path.endsWith("/runs")).length, 1);
+  accepted.resolve(response({ run: { id: "run-test" } }));
+  await Promise.all([first, second]);
+});
+
+test("failed submissions retain input and reuse their request ID on retry", async () => {
+  const app = await boot();
+  app.submissions.push(response({ detail: "temporarily unavailable" }, 503));
+  app.elements.get("prompt").value = "inspect files";
+  await app.elements.get("composer").onsubmit({ preventDefault() {} });
+  assert.equal(app.elements.get("prompt").value, "inspect files");
+  await app.elements.get("composer").onsubmit({ preventDefault() {} });
+  const submissions = app.requests.filter((request) => request.path.endsWith("/runs"));
+  assert.equal(submissions.length, 2);
+  assert.equal(JSON.parse(submissions[0].options.body).request_id, JSON.parse(submissions[1].options.body).request_id);
+});
+
+test("replayed approval events do not revive an expired decision", async () => {
+  const app = await boot();
+  app.emit(1, "approval_requested", { approval_id: "expired", call: { name: "shell" }, preview: "old" });
+  await flush();
+  assert.equal(app.elements.get("approval").hidden, true);
+});
