@@ -15,6 +15,11 @@ pub fn transcript(records: &[EventRecord], details: bool) -> String {
     let mut streamed = false;
     for record in records {
         match &record.event {
+            Event::QueueUpdated { paused } => output.push_str(if *paused {
+                "\n[Input queue paused · resume explicitly]\n"
+            } else {
+                "\n[Input queue resumed]\n"
+            }),
             Event::RunStarted { prompt } => {
                 output.push_str(&format!("\nYOU\n{prompt}\n\nNGN\n"));
                 streamed = false;

@@ -134,7 +134,11 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                         record = await asyncio.wait_for(socket.receive_json(), 30)
                         records.append(record)
                         require(
-                            record["session_id"] == session and record["run_id"] == root_run,
+                            record["session_id"] == session
+                            and (
+                                record["run_id"] == root_run
+                                or (record["event"] == "queue_updated" and record["run_id"] == "")
+                            ),
                             "Child events escaped into the parent's stream",
                         )
                         if record["event"] == "task_started":

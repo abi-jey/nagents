@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use futures_util::SinkExt;
-use ngn_core::{ApprovalMode, Host};
+use ngn_core::{ApprovalMode, Host, queues::QueueAction};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
@@ -48,6 +48,11 @@ struct Empty {}
 struct RunInput {
     prompt: String,
     request_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueueControl {
+    action: QueueAction,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -217,6 +222,7 @@ fn router(state: WebState) -> Router {
         .route("/api/sessions", get(sessions).post(create_session))
         .route("/api/sessions/{id}/events", get(history))
         .route("/api/sessions/{id}/runs", post(start))
+        .route("/api/sessions/{id}/queue", get(queue).post(control_queue))
         .route("/api/sessions/{id}/tasks", get(tasks))
         .route("/api/runs/{id}/cancel", post(cancel))
         .route("/api/approvals", post(decide))
@@ -253,6 +259,20 @@ async fn tasks(State(state): State<WebState>, Path(id): Path<String>) -> ApiResu
         json!({"tasks":state.host.store.tasks(&id).await.map_err(failure)?, "limits":state.host.config.subagents}),
     ))
 }
+async fn queue(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
+    Ok(Json(
+        json!({"queue": state.host.queue(&id).await.map_err(failure)?, "limit": ngn_core::queues::MAX_SESSION_INPUTS}),
+    ))
+}
+async fn control_queue(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    Json(input): Json<QueueControl>,
+) -> ApiResult {
+    Ok(Json(
+        json!({"queue": state.host.control_queue(&id, input.action).await.map_err(failure)?}),
+    ))
+}
 async fn history(
     State(state): State<WebState>,
     Path(id): Path<String>,
@@ -281,7 +301,7 @@ async fn start(
     Json(input): Json<RunInput>,
 ) -> ApiResult {
     Ok(Json(
-        json!({"run":state.host.start(&id, &input.prompt, &input.request_id, ApprovalMode::Interactive).await.map_err(failure)?}),
+        json!({"run":state.host.submit(&id, &input.prompt, &input.request_id, ApprovalMode::Interactive).await.map_err(failure)?}),
     ))
 }
 async fn cancel(
@@ -561,6 +581,125 @@ mod tests {
             app.oneshot(request).await.unwrap().status(),
             StatusCode::CONFLICT
         );
+        state.host.shutdown().await;
+    }
+    #[tokio::test]
+    async fn queue_routes_accept_busy_inputs_and_validate_controls_and_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let session = host.store.create_session().await.unwrap().id;
+        let state = WebState {
+            host,
+            authority: "127.0.0.1:8765".into(),
+            token: "test-token".into(),
+            shutdown: CancellationToken::new(),
+        };
+        let app = router(state.clone());
+        async fn request(
+            app: &Router,
+            path: &str,
+            body: Option<Value>,
+            expected: StatusCode,
+        ) -> Value {
+            let request = Request::builder()
+                .method(if body.is_some() { "POST" } else { "GET" })
+                .uri(path)
+                .header("host", "127.0.0.1:8765")
+                .header("origin", "http://127.0.0.1:8765")
+                .header("x-ngn-token", "test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    body.map(|value| value.to_string()).unwrap_or_default(),
+                ))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+        }
+        let queue_path = format!("/api/sessions/{session}/queue");
+        let runs_path = format!("/api/sessions/{session}/runs");
+        let paused = request(
+            &app,
+            &queue_path,
+            Some(json!({"action":"pause"})),
+            StatusCode::OK,
+        )
+        .await;
+        assert_eq!(paused["queue"]["paused"], true);
+        let input = json!({"prompt":"demo hold", "request_id":Uuid::new_v4().to_string()});
+        let first = request(&app, &runs_path, Some(input.clone()), StatusCode::OK).await;
+        let again = request(&app, &runs_path, Some(input), StatusCode::OK).await;
+        assert_eq!(first["run"]["id"], again["run"]["id"]);
+        assert_eq!(first["run"]["status"], "queued");
+        request(
+            &app,
+            &queue_path,
+            Some(json!({"action":"resume", "approved":true})),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        )
+        .await;
+        request(
+            &app,
+            &queue_path,
+            Some(json!({"action":"retry_interrupted"})),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        )
+        .await;
+        request(
+            &app,
+            &queue_path,
+            Some(json!({"action":"resume"})),
+            StatusCode::OK,
+        )
+        .await;
+        let second = request(
+            &app,
+            &runs_path,
+            Some(json!({"prompt":"later", "request_id":Uuid::new_v4().to_string()})),
+            StatusCode::OK,
+        )
+        .await;
+        assert_eq!(second["run"]["status"], "queued");
+        let snapshot = request(&app, &queue_path, None, StatusCode::OK).await;
+        assert_eq!(
+            snapshot["queue"]["entries"][0]["run"]["id"],
+            second["run"]["id"]
+        );
+        request(
+            &app,
+            &format!("/api/runs/{}/cancel", second["run"]["id"].as_str().unwrap()),
+            Some(json!({})),
+            StatusCode::OK,
+        )
+        .await;
+        assert_eq!(state.host.active().await.len(), 1);
+        let records = state.host.store.events(&session, 0).await.unwrap();
+        assert!(records.iter().any(|record| record.run_id.is_empty()
+            && matches!(record.event, ngn_protocol::Event::QueueUpdated { .. })));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&queue_path)
+                    .header("host", &state.authority)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         state.host.shutdown().await;
     }
 }

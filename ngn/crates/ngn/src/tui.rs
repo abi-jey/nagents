@@ -13,6 +13,7 @@ use futures_util::StreamExt;
 use ngn_core::{
     ApprovalMode, Host,
     host::Approval,
+    queues::{QueueAction, QueueState},
     store::{Run, Session},
 };
 use ngn_protocol::{EventRecord, TaskInfo};
@@ -36,6 +37,7 @@ impl Drop for Restore {
     }
 }
 
+#[derive(Default)]
 struct App {
     session: String,
     sessions: Vec<Session>,
@@ -56,6 +58,10 @@ struct App {
     task_detail: bool,
     task_records: Vec<EventRecord>,
     task_after: i64,
+    queue: QueueState,
+    queue_picker: bool,
+    queue_index: usize,
+    submission: Option<(String, String, String)>,
 }
 
 impl App {
@@ -92,6 +98,25 @@ impl App {
             self.preview_scroll = 0;
         }
         self.approval = approval;
+        let selected = self
+            .queue
+            .entries
+            .get(self.queue_index)
+            .map(|entry| entry.run.id.clone());
+        match host.queue(&self.session).await {
+            Ok(queue) => {
+                self.queue = queue;
+                self.queue_index = selected
+                    .and_then(|id| {
+                        self.queue
+                            .entries
+                            .iter()
+                            .position(|entry| entry.run.id == id)
+                    })
+                    .unwrap_or(0);
+            }
+            Err(error) => self.status = format!("Cannot load input queue: {error}"),
+        }
         if self.task_picker {
             let selected = self
                 .tasks
@@ -143,6 +168,7 @@ impl App {
         self.picker = false;
         self.task_picker = false;
         self.task_detail = false;
+        self.queue_picker = false;
         self.catch_up(host).await?;
         self.state(host).await;
         Ok(())
@@ -230,16 +256,18 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
             .scroll((input_lines.saturating_sub(3), 0))
             .block(
                 Block::bordered()
-                    .title(" Message · Enter send · Shift+Enter newline ")
+                    .title(format!(
+                        " Message · Enter send/queue · {} pending{} · F6 queue ",
+                        app.queue.entries.len(),
+                        if app.queue.paused { " · PAUSED" } else { "" }
+                    ))
                     .border_style(Style::new().fg(accent)),
             ),
         rows[3],
     );
     frame.render_widget(
-        Paragraph::new(
-            " F2 sessions · F3 new · F4 tools · F5 agents · PgUp/PgDn scroll · Ctrl+Q quit ",
-        )
-        .style(Style::new().fg(muted)),
+        Paragraph::new(" F2 sessions · F3 new · F4 tools · F5 agents · F6 queue · Ctrl+Q quit ")
+            .style(Style::new().fg(muted)),
         rows[4],
     );
     if app.picker {
@@ -322,6 +350,37 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
             );
         }
     }
+    if app.queue_picker {
+        let area = center(frame.area(), 118, 25);
+        frame.render_widget(Clear, area);
+        let items: Vec<ListItem<'_>> = if app.queue.entries.is_empty() {
+            vec![ListItem::new(
+                "No pending inputs. Running work is not affected by queue controls.",
+            )]
+        } else {
+            app.queue
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    ListItem::new(format!(
+                        "{}. {} · {}",
+                        index + 1,
+                        view::plain(&entry.prompt.replace(['\n', '\r'], " "))
+                            .chars()
+                            .take(100)
+                            .collect::<String>(),
+                        entry.run.id
+                    ))
+                })
+                .collect()
+        };
+        let mut selection = ListState::default().with_selected(Some(app.queue_index));
+        frame.render_stateful_widget(List::new(items).block(Block::bordered().title(format!(
+            " Input queue: {} · Ctrl+P pause/resume · Ctrl+X remove · Ctrl+K clear · Esc close ",
+            if app.queue.paused { "PAUSED" } else { "RUNNING" }
+        ))).highlight_style(Style::new().fg(accent)), area, &mut selection);
+    }
     if let Some(approval) = &app.approval {
         let area = center(frame.area(), 110, 32);
         frame.render_widget(Clear, area);
@@ -360,10 +419,24 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
         app.input.clear();
         return Ok(false);
     }
-    ensure!(
-        app.active.is_none(),
-        "A run is active; wait or press Esc to cancel. Input is retained."
-    );
+    if input == "/queue" {
+        app.queue_picker = true;
+        app.state(host).await;
+        app.input.clear();
+        return Ok(false);
+    }
+    if let Some(action) = input.strip_prefix("/queue ") {
+        let action = match action {
+            "pause" => QueueAction::Pause,
+            "resume" => QueueAction::Resume,
+            "clear" => QueueAction::Clear,
+            _ => anyhow::bail!("Use /queue pause, /queue resume or /queue clear"),
+        };
+        host.control_queue(&app.session, action).await?;
+        app.state(host).await;
+        app.input.clear();
+        return Ok(false);
+    }
     if input == "/new" {
         app.switch(host, host.store.create_session().await?.id)
             .await?;
@@ -374,16 +447,34 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     } else if let Some(id) = input.strip_prefix("/resume ") {
         app.switch(host, id.trim().to_owned()).await?;
     } else if input == "/help" {
-        app.status = "/new · /sessions · /resume ID · /tasks · /quit · F4 tool details. Modifying tools require explicit approval.".into();
+        app.status = "/new · /sessions · /resume ID · /tasks · /queue [pause|resume|clear] · /quit. Enter queues while busy; approvals remain per-call.".into();
     } else {
         ensure!(!input.starts_with('/'), "Unknown command; try /help");
-        host.start(
-            &app.session,
-            &input,
-            &Uuid::new_v4().to_string(),
-            ApprovalMode::Interactive,
-        )
-        .await?;
+        if !app
+            .submission
+            .as_ref()
+            .is_some_and(|(session, prompt, _)| session == &app.session && prompt == &input)
+        {
+            app.submission = Some((
+                app.session.clone(),
+                input.clone(),
+                Uuid::new_v4().to_string(),
+            ));
+        }
+        let request = &app
+            .submission
+            .as_ref()
+            .expect("submission was just initialized")
+            .2;
+        let accepted = host
+            .submit(&app.session, &input, request, ApprovalMode::Interactive)
+            .await?;
+        app.submission = None;
+        app.status = if accepted.status == ngn_protocol::RunStatus::Queued {
+            "Input queued · F6 inspect · /queue resume if paused".into()
+        } else {
+            "Input accepted".into()
+        };
         app.scroll = 0;
     }
     app.input.clear();
@@ -414,6 +505,10 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         task_detail: false,
         task_records: Vec::new(),
         task_after: 0,
+        queue: QueueState::default(),
+        queue_picker: false,
+        queue_index: 0,
+        submission: None,
     };
     app.catch_up(&host).await?;
     enable_raw_mode()?;
@@ -450,6 +545,23 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             }
                             app.state(&host).await; continue;
                         }
+                        if app.queue_picker {
+                            let action = match key.code {
+                                KeyCode::Esc => { app.queue_picker = false; None },
+                                KeyCode::Up => { app.queue_index = app.queue_index.saturating_sub(1); None },
+                                KeyCode::Down => { app.queue_index = (app.queue_index + 1).min(app.queue.entries.len().saturating_sub(1)); None },
+                                KeyCode::Char('p') if control => Some(if app.queue.paused { QueueAction::Resume } else { QueueAction::Pause }),
+                                KeyCode::Char('k') if control => Some(QueueAction::Clear),
+                                KeyCode::Char('x') if control => {
+                                    if let Some(entry) = app.queue.entries.get(app.queue_index) && let Err(error) = host.cancel(&entry.run.id).await { app.status = error.to_string(); }
+                                    None
+                                },
+                                _ => None,
+                            };
+                            if let Some(action) = action && let Err(error) = host.control_queue(&app.session, action).await { app.status = error.to_string(); }
+                            app.state(&host).await;
+                            continue;
+                        }
                         if app.task_picker {
                             match key.code {
                                 KeyCode::Esc => { if app.task_detail { app.task_detail = false; } else { app.task_picker = false; } app.scroll = 0; },
@@ -475,10 +587,11 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                         }
                         match key.code {
                             KeyCode::Esc => { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } },
-                            KeyCode::F(2) if app.active.is_none() => { app.sessions = host.store.sessions().await?; app.picker = true; app.picker_index = 0; },
-                            KeyCode::F(3) if app.active.is_none() => { app.switch(&host, host.store.create_session().await?.id).await?; },
+                            KeyCode::F(2) => { app.sessions = host.store.sessions().await?; app.picker = true; app.picker_index = 0; },
+                            KeyCode::F(3) => { app.switch(&host, host.store.create_session().await?.id).await?; },
                             KeyCode::F(4) => app.details = !app.details,
                             KeyCode::F(5) => { app.task_picker = true; app.task_detail = false; app.task_index = 0; app.state(&host).await; },
+                            KeyCode::F(6) => { app.queue_picker = true; app.queue_index = 0; app.state(&host).await; },
                             KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
                             KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
                             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); } },
@@ -517,6 +630,63 @@ mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
 
+    #[tokio::test]
+    async fn tui_submissions_queue_while_busy_and_controls_do_not_cancel_the_active_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let session = host.store.create_session().await.unwrap().id;
+        let mut app = App {
+            session,
+            input: "/queue pause".into(),
+            ..App::default()
+        };
+        submit(&mut app, &host).await.unwrap();
+        app.input = "demo hold".into();
+        submit(&mut app, &host).await.unwrap();
+        app.input = "queued before resume".into();
+        submit(&mut app, &host).await.unwrap();
+        app.state(&host).await;
+        assert_eq!(app.queue.entries.len(), 2);
+        assert!(app.queue.paused);
+        let root = app.queue.entries[0].run.id.clone();
+        app.input = "/queue resume".into();
+        submit(&mut app, &host).await.unwrap();
+        app.state(&host).await;
+        assert_eq!(app.active.as_ref().unwrap().id, root);
+        app.input = "queued while busy".into();
+        submit(&mut app, &host).await.unwrap();
+        app.input = "/queue".into();
+        submit(&mut app, &host).await.unwrap();
+        assert!(app.queue_picker);
+        assert_eq!(app.queue.entries.len(), 2);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(130, 35)).unwrap();
+        terminal.draw(|frame| draw(frame, &app, &host)).unwrap();
+        let contents: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(contents.contains("Input queue: RUNNING"));
+        assert!(contents.contains("queued while busy"));
+        app.input = "/queue clear".into();
+        submit(&mut app, &host).await.unwrap();
+        assert!(app.queue.paused && app.queue.entries.is_empty());
+        assert!(host.active().await.iter().any(|run| run.id == root));
+        host.shutdown().await;
+    }
+
     #[test]
     fn terminal_layout_renders_at_small_and_large_sizes() {
         let directory = tempfile::tempdir().unwrap();
@@ -551,6 +721,10 @@ mod tests {
             task_detail: false,
             task_records: Vec::new(),
             task_after: 0,
+            queue: QueueState::default(),
+            queue_picker: false,
+            queue_index: 0,
+            submission: None,
         };
         for (width, height) in [(1, 1), (20, 6), (40, 12), (120, 40)] {
             let mut terminal =
@@ -640,6 +814,10 @@ mod tests {
             task_detail: false,
             task_records: Vec::new(),
             task_after: 0,
+            queue: QueueState::default(),
+            queue_picker: false,
+            queue_index: 0,
+            submission: None,
         };
         app.state(&host).await;
         let approval = app.approval.as_ref().unwrap();

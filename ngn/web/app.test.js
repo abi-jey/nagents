@@ -27,7 +27,9 @@ async function boot() {
   const states = [];
   const submissions = [];
   const tasks = [];
+  const queues = [];
   const session = { id: "ngn-test", title: "Test conversation" };
+  const queue = { session_id: session.id, paused: false, entries: [] };
   globalThis.document = {
     getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
     createElement(tag) { return new Element(tag); },
@@ -45,13 +47,17 @@ async function boot() {
     if (path === "/api/sessions") return response({ sessions: [session] });
     if (path === "/api/state") return states.length ? states.shift() : response({ runs: [], approvals: [] });
     if (path.endsWith("/tasks")) return response({ tasks, limits: { max_depth: 2, max_concurrent: 3, max_executions: 8 } });
+    if (path.endsWith("/queue")) {
+      if (options.method === "POST") { const { action } = JSON.parse(options.body); queue.paused = action !== "resume"; if (action === "clear") queue.entries.length = 0; }
+      return queues.length ? queues.shift() : response({ queue, limit: 32 });
+    }
     if (path.endsWith("/cancel") || path === "/api/approvals") return response({ accepted: true });
     if (path.endsWith("/runs")) return submissions.length ? submissions.shift() : response({ run: { id: "run-test" } });
     throw new Error(`Unexpected request: ${path}`);
   };
   await import(`./app.js?test=${++bootCount}`);
   const emit = (sequence, event, data = {}) => sockets[0].onmessage({ data: JSON.stringify({ schema_version: 1, session_id: session.id, run_id: "run-test", sequence, event, ...data }) });
-  return { elements, requests, sockets, states, submissions, tasks, emit };
+  return { elements, requests, sockets, states, submissions, tasks, queues, queue, emit };
 }
 
 test("browser client uses host schema and does not duplicate completed or replayed text", async () => {
@@ -149,4 +155,58 @@ test("a root operator can approve a child call, bound to the actual child run", 
   await app.elements.get("allow").onclick();
   const decision = app.requests.find((request) => request.path === "/api/approvals");
   assert.deepEqual(JSON.parse(decision.options.body), { run_id: "run-child", approval_id: "approval-child", allow: true });
+});
+
+test("busy conversations accept queued inputs and pending controls target exact identities", async () => {
+  const app = await boot();
+  app.states.push(response({ runs: [{ id: "run-active", session_id: "ngn-test" }], approvals: [] }));
+  app.queue.entries.push({ run: { id: "run-pending", session_id: "ngn-test" }, prompt: '<script>untrusted()</script>' });
+  app.emit(1, "run_started", { prompt: "busy" });
+  await flush();
+  assert.equal(app.elements.get("send").disabled, false);
+  assert.equal(app.elements.get("send").textContent, "Queue ↗");
+  assert(app.elements.get("queue").textContent.includes('<script>untrusted()</script>'));
+  app.elements.get("prompt").value = "next input";
+  await app.elements.get("composer").onsubmit({ preventDefault() {} });
+  assert(app.requests.some((request) => request.path.endsWith("/runs") && JSON.parse(request.options.body).prompt === "next input"));
+  await app.elements.get("queue").children[0].children[1].onclick();
+  assert(app.requests.some((request) => request.path === "/api/runs/run-pending/cancel"));
+  assert(!app.requests.some((request) => request.path === "/api/runs/run-active/cancel"));
+  await app.elements.get("pause-queue").onclick();
+  assert.equal(app.elements.get("pause-queue").textContent, "Resume queue");
+  await app.elements.get("pause-queue").onclick();
+  await app.elements.get("clear-queue").onclick();
+  const actions = app.requests.filter((request) => request.path.endsWith("/queue") && request.options.method === "POST").map((request) => JSON.parse(request.options.body).action);
+  assert.deepEqual(actions, ["pause", "resume", "clear"]);
+  assert(app.elements.get("queue-status").textContent.includes("Paused"));
+});
+
+test("stale queue snapshots cannot replace newer state and replay never duplicates user turns", async () => {
+  const app = await boot();
+  const older = deferred(), newer = deferred();
+  app.queues.push(older.promise, newer.promise);
+  app.emit(1, "run_queued", { prompt: "pending" });
+  app.emit(2, "queue_updated", { paused: true, run_id: "" });
+  newer.resolve(response({ queue: { session_id: "ngn-test", paused: true, entries: [] } }));
+  await flush();
+  older.resolve(response({ queue: { session_id: "ngn-test", paused: false, entries: [{ run: { id: "old" }, prompt: "stale" }] } }));
+  await flush();
+  assert(app.elements.get("queue-status").textContent.includes("Paused"));
+  assert.equal(app.elements.get("queue").children.length, 0);
+  app.emit(3, "run_started", { prompt: "pending" });
+  app.emit(3, "run_started", { prompt: "pending" });
+  assert.equal(app.elements.get("transcript").children.filter((child) => child.className === "message user").length, 1);
+  await flush();
+});
+
+test("a delayed accepted submission does not erase a newer draft", async () => {
+  const app = await boot();
+  const accepted = deferred();
+  app.submissions.push(accepted.promise);
+  app.elements.get("prompt").value = "first input";
+  const sending = app.elements.get("composer").onsubmit({ preventDefault() {} });
+  app.elements.get("prompt").value = "newer draft";
+  accepted.resolve(response({ run: { id: "accepted", status: "queued" } }));
+  await sending;
+  assert.equal(app.elements.get("prompt").value, "newer draft");
 });
