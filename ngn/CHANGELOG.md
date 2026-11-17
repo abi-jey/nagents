@@ -1,6 +1,46 @@
 # Changelog
 
-## Official 0.100.1 — durable input queues
+## 0.100.2 — development, not yet released
+
+- Preserve and reconcile the original local Python work without reverting later
+  provider, cancellation, streaming and UI fixes already integrated on main.
+- `./ngn/dev` builds the optimized binary and installed wheels from current working
+  source, isolates development state and runs the extracted application. `--test`
+  exercises the real packaged CLI/HTTP/WebSocket/PTY paths, including dirty checkouts.
+- Native tool duration excludes its own approval waiting; durable timing snapshots
+  keep call attribution and active duration consistent in the TUI and browser.
+- Compact bounded durations and recognized tool targets in native client summaries.
+- Touch browser Return stays in the draft; deliberate Send/Queue and Stop preserve
+  composer focus. Mobile conversation controls, scrollable approval previews and
+  non-collapsing decision controls have optional real-Chromium acceptance coverage.
+- Native list/search respect bounded workspace `.gitignore` rules, including nested
+  origins, negation and explicit starting paths. Protected paths remain excluded.
+- The Python library exposes device authentication and guarded storage without a
+  harness/UI import, with cooperative cross-process refresh ownership.
+- Explicit development ChatGPT connections use a host-generated private store,
+  negotiated runtime capability and credentials callback without Codex discovery or
+  API-key fallback. Native CLI device login/status/logout use bounded redacted
+  frames and shared-host/exclusive-writer ownership. Browser login, live entitlement
+  checks and publication of the prerequisite core version remain separate gates.
+- Bounded exact-root steering at persisted whole-tool-batch/final boundaries, with
+  two-sided optional negotiation and durable pending/offered/applied/uncertain/
+  undelivered receipts. Nothing is automatically replayed or relabelled as FIFO.
+- Explicit browser Steer active turn and native `/steer TEXT`/F7 receipt controls;
+  ordinary Enter/Send still queues next-run input. Reconnect only inspects receipts.
+- Host schema 3→4 preserves queues/cursors; back up important state before upgrading
+  and use a separate state directory or that backup when downgrading older binaries.
+- External development Cargo target bases are namespaced by canonical checkout.
+  Both installed archive paths include the checked-in ChatGPT example. Synthetic
+  auth gates run explicitly; tag publication refuses a published core without its
+  public auth API. Private test roots do not depend on the invoking shell's umask.
+- Create each missing default/custom development cache ancestor as 0700 without
+  changing existing unsafe paths. Acceptance also launches the extracted offline,
+  read-only app in the real cache ancestry, not only independent fixture state.
+
+This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
+parity. Production deployment and paid-provider/Codex validation are separate gates.
+
+## 0.100.1 — durable input queues (separately gated)
 
 - Rust-owned per-session FIFO, stable idempotent request IDs, 32 pending inputs per
   session/256 per host, admission within existing root/run limits and no backlog bypass.

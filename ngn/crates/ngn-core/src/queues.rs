@@ -270,7 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn fifo_and_concurrent_deduplication_preserve_approval_mode() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let session = host.store.create_session().await.unwrap().id;
         host.control_queue(&session, QueueAction::Pause)
@@ -341,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_and_clear_do_not_execute_pending_inputs_or_cancel_other_work() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let session = host.store.create_session().await.unwrap().id;
         let root = submit(&host, &session, "demo hold").await;
@@ -409,7 +409,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_runs_pause_the_queue_and_children_cannot_submit_or_control_it() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let session = host.store.create_session().await.unwrap().id;
         host.control_queue(&session, QueueAction::Pause)
@@ -455,7 +455,7 @@ mod tests {
 
     #[tokio::test]
     async fn global_capacity_dispatches_waiting_sessions_after_a_slot_is_freed() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let mut roots = Vec::new();
         for _ in 0..8 {
@@ -488,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn queue_limits_are_atomic_and_full_queue_retries_still_deduplicate() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = host(directory.path());
         let session = host.store.create_session().await.unwrap().id;
         host.control_queue(&session, QueueAction::Pause)
@@ -545,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn restart_keeps_unstarted_inputs_paused_and_never_replays_claimed_work() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
         let session = store.create_session().await.unwrap().id;
         let (started, _) = store
@@ -598,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn schema_two_upgrade_preserves_cursors_and_allows_empty_session_queue_events() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let db = Connection::open(directory.path().join("host.sqlite3")).unwrap();
         db.execute_batch("PRAGMA user_version=2;
             CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);

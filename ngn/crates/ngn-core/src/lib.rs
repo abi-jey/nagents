@@ -1,9 +1,14 @@
+pub mod auth;
 pub mod config;
 pub mod host;
 pub mod queues;
 pub mod runner;
+pub mod steering;
 pub mod store;
 pub mod subagents;
+#[cfg(test)]
+mod test_support;
+mod timing;
 pub mod tools;
 
 pub use config::Config;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +92,34 @@ class ReleaseTests(unittest.TestCase):
             self.assertRaisesRegex(AssertionError, "Commit the complete candidate"),
         ):
             release.package(self.output, self.output / "untrusted-binary")
+
+    def test_shared_dev_release_bundle_contains_both_exact_source_examples_only(self) -> None:
+        source = self.output / "source"
+        source.mkdir()
+        names = (
+            "LICENSE",
+            "README.md",
+            "CHANGELOG.md",
+            "config.example.json",
+            "config.chatgpt.example.json",
+        )
+        for name in names:
+            (source / name).write_bytes((release.NGN / name).read_bytes())
+        (source / "docs").mkdir()
+        (source / "docs/chatgpt-auth.md").write_bytes((release.NGN / "docs/chatgpt-auth.md").read_bytes())
+        (source / "config.local.json").write_text("must not be bundled")
+        (source / "auth").mkdir()
+        (source / "auth/openai.json").write_text("synthetic private sentinel; must not be bundled")
+        binary = self.output / "binary"
+        binary.write_bytes(b"fixture executable")
+        archive = self.output / "bundle.tar.gz"
+        release.binary_archive(archive, binary, source)
+        with tarfile.open(archive) as bundled:
+            self.assertEqual(set(bundled.getnames()), {"ngn", "docs", "docs/chatgpt-auth.md", *names})
+            for name in names:
+                member = bundled.extractfile(name)
+                assert member is not None
+                self.assertEqual(member.read(), (release.NGN / name).read_bytes())
 
 
 if __name__ == "__main__":

@@ -225,6 +225,7 @@ fn router(state: WebState) -> Router {
         .route("/api/sessions/{id}/queue", get(queue).post(control_queue))
         .route("/api/sessions/{id}/tasks", get(tasks))
         .route("/api/runs/{id}/cancel", post(cancel))
+        .route("/api/runs/{id}/steer", get(steering).post(steer))
         .route("/api/approvals", post(decide))
         .route("/api/events", get(events))
         .layer(DefaultBodyLimit::max(64 * 1024))
@@ -311,6 +312,26 @@ async fn cancel(
 ) -> ApiResult {
     state.host.cancel(&id).await.map_err(failure)?;
     Ok(Json(json!({"cancelled":true})))
+}
+async fn steering(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
+    Ok(Json(
+        json!({"steering": state.host.steering(&id).await.map_err(failure)?}),
+    ))
+}
+async fn steer(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    input: std::result::Result<Json<RunInput>, axum::extract::rejection::JsonRejection>,
+) -> ApiResult {
+    let Json(input) = input.map_err(|error| {
+        ApiError(
+            error.status(),
+            "Invalid steering JSON; expected only prompt and request_id".into(),
+        )
+    })?;
+    Ok(Json(
+        json!({"receipt": state.host.steer(&id, &input.prompt, &input.request_id).await.map_err(failure)?}),
+    ))
 }
 async fn decide(State(state): State<WebState>, Json(input): Json<Decision>) -> ApiResult {
     state
@@ -425,7 +446,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_origin_token_and_security_headers_are_enforced() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),
@@ -510,8 +531,130 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn steering_routes_are_origin_token_protected_strict_and_never_fall_back_to_fifo() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let session = host.store.create_session().await.unwrap();
+        let run = host
+            .start(
+                &session.id,
+                "demo hold",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Deny,
+            )
+            .await
+            .unwrap();
+        let state = WebState {
+            host,
+            authority: "127.0.0.1:8765".into(),
+            token: "test-token".into(),
+            shutdown: CancellationToken::new(),
+        };
+        let app = router(state.clone());
+        for (method, token, origin, extra, expected) in [
+            (
+                "GET",
+                "",
+                "http://127.0.0.1:8765",
+                false,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "",
+                "http://127.0.0.1:8765",
+                false,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "test-token",
+                "http://foreign.example",
+                false,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "test-token",
+                "http://127.0.0.1:8765",
+                true,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "POST",
+                "test-token",
+                "http://127.0.0.1:8765",
+                false,
+                StatusCode::CONFLICT,
+            ),
+            (
+                "GET",
+                "test-token",
+                "http://127.0.0.1:8765",
+                false,
+                StatusCode::OK,
+            ),
+        ] {
+            let mut input =
+                json!({"prompt":"not a queued run", "request_id":Uuid::new_v4().to_string()});
+            if extra {
+                input["run_id"] = json!("foreign");
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("/api/runs/{}/steer", run.id))
+                        .header("host", &state.authority)
+                        .header("x-ngn-token", token)
+                        .header("origin", origin)
+                        .header("content-type", "application/json")
+                        .body(Body::from(if method == "POST" {
+                            input.to_string()
+                        } else {
+                            String::new()
+                        }))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        assert!(
+            state
+                .host
+                .steering(&run.id)
+                .await
+                .unwrap()
+                .receipts
+                .is_empty()
+        );
+        assert!(
+            state
+                .host
+                .queue(&session.id)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        state.host.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn task_routes_preserve_topology_and_do_not_promote_children_to_roots() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),
@@ -585,7 +728,7 @@ mod tests {
     }
     #[tokio::test]
     async fn queue_routes_accept_busy_inputs_and_validate_controls_and_identity() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
                 workspace: directory.path().into(),

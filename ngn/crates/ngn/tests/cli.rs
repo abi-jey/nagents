@@ -1,9 +1,12 @@
+#[path = "../../ngn-core/src/test_support.rs"]
+mod test_support;
+
 use std::process::Command;
 
 #[test]
 fn native_demo_requires_neither_python_nor_provider_credentials() {
-    let workspace = tempfile::tempdir().unwrap();
-    let state = tempfile::tempdir().unwrap();
+    let workspace = test_support::private_tempdir().unwrap();
+    let state = test_support::private_tempdir().unwrap();
     std::fs::write(workspace.path().join("hello.txt"), "hello").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
         .args(["--demo", "-C"])

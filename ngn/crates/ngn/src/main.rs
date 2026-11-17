@@ -1,3 +1,6 @@
+#[cfg(test)]
+#[path = "../../ngn-core/src/test_support.rs"]
+mod test_support;
 mod tui;
 mod view;
 mod web;
@@ -11,6 +14,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
+use ngn_core::auth::{self, Operation};
 use ngn_core::{ApprovalMode, Config, Host, config::Backend};
 use ngn_protocol::{Event, EventRecord, RunStatus};
 use uuid::Uuid;
@@ -62,6 +66,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Explicit ChatGPT device login and local status/logout. No browser is opened.
+    Auth {
+        #[command(subcommand)]
+        operation: AuthCommand,
+    },
     /// Run one prompt. All modifying tools fail closed in this mode.
     Run {
         #[arg(long)]
@@ -80,6 +89,23 @@ enum Commands {
     Sessions,
     /// Show local configuration diagnostics without starting Python or making requests.
     Doctor,
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    Login,
+    Status,
+    Logout,
+}
+
+impl AuthCommand {
+    fn operation(&self) -> Operation {
+        match self {
+            Self::Login => Operation::Login,
+            Self::Status => Operation::Status,
+            Self::Logout => Operation::Logout,
+        }
+    }
 }
 
 async fn session(host: &Host, resume: Option<&str>, continue_session: bool) -> Result<String> {
@@ -196,6 +222,41 @@ async fn execute(cli: Cli) -> Result<i32> {
         provider.model = model;
     }
     let config = config.resolve()?;
+    if let Some(Commands::Auth { operation }) = &cli.command {
+        ensure!(
+            config.backend == Backend::Nagents,
+            "ngn auth requires a configured nagents ChatGPT connection, not --demo"
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let command = auth::run(
+            &config,
+            operation.operation(),
+            cancel.clone(),
+            |challenge| {
+                eprintln!(
+                    "Open {} manually and enter code: {}\nNo browser approval is automated. Waiting for authorization…",
+                    auth::VERIFICATION_URL,
+                    challenge.user_code
+                );
+            },
+        );
+        tokio::pin!(command);
+        let result = tokio::select! {
+            result = &mut command => result,
+            _ = shutdown_signal() => {
+                cancel.cancel();
+                let _ = command.await;
+                eprintln!("Authentication cancelled. Check ngn auth status; completed identity changes are not rolled back.");
+                return Ok(130);
+            }
+        }?;
+        println!("{}", result.description());
+        return Ok(if result == auth::AuthStatus::Unusable {
+            1
+        } else {
+            0
+        });
+    }
     if matches!(cli.command, Some(Commands::Doctor)) {
         println!(
             "ngn {}\nAgent Runtime Protocol: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nNo legacy state was imported. No runner or network request was started.",
@@ -239,7 +300,7 @@ async fn execute(cli: Cli) -> Result<i32> {
                 }
                 Ok(0)
             }
-            Some(Commands::Doctor) => unreachable!(),
+            Some(Commands::Doctor | Commands::Auth { .. }) => unreachable!(),
             None => {
                 ensure!(
                     std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),

@@ -21,6 +21,7 @@ NGN = ROOT / "ngn"
 
 def version_check(tag: str = "") -> str:
     version = tomllib.loads((NGN / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    assert isinstance(version, str), "Rust workspace version must be text"
     if re.fullmatch(r"0\.100\.\d+", version) is None:
         raise ValueError("Rust releases must use the reserved 0.100.x series")
     if tag and tag != f"v{version}":
@@ -42,6 +43,21 @@ def commit() -> str:
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def binary_archive(destination: Path, binary: Path, source: Path) -> None:
+    """Bundle only checked-in application docs/examples, never local configuration."""
+    with tarfile.open(destination, "w:gz") as target:
+        target.add(binary, arcname="ngn")
+        for name in (
+            "LICENSE",
+            "README.md",
+            "CHANGELOG.md",
+            "config.example.json",
+            "config.chatgpt.example.json",
+            "docs",
+        ):
+            target.add(source / name, arcname=name)
 
 
 def package(output: Path, binary: Path) -> None:
@@ -67,10 +83,7 @@ def package(output: Path, binary: Path) -> None:
         check=True,
     )
     archive = output / f"ngn-v{version}-linux-x86_64.tar.gz"
-    with tarfile.open(archive, "w:gz") as target:
-        target.add(binary, arcname="ngn")
-        for name in ("LICENSE", "README.md", "CHANGELOG.md", "config.example.json", "docs"):
-            target.add(NGN / name, arcname=name)
+    binary_archive(archive, binary, NGN)
     subprocess.run(
         [
             "git",
@@ -129,13 +142,13 @@ def verify(output: Path) -> None:
             assert wheel.read(f"ngn_nagents/{source.name}") == source.read_bytes(), (
                 "Packaged adapter is not the tested source"
             )
-    with tarfile.open(output / f"ngn-v{version}-source.tar.gz") as source:
+    with tarfile.open(output / f"ngn-v{version}-source.tar.gz") as source_archive:
         prefix = f"nagents-ngn-{version}/"
         for path, expected_version, component in [
             ("pyproject.toml", manifest["nagents_version"], "project"),
             ("ngn/Cargo.toml", version, "workspace"),
         ]:
-            member = source.extractfile(prefix + path)
+            member = source_archive.extractfile(prefix + path)
             assert member is not None, "Missing component source"
             metadata = tomllib.loads(member.read().decode())
             actual = (
@@ -148,6 +161,10 @@ def verify(output: Path) -> None:
         extracted = Path(temporary)
         with tarfile.open(output / f"ngn-v{version}-linux-x86_64.tar.gz") as archive:
             archive.extractall(extracted, filter="data")
+        for name in ("config.example.json", "config.chatgpt.example.json"):
+            assert (extracted / name).read_bytes() == (NGN / name).read_bytes(), (
+                "Packaged configuration example is not the tested source"
+            )
         binary = extracted / "ngn"
         assert subprocess.check_output([str(binary), "--version"], text=True).strip() == f"ngn {version}"
         run = subprocess.run(

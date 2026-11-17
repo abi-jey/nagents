@@ -1,4 +1,4 @@
-# Rust migration status · official 0.100.1
+# Rust migration status · 0.100.2 development
 
 ## Decision
 
@@ -55,6 +55,26 @@ initial browser client proves the new shared lifecycle and tool boundary.
   bounded backlog, stable request IDs and matching TUI/HTTP/WebSocket controls.
 - [x] Pending-input removal, clear/pause/resume and paused restart recovery without
   replaying interrupted runs or transferring a prior tool approval.
+- [x] Call-owned active tool clocks, approval-wait exclusion and compact target/time
+  summaries in both native clients.
+- [x] Touch Return/focus behavior, mobile conversation navigation and independently
+  scrollable approval previews, with real desktop/touch Chromium acceptance.
+- [x] Bounded workspace-root/nested `.gitignore` discovery and ancestor-aware search,
+  retaining non-negatable protected paths and instruction-payload isolation.
+- [x] Explicit development ChatGPT subscription configuration, capability-gated
+  runtime credentials callback and bounded native `auth login|status|logout`.
+  Shared host/runtime identity guards exclude concurrent identity mutations.
+- [x] Bounded explicit active-root [steering API](steering.md), two-sided runtime
+  negotiation, complete persisted tool-batch/final safe points and durable
+  pending/offered/applied/uncertain/undelivered receipts without automatic replay.
+- [x] Separate browser Steer active turn and TUI `/steer TEXT`/F7 receipt controls,
+  exact-run retry bindings and terminal receipt snapshots. Enter/Send remains FIFO.
+
+Host storage now uses **schema 4**, upgraded transactionally from schema 3 while
+preserving FIFO state and event cursors. Stop the host and back up important state
+before upgrading. Schema-3 binaries refuse schema 4: downgrade with a separate
+state directory or restore the backup, never edit `user_version`. The runtime
+database remains opaque; no legacy Python data is implicitly imported.
 
 ## Explicitly not migrated yet
 
@@ -69,11 +89,16 @@ These are **gaps**, not features hidden behind a compatibility fallback:
   automatic completion notifications at model boundaries and wake-up timers.
   Basic Rust supervision, inspection, budgets and explicit `agent_wait` delivery
   exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
-- Steering/interrupt delivery during an active model generation, queue reordering,
-  editing, attachments and scheduled/follow-up delivery. Plain FIFO exists in 0.100.1.
-- Skills, nested instructions, Git-ignore discovery, MCP and custom Python plugins.
+- Interrupt delivery during active model generation, queue reordering/editing,
+  attachments and scheduled/follow-up delivery. Explicit safe-point steering exists
+  in the API and native clients; plain FIFO remains separate.
+- Skills, nested instruction loading, MCP and custom Python plugins. Native discovery
+  supports workspace `.gitignore` only; user/global Git sources are not imported.
 - Model context accounting, compaction controls, usage UI and model discovery UI.
-- OAuth/device login, ChatGPT/Codex routes, Foundry Entra integration and key storage.
+- Browser auth UI/HTTP mutations, live ChatGPT login/entitlement validation,
+  Foundry Entra integration and OS keyring storage. Explicit native CLI device
+  auth/subscription development is [bounded separately](chatgpt-auth.md); its
+  official release is blocked until the public core auth API is published.
 - Attachments, image/artifact delivery, session forks/rename/trash/grouping.
 - Voice, realtime/WebRTC, local audio devices, speech-driven delegation.
 - Channels/connectors (Telegram/Twilio/etc.), durable external inbox/routing ownership.
@@ -82,8 +107,9 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Legacy configuration/database import, complete platform compatibility and benchmarks.
 
 Provider API support inherited through nagents is separate from host integration:
-the adapter currently accepts environment API-key connections, not every legacy
-authentication or media mode. Local fixture coverage is not paid-provider validation.
+the adapter accepts environment API-key connections and an opt-in, capability-gated
+ChatGPT subscription extension, not every legacy authentication or media mode.
+Local fixture coverage is not paid-provider validation.
 
 ## Iteration order
 
