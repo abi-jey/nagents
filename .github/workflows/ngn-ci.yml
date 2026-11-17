@@ -32,11 +32,13 @@ jobs:
       - name: Create isolated test environment
         run: |
           python -m venv "$RUNNER_TEMP/ngn-venv"
-          "$RUNNER_TEMP/ngn-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents ruff mypy
+          "$RUNNER_TEMP/ngn-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents ruff mypy playwright
           echo "$RUNNER_TEMP/ngn-venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$RUNNER_TEMP/ngn-venv" >> "$GITHUB_ENV"
       - name: All Rust/adapter/browser gates
         run: bash ngn/scripts/check.sh all
+      - name: Install test-only Chromium
+        run: python -m playwright install --with-deps chromium
       - name: Build optimized binary and package adapter wheel
         run: |
           cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
@@ -47,6 +49,26 @@ jobs:
           export PYTHONPATH="$(find "$GITHUB_WORKSPACE/artifacts" -name 'ngn_nagents-*.whl' -print):$GITHUB_WORKSPACE/src"
           python scripts/smoke.py --binary target/release/ngn
           python scripts/release.py verify --output ../artifacts
+      - name: Accept a fresh installed development candidate and real touch browser
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/ngn/target
+          NGN_DEV_CACHE: ${{ runner.temp }}/ngn-dev-acceptance
+        run: |
+          ./ngn/dev --test
+          candidate=$(cat "$NGN_DEV_CACHE/latest-path")
+          mkdir "$RUNNER_TEMP/ngn-packaged-app"
+          tar -xzf artifacts/ngn-v*-linux-x86_64.tar.gz -C "$RUNNER_TEMP/ngn-packaged-app" ngn
+          cmp "$candidate/app/ngn" "$RUNNER_TEMP/ngn-packaged-app/ngn"
+          python ngn/scripts/browser_smoke.py --binary "$RUNNER_TEMP/ngn-packaged-app/ngn" \
+            --runtime-python "$candidate/runtime/bin/python" \
+            --output "$RUNNER_TEMP/ngn-browser-evidence"
+      - name: Save real-browser evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ngn-browser-${{ github.sha }}
+          path: ${{ runner.temp }}/ngn-browser-evidence/*.png
+          if-no-files-found: warn
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ngn-linux-x86_64-${{ github.sha }}
