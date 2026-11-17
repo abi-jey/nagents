@@ -7,6 +7,7 @@ from contextlib import suppress
 
 from nagents.tools import ToolRegistry
 
+from . import auth
 from .protocol import MAX_FRAME
 from .protocol import HostFrame
 from .protocol import ProtocolError
@@ -25,7 +26,10 @@ async def serve() -> int:
     task: asyncio.Task[None] | None = None
     incoming: asyncio.Task[HostFrame] | None = None
     try:
-        output("", {"type": "ready", "runtime": "nagents", "capabilities": ["host_tools", "cancel"]})
+        capabilities = ["host_tools", "cancel"]
+        if auth.available():
+            capabilities.append("chatgpt_auth")
+        output("", {"type": "ready", "runtime": "nagents", "capabilities": capabilities})
         first = await read(reader)
         start = Start.parse(first.message)
         executor = HostExecutor(ToolRegistry(), first.run_id, output)
@@ -68,6 +72,11 @@ async def serve() -> int:
 def main() -> int:
     logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
     try:
+        if len(sys.argv) > 1:
+            if sys.argv[1] == "auth":
+                return asyncio.run(auth.serve(sys.argv[2:]))
+            print("ngn-nagents: invalid runtime mode", file=sys.stderr)
+            return 2
         return asyncio.run(serve())
     except (ProtocolError, EOFError, BrokenPipeError):
         print("ngn-nagents: invalid/closed host protocol stream", file=sys.stderr)

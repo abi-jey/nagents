@@ -65,6 +65,11 @@ The adapter uses public `Agent.run()`, `ToolRegistry.register()` and
 `ToolExecutor.execute()` APIs. **No `nagents.harness`, Textual, FastAPI or Uvicorn
 is imported.** The core agents library remains independently usable and unchanged.
 
+Development-only [ChatGPT device login](docs/chatgpt-auth.md) is an explicit
+`kind: "openai", auth: "chatgpt"` connection with native `auth login|status|logout`
+commands. Its official release is blocked until the new public core auth API is
+published; it is **not available in nagents 0.28.5**. API-key connections are unchanged.
+
 ## Controls
 
 - **Enter** sends, or queues while busy/paused; **Shift+Enter** inserts a newline.

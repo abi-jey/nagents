@@ -69,10 +69,12 @@ pub struct Host {
     workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     emission: Mutex<()>,
     closed: AtomicBool,
+    _identity_guard: crate::auth::IdentityGuard,
 }
 
 impl Host {
     pub fn open(config: Config) -> Result<Arc<Self>> {
+        let identity_guard = crate::auth::IdentityGuard::host(&config.data_dir)?;
         let store = Store::open(&config.state_dir())?;
         let protected = config.data_dir.canonicalize()?;
         let tools = Tools::open(
@@ -93,6 +95,7 @@ impl Host {
             workers: Mutex::new(Vec::new()),
             emission: Mutex::new(()),
             closed: AtomicBool::new(false),
+            _identity_guard: identity_guard,
         }))
     }
 

@@ -6,6 +6,20 @@ use serde_json::Value;
 pub const VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAuth {
+    #[default]
+    ApiKey,
+    Chatgpt,
+}
+
+impl ProviderAuth {
+    fn is_api_key(&self) -> bool {
+        *self == Self::ApiKey
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolDefinition {
@@ -40,7 +54,11 @@ pub struct ProviderConfig {
     pub api: String,
     #[serde(default)]
     pub base_url: String,
+    #[serde(default)]
     pub api_key_env: String,
+    /// Omitted for API keys so existing v1 runtimes receive the original wire shape.
+    #[serde(default, skip_serializing_if = "ProviderAuth::is_api_key")]
+    pub auth: ProviderAuth,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +69,9 @@ pub struct StartRun {
     pub system_prompt: String,
     /// Opaque runtime-owned storage. The host never opens the nagents schema.
     pub database: String,
+    /// Host-generated absolute path, only sent after chatgpt_auth negotiation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_store: Option<String>,
     pub provider: ProviderConfig,
     pub tools: Vec<ToolDefinition>,
     pub max_tool_rounds: u32,
@@ -238,5 +259,24 @@ mod tests {
         };
         let encoded = serde_json::to_vec(&frame).unwrap();
         assert!(serde_json::from_slice::<HostFrame>(&encoded).is_ok());
+    }
+
+    #[test]
+    fn api_key_wire_remains_identical_and_auth_is_opt_in() {
+        let source = json!({"session_id":"s", "prompt":"hello", "system_prompt":"policy", "database":"/runtime.sqlite3",
+            "provider":{"kind":"openai_compatible", "model":"test", "api":"auto", "base_url":"", "api_key_env":"TEST_KEY"},
+            "tools":[], "max_tool_rounds":10});
+        let run: StartRun = serde_json::from_value(source.clone()).unwrap();
+        assert_eq!(run.provider.auth, ProviderAuth::ApiKey);
+        assert!(run.auth_store.is_none());
+        assert_eq!(serde_json::to_value(run).unwrap(), source);
+        let mut subscription = source;
+        subscription["provider"]["auth"] = json!("chatgpt");
+        subscription["auth_store"] = json!("/private/auth/openai.json");
+        let run: StartRun = serde_json::from_value(subscription.clone()).unwrap();
+        assert_eq!(run.provider.auth, ProviderAuth::Chatgpt);
+        assert_eq!(serde_json::to_value(run).unwrap(), subscription);
+        subscription["provider"]["auth"] = json!("codex_home");
+        assert!(serde_json::from_value::<StartRun>(subscription).is_err());
     }
 }

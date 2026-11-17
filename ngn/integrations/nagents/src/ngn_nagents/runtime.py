@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import stat
+from contextlib import ExitStack
 from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,11 @@ from nagents.tools import ToolRegistry
 from nagents.types import JsonSchema
 from nagents.types import ToolCall
 
+from .auth import Auth
+from .auth import auth_factory
+from .auth import identity_guard
+from .auth import joined_cleanup
+from .auth import store_path
 from .protocol import Emitter
 from .protocol import Json
 from .protocol import ProtocolError
@@ -49,6 +56,7 @@ class Start:
     provider: dict[str, object]
     tools: list[Definition]
     max_tool_rounds: int
+    auth_store: Path | None = None
 
     @classmethod
     def parse(cls, message: dict[str, object]) -> Start:
@@ -56,11 +64,18 @@ class Start:
         if message["type"] != "start":
             raise ProtocolError("Expected a start message")
         run = mapping(message["run"])
-        fields(run, {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"})
+        fields(
+            run,
+            {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"},
+            frozenset({"auth_store"}),
+        )
         provider = mapping(run["provider"])
-        fields(provider, {"kind", "model", "api", "base_url", "api_key_env"})
-        for key in provider:
-            text(provider, key, 4096, empty=key in {"api", "base_url"})
+        mode = validate_provider(provider)
+        auth_store = None
+        if mode == "chatgpt":
+            auth_store = store_path(text(run, "auth_store", 4096))
+        elif "auth_store" in run:
+            raise ProtocolError("auth_store is only allowed for ChatGPT authentication")
         tools = run["tools"]
         if not isinstance(tools, list) or len(tools) > 128:
             raise ProtocolError("Invalid tool definitions")
@@ -83,6 +98,8 @@ class Start:
         database = Path(text(run, "database", 4096))
         if not database.is_absolute():
             raise ProtocolError("Runtime storage path must be absolute")
+        if auth_store is not None and database.parent == auth_store.parent:
+            raise ProtocolError("Runtime conversation storage must be separate from authentication storage")
         return cls(
             text(run, "session_id", 80),
             text(run, "prompt"),
@@ -91,6 +108,7 @@ class Start:
             provider,
             definitions,
             rounds,
+            auth_store,
         )
 
 
@@ -146,11 +164,34 @@ class HostExecutor(ToolExecutor):
         super().__init__(registry)
 
 
+def validate_provider(settings: dict[str, object]) -> str:
+    fields(settings, {"kind", "model", "api", "base_url", "api_key_env"}, frozenset({"auth"}))
+    for key in settings:
+        text(settings, key, 4096, empty=key in {"api", "base_url", "api_key_env"})
+    mode = text(settings, "auth", 16) if "auth" in settings else "api_key"
+    if mode not in {"api_key", "chatgpt"}:
+        raise ProtocolError("Unsupported provider authentication mode")
+    if mode == "chatgpt":
+        if (
+            settings["kind"] != "openai"
+            or settings["api_key_env"] != ""
+            or settings["api"] not in {"", "auto", "responses"}
+            or settings["base_url"] not in {"", "https://api.openai.com/v1", "https://api.openai.com/v1/"}
+            or re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", text(settings, "model", 128)) is None
+        ):
+            raise ProtocolError(
+                "ChatGPT auth requires kind openai, a bounded model ID, auto/responses, no key environment setting and no custom endpoint"
+            )
+    elif re.fullmatch(r"[A-Za-z0-9_]{1,128}", text(settings, "api_key_env", 128)) is None:
+        raise ProtocolError("api_key_env must name an environment variable")
+    return mode
+
+
 def create_provider(settings: dict[str, object]) -> Provider:
+    if validate_provider(settings) != "api_key":
+        raise ProtocolError("ChatGPT requires an explicit host-owned auth store and credentials callback")
     kind = ProviderType(text(settings, "kind", 128))
     variable = text(settings, "api_key_env", 128)
-    if not variable.replace("_", "A").isascii() or not variable.replace("_", "A").isalnum():
-        raise ProtocolError("api_key_env must name an environment variable")
     key = os.environ.get(variable, "")
     if not key.strip():
         raise ProtocolError("Configured provider API-key environment variable is not set")
@@ -167,7 +208,7 @@ def _unbound(**arguments: object) -> None:
     raise RuntimeError("Host tools cannot execute inside Python")
 
 
-def create_agent(start: Start, executor: HostExecutor) -> Agent:
+def create_agent(start: Start, executor: HostExecutor, provider: Provider | None = None) -> Agent:
     start.database.parent.mkdir(parents=True, exist_ok=True)
     if start.database.exists() or start.database.is_symlink():
         metadata = start.database.lstat()
@@ -177,7 +218,7 @@ def create_agent(start: Start, executor: HostExecutor) -> Agent:
     os.close(descriptor)
     start.database.chmod(0o600)
     agent = Agent(
-        provider=create_provider(start.provider),
+        provider=provider if provider is not None else create_provider(start.provider),
         session_manager=SessionManager(start.database),
         system_prompt=start.system_prompt,
         max_tool_rounds=start.max_tool_rounds,
@@ -197,10 +238,29 @@ def create_agent(start: Start, executor: HostExecutor) -> Agent:
 
 async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None:
     agent: Agent | None = None
+    auth: Auth | None = None
+    provider: Provider | None = None
+    ownership = ExitStack()
     status = "failed"
     error = "Agent ended without a successful terminal event"
     try:
-        agent = create_agent(start, executor)
+        if validate_provider(start.provider) == "chatgpt":
+            if start.auth_store is None:
+                raise ProtocolError("ChatGPT requires an explicit host-owned auth store")
+            # Keep a shared guard in the actual runtime too. An orphaned runner
+            # must finish cancellation/cleanup before CLI identity changes win.
+            ownership.enter_context(identity_guard(store_path(str(start.auth_store)), exclusive=False))
+            auth = auth_factory()(store_path(str(start.auth_store)))
+            from nagents.provider.openai import OpenAIProvider
+
+            # Explicit callback bypasses CODEX_HOME/discovery and all API-key fallbacks.
+            # A default public base_url is validated above, never forwarded to OAuth.
+            provider = OpenAIProvider(credentials=auth.credentials, model=text(start.provider, "model", 128))
+        else:
+            if start.auth_store is not None:
+                raise ProtocolError("auth_store is only allowed for ChatGPT authentication")
+            provider = create_provider(start.provider)
+        agent = create_agent(start, executor, provider)
         completed = False
         failed = False
         async with aclosing(agent.run(start.prompt, session_id=start.session_id, user_id="ngn-rust")) as events:
@@ -229,9 +289,23 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
     except Exception:
         error = "Agent/provider failed. Verify the runtime installation, provider configuration and credentials. No automatic tool retry was performed."
     finally:
-        if agent is not None:
+
+        async def cleanup() -> None:
             try:
-                await agent.close()
-            except Exception:
-                status, error = "failed", "Agent resource cleanup failed"
+                if agent is not None:
+                    await agent.close()
+                elif provider is not None:
+                    await provider.close()
+            finally:
+                if auth is not None:
+                    await auth.close()
+
+        try:
+            await joined_cleanup(cleanup())
+        except asyncio.CancelledError:
+            status, error = "cancelled", ""
+        except Exception:
+            status, error = "failed", "Agent resource cleanup failed"
+        finally:
+            ownership.close()
         emit(executor.run_id, {"type": "finished", "status": status, "error": error})

@@ -73,7 +73,10 @@ These are **gaps**, not features hidden behind a compatibility fallback:
   editing, attachments and scheduled/follow-up delivery. Plain FIFO exists in 0.100.1.
 - Skills, nested instructions, Git-ignore discovery, MCP and custom Python plugins.
 - Model context accounting, compaction controls, usage UI and model discovery UI.
-- OAuth/device login, ChatGPT/Codex routes, Foundry Entra integration and key storage.
+- Browser auth UI/HTTP mutations, live ChatGPT login/entitlement validation,
+  Foundry Entra integration and OS keyring storage. Explicit native CLI device
+  auth/subscription development is [bounded separately](chatgpt-auth.md); its
+  official release is blocked until the public core auth API is published.
 - Attachments, image/artifact delivery, session forks/rename/trash/grouping.
 - Voice, realtime/WebRTC, local audio devices, speech-driven delegation.
 - Channels/connectors (Telegram/Twilio/etc.), durable external inbox/routing ownership.
@@ -82,8 +85,9 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Legacy configuration/database import, complete platform compatibility and benchmarks.
 
 Provider API support inherited through nagents is separate from host integration:
-the adapter currently accepts environment API-key connections, not every legacy
-authentication or media mode. Local fixture coverage is not paid-provider validation.
+the adapter accepts environment API-key connections and an opt-in, capability-gated
+ChatGPT subscription extension, not every legacy authentication or media mode.
+Local fixture coverage is not paid-provider validation.
 
 ## Iteration order
 
