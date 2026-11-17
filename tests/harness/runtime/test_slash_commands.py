@@ -26,9 +26,12 @@ from tests.support.tui import idle
 from tests.support.tui import make_app
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from textual.message import Message
+
+    from nagents.skills import Skill
 
 
 @pytest.mark.parametrize("size", [(60, 20), (80, 24), (132, 38)])
@@ -340,7 +343,9 @@ def test_required_arguments_and_prompt_command_follow_normal_run(tmp_path: Path)
 
 @pytest.mark.requires_posix
 @pytest.mark.parametrize("created_after_start", [False, True])
-def test_discovered_skill_is_invocable_from_composer(tmp_path: Path, created_after_start: bool) -> None:
+def test_discovered_skill_is_invocable_from_composer(
+    tmp_path: Path, created_after_start: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     directory = tmp_path / ".agents/skills/audit"
     directory.mkdir(parents=True)
 
@@ -355,12 +360,45 @@ def test_discovered_skill_is_invocable_from_composer(tmp_path: Path, created_aft
     async def scenario() -> None:
         harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", demo=True))
         app = NagentsApp(harness)
+        discovering, release = asyncio.Event(), asyncio.Event()
         async with app.run_test(size=(100, 30)) as pilot:
             await idle(app, pilot)
             if created_after_start:
                 assert harness.commands.get("skill:audit") is None
                 install()
-            await pilot.press(*"/skill:audit", "enter")
+                refresh = harness.agent.refresh_skills
+
+                async def delayed_refresh() -> Mapping[str, Skill]:
+                    discovering.set()
+                    await release.wait()
+                    return await refresh()
+
+                monkeypatch.setattr(harness.agent, "refresh_skills", delayed_refresh)
+            await pilot.press(*"/skill:audit")
+            if created_after_start:
+                await asyncio.wait_for(discovering.wait(), HANG_GUARD)
+                assert app.query_one(Composer).text == "/skill:audit"
+                assert harness.commands.get("skill:audit") is None
+                assert await harness.history() == []
+                discovery = app._skill_completion_worker
+                assert discovery is not None and not discovery.is_finished
+                # The same refresh also runs on every animation tick. Replacing
+                # an unfinished scan here can starve slow discovery forever.
+                app._refresh_completions()
+                assert app._skill_completion_worker is discovery
+                release.set()
+            # Backend idleness and Pilot's key delivery do not await the owned
+            # discovery worker. Enter selects a suggestion only after it exists;
+            # before that, it submits the literal command instead of prefilling.
+            menu = app.query_one(SlashMenu)
+            async with asyncio.timeout(HANG_GUARD):
+                while True:
+                    selected = menu.selected()
+                    if menu.display and selected is not None and selected.name == "skill:audit":
+                        assert selected.source == "skill"
+                        break
+                    await pilot.pause()
+            await pilot.press("enter")
             assert app.query_one(Composer).text == "/skill:audit "
             await pilot.press(*"Check the docs", "enter")
             await idle(app, pilot)

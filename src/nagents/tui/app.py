@@ -757,13 +757,18 @@ class NagentsApp(App[None]):
         menu.display = eligible
         if eligible:
             menu.update_commands(self._completion_commands(), text[1:])
-            if self._backend_ready:
+            if self._backend_ready and (
+                self._skill_completion_worker is None or self._skill_completion_worker.is_finished
+            ):
+                # Discovery does not depend on the typed filter; completion uses
+                # the current composer text. Animation ticks must not repeatedly
+                # cancel a slow scan before it can publish its catalog.
                 self._skill_completion_worker = self.run_worker(
                     self._discover_command_skills, group="skill-completions", exclusive=True, exit_on_error=False
                 )
 
     async def _discover_command_skills(self) -> None:
-        """Refresh suggestions in an owned, replaceable worker, never in list()."""
+        """Refresh suggestions in one owned worker, never in list()."""
         try:
             await self.harness.agent.refresh_skills()
             self._skill_commands_enabled = (
