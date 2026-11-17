@@ -16,6 +16,7 @@ cap-std = "3"
 clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures-util = "0.3"
+ignore = "0.4.34"
 ngn-core = { path = "crates/ngn-core" }
 ngn-protocol = { path = "crates/ngn-protocol" }
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }

@@ -13,6 +13,11 @@
 - Touch browser Return stays in the draft; deliberate Send/Queue and Stop preserve
   composer focus. Mobile conversation controls, scrollable approval previews and
   non-collapsing decision controls have optional real-Chromium acceptance coverage.
+- Native list/search respect bounded workspace `.gitignore` rules, including nested
+  origins, negation and explicit starting paths. Protected paths remain excluded.
+- The Python library exposes device authentication and guarded storage without a
+  harness/UI import, with cooperative cross-process refresh ownership. This does
+  not yet expose Codex login or subscription configuration in the Rust application.
 
 This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
 parity. Production deployment and paid-provider/Codex validation are separate gates.

@@ -22,6 +22,8 @@
   ["nagents.channels.store", "nagents._async", "finish_on_cancel"],
   ["nagents.channels.store", "nagents._sqlite", "write_database"],
   ["nagents.harness.providers.connection", "nagents.provider.codex.openai", "_load_config"],
+  ["nagents.harness.providers.auth", "nagents.provider.device_auth", "_Tokens"],
+  ["nagents.harness.providers.auth", "nagents.provider.device_auth", "_tokens"],
   ["nagents.web.settings.provider_setup", "nagents.harness.providers.connection", "_EnvOpenAIProvider"],
   ["nagents.harness.remote.artifacts", "nagents._async", "finish_on_cancel"],
   ["nagents.harness.remote.runtime", "nagents._async", "finish_on_cancel"],

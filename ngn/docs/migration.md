@@ -55,6 +55,12 @@ initial browser client proves the new shared lifecycle and tool boundary.
   bounded backlog, stable request IDs and matching TUI/HTTP/WebSocket controls.
 - [x] Pending-input removal, clear/pause/resume and paused restart recovery without
   replaying interrupted runs or transferring a prior tool approval.
+- [x] Call-owned active tool clocks, approval-wait exclusion and compact target/time
+  summaries in both native clients.
+- [x] Touch Return/focus behavior, mobile conversation navigation and independently
+  scrollable approval previews, with real desktop/touch Chromium acceptance.
+- [x] Bounded workspace-root/nested `.gitignore` discovery and ancestor-aware search,
+  retaining non-negatable protected paths and instruction-payload isolation.
 
 ## Explicitly not migrated yet
 
@@ -71,9 +77,12 @@ These are **gaps**, not features hidden behind a compatibility fallback:
   exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
 - Steering/interrupt delivery during an active model generation, queue reordering,
   editing, attachments and scheduled/follow-up delivery. Plain FIFO exists in 0.100.1.
-- Skills, nested instructions, Git-ignore discovery, MCP and custom Python plugins.
+- Skills, nested instruction loading, MCP and custom Python plugins. Native discovery
+  supports workspace `.gitignore` only; user/global Git sources are not imported.
 - Model context accounting, compaction controls, usage UI and model discovery UI.
 - OAuth/device login, ChatGPT/Codex routes, Foundry Entra integration and key storage.
+  Public device auth/guarded storage are now available in the Python core; that
+  prerequisite is not yet an implemented Rust login or subscription connection.
 - Attachments, image/artifact delivery, session forks/rename/trash/grouping.
 - Voice, realtime/WebRTC, local audio devices, speech-driven delegation.
 - Channels/connectors (Telegram/Twilio/etc.), durable external inbox/routing ownership.

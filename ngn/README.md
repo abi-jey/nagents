@@ -63,7 +63,8 @@ the file, browser, URL or command line. `.env` is not loaded automatically.
 
 The adapter uses public `Agent.run()`, `ToolRegistry.register()` and
 `ToolExecutor.execute()` APIs. **No `nagents.harness`, Textual, FastAPI or Uvicorn
-is imported.** The core agents library remains independently usable and unchanged.
+is imported.** The core agents library remains independently usable; public library
+changes preserve the existing harness import paths rather than embedding that harness.
 
 ## Controls
 
@@ -149,6 +150,13 @@ Native tools: `read_file`, `list_files`, literal `search`, `write`, literal `edi
 and `shell`. Existing file changes require the exact SHA-256 from an inspected
 file and are revalidated after approval. File tools are capability-relative,
 bounded, and reject traversal, symlinks, hard links and common credential paths.
+List/search honor only workspace-root/nested `.gitignore` files, not global/user
+Git configuration or `.git/info/exclude`. Ignored ancestors are checked even for
+explicit search paths; negation cannot override protected/credential/build exclusions.
+Rules use bounded capability-relative reads and a mature Git-ignore matcher. An
+unsafe/unreadable/invalid ignore file fails discovery closed, without leaking its
+contents or returning a misleading partial result. Discovery does not load project
+instructions; nested instruction/skill execution is still a separate migration gap.
 Approved shell commands and a trusted runtime have full access as your user:
 **this is not an OS sandbox**. See [security](docs/security.md).
 
@@ -181,7 +189,10 @@ Artifacts and state default to `$XDG_CACHE_HOME/ngn-rust-dev/<checkout-hash>/`
 stop one host before opening another on the same development state. Pass
 `--data-dir PATH` only when deliberately choosing another Rust state directory.
 `NGN_DEV_CACHE` overrides the cache; `NGN_DEV_PYTHON` chooses the bootstrap
-interpreter; `CARGO_TARGET_DIR` can reuse a trusted compilation cache. Rust and
+interpreter; `CARGO_TARGET_DIR` may select a **dedicated per-checkout** compilation
+directory. Do not share a target between concurrently changing worktrees: protocol
+metadata from another source tree can invalidate both compilation and test evidence.
+Rust and
 embedded web assets are rebuilt on every invocation; Python wheels and the runtime
 environment are freshly built/installed. A source change during the build aborts
 the candidate rather than mixing revisions.
