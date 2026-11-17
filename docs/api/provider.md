@@ -378,7 +378,7 @@ ngn login --status
 import asyncio
 
 from nagents import OpenAIProvider, ModelListError
-from nagents.harness.providers.auth import OpenAIAuth
+from nagents.provider.device_auth import OpenAIAuth
 
 
 async def codex_models() -> None:
@@ -395,6 +395,60 @@ async def codex_models() -> None:
 
 asyncio.run(codex_models())
 ```
+
+### Application-owned device authentication
+
+`nagents.provider.device_auth` exposes `OpenAIAuth`, `OpenAIAuthError`, and
+`DeviceAuthorization` without importing the harness, TUI, web host or server.
+The legacy harness import is a compatibility alias to the same implementation.
+Embeddings such as the Rust runtime adapter must supply their **own explicit
+store path** and credential callback; do not instantiate `OpenAIProvider()` with
+no authentication source (that enables Codex discovery).
+
+```python
+from pathlib import Path
+
+from nagents.provider.device_auth import OpenAIAuth
+from nagents.provider.openai import OpenAIProvider
+
+auth = OpenAIAuth(path=Path("/absolute/application-owned/private/auth/openai.json"))
+provider = OpenAIProvider(credentials=auth.credentials, model="gpt-5.6-terra")
+# For an explicit user-requested login only:
+# authorization = await auth.start_device_login()
+# Display authorization.verification_url and authorization.user_code to the user.
+# await auth.complete_device_login(authorization)
+# await auth.logout_async()
+```
+
+`credentials()` returns `CodexCredentials` asynchronously and refreshes only if
+needed. Neither authentication nor callback failure discovers another cache or
+falls back to an API key. `logged_in()` and `status()` check local saved presence,
+not upstream validity. Omitting `path` retains the legacy XDG location shown
+above, solely for compatibility; this module never reads `CODEX_HOME`.
+
+The plaintext store requires POSIX ownership checks: an owned private directory
+(`700`), regular private files (`600`), no symlinks/hardlinks, and safe ancestors.
+`nagents.protected_store` provides the reusable filesystem and lock boundary.
+Cooperative processes sharing a path use nonblocking `flock` with cancellable
+async waiting, reload tokens under lock, and serialize refresh ownership across
+the entire exchange. A short independent store lock lets login/logout invalidate
+pending refreshes without waiting for network IO. Persistent revisions prevent
+older login/refresh work from overwriting a newer login or resurrecting logout.
+`logout()` is synchronous and fails immediately with a safe busy error if that
+short lock is contended; `logout_async()` waits cancellation-safely instead.
+
+Sibling `.lock`, `.refresh.lock`, and `.state.json` files retain ownership,
+revision and refresh-attempt metadata after logout. **Do not remove or rename
+them while any process may use this store.** An interrupted, failed, or ambiguous
+refresh leaves a durable attempt marker: a new device login is required rather
+than replaying a possibly consumed refresh token. Explicit `429`/`slow_down`
+responses retain the bounded OAuth backoff; connection failures, cancellation,
+and process death never trigger a refresh replay. A crash after a validated token
+replacement may leave an old marker, which cannot block or overwrite the newer
+stored token. Locks are advisory, not protection from hostile same-user code;
+use a local filesystem with working POSIX `flock`, atomic replace and `fsync`.
+Sharing with older versions that do not implement this locking protocol is
+unsupported. This boundary does not establish full Rust/Python harness parity.
 
 For ChatGPT/OAuth authentication, Codex discovery uses the fixed
 `https://chatgpt.com/backend-api/codex/models` route. Its `client_version` query
