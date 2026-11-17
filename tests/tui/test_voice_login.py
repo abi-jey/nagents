@@ -25,7 +25,8 @@ from nagents.web.live import login
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import setup_harness
 from tests.support.tui import idle
-from tests.tui.test_voice import FakeLocalAudio
+from tests.support.voice_audio import PlaybackLocalAudio
+from tests.support.voice_audio import PlaybackSpeaker
 from tests.tui.test_voice import configure
 from tests.tui.test_voice import until
 
@@ -115,7 +116,7 @@ def test_chatgpt_voice_uses_same_identity_native_handoff_and_confirmed_close(
         origin = f"http://127.0.0.1:{runner.addresses[0][1]}"
         monkeypatch.setattr(login, "CALLS_URL", origin + "/calls")
         monkeypatch.setattr(login, "SIDEBAND_URL", origin + "/live/")
-        monkeypatch.setattr(voice_runtime, "LocalAudio", FakeLocalAudio)
+        monkeypatch.setattr(voice_runtime, "LocalAudio", PlaybackLocalAudio)
 
         def no_api_fallback(provider: Provider, **kwargs: object) -> str:
             raise AssertionError("A subscription call must not use the API-key transport")
@@ -145,6 +146,8 @@ def test_chatgpt_voice_uses_same_identity_native_handoff_and_confirmed_close(
                     async with asyncio.timeout(HANG_GUARD):
                         await voice.start()
                         await spoken.wait()
+                        assert voice.audio is not None and isinstance(voice.audio.output, PlaybackSpeaker)
+                        await voice.audio.output.played.wait()
                         await idle(app, pilot)
                         await until(lambda: "Hello" in str(app.query_one(VoicePanel).content))
                         assert len(providers[0].requests) == 1
@@ -152,7 +155,7 @@ def test_chatgpt_voice_uses_same_identity_native_handoff_and_confirmed_close(
                         assert sessions[0]["audio"] == {"output": {"voice": "sol"}}
                         assert sessions[0]["delegation"] == {"type": "client", "ack_filler": False}
                         await voice.stop()
-                    assert voice.payload["status"] == "closed"
+                    assert voice.payload["status"] == "closed", voice.payload
                     assert "Finalization confirmed" in str(voice.payload["message"])
                     assert sum(command["type"] == "session.close" for command in commands) == 1
                 else:
