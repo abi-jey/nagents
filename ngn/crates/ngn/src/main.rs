@@ -1,3 +1,4 @@
+mod install;
 #[cfg(test)]
 #[path = "../../ngn-core/src/test_support.rs"]
 mod test_support;
@@ -66,6 +67,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install a verified self-contained bundle, without loading config or state.
+    Install(install::Install),
+    /// Update only this managed installation, without touching running hosts/state.
+    Update(install::Update),
     /// Explicit ChatGPT device login and local status/logout. No browser is opened.
     Auth {
         #[command(subcommand)]
@@ -198,6 +203,26 @@ async fn headless(host: Arc<Host>, session: &str, prompt: &str, json: bool) -> R
 }
 
 async fn execute(cli: Cli) -> Result<i32> {
+    if let Some(command @ (Commands::Install(_) | Commands::Update(_))) = &cli.command {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let operation = async {
+            match command {
+                Commands::Install(arguments) => install::install(arguments, &cancel).await,
+                Commands::Update(arguments) => install::update(arguments, &cancel).await,
+                _ => unreachable!(),
+            }
+        };
+        tokio::pin!(operation);
+        return tokio::select! {
+            result = &mut operation => { result?; Ok(0) },
+            _ = shutdown_signal() => {
+                cancel.cancel();
+                let _ = operation.await;
+                eprintln!("Installation cancelled. Inspect `current` if cancellation raced with successful activation; existing hosts and state were not changed.");
+                Ok(130)
+            }
+        };
+    }
     let mut config = Config::load(cli.config.as_deref())?;
     if let Some(workspace) = cli.workspace {
         config.workspace = workspace;
@@ -269,6 +294,13 @@ async fn execute(cli: Cli) -> Result<i32> {
             config.read_only,
             config.runner.first().map(String::as_str).unwrap_or("unset")
         );
+        if let Some(runtime) = &config.bundled_runtime {
+            println!(
+                "Bundled CPython: {}\nBundled runtime: {}",
+                runtime.python_version(),
+                runtime.python().display()
+            );
+        }
         return Ok(0);
     }
     let host = Host::open(config)?;
@@ -300,7 +332,12 @@ async fn execute(cli: Cli) -> Result<i32> {
                 }
                 Ok(0)
             }
-            Some(Commands::Doctor | Commands::Auth { .. }) => unreachable!(),
+            Some(
+                Commands::Doctor
+                | Commands::Auth { .. }
+                | Commands::Install(_)
+                | Commands::Update(_),
+            ) => unreachable!(),
             None => {
                 ensure!(
                     std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
