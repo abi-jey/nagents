@@ -362,7 +362,10 @@ def test_pane_focus_and_tool_keyboard_navigation(tmp_path: Path, size: tuple[int
 
 
 @pytest.mark.parametrize("size", [(80, 24), (140, 40)])
-def test_approval_paging_from_decision_buttons_keeps_exact_proposal(tmp_path: Path, size: tuple[int, int]) -> None:
+@pytest.mark.parametrize("defer_scroll", [False, True])
+def test_approval_paging_from_decision_buttons_keeps_exact_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: tuple[int, int], defer_scroll: bool
+) -> None:
     async def scenario() -> None:
         app = make_app(FakeHarness(tmp_path))
         async with app.run_test(size=size) as pilot:
@@ -392,16 +395,40 @@ def test_approval_paging_from_decision_buttons_keeps_exact_proposal(tmp_path: Pa
             assert allow.region.right <= size[0]
             await pilot.press("f6")
             assert app.focused is deny
+
+            async def page(key: str, expected: float) -> None:
+                before = scroll.scroll_y
+                deferred: list[InvokeLater] = []
+                post_message = scroll.post_message
+
+                def defer_scroll_delivery(message: TextualMessage) -> bool:
+                    if defer_scroll and isinstance(message, InvokeLater):
+                        deferred.append(message)
+                        return True
+                    return post_message(message)
+
+                with monkeypatch.context() as delivery:
+                    delivery.setattr(scroll, "post_message", defer_scroll_delivery)
+                    await pilot.press(key)
+                    await pilot.wait_for_scheduled_animations()
+                    if defer_scroll:
+                        # Nonanimated paging runs after refresh, not in the
+                        # animator. Its idle barrier can finish before paging.
+                        assert deferred
+                        assert scroll.scroll_y == before
+                for message in deferred:
+                    post_message(message)
+                async with asyncio.timeout(HANG_GUARD):
+                    while scroll.scroll_y != expected:
+                        await pilot.pause()
+
             for button in (deny, allow):
                 assert app.focused is button
                 before = scroll.scroll_y
-                await pilot.press("pagedown")
-                # CPU-idle is not a completed refresh/scroll barrier on Windows.
-                await pilot.wait_for_scheduled_animations()
+                await page("pagedown", min(before + scroll.scrollable_content_region.height, scroll.max_scroll_y))
                 assert scroll.scroll_y > before
                 assert app.focused is button
-                await pilot.press("pageup")
-                await pilot.wait_for_scheduled_animations()
+                await page("pageup", before)
                 assert scroll.scroll_y == before
                 assert app.focused is button
                 assert not approval.done()

@@ -42,8 +42,8 @@ changes ship as later tested `0.100.x` releases.
 A read-only audit compared historical branches and worktrees to `e7f94b3`, checking
 patch content as well as ancestry because squash merges hide ancestry equivalence.
 The priority Python identity/Codex, voice, steering, managed-shell, MCP, settings
-and A2A work is already integrated on main. The genuine outstanding queue candidate
-is PR #275, whose reviewed history is included here but remains separately gated.
+and A2A work is already integrated on main. The reviewed queue work from PR #275
+has since merged into main and is included in this integration's ancestry.
 Six historical worktrees contained dirty work: two already-integrated fixes and
 four unwired UI prototypes. Those checkouts and branches are left untouched; an
 unmerged branch name alone is not evidence that its old implementation should win.
@@ -53,9 +53,11 @@ and serializes cooperative POSIX
 refresh owners; ambiguous refresh attempts require fresh device login rather than
 retrying a possibly spent renewable token. Explicit Rust subscription configuration
 and bounded CLI login/status/logout now use that public API and enforce exclusive
-identity mutations against live hosts/runtimes. Browser auth UI and live account
-tests remain separate gates. Published `nagents 0.28.5` does not have
-this new public API; a future official adapter using it needs a tested core release.
+identity mutations against live hosts/runtimes. Bounded live read-only Codex
+questions now pass in the installed Linux TUI and Chromium; broader account/refresh
+coverage, live steering delivery and browser auth UI remain separate gates.
+Published `nagents 0.28.5` does not have this new public API; a future official
+adapter using it needs a tested core release and coordinated dependency minimum.
 
 ## One-command development
 
@@ -67,9 +69,10 @@ a separate development UI. Its manifest names the commit, working-source digest,
 dirty status and artifact digests; it is not an official release manifest.
 
 The full shared Python suite at the released baseline passed locally with
-**6,345 passed, 10 skipped**. The combined native-discovery/public-auth/fixture
-candidate passed **6,390 tests, 10 skips**, plus **59 Rust** and **16 browser**
-regressions, all eight installed acceptance suites and actual desktop/touch Chromium.
+**6,345 passed, 10 skipped**. The final integrated source candidate `2c9f24e` passed
+**6,397 tests, 10 skips**, plus **89 Rust**, **26 adapter (zero skips)**,
+**30 script** and **28 browser** regressions, all eight installed acceptance suites
+and actual desktop/touch Chromium and PTY steering checks.
 Both Python runs used private temporary roots. `/tmp/opencode` is
 group-writable on this machine and is deliberately rejected by private A2A and
 credential-storage checks; the earlier full-suite run beneath it was invalid.

@@ -34,8 +34,14 @@ These commands are opt-in; merely starting ngn never initiates login. Enable
 device authorization in ChatGPT security/workspace settings if required. Login
 prints only the fixed `https://auth.openai.com/codex/device` address and a bounded
 user code. Complete the authorization manually in your own browser. No browser
-is opened and no approval is automated. No live login or entitlement testing has
-been performed for this development implementation.
+is opened and no approval is automated.
+
+The integrated Linux development candidate was tested with a separately authorized
+fresh login and `gpt-5.6-terra`: both a real PTY TUI and Chromium web conversation
+used native read-only file tools and returned distinct expected fixture contents.
+Both hosts joined their runners on shutdown, and the TUI restored terminal settings.
+This confirms those bounded questions for that account, not general model
+entitlement, refresh recovery, live steering delivery or full provider/UI parity.
 
 `status` only inspects protected local storage: it does not refresh, resolve
 credentials, or contact a network service. “Saved” means local credential
@@ -123,7 +129,9 @@ EOF/exit/cleanup waits. Stderr and upstream exception/server bodies are discarde
 Device-auth IDs, access/refresh/ID tokens and account routing credentials never
 belong in this protocol, Rust config/events, browser bootstrap, or Node assets.
 
-No HTTP login/logout routes or browser auth UI are provided. Interactive/live
-login, real subscription generation, browser active-host gating, macOS and
-non-local filesystem validation remain separate unfinished gates. The native
-offline demo still requires no Python, credentials or network.
+No HTTP login/logout routes or browser auth UI are provided. Browser identity
+mutation/active-host gating, broader account/refresh coverage, macOS and non-local
+filesystem validation remain separate unfinished gates. A live web steering attempt
+ended before admission; no steering request or FIFO fallback was submitted, so
+installed synthetic safe-point tests, not that attempt, establish steering behavior.
+The native offline demo still requires no Python, credentials or network.
