@@ -383,6 +383,7 @@ def test_approval_paging_from_decision_buttons_keeps_exact_proposal(tmp_path: Pa
             async with asyncio.timeout(HANG_GUARD):
                 while app.focused is not deny:
                     await pilot.pause()
+            await pilot.wait_for_scheduled_animations()
             assert "PgUp/PgDn" in str(modal.query_one(".dialog-hint", Static).content)
             assert modal.request.arguments == arguments
             assert modal.request.preview == preview
@@ -395,11 +396,12 @@ def test_approval_paging_from_decision_buttons_keeps_exact_proposal(tmp_path: Pa
                 assert app.focused is button
                 before = scroll.scroll_y
                 await pilot.press("pagedown")
-                await pilot.pause()
+                # CPU-idle is not a completed refresh/scroll barrier on Windows.
+                await pilot.wait_for_scheduled_animations()
                 assert scroll.scroll_y > before
                 assert app.focused is button
                 await pilot.press("pageup")
-                await pilot.pause()
+                await pilot.wait_for_scheduled_animations()
                 assert scroll.scroll_y == before
                 assert app.focused is button
                 assert not approval.done()

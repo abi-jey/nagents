@@ -10,7 +10,7 @@ not embedded Python and not a wrapper around the old Python harness.
 - Every envelope contains exactly `protocol_version`, `run_id`, `message`.
 - Maximum frame including newline: **1,048,576 bytes**. Oversized/incomplete frames,
   unknown fields, unknown message types, wrong versions and wrong run IDs fail closed.
-- Initial application version **0.100.0** (current patch **0.100.1**), runtime protocol **1**, and browser event
+- Official application version **0.100.0**, runtime protocol **1**, and browser event
   `schema_version: 1` are independently versioned contracts.
 - v1 starts **one process per run**, not one per tool. Conversation storage survives
   process restart. No Python object, callable or pickle crosses the boundary.
@@ -69,7 +69,7 @@ tools, register arbitrary Python tools, or carry approval grants to the runtime.
 API keys are looked up by the runtime from its inherited environment, not passed
 in frames. Runtime storage is opaque: the host never opens nagents message tables.
 
-Since 0.100.1, the catalog can include Rust-hosted `to_agent`, `agent_status`,
+The official 0.100.0 catalog can include Rust-hosted `to_agent`, `agent_status`,
 `agent_wait` and `agent_cancel`. No new agent message types are required. Rust
 assigns child ancestry, intersects read-only permissions and approval mode with
 the parent, and supplies a separate run/session to the same configured runtime.
