@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import stat
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -23,6 +26,47 @@ class WorkflowTests(unittest.TestCase):
         steps = workflow["jobs"]["acceptance"]["steps"]
         self.assertTrue(any("check.sh all" in step.get("run", "") for step in steps))
         self.assertTrue(any("install_smoke.py" in step.get("run", "") for step in steps))
+
+
+class OutputTests(unittest.TestCase):
+    def test_bundled_package_creates_every_new_output_ancestor_private_under_both_umasks(self) -> None:
+        code = """import json, stat, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[2])
+import release
+root = Path(sys.argv[1])
+output = root / 'new/nested/artifacts'
+with (patch.object(release.subprocess, 'check_output', side_effect=['', 'ngn ' + release.version_check()]),
+      patch.object(release.subprocess, 'run', side_effect=RuntimeError('stop-after-output'))):
+    try:
+        release.package(output, root / 'unused-binary', bundled=True)
+    except RuntimeError as error:
+        assert str(error) == 'stop-after-output'
+    else:
+        raise AssertionError('Expected to stop before building wheels')
+print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (root / 'new', root / 'new/nested', output)]))
+"""
+        for mask in ("0002", "0022"):
+            with self.subTest(mask=mask), tempfile.TemporaryDirectory() as temporary:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'umask "$1"; shift; exec "$@"',
+                        "ngn-output-test",
+                        mask,
+                        sys.executable,
+                        "-c",
+                        code,
+                        temporary,
+                        str(Path(__file__).resolve().parent),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual(json.loads(result.stdout), [stat.S_IRWXU] * 3)
 
 
 class ReleaseTests(unittest.TestCase):

@@ -102,7 +102,12 @@ def package(output: Path, binary: Path, *, bundled: bool = False, published_core
     assert platform.system() == "Linux" and platform.machine() == "x86_64", "Only Linux x86_64 binaries are validated"
     assert subprocess.check_output([str(binary), "--version"], text=True).strip() == f"ngn {version}"
     assert not published_core or bundled, "--published-core requires --bundle"
-    output.mkdir(parents=True, exist_ok=True)
+    if bundled:
+        from bundle import prepare_output
+
+        prepare_output(output)
+    else:
+        output.mkdir(parents=True, exist_ok=True)
     assert not list(output.iterdir()), "Use a new artifact directory; never overwrite an existing release"
     subprocess.run(
         [
@@ -351,7 +356,7 @@ def main() -> None:
         print("PASS: consistent Rust component versions:", version_check(arguments.tag))
     elif arguments.action == "package":
         package(
-            arguments.output.resolve(),
+            arguments.output.absolute(),
             arguments.binary.resolve(),
             bundled=arguments.bundle,
             published_core=arguments.published_core,

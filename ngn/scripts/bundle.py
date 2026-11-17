@@ -141,6 +141,11 @@ def _private_directory(path: Path, *, private: bool = True) -> Path:
     return path
 
 
+def prepare_output(path: Path) -> Path:
+    """Create each missing output ancestor privately without repairing existing paths."""
+    return _private_directory(path, private=False)
+
+
 def _url(url: str, *, redirect: bool = False) -> None:
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port or parsed.fragment:
