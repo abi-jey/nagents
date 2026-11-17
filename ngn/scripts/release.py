@@ -21,6 +21,7 @@ NGN = ROOT / "ngn"
 
 def version_check(tag: str = "") -> str:
     version = tomllib.loads((NGN / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    assert isinstance(version, str), "Rust workspace version must be text"
     if re.fullmatch(r"0\.100\.\d+", version) is None:
         raise ValueError("Rust releases must use the reserved 0.100.x series")
     if tag and tag != f"v{version}":
@@ -129,13 +130,13 @@ def verify(output: Path) -> None:
             assert wheel.read(f"ngn_nagents/{source.name}") == source.read_bytes(), (
                 "Packaged adapter is not the tested source"
             )
-    with tarfile.open(output / f"ngn-v{version}-source.tar.gz") as source:
+    with tarfile.open(output / f"ngn-v{version}-source.tar.gz") as source_archive:
         prefix = f"nagents-ngn-{version}/"
         for path, expected_version, component in [
             ("pyproject.toml", manifest["nagents_version"], "project"),
             ("ngn/Cargo.toml", version, "workspace"),
         ]:
-            member = source.extractfile(prefix + path)
+            member = source_archive.extractfile(prefix + path)
             assert member is not None, "Missing component source"
             metadata = tomllib.loads(member.read().decode())
             actual = (

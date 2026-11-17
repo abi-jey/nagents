@@ -151,6 +151,44 @@ Approved shell commands and a trusted runtime have full access as your user:
 
 ## Development
 
+### Build and run exactly the installed application
+
+From the repository root, on Linux x86_64 with Python 3.13, Rust 1.93+ and a C
+compiler:
+
+```sh
+./ngn/dev                         # Rebuild, install wheels, launch offline TUI
+./ngn/dev serve --port 18768      # Same installed binary, embedded browser UI
+./ngn/dev --config /path/to/rust-config.json
+./ngn/dev --config /path/to/rust-config.json serve --port 18768
+./ngn/dev --test                  # Build + actual CLI/HTTP/WebSocket/PTY acceptance
+./ngn/dev --published-core --test # Compatibility with the pinned published core
+```
+
+This works with **uncommitted changes**. It builds the optimized, locked Cargo
+binary, builds non-editable Python core/adapter wheels, installs a fresh virtual
+environment, packs and extracts the binary, then launches its explicit path.
+The runtime never falls back to your installed Python `ngn` or an editable import.
+The configured runner is rebound to that fresh environment; provider and permission
+settings are retained. Export the referenced API key securely; `.env` is not loaded.
+Without an explicit Rust `--config`, the command selects the offline demo.
+
+Artifacts and state default to `$XDG_CACHE_HOME/ngn-rust-dev/<checkout-hash>/`
+(or `~/.cache/...`). Development state is separate from installed/legacy state;
+stop one host before opening another on the same development state. Pass
+`--data-dir PATH` only when deliberately choosing another Rust state directory.
+`NGN_DEV_CACHE` overrides the cache; `NGN_DEV_PYTHON` chooses the bootstrap
+interpreter; `CARGO_TARGET_DIR` can reuse a trusted compilation cache. Rust and
+embedded web assets are rebuilt on every invocation; Python wheels and the runtime
+environment are freshly built/installed. A source change during the build aborts
+the candidate rather than mixing revisions.
+
+“Latest” means the source currently checked out, including local edits. The command
+does **not** silently fetch, switch branches, pull, publish, or update an existing
+environment. Development artifacts are explicitly labelled as local candidates;
+official publication still requires a clean commit, CI, matching tag and release
+manifest. See [local-work migration](docs/local-work-migration.md).
+
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
