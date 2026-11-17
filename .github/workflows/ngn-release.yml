@@ -27,7 +27,7 @@ jobs:
       - name: Isolated release environment
         run: |
           python -m venv "$RUNNER_TEMP/ngn-release-venv"
-          "$RUNNER_TEMP/ngn-release-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents ruff mypy pre-commit
+          "$RUNNER_TEMP/ngn-release-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents ruff mypy pre-commit playwright
           echo "$RUNNER_TEMP/ngn-release-venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$RUNNER_TEMP/ngn-release-venv" >> "$GITHUB_ENV"
       - name: Require a release from main, with matching component versions
@@ -37,6 +37,8 @@ jobs:
           git merge-base --is-ancestor HEAD origin/main
           python ngn/scripts/release.py check --tag "$RELEASE_TAG"
       - run: pre-commit run --all-files
+      - name: Install test-only Chromium
+        run: python -m playwright install --with-deps chromium
       - name: Build and package immutable candidate
         run: |
           cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
@@ -48,6 +50,26 @@ jobs:
           export PYTHONPATH="$(find "$GITHUB_WORKSPACE/artifacts" -name 'ngn_nagents-*.whl' -print):$GITHUB_WORKSPACE/src"
           python scripts/smoke.py --binary target/release/ngn
           python scripts/release.py verify --output ../artifacts
+      - name: Accept installed source and the real desktop/touch browser before publication
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/ngn/target
+          NGN_DEV_CACHE: ${{ runner.temp }}/ngn-release-acceptance
+        run: |
+          ./ngn/dev --test
+          candidate=$(cat "$NGN_DEV_CACHE/latest-path")
+          mkdir "$RUNNER_TEMP/ngn-packaged-app"
+          tar -xzf artifacts/ngn-v*-linux-x86_64.tar.gz -C "$RUNNER_TEMP/ngn-packaged-app" ngn
+          cmp "$candidate/app/ngn" "$RUNNER_TEMP/ngn-packaged-app/ngn"
+          python ngn/scripts/browser_smoke.py --binary "$RUNNER_TEMP/ngn-packaged-app/ngn" \
+            --runtime-python "$candidate/runtime/bin/python" \
+            --output "$RUNNER_TEMP/ngn-browser-evidence"
+      - name: Save real-browser evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ngn-release-browser-${{ github.sha }}
+          path: ${{ runner.temp }}/ngn-browser-evidence/*.png
+          if-no-files-found: warn
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ngn-release
