@@ -46,11 +46,60 @@ def version_check(tag: str = "") -> str:
     assert f'__version__ = "{version}"' in (NGN / "integrations/nagents/src/ngn_nagents/__init__.py").read_text()
     bootstrap = re.search(r"(?m)^NGN_BOOTSTRAP_VERSION=([0-9.]+)$", (NGN / "install.sh").read_text())
     assert bootstrap is not None and bootstrap[1] == version, "Installer bootstrap version mismatch"
+    assert f'<span id="version">{version}</span>' in (NGN / "web/index.html").read_text(), "Web client version mismatch"
     lock = tomllib.loads((NGN / "Cargo.lock").read_text())
     for package in lock["package"]:
         if package["name"] in {"ngn", "ngn-core", "ngn-protocol"}:
             assert package["version"] == version, "Cargo lock version mismatch"
     return version
+
+
+def bump(version: str, notes: str, root: Path = ROOT) -> None:
+    """Move every coordinated component to one new version and record its release notes."""
+    if re.fullmatch(r"0\.100\.\d+", version) is None:
+        raise ValueError("Coordinated releases must use the 0.100.x series")
+    if not notes.strip() or "\n" in notes.strip():
+        raise ValueError("Release notes must be one non-empty line")
+    ngn = root / "ngn"
+    current = tomllib.loads((ngn / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    if tuple(map(int, version.split("."))) <= tuple(map(int, current.split("."))):
+        raise ValueError(f"New version must be greater than {current}")
+    old = re.escape(current)
+    replacements: list[tuple[Path, str, str]] = [
+        (root / "pyproject.toml", rf'(?m)^version = "{old}"$', f'version = "{version}"'),
+        (ngn / "Cargo.toml", rf'(?m)^version = "{old}"$', f'version = "{version}"'),
+        (ngn / "package.json", rf'"version": "{old}"', f'"version": "{version}"'),
+        (ngn / "integrations/nagents/pyproject.toml", rf'(?m)^version = "{old}"$', f'version = "{version}"'),
+        (ngn / "integrations/nagents/pyproject.toml", rf'"nagents>={old},<0\.101"', f'"nagents>={version},<0.101"'),
+        (
+            ngn / "integrations/nagents/src/ngn_nagents/__init__.py",
+            rf'__version__ = "{old}"',
+            f'__version__ = "{version}"',
+        ),
+        (ngn / "install.sh", rf"(?m)^NGN_BOOTSTRAP_VERSION={old}$", f"NGN_BOOTSTRAP_VERSION={version}"),
+        (ngn / "runtime-lock.json", rf'"version": "{old}"', f'"version": "{version}"'),
+        (ngn / "runtime-lock.json", rf"pypi/nagents/{old}/json", f"pypi/nagents/{version}/json"),
+        (ngn / "web/index.html", rf'<span id="version">{old}</span>', f'<span id="version">{version}</span>'),
+    ]
+    for crate in ("ngn", "ngn-core", "ngn-protocol"):
+        replacements.append(
+            (ngn / "Cargo.lock", rf'(?m)^(name = "{crate}"\n)version = "{old}"$', rf'\g<1>version = "{version}"')
+        )
+    for path, pattern, replacement in replacements:
+        text, count = re.subn(pattern, replacement, path.read_text())
+        if count != 1:
+            raise ValueError(f"Expected one version field in {path.relative_to(root)}, found {count}")
+        path.write_text(text)
+    notes_path = ngn / "docs/releases" / f"{version}.md"
+    if notes_path.exists():
+        raise ValueError(f"{notes_path.relative_to(root)} already exists")
+    notes_path.write_text(f"# v{version}\n\n{notes.strip()}\n")
+    changelog = ngn / "CHANGELOG.md"
+    text = changelog.read_text()
+    heading = "# Changelog\n\n"
+    if not text.startswith(heading):
+        raise ValueError("CHANGELOG.md must start with '# Changelog'")
+    changelog.write_text(f"{heading}## {version}\n\n- {notes.strip()}\n\n{text[len(heading) :]}")
 
 
 def commit() -> str:
@@ -358,7 +407,9 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("check", "package", "verify"))
+    parser.add_argument("action", choices=("bump", "check", "package", "verify"))
+    parser.add_argument("version", nargs="?", default="", help="bump: the new shared 0.100.x version")
+    parser.add_argument("--notes", default="", help="bump: one-line release notes")
     parser.add_argument("--tag", default="")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts")
     parser.add_argument("--binary", type=Path, default=NGN / "target/release/ngn")
@@ -370,7 +421,10 @@ def main() -> None:
         "--require-bundle", action="store_true", help="Reject legacy or unofficial bundles before publication"
     )
     arguments = parser.parse_args()
-    if arguments.action == "check":
+    if arguments.action == "bump":
+        bump(arguments.version, arguments.notes)
+        print("PASS: bumped every coordinated component to", version_check())
+    elif arguments.action == "check":
         print("PASS: consistent Rust component versions:", version_check(arguments.tag))
     elif arguments.action == "package":
         package(

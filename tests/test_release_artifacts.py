@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 import tarfile
@@ -107,7 +108,7 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
     workflow = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
     native = yaml.load((ROOT / ".github/workflows/ngn-release.yml").read_text(), Loader=yaml.BaseLoader)
     version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-    assert version == "0.100.2"
+    assert re.fullmatch(r"0\.100\.\d+", version)
     assert tomllib.loads((ROOT / "ngn/Cargo.toml").read_text())["workspace"]["package"]["version"] == version
     adapter = tomllib.loads((ROOT / "ngn/integrations/nagents/pyproject.toml").read_text())["project"]
     assert adapter["version"] == version and adapter["dependencies"] == [f"nagents>={version},<0.101"]

@@ -587,6 +587,19 @@ fn manifest_and_expansion_limits_and_truncated_gzip_are_enforced() {
 
 #[cfg(unix)]
 #[test]
+fn group_writable_parent_is_accepted_but_world_writable_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = crate::test_support::private_tempdir().unwrap();
+    // Like ~/.local/bin created under the Debian/Ubuntu default umask 0002.
+    let bin = directory.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o775)).unwrap();
+    assert!(Installation::prepare(directory.path().join("prefix"), bin.clone()).is_ok());
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(ancestry(&bin, false).is_err());
+}
+
+#[test]
 fn unsafe_parents_prefix_collision_binary_collision_and_stable_lock_are_refused() {
     use std::os::unix::fs::{PermissionsExt, symlink};
     let directory = crate::test_support::private_tempdir().unwrap();

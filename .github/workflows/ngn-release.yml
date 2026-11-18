@@ -118,6 +118,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          # Workflow artifacts do not preserve file modes; verify executes the installer.
+          chmod +x artifacts/ngn-installer-linux-x86_64
           python3 -m venv "$RUNNER_TEMP/ngn-verify-venv"
           "$RUNNER_TEMP/ngn-verify-venv/bin/python" ngn/scripts/release.py verify --output artifacts --require-bundle
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

@@ -189,7 +189,7 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
     assert foreign.read_bytes() == b"existing Python ngn must not be overwritten\n"
     unsafe = output / "unsafe"
     unsafe.mkdir(mode=0o700)
-    unsafe.chmod(0o775)
+    unsafe.chmod(0o777)
     execute(
         [
             str(installer),
@@ -204,7 +204,7 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
         directory=workspace,
         success=False,
     )
-    assert unsafe.stat().st_mode & 0o777 == 0o775
+    assert unsafe.stat().st_mode & 0o777 == 0o777
     assert inventory(generation) == before
     upgraded = "not requested; cross-version update is covered by native unit tests"
     if upgrade_bundle:

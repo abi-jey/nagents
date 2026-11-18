@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.3
+
+- Fix: the installer no longer rejects group-writable parent directories such as ~/.local/bin (only world-writable or foreign-owned ones), and release publishing restores the installer exec bit.
+
 ## 0.100.2 — self-contained installation (2026-11-18)
 
 - Self-contained Linux x86_64 installer with pinned relocatable CPython 3.13.18,

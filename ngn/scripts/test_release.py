@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import stat
 import subprocess
 import sys
@@ -121,6 +122,37 @@ class ReleaseTests(unittest.TestCase):
     def test_tag_must_match_component_versions(self) -> None:
         with self.assertRaisesRegex(ValueError, "tag does not match"):
             release.version_check("v0.100.999999")
+
+    def test_bump_moves_every_component_and_records_one_line_notes(self) -> None:
+        root = self.output / "repo"
+        for name in (
+            "pyproject.toml",
+            "ngn/Cargo.toml",
+            "ngn/Cargo.lock",
+            "ngn/package.json",
+            "ngn/install.sh",
+            "ngn/web/index.html",
+            "ngn/runtime-lock.json",
+            "ngn/CHANGELOG.md",
+            "ngn/integrations/nagents/pyproject.toml",
+            "ngn/integrations/nagents/src/ngn_nagents/__init__.py",
+        ):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(release.ROOT / name, root / name)
+        (root / "ngn/docs/releases").mkdir(parents=True)
+        major, minor, patch_level = self.version.split(".")
+        target = f"{major}.{minor}.{int(patch_level) + 1}"
+        with self.assertRaisesRegex(ValueError, "one non-empty line"):
+            release.bump(target, "two\nlines", root)
+        with self.assertRaisesRegex(ValueError, "greater than"):
+            release.bump(self.version, "same version", root)
+        release.bump(target, "Fix the thing.", root)
+        with patch.object(release, "ROOT", root), patch.object(release, "NGN", root / "ngn"):
+            self.assertEqual(release.version_check(f"v{target}"), target)
+        self.assertEqual((root / f"ngn/docs/releases/{target}.md").read_text(), f"# v{target}\n\nFix the thing.\n")
+        self.assertTrue(
+            (root / "ngn/CHANGELOG.md").read_text().startswith(f"# Changelog\n\n## {target}\n\n- Fix the thing.\n")
+        )
 
     def test_root_core_version_cannot_diverge_from_native_adapter_and_browser(self) -> None:
         (self.output / "pyproject.toml").write_text('[project]\nversion = "0.100.1"\n')

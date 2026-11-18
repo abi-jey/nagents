@@ -259,10 +259,13 @@ fn ancestry(path: &Path, create: bool) -> Result<()> {
         {
             use std::os::unix::fs::MetadataExt;
             let root_sticky = info.uid() == 0 && info.mode() & 0o1000 != 0 && current != path;
+            let euid = nix::unistd::geteuid().as_raw();
+            // Group-writable parents (e.g. ~/.local/bin under umask 0002) are
+            // accepted; only world-writable or foreign-owned ones are refused.
             ensure!(
-                (info.uid() == 0 || info.uid() == nix::unistd::geteuid().as_raw())
-                    && (info.mode() & 0o022 == 0 || root_sticky),
-                "Unsafe installation ancestry: use owner-controlled, non-writable parents; permissions are never repaired"
+                (info.uid() == 0 || info.uid() == euid)
+                    && (info.mode() & 0o002 == 0 || root_sticky),
+                "Unsafe installation ancestry: a parent directory is world-writable or owned by another user"
             );
         }
     }

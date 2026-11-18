@@ -16,45 +16,20 @@ under `ngn/`. The Python `nagents` library remains under `src/nagents/`, with it
 existing interfaces and independently usable APIs. The two communicate through a private,
 versioned runtime protocol; Python does not own Rust tool execution or approvals.
 
-Starting with **0.100.2**, the library, native application and adapter share one
-version and tag. [CI](.github/workflows/ci.yml) publishes the tested core to PyPI
-first, then calls the [native release workflow](.github/workflows/ngn-release.yml).
-One GitHub release, titled only `v0.100.2`, carries the native assets and the exact
-published core wheel/source distribution; no separate Python GitHub release is created.
-The Rust client is **not yet a feature-complete replacement** for the Python client
-described below; see the [migration checklist](ngn/docs/migration.md).
-Use an extracted Rust binary by its explicit path so it cannot be confused with
-the Python `ngn` console script. No installed defaults or legacy data are migrated.
-
-Release 0.100.2 adds a [self-contained per-user installer and
-`ngn update`](ngn/docs/installation.md): pinned Python, the core/adapter and
-dependencies are bundled, with no Python/Rust/Node/pip prerequisite for end users.
-It refuses to overwrite an unrelated Python `ngn` installation. Bundled installer
-assets are published from v0.100.2; the earlier 0.100.0/0.100.1 releases are unchanged.
+The library, native application and adapter share one version and one GitHub
+release. The Rust client is **not yet a feature-complete replacement** for the Python
+client below; see the [migration checklist](ngn/docs/migration.md).
 
 ## Install native ngn
 
-Use the [native installer and usage guide](docs/guide/native-ngn.md) for the
-Linux x86_64/glibc 2.39+ bundle. It includes CPython 3.13.18, the matching core
-and adapter, locked dependencies and CA certificates: no end-user Python, pip,
-Rust, Node or compiler setup is needed.
-
-After the official [v0.100.2 assets](https://github.com/abi-jey/nagents/releases/tag/v0.100.2)
-are published:
-
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/abi-jey/nagents/releases/download/v0.100.2/install.sh | sh
-"$HOME/.local/bin/ngn" doctor
-"$HOME/.local/bin/ngn" --demo
+curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh
+ngn doctor && ngn --demo
 ```
 
-Before publication, those URLs fail; `sh ngn/install.sh` also downloads release
-assets rather than compiling source. `./ngn/dev` is the available source-preview
-route and requires development tools. Both clients are named `ngn`: the installer
-refuses to overwrite an existing Python/unrelated command. Choose a separate
-bin directory as described in the guide. Native and Python configuration and
-login commands are not interchangeable; existing state is not migrated.
+Self-contained (bundled Python, core, adapter and dependencies) for Linux x86_64,
+glibc 2.39+. It never overwrites an existing Python `ngn`; see the
+[native installer guide](docs/guide/native-ngn.md) for options, configuration and updates.
 
 ## Python library and client features
 
