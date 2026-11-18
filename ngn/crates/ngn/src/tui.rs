@@ -174,6 +174,13 @@ impl App {
             != approval.as_ref().map(|approval| &approval.id)
         {
             self.preview_scroll = 0;
+            // The pending modal and durable transcript have separate sources.
+            // Pick up a committed decision before drawing the newly exposed row.
+            if self.approval.is_some()
+                && let Err(error) = self.catch_up(host).await
+            {
+                self.status = format!("Cannot load conversation: {error}");
+            }
         }
         self.approval = approval;
         self.sync_activity();
@@ -329,6 +336,7 @@ fn footer_area(area: Rect) -> Rect {
 }
 
 fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
+    let wall_ms = ngn_core::store::now_ms();
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
     let area = frame.area();
@@ -367,7 +375,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     let text = if app.records.is_empty() {
         welcome(&host.config)
     } else {
-        view::transcript(&app.records, app.details)
+        view::transcript(&app.records, app.details, wall_ms)
     };
     let mut lines: Vec<Line<'_>> = text.lines().map(Line::raw).collect();
     if let Some(reason) = &app.failure {
@@ -410,7 +418,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 .tasks
                 .get(app.task_index)
                 .map_or("Subagent", |task| task.title.as_str());
-            let text = view::transcript(&app.task_records, app.details);
+            let text = view::transcript(&app.task_records, app.details, wall_ms);
             let paragraph =
                 Paragraph::new(text)
                     .wrap(Wrap { trim: false })
