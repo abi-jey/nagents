@@ -23,33 +23,55 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, c
     headers = {}
     token = ""
 
-    async def launch(settings: Path = config) -> None:
+    async def launch(phase: str, settings: Path = config) -> None:
         nonlocal process, url, headers, token
-        process = await asyncio.create_subprocess_exec(
-            str(binary),
-            "--config",
-            str(settings),
-            "-C",
-            str(workspace),
-            "--data-dir",
-            str(data),
-            "serve",
-            "--port",
-            "0",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        require(process.stderr is not None, "Queue host has no startup stream")
-        for _ in range(8):
-            line = (await asyncio.wait_for(process.stderr.readline(), 10)).decode()
-            match = re.search(r"Open (http://\S+)", line)
-            if match:
-                url = match[1]
+        process = None
+        stage = "spawning"
+        stderr = b""
+        try:
+            async with asyncio.timeout(20):
+                process = await asyncio.create_subprocess_exec(
+                    str(binary),
+                    "--config",
+                    str(settings),
+                    "-C",
+                    str(workspace),
+                    "--data-dir",
+                    str(data),
+                    "serve",
+                    "--port",
+                    "0",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                assert process.stderr is not None
+                stage = "waiting for listen address"
+                while True:
+                    chunk = await process.stderr.read(4096)
+                    if not chunk:
+                        await process.wait()
+                        raise EOFError("stderr closed before announcing a listen address")
+                    stderr = (stderr + chunk)[-8192:]
+                    match = re.search(rb"(?m)^Open (http://\S+)\r?\n", stderr)
+                    if match:
+                        url = match[1].decode()
+                        break
+                stage = "fetching bootstrap token"
                 async with client.get(url + "/api/bootstrap") as response:
-                    token = (await response.json())["token"]
+                    response.raise_for_status()
+                    payload = await response.json()
+                bootstrap_token = payload.get("token") if isinstance(payload, dict) else None
+                if not isinstance(bootstrap_token, str) or not bootstrap_token:
+                    raise ValueError("bootstrap response did not contain a token")
+                token = bootstrap_token
                 headers = {"x-ngn-token": token, "Origin": url}
-                return
-        raise AssertionError("Queue HTTP host did not start")
+        except (OSError, EOFError, ValueError, aiohttp.ClientError) as error:
+            exit_code = process.returncode if process is not None else None
+            detail = stderr.decode(errors="replace").strip() or "<empty>"
+            raise AssertionError(
+                f"Queue HTTP host did not start ({phase}, {stage}, exit={exit_code}): "
+                f"{type(error).__name__}: {error}\nHost stderr (tail):\n{detail}"
+            ) from error
 
     async def stop(*, crash: bool = False) -> None:
         require(process is not None, "Queue host was not started")
@@ -103,7 +125,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, c
                     await asyncio.sleep(0.03)
 
         try:
-            await launch()
+            await launch("initial launch")
             session = (await api("/api/sessions", {}))["session"]["id"]
             queue_path = f"/api/sessions/{session}/queue"
             async with client.ws_connect(
@@ -223,7 +245,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, c
             await stop()
 
             # The test runner exits on EOF, including when its host is SIGKILLed.
-            await launch(crash_config)
+            await launch("crash fixture launch", crash_config)
             interrupted = await submit(session, CRASH_PROMPT)
             async with asyncio.timeout(10):
                 while not any(
@@ -239,7 +261,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, c
                 "Crash fixture did not leave a pending input",
             )
             await stop(crash=True)
-            await launch()
+            await launch("restart after SIGKILL")
             queue = (await api(queue_path))["queue"]
             require(
                 queue["paused"] and [entry["run"]["id"] for entry in queue["entries"]] == [saved["id"]],

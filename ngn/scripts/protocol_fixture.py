@@ -16,7 +16,9 @@ def write_config(path: Path) -> None:
     path.write_text(
         json.dumps(
             {
-                "runner": [sys.executable, "-I", str(Path(__file__).resolve())],
+                # -I ignores PYTHONDONTWRITEBYTECODE. When the smoke driver
+                # uses bundled Python, -B keeps the verified bundle unchanged.
+                "runner": [sys.executable, "-I", "-B", str(Path(__file__).resolve())],
                 "provider": "protocol-fixture",
                 "providers": {
                     "protocol-fixture": {

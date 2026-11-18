@@ -146,7 +146,9 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
         timeout=180,
     )
     (output / "smoke.log").write_text(checks.stdout + checks.stderr)
-    assert len([line for line in checks.stdout.splitlines() if line.startswith("PASS:")]) == 8
+    suites_passed = sum(line.startswith("PASS:") for line in checks.stdout.splitlines())
+    # Four CLI/HTTP/WS suites and three PTY suites; no separate demo suite.
+    assert suites_passed == 7, f"Expected seven bundled smoke suites, got {suites_passed}"
     assert inventory(generation) == before, "Runtime execution changed the immutable release inventory"
     selected = (prefix / "current").readlink()
     for check_flag in (["--check"], []):
@@ -233,14 +235,16 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
         "command": str(command),
         "runtime_python": str(python),
         "runtime": runtime_info,
-        "suites_passed": 8,
+        "suites_passed": suites_passed,
         "path": "",
         "state_sentinels_unchanged": True,
         "release_inventory_unchanged": True,
         "cross_version_update": upgraded,
     }
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
-    print("PASS: real bundled first install, isolated imports/CA, eight CLI/HTTP/WS/PTY suites with empty PATH")
+    print(
+        f"PASS: real bundled first install, isolated imports/CA, {suites_passed} CLI/HTTP/WS/PTY suites with empty PATH"
+    )
     print(
         "PASS: managed check/no-op, corrupt update, foreign binary and unsafe ancestry leave protected state unchanged"
     )
