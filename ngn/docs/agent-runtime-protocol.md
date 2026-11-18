@@ -218,6 +218,12 @@ with earlier runtimes. This adapter's package now requires the public-auth core
 Missing public core auth never triggers Codex cache discovery, legacy imports,
 API-key fallback, or an implicit login.
 
+A runtime advertising `codex_auth` may receive `provider.auth: "codex"`, with the
+same shape rules as `chatgpt` but no `run.auth_store`. The adapter constructs
+`OpenAIProvider(model=…)` without credentials, so nagents uses the local Codex
+login (`$CODEX_HOME` or `~/.codex`), exactly as the Python ngn did. It never falls
+back to an API key. The host verifies `codex_auth` before sending start.
+
 ## Optional safe steering (0.100.2)
 
 The supplied adapter now advertises `safe_steering` alongside the required

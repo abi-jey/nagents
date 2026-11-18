@@ -54,6 +54,8 @@ struct App {
     after: i64,
     input: String,
     status: String,
+    /// The last Enter submission failed; render its reason as an error, not a hint.
+    failed: bool,
     active: Option<Run>,
     approval: Option<Approval>,
     scroll: u16,
@@ -228,6 +230,22 @@ impl App {
     }
 }
 
+fn welcome(config: &ngn_core::Config) -> String {
+    let next = if config.backend == ngn_core::config::Backend::Demo {
+        "Type a prompt and press Enter. Try `demo approval` or `demo subagents`.".to_owned()
+    } else {
+        match config.selected_provider() {
+            Ok(_) => "Type a prompt and press Enter.".to_owned(),
+            Err(error) => format!(
+                "Prompts cannot be sent yet. {error}.\nLegacy ~/.config/ngn/providers.json is not imported."
+            ),
+        }
+    };
+    format!(
+        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\n{next}\n\nF2 conversations · F3 new · F4 tool detail · Ctrl+Q quit"
+    )
+}
+
 fn center(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2));
     let height = height.min(area.height.saturating_sub(2));
@@ -277,7 +295,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
     ]);
     frame.render_widget(header, rows[0]);
     let text = if app.records.is_empty() {
-        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\nTry a prompt in --demo mode, or configure your provider.\n\nF2 conversations · F3 new · F4 tool detail · Ctrl+Q quit".into()
+        welcome(&host.config)
     } else {
         view::transcript(&app.records, app.details)
     };
@@ -291,16 +309,22 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         .saturating_sub(rows[1].height.saturating_sub(1))
         .saturating_sub(app.scroll);
     frame.render_widget(paragraph.scroll((top, 0)), rows[1]);
-    let status = if app.approval.is_some() {
-        "Waiting for approval · Ctrl+Y allows once · Ctrl+D denies"
+    let activity = if app.approval.is_some() {
+        "Waiting for approval · Ctrl+Y allows once · Ctrl+D denies\n"
     } else if app.active.is_some() {
-        "Agent working · Esc cancels · completed actions are not rolled back"
+        "Agent working · Esc cancels · completed actions are not rolled back\n"
     } else {
-        &app.status
+        ""
+    };
+    let style = if app.failed {
+        Style::new()
+            .fg(Color::LightRed)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(muted)
     };
     frame.render_widget(
-        Paragraph::new(view::plain(&format!("{status}\n{}", app.status)))
-            .style(Style::new().fg(muted)),
+        Paragraph::new(view::plain(&format!("{activity}{}", app.status))).style(style),
         rows[2],
     );
     let input_lines = app.input.lines().count().max(1) as u16;
@@ -835,7 +859,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
                             KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
                             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); } },
-                            KeyCode::Enter => { match submit(&mut app, &host).await { Ok(true) => break, Ok(false) => (), Err(error) => app.status = error.to_string() } app.state(&host).await; },
+                            KeyCode::Enter => { app.failed = false; match submit(&mut app, &host).await { Ok(true) => break, Ok(false) => (), Err(error) => { app.status = format!("Not sent: {error}"); app.failed = true; } } app.state(&host).await; },
                             KeyCode::Backspace => { app.input.pop(); },
                             KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => app.input.push(character),
                             _ => (),

@@ -299,6 +299,13 @@ fn validate_capabilities(capabilities: &[String], auth: ProviderAuth) -> Result<
                 .any(|capability| capability == "chatgpt_auth"),
         "Runtime lacks chatgpt_auth. ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5. Install nagents>=0.28.6 and the matching adapter, or source-built equivalents containing that API."
     );
+    ensure!(
+        auth != ProviderAuth::Codex
+            || capabilities
+                .iter()
+                .any(|capability| capability == "codex_auth"),
+        "Runtime lacks codex_auth. Update the bundled ngn runtime, or choose an API-key or ChatGPT connection."
+    );
     Ok(())
 }
 
@@ -531,6 +538,9 @@ mod tests {
         assert!(steering_capability(&modern).unwrap());
         modern.retain(|capability| capability != "chatgpt_auth");
         assert!(validate_capabilities(&modern, ProviderAuth::Chatgpt).is_err());
+        assert!(validate_capabilities(&modern, ProviderAuth::Codex).is_err());
+        modern.push("codex_auth".into());
+        assert!(validate_capabilities(&modern, ProviderAuth::Codex).is_ok());
         assert!(validate_capabilities(&[], ProviderAuth::Chatgpt).is_err());
     }
 

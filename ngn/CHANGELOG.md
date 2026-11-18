@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Fix: Enter appeared to do nothing after the Rust migration. Without `--config`,
+  ngn had no provider, so every prompt was rejected with only a faint status line.
+  ngn now selects the same provider connection and model as the Python ngn, by
+  reading (never writing) `~/.config/ngn/providers.json`, its per-workspace
+  overlay, `assistant.md` model bindings and `config.json`'s `model`.
+- Python ngn `auth: "codex"` connections run through the local Codex login
+  (`$CODEX_HOME` or `~/.codex`) via the new `codex` provider auth and the
+  `codex_auth` runtime capability. There is no API-key fallback.
+- A Rust-native configuration at `$XDG_CONFIG_HOME/ngn/rust.json` (default
+  `~/.config/ngn/rust.json`) is loaded when `--config` is omitted. It must be a
+  regular file owned by you and not group- or world-writable.
+- A failed Enter now shows the reason in red, and the welcome screen says when no
+  provider is usable and how to fix it. `ngn doctor` reports the configuration
+  source, model, legacy files read and any unavailable connections.
+- Not yet supported from legacy files: Foundry/Azure `api_version` routes, Entra
+  auth, and the `assistant.md` system prompt (the Rust default prompt is used).
+
 ## 0.100.5
 
 - Native macOS bundles: install.sh now installs self-contained ngn on Apple silicon and Intel Macs (macOS 11+), alongside Linux x86_64.

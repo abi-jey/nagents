@@ -12,6 +12,8 @@ pub enum ProviderAuth {
     #[default]
     ApiKey,
     Chatgpt,
+    /// The local Codex CLI login (`$CODEX_HOME` or `~/.codex`), as the Python ngn used.
+    Codex,
 }
 
 impl ProviderAuth {

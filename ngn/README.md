@@ -70,6 +70,14 @@ cargo run -p ngn -- --config config.local.json
 cargo run -p ngn -- --config config.local.json serve
 ```
 
+Configuration is chosen in this order: `--config FILE`; else
+`$XDG_CONFIG_HOME/ngn/rust.json` (default `~/.config/ngn/rust.json`, which must be
+yours and not group/world-writable); else the Python ngn's provider files are read,
+never written, so the same connection and model as before are used:
+`~/.config/ngn/providers.json` overlaid by its per-workspace file, the model from
+the workspace then global `assistant.md`, then `config.json`'s `model`.
+`auth: "codex"` uses the local Codex login. `ngn doctor` shows what was selected.
+
 The managed bundle automatically uses its embedded runtime when `runner` is
 omitted, as in the examples. For a source/small-native installation, `runner` is
 an argv array. Use an absolute environment interpreter path if the

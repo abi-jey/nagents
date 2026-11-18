@@ -74,7 +74,8 @@ Host storage now uses **schema 4**, upgraded transactionally from schema 3 while
 preserving FIFO state and event cursors. Stop the host and back up important state
 before upgrading. Schema-3 binaries refuse schema 4: downgrade with a separate
 state directory or restore the backup, never edit `user_version`. The runtime
-database remains opaque; no legacy Python data is implicitly imported.
+database remains opaque; no legacy Python data is imported or modified. Only the
+Python ngn provider selection files are read when no Rust configuration exists.
 
 ## Explicitly not migrated yet
 

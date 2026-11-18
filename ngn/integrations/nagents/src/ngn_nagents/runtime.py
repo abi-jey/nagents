@@ -177,9 +177,9 @@ def validate_provider(settings: dict[str, object]) -> str:
     for key in settings:
         text(settings, key, 4096, empty=key in {"api", "base_url", "api_key_env"})
     mode = text(settings, "auth", 16) if "auth" in settings else "api_key"
-    if mode not in {"api_key", "chatgpt"}:
+    if mode not in {"api_key", "chatgpt", "codex"}:
         raise ProtocolError("Unsupported provider authentication mode")
-    if mode == "chatgpt":
+    if mode in {"chatgpt", "codex"}:
         if (
             settings["kind"] != "openai"
             or settings["api_key_env"] != ""
@@ -271,6 +271,14 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
             # Explicit callback bypasses CODEX_HOME/discovery and all API-key fallbacks.
             # A default public base_url is validated above, never forwarded to OAuth.
             provider = OpenAIProvider(credentials=auth.credentials, model=text(start.provider, "model", 128))
+        elif validate_provider(start.provider) == "codex":
+            if start.auth_store is not None:
+                raise ProtocolError("auth_store is only allowed for ChatGPT authentication")
+            from nagents.provider.openai import OpenAIProvider
+
+            # No credentials argument: nagents discovers the local Codex login,
+            # exactly as the Python ngn did for auth "codex". No API-key fallback.
+            provider = OpenAIProvider(model=text(start.provider, "model", 128))
         else:
             if start.auth_store is not None:
                 raise ProtocolError("auth_store is only allowed for ChatGPT authentication")

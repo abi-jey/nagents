@@ -600,5 +600,30 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
                 self.fail("Symlink ownership directory accepted")
 
 
+class CodexAuthTests(unittest.TestCase):
+    """The Python ngn's auth "codex" uses the local Codex login, never an API key."""
+
+    def codex(self) -> dict[str, object]:
+        return subscription() | {"auth": "codex", "api": "auto"}
+
+    def test_codex_needs_no_host_store_and_never_falls_back_to_a_key(self) -> None:
+        wire = message(self.codex(), "/host/auth/openai.json")
+        run = wire["run"]
+        assert isinstance(run, dict)
+        del run["auth_store"]
+        self.assertIsNone(Start.parse(wire).auth_store)
+        with self.assertRaises(ProtocolError):
+            create_provider(self.codex())
+        for changes in (
+            {"api_key_env": "OPENAI_API_KEY"},
+            {"kind": "anthropic"},
+            {"base_url": "https://example.invalid/v1"},
+            {"api": "chat_completions"},
+        ):
+            run["provider"] = self.codex() | changes
+            with self.subTest(changes=changes), self.assertRaises(ProtocolError):
+                Start.parse(wire)
+
+
 if __name__ == "__main__":
     unittest.main()

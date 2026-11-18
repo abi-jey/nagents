@@ -284,16 +284,50 @@ async fn execute(cli: Cli) -> Result<i32> {
     }
     if matches!(cli.command, Some(Commands::Doctor)) {
         println!(
-            "ngn {}\nAgent Runtime Protocol: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nNo legacy state was imported. No runner or network request was started.",
+            "ngn {}\nAgent Runtime Protocol: {}\nConfig: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nLegacy files are only read, never modified or migrated. No runner or network request was started.",
             env!("CARGO_PKG_VERSION"),
             ngn_protocol::VERSION,
+            config.source.as_ref().map_or_else(
+                || format!(
+                    "built-in defaults ({} not found)",
+                    Config::default_path().map_or_else(
+                        || "~/.config/ngn/rust.json".into(),
+                        |path| path.display().to_string()
+                    )
+                ),
+                |path| path.display().to_string()
+            ),
             config.workspace.display(),
             config.state_dir().display(),
             config.backend,
-            config.provider,
+            if config.backend == Backend::Demo || config.selected_provider().is_ok() {
+                config.provider.clone()
+            } else {
+                format!(
+                    "none — {}",
+                    ngn_core::config::missing_provider_help(config.source.as_deref())
+                )
+            },
             config.read_only,
             config.runner.first().map(String::as_str).unwrap_or("unset")
         );
+        if let Ok(provider) = config.selected_provider() {
+            println!("Model: {} · auth {:?}", provider.model, provider.auth);
+        }
+        if !config.legacy_sources.is_empty() {
+            println!(
+                "Python ngn provider files (read-only): {}",
+                config
+                    .legacy_sources
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for (name, reason) in &config.unavailable {
+            println!("Unavailable connection {name}: {reason}");
+        }
         if let Some(runtime) = &config.bundled_runtime {
             println!(
                 "Bundled CPython: {}\nBundled runtime: {}",

@@ -29,6 +29,8 @@ async def serve() -> int:
         capabilities = ["host_tools", "cancel", "safe_steering"]
         if auth.available():
             capabilities.append("chatgpt_auth")
+        # The local Codex login is discovered by nagents itself (CODEX_HOME/~/.codex).
+        capabilities.append("codex_auth")
         output("", {"type": "ready", "runtime": "nagents", "capabilities": capabilities})
         first = await read(reader)
         start = Start.parse(first.message)

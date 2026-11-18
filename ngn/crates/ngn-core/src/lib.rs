@@ -2,6 +2,7 @@ pub mod auth;
 pub mod bundle;
 pub mod config;
 pub mod host;
+pub mod legacy;
 pub mod paths;
 pub mod queues;
 pub mod runner;
