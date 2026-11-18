@@ -52,7 +52,16 @@ fn doctor_uses_explicit_config_without_starting_a_runtime() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        report.contains(&format!("Config: {}", config.display())),
+        "{report}"
+    );
     assert!(report.contains("Backend: Nagents"), "{report}");
+    assert!(report.contains("Provider: none"), "{report}");
+    assert!(
+        report.contains("Provider setup: No provider selected"),
+        "{report}"
+    );
     assert!(report.contains("Runner: unavailable-runtime"), "{report}");
     assert!(!report.contains("--demo"), "{report}");
 }

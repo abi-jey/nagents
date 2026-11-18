@@ -296,7 +296,7 @@ def main() -> int:
         description=__doc__,
         epilog=(
             "Other arguments are forwarded unchanged to the Rust CLI. Pass --config PATH to use an explicit "
-            "provider config with the staged runtime; otherwise ngn discovers its usual provider config. "
+            "provider config with the staged runtime; otherwise ngn checks existing Python provider settings. "
             "Use doctor to inspect the selection."
         ),
     )

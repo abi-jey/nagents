@@ -73,8 +73,10 @@ Host storage now uses **schema 4**, upgraded transactionally from schema 3 while
 preserving FIFO state and event cursors. Stop the host and back up important state
 before upgrading. Schema-3 binaries refuse schema 4: downgrade with a separate
 state directory or restore the backup, never edit `user_version`. The runtime
-database remains opaque; no legacy Python data is imported or modified. Only the
-Python ngn provider selection files are read when no Rust configuration exists.
+database remains opaque during normal operation. Without `--config`, the host
+reads Python ngn provider settings without modifying them. History is never
+imported at startup; an explicit `ngn upgrade` copies supported history into
+separate Rust-owned databases without modifying the Python database.
 
 ## Explicitly not migrated yet
 
@@ -104,7 +106,7 @@ These are **gaps**, not features hidden behind a compatibility fallback:
 - Channels/connectors (Telegram/Twilio/etc.), durable external inbox/routing ownership.
 - A2A client/server/authentication and remote agent management.
 - Docker/Kubernetes migration, remote multi-user authentication, signed release assets.
-- Legacy configuration/database import, complete platform compatibility and benchmarks.
+- Full legacy configuration/database parity, complete platform compatibility and benchmarks.
 
 Provider API support inherited through nagents is separate from host integration:
 the adapter accepts environment API-key connections and an opt-in, capability-gated

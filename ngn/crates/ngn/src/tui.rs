@@ -315,7 +315,9 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         Style::new().fg(muted)
     };
     frame.render_widget(
-        Paragraph::new(view::plain(&format!("{activity}{}", app.status))).style(style),
+        Paragraph::new(view::plain(&format!("{activity}{}", app.status)))
+            .style(style)
+            .wrap(Wrap { trim: true }),
         rows[2],
     );
     let input_lines = app.input.lines().count().max(1) as u16;
@@ -724,6 +726,21 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     Ok(false)
 }
 
+async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
+    if app.input.trim().is_empty() {
+        return false;
+    }
+    app.failed = false;
+    match submit(app, host).await {
+        Ok(quit) => quit,
+        Err(error) => {
+            app.status = format!("Not sent: {error}");
+            app.failed = true;
+            false
+        }
+    }
+}
+
 pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let mut app = App {
@@ -850,7 +867,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
                             KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
                             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); } },
-                            KeyCode::Enter => { app.failed = false; match submit(&mut app, &host).await { Ok(true) => break, Ok(false) => (), Err(error) => { app.status = format!("Not sent: {error}"); app.failed = true; } } app.state(&host).await; },
+                            KeyCode::Enter => { if submit_from_enter(&mut app, &host).await { break; } app.state(&host).await; },
                             KeyCode::Backspace => { app.input.pop(); },
                             KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => app.input.push(character),
                             _ => (),
@@ -890,6 +907,31 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
 mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
+
+    #[tokio::test]
+    async fn enter_without_provider_explains_rejection_and_keeps_draft() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let config = Config {
+            workspace: directory.path().into(),
+            data_dir: directory.path().join("state"),
+            ..Config::default()
+        }
+        .resolve()
+        .unwrap();
+        assert!(welcome(&config).contains("Prompts cannot be sent yet."));
+        let host = Host::open(config).unwrap();
+        let mut app = App {
+            session: host.store.create_session().await.unwrap().id,
+            input: "keep this draft".into(),
+            ..App::default()
+        };
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.failed);
+        assert!(app.status.starts_with("Not sent: No provider selected"));
+        assert!(app.status.contains("providers.json"));
+        assert_eq!(app.input, "keep this draft");
+        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+    }
 
     #[tokio::test]
     async fn unsupported_steering_preserves_draft_and_retries_do_not_rebind_to_a_new_root_or_fifo()

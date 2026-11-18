@@ -41,7 +41,7 @@ pub struct Config {
     /// Derived only from verified metadata next to the canonical executable.
     #[serde(skip)]
     pub bundled_runtime: Option<BundledRuntime>,
-    /// The explicitly supplied native config file, if any.
+    /// The explicitly supplied native configuration, if any.
     #[serde(skip)]
     pub source: Option<PathBuf>,
     /// Python ngn configuration directory to select providers from, read-only.
@@ -282,6 +282,11 @@ impl Config {
 
     fn missing_provider_help(&self) -> String {
         match &self.source {
+            Some(path) if !self.provider.is_empty() => format!(
+                "Provider {:?} is not defined in {}. Choose a configured connection with --provider-id",
+                self.provider,
+                path.display()
+            ),
             Some(path) => format!(
                 "No provider selected in {}. Set \"provider\" to one of its \"providers\" or pass --provider-id",
                 path.display()

@@ -2,23 +2,28 @@
 
 ## Unreleased
 
-- Remove the native Rust `--demo` flag and scripted demo backend. `ngn doctor`
-  still works without a model or credentials.
-- Fix: Enter appeared to do nothing after the Rust migration. Without `--config`,
-  ngn had no provider, so every prompt was rejected with only a faint status line.
-  ngn now reads the existing Python ngn provider and model settings without
-  writing them or requiring a new configuration file.
+- Without `--config`, native ngn reads the existing Python ngn provider and model
+  settings without writing them or requiring a new configuration file.
 - Native ngn honors Python's `read_only` setting without adopting its approval
   or tool policy. Python ChatGPT credentials stay separate: when Python's
   connection would use ChatGPT, select a native configuration and sign in to the
   intended account instead of falling back to another route.
 - Python ngn `auth: "codex"` connections require local Codex files
   (`$CODEX_HOME` or `~/.codex`) and honor their OAuth or API-key policy.
-- A failed Enter now shows the reason in red, and the welcome screen says when no
-  provider is usable and how to fix it. `ngn doctor` reports the configuration
-  source, model, legacy files read and any unavailable connections.
+- The welcome screen explains when no provider is usable and how to fix it.
+  `ngn doctor` also lists legacy files read and unavailable connections.
+- Add opt-in wire logs and local diagnostic logs.
+- Add an explicit `ngn upgrade` command that copies supported Python ngn history
+  into separate Rust-owned databases without changing the original.
 - Not yet supported from legacy files: Foundry/Azure `api_version` routes, Entra
   auth, and the `assistant.md` system prompt (the Rust default prompt is used).
+
+## 0.100.6
+
+- Remove native Rust `--demo`. `ngn doctor` still works without loading a runtime
+  or contacting a model; offline acceptance tests use a separate fixture runner.
+- Show the reason a prompt could not be sent after Enter, and report the active
+  configuration source and model in `ngn doctor`.
 
 ## 0.100.5
 

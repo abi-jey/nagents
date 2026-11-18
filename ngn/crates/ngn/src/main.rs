@@ -340,19 +340,23 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
             "ngn {}\nAgent Runtime Protocol: {}\nConfig: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nPython ngn settings are only read, never modified or migrated. No runner or network request was started.",
             env!("CARGO_PKG_VERSION"),
             ngn_protocol::VERSION,
-            source,
+            view::plain(&source),
             config.workspace.display(),
             config.state_dir().display(),
             config.backend,
-            selected.as_ref().map_or_else(
-                |error| format!("none — {error}"),
-                |_| config.provider.clone()
-            ),
+            selected
+                .as_ref()
+                .map_or_else(|_| "none".into(), |_| view::plain(&config.provider)),
             config.read_only,
             config.runner.first().map(String::as_str).unwrap_or("unset")
         );
-        if let Ok(provider) = selected {
-            println!("Model: {} · auth {:?}", provider.model, provider.auth);
+        match selected {
+            Ok(provider) => println!(
+                "Model: {} · auth {:?}",
+                view::plain(&provider.model),
+                provider.auth
+            ),
+            Err(error) => println!("Provider setup: {}", view::plain(&error.to_string())),
         }
         if !config.legacy_sources.is_empty() {
             println!(
@@ -360,13 +364,17 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
                 config
                     .legacy_sources
                     .iter()
-                    .map(|path| path.display().to_string())
+                    .map(|path| view::plain(&path.display().to_string()))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
         }
         for (name, reason) in &config.unavailable {
-            println!("Unavailable connection {name}: {reason}");
+            println!(
+                "Unavailable connection {}: {}",
+                view::plain(name),
+                view::plain(reason)
+            );
         }
         if let Some(runtime) = &config.bundled_runtime {
             println!(
