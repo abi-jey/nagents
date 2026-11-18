@@ -54,6 +54,8 @@ struct App {
     after: i64,
     input: String,
     status: String,
+    /// The last Enter submission failed; render its reason as an error, not a hint.
+    failed: bool,
     active: Option<Run>,
     approval: Option<Approval>,
     scroll: u16,
@@ -228,6 +230,16 @@ impl App {
     }
 }
 
+fn welcome(config: &ngn_core::Config) -> String {
+    let next = match config.selected_provider() {
+        Ok(_) => "Type a prompt and press Enter.".to_owned(),
+        Err(error) => format!("Prompts cannot be sent yet. {error}"),
+    };
+    format!(
+        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\n{next}\n\nF2 conversations · F3 new · F4 tool detail · Ctrl+Q quit"
+    )
+}
+
 fn center(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2));
     let height = height.min(area.height.saturating_sub(2));
@@ -250,14 +262,11 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         Constraint::Length(1),
     ])
     .split(frame.area());
-    let provider = if host.config.backend == ngn_core::config::Backend::Demo {
-        "offline Rust demo".to_string()
-    } else {
-        host.config
-            .selected_provider()
-            .map(|provider| format!("nagents · {}", provider.model))
-            .unwrap_or_else(|_| "provider not configured · see config.example.json".into())
-    };
+    let provider = host
+        .config
+        .selected_provider()
+        .map(|provider| format!("nagents · {}", provider.model))
+        .unwrap_or_else(|_| "provider not configured".into());
     let header = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
@@ -277,7 +286,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
     ]);
     frame.render_widget(header, rows[0]);
     let text = if app.records.is_empty() {
-        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\nTry a prompt in --demo mode, or configure your provider.\n\nF2 conversations · F3 new · F4 tool detail · Ctrl+Q quit".into()
+        welcome(&host.config)
     } else {
         view::transcript(&app.records, app.details)
     };
@@ -291,16 +300,24 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         .saturating_sub(rows[1].height.saturating_sub(1))
         .saturating_sub(app.scroll);
     frame.render_widget(paragraph.scroll((top, 0)), rows[1]);
-    let status = if app.approval.is_some() {
-        "Waiting for approval · Ctrl+Y allows once · Ctrl+D denies"
+    let activity = if app.approval.is_some() {
+        "Waiting for approval · Ctrl+Y allows once · Ctrl+D denies\n"
     } else if app.active.is_some() {
-        "Agent working · Esc cancels · completed actions are not rolled back"
+        "Agent working · Esc cancels · completed actions are not rolled back\n"
     } else {
-        &app.status
+        ""
+    };
+    let style = if app.failed {
+        Style::new()
+            .fg(Color::LightRed)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(muted)
     };
     frame.render_widget(
-        Paragraph::new(view::plain(&format!("{status}\n{}", app.status)))
-            .style(Style::new().fg(muted)),
+        Paragraph::new(view::plain(&format!("{activity}{}", app.status)))
+            .style(style)
+            .wrap(Wrap { trim: true }),
         rows[2],
     );
     let input_lines = app.input.lines().count().max(1) as u16;
@@ -709,6 +726,21 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     Ok(false)
 }
 
+async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
+    if app.input.trim().is_empty() {
+        return false;
+    }
+    app.failed = false;
+    match submit(app, host).await {
+        Ok(quit) => quit,
+        Err(error) => {
+            app.status = format!("Not sent: {error}");
+            app.failed = true;
+            false
+        }
+    }
+}
+
 pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let mut app = App {
@@ -835,7 +867,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
                             KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
                             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); } },
-                            KeyCode::Enter => { match submit(&mut app, &host).await { Ok(true) => break, Ok(false) => (), Err(error) => app.status = error.to_string() } app.state(&host).await; },
+                            KeyCode::Enter => { if submit_from_enter(&mut app, &host).await { break; } app.state(&host).await; },
                             KeyCode::Backspace => { app.input.pop(); },
                             KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => app.input.push(character),
                             _ => (),
@@ -851,16 +883,11 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     drop(terminal);
     drop(restore);
     println!(
-        "ngn {} · Session {}\nResume with: ngn -C {} --resume {}{}",
+        "ngn {} · Session {}\nResume with: ngn -C {} --resume {}",
         env!("CARGO_PKG_VERSION"),
         app.session,
         view::plain(&host.config.workspace.display().to_string()),
-        app.session,
-        if host.config.backend == ngn_core::config::Backend::Demo {
-            " --demo"
-        } else {
-            ""
-        }
+        app.session
     );
     Ok(())
 }
@@ -869,6 +896,34 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
 mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
+
+    #[tokio::test]
+    async fn enter_without_provider_explains_rejection_and_keeps_draft() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let config = Config {
+            workspace: directory.path().into(),
+            data_dir: directory.path().join("state"),
+            ..Config::default()
+        }
+        .resolve()
+        .unwrap();
+        assert!(welcome(&config).contains("Prompts cannot be sent yet."));
+        let host = Host::open(config).unwrap();
+        let mut app = App {
+            session: host.store.create_session().await.unwrap().id,
+            input: "keep this draft".into(),
+            ..App::default()
+        };
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.failed);
+        assert!(
+            app.status
+                .starts_with("Not sent: No provider is configured")
+        );
+        assert!(app.status.contains("--config FILE"));
+        assert_eq!(app.input, "keep this draft");
+        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+    }
 
     #[tokio::test]
     async fn unsupported_steering_preserves_draft_and_retries_do_not_rebind_to_a_new_root_or_fifo()

@@ -11,6 +11,8 @@ use crate::subagents::SubagentLimits;
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
+    #[cfg(any(test, feature = "test-support"))]
+    #[serde(skip)]
     Demo,
     #[default]
     Nagents,
@@ -35,6 +37,9 @@ pub struct Config {
     /// Derived only from verified metadata next to the canonical executable.
     #[serde(skip)]
     pub bundled_runtime: Option<BundledRuntime>,
+    /// The explicitly supplied native configuration, if any.
+    #[serde(skip)]
+    pub source: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -58,6 +63,7 @@ impl Default for Config {
             shell_timeout_seconds: 120,
             subagents: SubagentLimits::default(),
             bundled_runtime: None,
+            source: None,
         }
     }
 }
@@ -79,12 +85,10 @@ impl Config {
                 let value: serde_json::Value = serde_json::from_slice(&bytes)
                     .context("Invalid Rust ngn configuration (legacy configs are not imported)")?;
                 let explicit = value.get("runner").is_some();
-                (
-                    serde_json::from_value(value).context(
-                        "Invalid Rust ngn configuration (legacy configs are not imported)",
-                    )?,
-                    explicit,
-                )
+                let mut config: Self = serde_json::from_value(value)
+                    .context("Invalid Rust ngn configuration (legacy configs are not imported)")?;
+                config.source = Some(path.to_owned());
+                (config, explicit)
             }
             None => (Self::default(), false),
         };
@@ -220,7 +224,18 @@ impl Config {
     pub fn selected_provider(&self) -> Result<&ProviderConfig> {
         self.providers
             .get(&self.provider)
-            .context("Select a provider in --config (see config.example.json), or use --demo")
+            .with_context(|| match &self.source {
+                Some(path) if self.provider.is_empty() => format!(
+                    "No provider selected in {}. Set \"provider\" or pass --provider-id",
+                    path.display()
+                ),
+                Some(path) => format!(
+                    "Provider {:?} is not defined in {}. Choose a configured connection with --provider-id",
+                    self.provider,
+                    path.display()
+                ),
+                None => "No provider is configured. Pass --config FILE with a native Rust provider configuration (see config.example.json)".into(),
+            })
     }
 
     pub fn state_dir(&self) -> PathBuf {

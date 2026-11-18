@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use ngn_core::auth::{self, Operation};
-use ngn_core::{ApprovalMode, Config, Host, config::Backend};
+use ngn_core::{ApprovalMode, Config, Host};
 use ngn_protocol::{Event, EventRecord, RunStatus};
 use uuid::Uuid;
 
@@ -48,9 +48,6 @@ struct Cli {
     config: Option<PathBuf>,
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
-    /// Native offline demo; no Python or network required.
-    #[arg(long, global = true)]
-    demo: bool,
     #[arg(long, global = true)]
     read_only: bool,
     #[arg(long, global = true)]
@@ -230,9 +227,6 @@ async fn execute(cli: Cli) -> Result<i32> {
     if let Some(data) = cli.data_dir {
         config.data_dir = data;
     }
-    if cli.demo {
-        config.backend = Backend::Demo;
-    }
     if cli.read_only {
         config.read_only = true;
     }
@@ -248,10 +242,6 @@ async fn execute(cli: Cli) -> Result<i32> {
     }
     let config = config.resolve()?;
     if let Some(Commands::Auth { operation }) = &cli.command {
-        ensure!(
-            config.backend == Backend::Nagents,
-            "ngn auth requires a configured nagents ChatGPT connection, not --demo"
-        );
         let cancel = tokio_util::sync::CancellationToken::new();
         let command = auth::run(
             &config,
@@ -283,17 +273,33 @@ async fn execute(cli: Cli) -> Result<i32> {
         });
     }
     if matches!(cli.command, Some(Commands::Doctor)) {
+        let source = config.source.as_ref().map_or_else(
+            || "built-in defaults; pass --config FILE to select a provider".into(),
+            |path| view::plain(&path.display().to_string()),
+        );
+        let selected = config.selected_provider();
         println!(
-            "ngn {}\nAgent Runtime Protocol: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nNo legacy state was imported. No runner or network request was started.",
+            "ngn {}\nAgent Runtime Protocol: {}\nConfig: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nNo legacy state was imported. No runner or network request was started.",
             env!("CARGO_PKG_VERSION"),
             ngn_protocol::VERSION,
+            source,
             config.workspace.display(),
             config.state_dir().display(),
             config.backend,
-            config.provider,
+            selected
+                .as_ref()
+                .map_or_else(|_| "none".into(), |_| view::plain(&config.provider)),
             config.read_only,
             config.runner.first().map(String::as_str).unwrap_or("unset")
         );
+        match selected {
+            Ok(provider) => println!(
+                "Model: {} · auth {:?}",
+                view::plain(&provider.model),
+                provider.auth
+            ),
+            Err(error) => println!("Provider setup: {}", view::plain(&error.to_string())),
+        }
         if let Some(runtime) = &config.bundled_runtime {
             println!(
                 "Bundled CPython: {}\nBundled runtime: {}",
@@ -314,7 +320,7 @@ async fn execute(cli: Cli) -> Result<i32> {
                 }
                 ensure!(
                     !prompt.trim().is_empty(),
-                    "A prompt is required. Try: ngn --demo run --json 'hello'"
+                    "A prompt is required. Try: ngn run --json 'hello'"
                 );
                 let id = session(&host, cli.resume.as_deref(), cli.continue_session).await?;
                 headless(host.clone(), &id, &prompt, json).await

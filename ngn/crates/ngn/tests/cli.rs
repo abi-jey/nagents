@@ -4,16 +4,45 @@ mod test_support;
 use std::process::Command;
 
 #[test]
-fn native_demo_requires_neither_python_nor_provider_credentials() {
-    let workspace = test_support::private_tempdir().unwrap();
-    let state = test_support::private_tempdir().unwrap();
-    std::fs::write(workspace.path().join("hello.txt"), "hello").unwrap();
+fn rejects_removed_demo_flag() {
     let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
-        .args(["--demo", "-C"])
+        .args(["--demo", "run", "--json", "hello"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("unexpected argument '--demo'"), "{error}");
+}
+
+#[test]
+fn help_does_not_advertise_demo() {
+    for args in [&["--help"][..], &["run", "--help"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(help.contains("Usage:"));
+        assert!(!help.contains("--demo"), "{help}");
+    }
+}
+
+#[test]
+fn doctor_uses_explicit_config_without_starting_a_runtime() {
+    let workspace = test_support::private_tempdir().unwrap();
+    let config = workspace.path().join("rust.json");
+    std::fs::write(
+        &config,
+        r#"{"backend":"nagents","runner":["unavailable-runtime"]}"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
+        .arg("-C")
         .arg(workspace.path())
-        .arg("--data-dir")
-        .arg(state.path())
-        .args(["run", "--json", "hello"])
+        .arg("--config")
+        .arg(&config)
+        .arg("doctor")
         .env("PATH", workspace.path())
         .output()
         .unwrap();
@@ -22,19 +51,35 @@ fn native_demo_requires_neither_python_nor_provider_credentials() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records: Vec<serde_json::Value> = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(records[0]["schema_version"], 1);
-    assert_eq!(records.last().unwrap()["event"], "run_finished");
-    assert_eq!(records.last().unwrap()["status"], "completed");
+    let report = String::from_utf8(output.stdout).unwrap();
     assert!(
-        records
-            .iter()
-            .any(|record| record["event"] == "tool_completed")
+        report.contains(&format!("Config: {}", config.display())),
+        "{report}"
     );
+    assert!(report.contains("Backend: Nagents"), "{report}");
+    assert!(report.contains("Provider: none"), "{report}");
+    assert!(
+        report.contains("Provider setup: No provider selected"),
+        "{report}"
+    );
+    assert!(report.contains("Runner: unavailable-runtime"), "{report}");
+    assert!(!report.contains("--demo"), "{report}");
+}
+
+#[test]
+fn rejects_demo_backend_in_config_even_in_the_test_build() {
+    let workspace = test_support::private_tempdir().unwrap();
+    let config = workspace.path().join("rust.json");
+    std::fs::write(&config, r#"{"backend":"demo"}"#).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
+        .arg("--config")
+        .arg(&config)
+        .arg("doctor")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("Invalid Rust ngn configuration"), "{error}");
 }
 
 #[test]

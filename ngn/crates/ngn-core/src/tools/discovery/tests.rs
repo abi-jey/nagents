@@ -14,14 +14,8 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let tools = Tools::open(
-            directory.path(),
-            &directory.path().join("runtime"),
-            true,
-            false,
-            1,
-        )
-        .unwrap();
+        let tools =
+            Tools::open(directory.path(), &directory.path().join("runtime"), true, 1).unwrap();
         Self { directory, tools }
     }
 
@@ -241,7 +235,7 @@ fn only_workspace_gitignore_files_are_sources_of_rules() {
     fs::write(root.join(".git/info/exclude"), "*\n").unwrap();
     fs::write(root.join(".ignore"), "*\n").unwrap();
     fs::write(root.join("visible"), "needle\n").unwrap();
-    let tools = Tools::open(&root, &root.join("runtime"), true, false, 1).unwrap();
+    let tools = Tools::open(&root, &root.join("runtime"), true, 1).unwrap();
     assert_eq!(
         tools.walk(".").unwrap(),
         (vec![".ignore".into(), "visible".into()], false)

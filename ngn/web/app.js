@@ -336,7 +336,7 @@ try {
   const bootstrap = await api("/api/bootstrap"); token = bootstrap.token;
   $("version").textContent = bootstrap.version;
   $("workspace").textContent = bootstrap.workspace;
-  $("runtime").textContent = `${bootstrap.backend === "demo" ? "Offline Rust demo" : "nagents · " + (bootstrap.model || "provider not configured")}${bootstrap.read_only ? " · read only" : ""}`;
+  $("runtime").textContent = `nagents · ${bootstrap.model || "provider not configured"}${bootstrap.read_only ? " · read only" : ""}`;
   const sessions = await refreshSessions();
   if (sessions.length) await select(sessions[0].id, sessions[0].title); else await createSession();
 } catch (error) { $("connection").textContent = "Disconnected"; status(error.message); }

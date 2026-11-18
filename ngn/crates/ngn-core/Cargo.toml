@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Lets the ngn crate's unit tests use the in-process runtime fixture.
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 cap-std.workspace = true

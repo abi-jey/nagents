@@ -21,6 +21,7 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from protocol_fixture import write_config as write_protocol_fixture_config
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -349,7 +350,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
         require(process.returncode == 0, "HTTP host did not shut down cleanly")
 
 
-def tui_check(binary: Path, workspace: Path, data: Path, config: Path | None = None) -> None:
+def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, external_shutdown: bool) -> None:
     import fcntl
     import pty
     import select
@@ -360,8 +361,7 @@ def tui_check(binary: Path, workspace: Path, data: Path, config: Path | None = N
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
     original_mode = termios.tcgetattr(slave)
-    arguments = [str(binary), "-C", str(workspace), "--data-dir", str(data)]
-    arguments += ["--config", str(config)] if config is not None else ["--demo"]
+    arguments = [str(binary), "--config", str(config), "-C", str(workspace), "--data-dir", str(data)]
     process = subprocess.Popen(
         arguments,
         stdin=slave,
@@ -383,12 +383,15 @@ def tui_check(binary: Path, workspace: Path, data: Path, config: Path | None = N
             if select.select([master], [], [], 0.1)[0]:
                 output += os.read(master, 65536)
         require(b"Welcome to ngn" in visible(), "Native TUI did not render on a real PTY")
-        os.write(master, b"write a file\r" if config is not None else b"demo approval\r")
+        destination = workspace / "changed.txt"
+        require(not destination.exists(), "Approval fixture destination already exists")
+        os.write(master, b"write a file\r")
         deadline = time.monotonic() + 10
         while b"Approval:" not in visible() and time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
                 output += os.read(master, 65536)
         require(b"Approval:" in visible(), "TUI approval preview did not render")
+        require(not destination.exists(), "TUI wrote before approval")
         os.write(master, b"\x19")  # Ctrl+Y: explicit one-time approval.
         database = next(data.rglob("host.sqlite3"))
         completed = False
@@ -402,16 +405,15 @@ def tui_check(binary: Path, workspace: Path, data: Path, config: Path | None = N
                 )
             if completed:
                 break
-        require(completed, "TUI demo did not complete after approving")
-        if config is not None:
-            require(
-                (workspace / "changed.txt").read_text() == "written by an approved Rust host tool\n",
-                "Live TUI did not execute its approved native Rust tool",
-            )
-        if config is None:
-            os.write(master, b"\x11")  # Ctrl+Q: cleanup and terminal restoration.
-        else:
+        require(completed, "TUI fixture run did not complete after approving")
+        require(
+            destination.read_text() == "written by an approved Rust host tool\n",
+            "TUI did not execute its approved native Rust tool",
+        )
+        if external_shutdown:
             process.send_signal(signal.SIGTERM)  # External shutdown must restore terminal state too.
+        else:
+            os.write(master, b"\x11")  # Ctrl+Q: cleanup and terminal restoration.
         deadline = time.monotonic() + 10
         while process.poll() is None and time.monotonic() < deadline:
             if select.select([master], [], [], 0.05)[0]:
@@ -536,28 +538,39 @@ async def main() -> None:
             queue_workspace = root / "queue-workspace"
             queue_workspace.mkdir()
             (queue_workspace / "hello.txt").write_text("hello from a Rust tool\n")
-            await queue_http_checks(binary, config, queue_workspace, root / "queue-data")
+            crash_config = root / "crash-config.json"
+            write_protocol_fixture_config(crash_config)
+            await queue_http_checks(binary, config, queue_workspace, root / "queue-data", crash_config)
             print(
-                "PASS: real nagents FIFO, queued idempotency/removal, per-run approvals, session-scoped WS controls, Stop/clear, crash recovery and explicit resume without replay"
+                "PASS: real nagents FIFO, queued idempotency/removal, per-run approvals, session-scoped WS controls, "
+                "Stop/clear, protocol-runner crash recovery and explicit resume without replay"
             )
             if not arguments.skip_tui:
-                await asyncio.to_thread(tui_check, binary, workspace, root / "tui-data")
-                print("PASS: real-PTY Rust TUI, native approval and clean exit")
-                live_workspace = root / "tui-live-workspace"
-                live_workspace.mkdir()
-                (live_workspace / "hello.txt").write_text("hello from a Rust tool\n")
-                await asyncio.to_thread(tui_check, binary, live_workspace, root / "tui-live-data", config)
-                print("PASS: real-PTY TUI → nagents Agent.run → approved native Rust write; terminal mode restored")
+                for label, external_shutdown in (("ctrl-q", False), ("sigterm", True)):
+                    tui_workspace = root / f"tui-{label}"
+                    tui_workspace.mkdir()
+                    await asyncio.to_thread(
+                        tui_check,
+                        binary,
+                        config,
+                        tui_workspace,
+                        root / f"tui-{label}-data",
+                        external_shutdown=external_shutdown,
+                    )
+                print(
+                    "PASS: real-PTY TUI → nagents Agent.run → approved native Rust write; Ctrl+Q/SIGTERM restore terminal mode"
+                )
                 await asyncio.to_thread(
                     subagent_tui_check,
                     binary,
+                    config,
                     subagent_workspace,
                     root / "subagent-tui-data",
                 )
                 print(
-                    "PASS: real-PTY subagent inspection, child-only cancel, parent continuity, tree shutdown and terminal restoration"
+                    "PASS: real-PTY subagent inspection, child-only cancel, parent continuity, clean exit and terminal restoration"
                 )
-                await asyncio.to_thread(queue_tui_check, binary, queue_workspace, root / "queue-tui-data")
+                await asyncio.to_thread(queue_tui_check, binary, config, queue_workspace, root / "queue-tui-data")
                 print(
                     "PASS: real-PTY busy submission, F6 FIFO inspection, remove/pause/resume/clear, Stop, durable restart and terminal restoration"
                 )

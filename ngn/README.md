@@ -24,24 +24,20 @@ ngn update --check && ngn update
 Self-contained bundle for Linux x86_64 (glibc 2.39+) and macOS 11+ (Apple silicon or Intel); nothing else needs installing.
 See [installation](docs/installation.md).
 
-## Source-only offline demo (development tools required)
+## Build and inspect from source
 
 Requires Rust 1.93+ and a C compiler for bundled SQLite. No Node build is needed.
 
 ```sh
 # From the repository root:
 cd ngn
-cargo run -p ngn -- --demo -C /path/to/workspace
-cargo run -p ngn -- --demo -C /path/to/workspace serve
-cargo run -p ngn -- --demo run --json "hello"
-cargo build --release -p ngn
-./target/release/ngn --version
+cargo build -p ngn
+./target/debug/ngn --version
+./target/debug/ngn -C /path/to/workspace doctor
 ```
 
-The offline demo uses native Rust tools and scripted text. It makes no model or
-network requests, never writes workspace files, and does not launch Python. It
-does persist conversations in its own data directory. Try **demo approval**,
-**demo subagents**, or **demo subagents wait** (then inspect/cancel the child with F5).
+`doctor` reports configuration and runtime paths without launching Python or
+making model requests. Configure a provider and runtime before submitting prompts.
 
 The web client is at `http://127.0.0.1:8765`. Web serving is **loopback-only**;
 use the exact printed address. It is a trusted local operator application, not a
@@ -203,9 +199,8 @@ From the repository root, on Linux x86_64 with Python 3.13, Rust 1.93+ and a C
 compiler:
 
 ```sh
-./ngn/dev                         # Rebuild, install wheels, launch offline TUI
-./ngn/dev serve --port 18768      # Same installed binary, embedded browser UI
-./ngn/dev --config /path/to/rust-config.json
+./ngn/dev                                  # Launch for local inspection
+./ngn/dev --config /path/to/rust-config.json  # Or use an explicit Rust config
 ./ngn/dev --config /path/to/rust-config.json serve --port 18768
 ./ngn/dev --test                  # Build + actual CLI/HTTP/WebSocket/PTY acceptance
 ./ngn/dev --published-core --test # Compatibility with the pinned published core
@@ -217,7 +212,6 @@ environment, packs and extracts the binary, then launches its explicit path.
 The runtime never falls back to your installed Python `ngn` or an editable import.
 The configured runner is rebound to that fresh environment; provider and permission
 settings are retained. Export the referenced API key securely; `.env` is not loaded.
-Without an explicit Rust `--config`, the command selects the offline demo.
 
 Artifacts and state default to `$XDG_CACHE_HOME/ngn-rust-dev/<checkout-hash>/`
 (or `~/.cache/...`). Development state is separate from installed/legacy state;
@@ -236,9 +230,8 @@ Every missing cache ancestor is created with owner-only access, including on a
 first launch under umask 0002. Existing writable ancestors are rejected with an
 actionable error; the launcher does not chmod or repair existing directories or
 symlinks. Choose a private cache or secure the existing path deliberately.
-`--test` also launches the extracted offline/read-only app in its actual cache
-ancestry with a separate candidate-owned workspace/state and no Python on PATH;
-it never tests against an operator's configured state or contacts a live provider.
+`--test` uses candidate-owned workspace and state rather than the operator's
+configuration, and does not contact a live provider.
 
 Rust and embedded web assets are rebuilt on every invocation; Python wheels and
 the runtime environment are freshly built/installed. A source change during the

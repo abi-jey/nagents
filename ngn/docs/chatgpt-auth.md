@@ -81,7 +81,7 @@ identity changes are not rolled back; check status after interruption.
 ## Identity ownership
 
 Every native `Host` holds a **shared** flock on
-`<data_dir>/.identity/host.lock`, including API-key/demo hosts and hosts for other
+`<data_dir>/.identity/host.lock`, including API-key hosts and hosts for other
 workspaces. Subscription runtimes also retain a shared guard through their own
 provider/auth cleanup, so an orphaned runner cannot lose identity protection
 merely because its Rust parent exited.
@@ -138,4 +138,3 @@ mutation/active-host gating, broader account/refresh coverage, macOS and non-loc
 filesystem validation remain separate unfinished gates. A live web steering attempt
 ended before admission; no steering request or FIFO fallback was submitted, so
 installed synthetic safe-point tests, not that attempt, establish steering behavior.
-The native offline demo still requires no Python, credentials or network.

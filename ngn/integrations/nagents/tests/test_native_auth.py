@@ -134,7 +134,7 @@ class NativeAuthTests(unittest.IsolatedAsyncioTestCase):
             assert process.stderr is not None
             challenge = await asyncio.wait_for(process.stderr.readline(), 5)
             self.assertIn(b"TEST-CODE", challenge)
-            code, _, stderr = await self.invoke("--demo", "run", "--json", "hello")
+            code, _, stderr = await self.invoke("sessions")
             self.assertNotEqual(code, 0)
             self.assertIn("Stop all ngn hosts", stderr)
             process.send_signal(signal.SIGINT)
@@ -149,6 +149,6 @@ class NativeAuthTests(unittest.IsolatedAsyncioTestCase):
                 process.terminate()
                 await asyncio.wait_for(process.communicate(), 10)
         self.assertFalse(self.store.exists())
-        code, stdout, _ = await self.invoke("--demo", "run", "--json", "hello")
+        code, stdout, _ = await self.invoke("sessions")
         self.assertEqual(code, 0)
-        self.assertIn('"status":"completed"', stdout)
+        self.assertEqual(stdout, "")

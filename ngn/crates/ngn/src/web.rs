@@ -451,7 +451,6 @@ mod tests {
             Config {
                 workspace: directory.path().into(),
                 data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
                 ..Config::default()
             }
             .resolve()

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Remove native Rust `--demo`. `ngn doctor` still works without loading a runtime
+  or contacting a model; offline acceptance tests use a separate fixture runner.
+- Show the reason a prompt could not be sent after Enter, and report the active
+  configuration source and model in `ngn doctor`.
+
 ## 0.100.5
 
 - Native macOS bundles: install.sh now installs self-contained ngn on Apple silicon and Intel Macs (macOS 11+), alongside Linux x86_64.

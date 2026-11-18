@@ -24,7 +24,7 @@ client below; see the [migration checklist](ngn/docs/migration.md).
 
 ```sh
 curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh
-ngn doctor && ngn --demo
+ngn doctor
 ```
 
 Self-contained (bundled Python, core, adapter and dependencies) for Linux x86_64 (glibc 2.39+) and macOS 11+ (Apple silicon or Intel).

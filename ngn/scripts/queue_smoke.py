@@ -13,26 +13,26 @@ from collections.abc import Callable
 from pathlib import Path
 
 import aiohttp
+from protocol_fixture import CRASH_NOTICE, CRASH_PROMPT
 from subagent_smoke import require, terminal_text
 
 
-async def http_checks(binary: Path, config: Path, workspace: Path, data: Path) -> None:
+async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, crash_config: Path) -> None:
     process = None
     url = ""
     headers = {}
     token = ""
 
-    async def launch(*, demo: bool = False) -> None:
+    async def launch(settings: Path = config) -> None:
         nonlocal process, url, headers, token
         process = await asyncio.create_subprocess_exec(
             str(binary),
             "--config",
-            str(config),
+            str(settings),
             "-C",
             str(workspace),
             "--data-dir",
             str(data),
-            *(["--demo"] if demo else []),
             "serve",
             "--port",
             "0",
@@ -222,10 +222,17 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path) -
                 )
             await stop()
 
-            # Abrupt host loss is tested in native mode: no orphan runtime or
-            # paid-provider process is left behind by intentionally SIGKILLing it.
-            await launch(demo=True)
-            interrupted = await submit(session, "demo hold")
+            # The test runner exits on EOF, including when its host is SIGKILLed.
+            await launch(crash_config)
+            interrupted = await submit(session, CRASH_PROMPT)
+            async with asyncio.timeout(10):
+                while not any(
+                    record["run_id"] == interrupted["id"]
+                    and record["event"] == "notice"
+                    and record["text"] == CRASH_NOTICE
+                    for record in await history(session)
+                ):
+                    await asyncio.sleep(0.03)
             saved = await submit(session, "read hello.txt persisted")
             require(
                 saved["status"] == "queued",
@@ -239,7 +246,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path) -
                 "Restart did not preserve unstarted inputs in a paused queue",
             )
             require(
-                (await submit(session, "demo hold", interrupted["request_id"]))["status"] == "interrupted",
+                (await submit(session, CRASH_PROMPT, interrupted["request_id"]))["status"] == "interrupted",
                 "Restart retried a claimed/interrupted run",
             )
             require(
@@ -278,7 +285,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path) -
                     await process.wait()
 
 
-def tui_check(binary: Path, workspace: Path, data: Path) -> None:
+def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
     import fcntl
     import pty
     import select
@@ -289,7 +296,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
     before = termios.tcgetattr(slave)
-    arguments = [str(binary), "--demo", "-C", str(workspace), "--data-dir", str(data)]
+    arguments = [str(binary), "--config", str(config), "-C", str(workspace), "--data-dir", str(data)]
     process = subprocess.Popen(arguments, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     output = b""
     try:
@@ -324,42 +331,42 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
 
         os.write(master, b"/queue pause\r")
         wait_for(paused, "TUI pause did not persist")
-        os.write(master, b"demo hold\rdemo remove\rdemo before resume\r")
+        os.write(master, b"wait for cancellation\rremove this input\rqueued before resume\r")
         wait_for(lambda: len(statuses()) == 3, "TUI did not queue all three inputs")
         require(set(statuses().values()) == {"queued"}, "Paused TUI executed an input")
         os.write(master, b"\x1b[17~")  # F6 opens the input queue.
         wait_for(
-            lambda: b"Input queue: PAUSED" in visible() and b"demo before resume" in visible(),
+            lambda: b"Input queue: PAUSED" in visible() and b"queued before resume" in visible(),
             "F6 did not inspect the paused FIFO",
         )
         os.write(master, b"\x1b[B\x18")  # Down, Ctrl+X: remove only the second input.
         wait_for(
-            lambda: statuses().get("demo remove") == "cancelled",
+            lambda: statuses().get("remove this input") == "cancelled",
             "TUI removed the wrong queued input",
         )
         os.write(master, b"\x10")  # Ctrl+P resumes.
         wait_for(
-            lambda: statuses().get("demo hold") == "running",
+            lambda: statuses().get("wait for cancellation") == "running",
             "TUI resume did not start the FIFO head",
         )
         os.write(master, b"\x1b")
         wait_for(lambda: b"Input queue:" not in visible(), "Queue inspector did not close")
-        os.write(master, b"demo while busy\r")
+        os.write(master, b"queued while busy\r")
         wait_for(
-            lambda: statuses().get("demo while busy") == "queued",
+            lambda: statuses().get("queued while busy") == "queued",
             "Busy TUI did not accept a pending input",
         )
         os.write(master, b"\x1b[17~")
         wait_for(
-            lambda: b"demo while busy" in visible() and b"Input queue:" in visible(),
+            lambda: b"queued while busy" in visible() and b"Input queue:" in visible(),
             "TUI did not refresh the pending FIFO",
         )
         os.write(master, b"\x0b")  # Ctrl+K clears pending, never the active run.
         wait_for(
-            lambda: statuses().get("demo while busy") == "cancelled",
+            lambda: statuses().get("queued while busy") == "cancelled",
             "TUI clear did not cancel pending inputs",
         )
-        require(statuses()["demo hold"] == "running", "TUI clear cancelled active work")
+        require(statuses()["wait for cancellation"] == "running", "TUI clear cancelled active work")
         os.write(master, b"\x1b")
         wait_for(
             lambda: b"Input queue:" not in visible(),
@@ -367,12 +374,12 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
         )
         os.write(master, b"\x1b")  # Esc stops the root and leaves the queue paused.
         wait_for(
-            lambda: statuses().get("demo hold") == "cancelled",
+            lambda: statuses().get("wait for cancellation") == "cancelled",
             "TUI Stop did not cancel the root",
         )
-        os.write(master, b"demo persisted\r")
+        os.write(master, b"read persisted input\r")
         wait_for(
-            lambda: statuses().get("demo persisted") == "queued",
+            lambda: statuses().get("read persisted input") == "queued",
             "TUI did not preserve input after Stop",
         )
         with sqlite3.connect(database) as connection:
@@ -396,16 +403,16 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
         wait_for(lambda: b"F6 queue" in visible(), "Resumed queue TUI did not render")
         os.write(master, b"\x1b[17~")
         wait_for(
-            lambda: b"Input queue: PAUSED" in visible() and b"demo persisted" in visible(),
+            lambda: b"Input queue: PAUSED" in visible() and b"read persisted input" in visible(),
             "TUI restart did not expose paused durable inputs",
         )
         require(
-            statuses()["demo persisted"] == "queued",
+            statuses()["read persisted input"] == "queued",
             "TUI restart automatically replayed pending work",
         )
         os.write(master, b"\x10")
         wait_for(
-            lambda: statuses().get("demo persisted") == "completed",
+            lambda: statuses().get("read persisted input") == "completed",
             "Recovered TUI input did not complete on explicit resume",
         )
         os.write(master, b"\x11")
@@ -423,7 +430,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
                 )
             ]
         require(
-            starts == ["demo hold", "demo persisted"],
+            starts == ["wait for cancellation", "read persisted input"],
             f"TUI replayed or executed cancelled inputs: {starts}",
         )
     finally:
