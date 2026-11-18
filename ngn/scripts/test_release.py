@@ -131,6 +131,7 @@ class ReleaseTests(unittest.TestCase):
             "ngn/Cargo.lock",
             "ngn/package.json",
             "ngn/install.sh",
+            "ngn/web/index.html",
             "ngn/runtime-lock.json",
             "ngn/CHANGELOG.md",
             "ngn/integrations/nagents/pyproject.toml",

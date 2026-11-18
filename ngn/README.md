@@ -84,7 +84,7 @@ changes preserve the existing harness import paths rather than embedding that ha
 
 [ChatGPT device login](docs/chatgpt-auth.md) is an explicit
 `kind: "openai", auth: "chatgpt"` connection with native `auth login|status|logout`
-commands. It requires `nagents>=0.100.2,<0.101`; official bundles require that
+commands. It requires the matching `nagents` core version; official bundles require that
 matching published core. The API is **not available in nagents
 0.28.5**. Existing API-key connection semantics are unchanged.
 
@@ -122,7 +122,7 @@ Stop/failure/shutdown/restart pause pending inputs. **Resume is explicit**; star
 or interrupted work is never requeued/retried. `run --json` remains immediate and
 fails rather than jumping a paused/pending queue. This is FIFO, not model steering.
 
-Development 0.100.2 also has a separate, explicit
+ngn also has a separate, explicit
 [active-run steering boundary](docs/steering.md): browser **Steer active turn**,
 TUI **`/steer TEXT`**, and durable receipt inspection. It requires both the runtime's
 `safe_steering` capability and the host's explicit acknowledgment. Inputs apply

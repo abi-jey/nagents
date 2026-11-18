@@ -46,6 +46,7 @@ def version_check(tag: str = "") -> str:
     assert f'__version__ = "{version}"' in (NGN / "integrations/nagents/src/ngn_nagents/__init__.py").read_text()
     bootstrap = re.search(r"(?m)^NGN_BOOTSTRAP_VERSION=([0-9.]+)$", (NGN / "install.sh").read_text())
     assert bootstrap is not None and bootstrap[1] == version, "Installer bootstrap version mismatch"
+    assert f'<span id="version">{version}</span>' in (NGN / "web/index.html").read_text(), "Web client version mismatch"
     lock = tomllib.loads((NGN / "Cargo.lock").read_text())
     for package in lock["package"]:
         if package["name"] in {"ngn", "ngn-core", "ngn-protocol"}:
@@ -78,6 +79,7 @@ def bump(version: str, notes: str, root: Path = ROOT) -> None:
         (ngn / "install.sh", rf"(?m)^NGN_BOOTSTRAP_VERSION={old}$", f"NGN_BOOTSTRAP_VERSION={version}"),
         (ngn / "runtime-lock.json", rf'"version": "{old}"', f'"version": "{version}"'),
         (ngn / "runtime-lock.json", rf"pypi/nagents/{old}/json", f"pypi/nagents/{version}/json"),
+        (ngn / "web/index.html", rf'<span id="version">{old}</span>', f'<span id="version">{version}</span>'),
     ]
     for crate in ("ngn", "ngn-core", "ngn-protocol"):
         replacements.append(
