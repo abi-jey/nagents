@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.100.6
 
 - Remove native Rust `--demo`. `ngn doctor` still works without loading a runtime
   or contacting a model; offline acceptance tests use a separate fixture runner.
