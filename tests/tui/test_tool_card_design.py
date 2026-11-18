@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Literal
@@ -17,8 +18,11 @@ from nagents.harness.config import THEME_NAMES
 from nagents.tui import themes
 from nagents.tui import widgets
 from nagents.tui.widgets import ToolCard
+from tests.support.tui import layout_ready
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from textual.widget import Widget
 
 
@@ -123,31 +127,52 @@ def settle(card: ToolCard, outcome: str) -> None:
         card.finish({"output": "Result"}, "Failure details" if outcome == "failed" else None, 1250)
 
 
+@contextmanager
+def outcome_case(outcome: str) -> Iterator[None]:
+    """Keep the former outcome parameter visible in failures after sharing an app."""
+    try:
+        yield
+    except Exception as error:
+        error.add_note(f"ToolCard outcome case: {outcome}")
+        raise
+
+
 @pytest.mark.asyncio
+async def test_layout_barrier_waits_for_deferred_widget_update() -> None:
+    app = design_app("terminal")
+    label = Static("Initial", id="deferred")
+    async with app.run_test() as pilot:
+        await app.mount(label)
+        assert label.call_later(label.update, "Queued")
+        assert label.call_after_refresh(label.update, "After\nrefresh")
+        await layout_ready(pilot)
+        assert str(label.content) == "After\nrefresh"
+        assert label.region.height == 2
+
+
 @pytest.mark.parametrize("width", [80, 160])
 @pytest.mark.parametrize("outcome", OUTCOMES)
-async def test_tool_columns_align_with_and_without_timeout(width: int, outcome: str) -> None:
-    app = design_app("terminal")
+def test_tool_columns_align_with_and_without_timeout(width: int, outcome: str) -> None:
+    # This contract only inspects formatted titles. Real allocated/rendered
+    # columns, focus and resizing are exercised below; no app/timer is needed.
     cards = [
         ToolCard("plain", "read_file", {"path": "src/example.py"}, animations=False),
         ToolCard("short", "shell", {"command": "echo hello", "timeout": 60}, animations=False),
         ToolCard("long", "shell", {"command": "echo hello", "timeout": 600}, animations=False),
     ]
-    async with app.run_test(size=(width, 24)) as pilot:
-        await app.mount(*cards)
-        await pilot.pause()
-        for card in cards:
-            card._stop_elapsed()
-            settle(card, outcome)
-            card._duration = "1.25s"
-            card._update_summary()
-        assert len({cell_len(card.title.split(card._outcome)[0]) for card in cards}) == 1
-        assert len({cell_len(card.title.split("1.25s")[0]) for card in cards}) == 1
-        assert len({cell_len(card.title) for card in cards}) == 1
-        assert " / " not in cards[0].title
-        assert cards[0].title.endswith(f"{'1.25s':>8}" + " " * 11)
-        assert cards[1].title.endswith(f"{'1.25s':>8} / {'1m':>8}")
-        assert cards[2].title.endswith(f"{'1.25s':>8} / {'10m':>8}")
+    size = Size(width, 1)
+    for card in cards:
+        card._size_updated(size, size, size, layout=False)
+        settle(card, outcome)
+        card._duration = "1.25s"
+        card._update_summary()
+    assert len({cell_len(card.title.split(card._outcome)[0]) for card in cards}) == 1
+    assert len({cell_len(card.title.split("1.25s")[0]) for card in cards}) == 1
+    assert {cell_len(card.title) for card in cards} == {width - 4}
+    assert " / " not in cards[0].title
+    assert cards[0].title.endswith(f"{'1.25s':>8}" + " " * 11)
+    assert cards[1].title.endswith(f"{'1.25s':>8} / {'1m':>8}")
+    assert cards[2].title.endswith(f"{'1.25s':>8} / {'10m':>8}")
 
 
 def assert_transparent(widget: Widget) -> None:
@@ -164,95 +189,102 @@ def assert_unframed(card: ToolCard) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("theme", THEME_NAMES)
-@pytest.mark.parametrize("outcome", OUTCOMES)
-async def test_native_hover_and_focus_keep_closed_rows_stationary(theme: str, outcome: str) -> None:
+async def test_native_hover_and_focus_keep_closed_rows_stationary(theme: str) -> None:
     app = design_app(theme)
-    card = ToolCard("design", "shell", {"command": "printf '[red]literal[/red]'", "timeout": 30})
-    neighbour = ToolCard("neighbour", "read_file", {"path": "src/example.py"})
     async with app.run_test(size=(100, 32)) as pilot:
-        await app.mount(Static("Move pointer here", id="away"), card, neighbour)
-        settle(card, outcome)
-        app.set_focus(None)
-        await pilot.hover("#away")
-        await pilot.pause()
-        title = card.query_one("CollapsibleTitle", Static)
-        regions = (card.region, title.region, neighbour.region)
-        foreground = title.styles.color
-        plain = card.title
-        assert outcome in plain
-        assert card.collapsed and card.size.height == title.size.height == 1
-        assert card.region.bottom == neighbour.region.y
-        assert not title.styles.text_style.bold
-        assert not title.styles.text_style.underline
-        assert_unframed(card)
+        await app.mount(Static("Move pointer here", id="away"))
+        for outcome in OUTCOMES:
+            with outcome_case(outcome):
+                # Share CSS/app startup, never mutable cards, timers or focus.
+                card = ToolCard("design", "shell", {"command": "printf '[red]literal[/red]'", "timeout": 30})
+                neighbour = ToolCard("neighbour", "read_file", {"path": "src/example.py"})
+                await app.mount(card, neighbour)
+                settle(card, outcome)
+                app.set_focus(None)
+                await pilot.hover("#away")
+                await layout_ready(pilot)
+                title = card.query_one("CollapsibleTitle", Static)
+                regions = (card.region, title.region, neighbour.region)
+                foreground = title.styles.color
+                plain = card.title
+                assert outcome in plain
+                assert card.collapsed and card.size.height == title.size.height == 1
+                assert card.region.bottom == neighbour.region.y
+                assert not title.styles.text_style.bold
+                assert not title.styles.text_style.underline
+                assert_unframed(card)
 
-        await pilot.hover(title)
-        await pilot.pause()
-        assert title.styles.text_style.bold  # Native CSS, not rewritten title markup.
-        assert not title.styles.text_style.reverse
-        assert not title.styles.text_style.underline
-        assert title.styles.color == foreground
-        assert_unframed(card)
-        assert (card.region, title.region, neighbour.region) == regions
-        # A running timer may advance; the target and status must not change.
-        assert card.title.split(outcome)[0] == plain.split(outcome)[0]
+                await pilot.hover(title)
+                await layout_ready(pilot)
+                assert title.styles.text_style.bold  # Native CSS, not rewritten title markup.
+                assert not title.styles.text_style.reverse
+                assert not title.styles.text_style.underline
+                assert title.styles.color == foreground
+                assert_unframed(card)
+                assert (card.region, title.region, neighbour.region) == regions
+                # A running timer may advance; the target and status must not change.
+                assert card.title.split(outcome)[0] == plain.split(outcome)[0]
 
-        title.focus()
-        await pilot.pause()
-        assert title.styles.text_style.bold and title.styles.text_style.underline
-        assert_unframed(card)
-        await pilot.hover("#away")
-        await pilot.pause()
-        assert not title.styles.text_style.bold
-        assert title.styles.text_style.underline
-        assert_unframed(card)
-        app.set_focus(None)
-        await pilot.pause()
-        assert not title.styles.text_style.bold
-        assert not title.styles.text_style.underline
-        assert (card.region, title.region, neighbour.region) == regions
-        assert card.collapsed
+                title.focus()
+                await layout_ready(pilot)
+                assert title.styles.text_style.bold and title.styles.text_style.underline
+                assert_unframed(card)
+                await pilot.hover("#away")
+                await layout_ready(pilot)
+                assert not title.styles.text_style.bold
+                assert title.styles.text_style.underline
+                assert_unframed(card)
+                app.set_focus(None)
+                await layout_ready(pilot)
+                assert not title.styles.text_style.bold
+                assert not title.styles.text_style.underline
+                assert (card.region, title.region, neighbour.region) == regions
+                assert card.collapsed
+                await card.remove()
+                await neighbour.remove()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("theme", THEME_NAMES)
-@pytest.mark.parametrize("outcome", OUTCOMES)
-async def test_click_and_enter_expand_real_tool_contents(theme: str, outcome: str) -> None:
+async def test_click_and_enter_expand_real_tool_contents(theme: str) -> None:
     app = design_app(theme)
-    card = ToolCard("inspect", "shell", {"command": "printf result"})
     async with app.run_test(size=(80, 40)) as pilot:
-        await app.mount(card)
-        card.append_output("Streamed evidence\n")
-        settle(card, outcome)
-        await pilot.pause()
-        title = card.query_one("CollapsibleTitle", Static)
-        header = title.region
-        assert card.collapsed and card.size.height == 1
-        assert card.output.region.height == 0
-        await pilot.click(title)
-        await pilot.pause()
-        assert not card.collapsed
-        assert app.focused is title
-        assert card.output.region.height > 0
-        assert card.arguments.region.height > 0
-        assert card.size.height > 1
-        assert title.region == header
-        assert "Streamed evidence" in card.output_text
-        # Pilot.click dispatches clicks but does not establish mouse hover.
-        await pilot.hover(title)
-        await pilot.pause()
-        assert title.styles.text_style.bold and title.styles.text_style.underline
-        assert_unframed(card)
-        await pilot.press("enter")
-        await pilot.pause()
-        assert card.collapsed and card.size.height == 1
-        assert title.region == header
-        assert card.output.region.height == 0
-        await pilot.press("enter")
-        await pilot.pause()
-        assert not card.collapsed and card.output.region.height > 0
-        assert title.region == header
-        assert_unframed(card)
+        for outcome in OUTCOMES:
+            with outcome_case(outcome):
+                card = ToolCard("inspect", "shell", {"command": "printf result"})
+                await app.mount(card)
+                card.append_output("Streamed evidence\n")
+                settle(card, outcome)
+                await layout_ready(pilot)
+                title = card.query_one("CollapsibleTitle", Static)
+                header = title.region
+                assert card.collapsed and card.size.height == 1
+                assert card.output.region.height == 0
+                await pilot.click(title)
+                await layout_ready(pilot)
+                assert not card.collapsed
+                assert app.focused is title
+                assert card.output.region.height > 0
+                assert card.arguments.region.height > 0
+                assert card.size.height > 1
+                assert title.region == header
+                assert "Streamed evidence" in card.output_text
+                # Pilot.click dispatches clicks but does not establish mouse hover.
+                await pilot.hover(title)
+                await layout_ready(pilot)
+                assert title.styles.text_style.bold and title.styles.text_style.underline
+                assert_unframed(card)
+                await pilot.press("enter")
+                await layout_ready(pilot)
+                assert card.collapsed and card.size.height == 1
+                assert title.region == header
+                assert card.output.region.height == 0
+                await pilot.press("enter")
+                await layout_ready(pilot)
+                assert not card.collapsed and card.output.region.height > 0
+                assert title.region == header
+                assert_unframed(card)
+                await card.remove()
 
 
 @pytest.mark.parametrize("width", [48, 100, 60])
@@ -291,55 +323,61 @@ def right_columns(card: ToolCard, status: str, timing: str) -> tuple[int, int]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("theme", THEME_NAMES)
 @pytest.mark.parametrize("width", [48, 100])
-@pytest.mark.parametrize("outcome", OUTCOMES[1:])
 async def test_status_and_timer_columns_survive_phases_and_resize(
-    theme: str, width: int, outcome: str, monkeypatch: pytest.MonkeyPatch
+    theme: str, width: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock = [100.0]
     monkeypatch.setattr("nagents.tui.widgets.monotonic", lambda: clock[0])
     app = design_app(theme)
-    card = ToolCard("columns", "shell", {"command": "工具/" * 60, "timeout": 30})
-    neighbour = ToolCard("next", "read_file")
     async with app.run_test(size=(width, 40)) as pilot:
-        await app.mount(card, neighbour)
-        app.set_focus(None)
-        await pilot.pause()
-        regions = (card.region, neighbour.region)
-        initial = right_columns(card, "running", f"{'0ms':>8} / {'30s':>8}")
-        clock[0] = 112.25
-        card._tick_elapsed()
-        await pilot.pause()
-        assert right_columns(card, "running", f"{'12.2s':>8} / {'30s':>8}") == initial
-        card.set_arguments({"command": "Short target", "timeout": 30})
-        card.append_output("Output must not expand a closed card\n" * 3)
-        await pilot.pause()
-        assert right_columns(card, "running", f"{'12.2s':>8} / {'30s':>8}") == initial
-        settle(card, outcome)
-        await pilot.pause()
-        elapsed = "12.2s" if outcome == "cancelled" else "1.25s"
-        timing = f"{elapsed:>8} / {'30s':>8}"
-        assert right_columns(card, outcome, timing) == initial
-        assert (card.region, neighbour.region) == regions
-        assert card.collapsed and card.size.height == 1
-        assert_unframed(card)
-        frozen = card.title
-        clock[0] = 200.0
-        await pilot.pause(0.15)
-        assert card.title == frozen
-        assert card._elapsed_timer is None
+        for outcome in OUTCOMES[1:]:
+            with outcome_case(outcome):
+                clock[0] = 100.0
+                card = ToolCard("columns", "shell", {"command": "工具/" * 60, "timeout": 30})
+                neighbour = ToolCard("next", "read_file")
+                await app.mount(card, neighbour)
+                app.set_focus(None)
+                await layout_ready(pilot)
+                regions = (card.region, neighbour.region)
+                initial = right_columns(card, "running", f"{'0ms':>8} / {'30s':>8}")
+                clock[0] = 112.25
+                card._tick_elapsed()
+                await layout_ready(pilot)
+                assert right_columns(card, "running", f"{'12.2s':>8} / {'30s':>8}") == initial
+                card.set_arguments({"command": "Short target", "timeout": 30})
+                card.append_output("Output must not expand a closed card\n" * 3)
+                await layout_ready(pilot)
+                assert right_columns(card, "running", f"{'12.2s':>8} / {'30s':>8}") == initial
+                settle(card, outcome)
+                await layout_ready(pilot)
+                elapsed = "12.2s" if outcome == "cancelled" else "1.25s"
+                timing = f"{elapsed:>8} / {'30s':>8}"
+                assert right_columns(card, outcome, timing) == initial
+                assert (card.region, neighbour.region) == regions
+                assert card.collapsed and card.size.height == 1
+                assert_unframed(card)
+                frozen = card.title
+                clock[0] = 200.0
+                # Retain the real timer-stop observation for every outcome.
+                await pilot.pause(0.15)
+                assert card.title == frozen
+                assert card._elapsed_timer is None
 
-        title = card.query_one("CollapsibleTitle", Static)
-        title.focus()
-        await pilot.press("enter")
-        await pilot.pause()
-        assert not card.collapsed
-        assert right_columns(card, outcome, timing) == initial
-        await pilot.resize_terminal(width + 12, 40)
-        await pilot.pause()
-        resized = right_columns(card, outcome, timing)
-        assert resized == (initial[0] + 12, initial[1] + 12)
-        await pilot.press("enter")
-        await pilot.pause()
-        assert card.collapsed and card.size.height == 1
-        assert right_columns(card, outcome, timing) == resized
-        assert_unframed(card)
+                title = card.query_one("CollapsibleTitle", Static)
+                title.focus()
+                await pilot.press("enter")
+                await layout_ready(pilot)
+                assert not card.collapsed
+                assert right_columns(card, outcome, timing) == initial
+                await pilot.resize_terminal(width + 12, 40)
+                await layout_ready(pilot)
+                resized = right_columns(card, outcome, timing)
+                assert resized == (initial[0] + 12, initial[1] + 12)
+                await pilot.press("enter")
+                await layout_ready(pilot)
+                assert card.collapsed and card.size.height == 1
+                assert right_columns(card, outcome, timing) == resized
+                assert_unframed(card)
+                await card.remove()
+                await neighbour.remove()
+                await pilot.resize_terminal(width, 40)

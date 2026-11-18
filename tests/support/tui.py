@@ -164,6 +164,18 @@ def make_app(backend: FakeHarness) -> NagentsApp:
     return NagentsApp(cast("Harness", backend))
 
 
+async def layout_ready(pilot: Pilot[None]) -> None:
+    """Drain widget messages and a paint without waiting for CPU-idle heuristics.
+
+    Use for synchronous CSS/layout changes only. Backend work and animation
+    completion still need their own event or animation barriers.
+    """
+    async with asyncio.timeout(HANG_GUARD):
+        await pilot.pause(0)
+        assert await pilot.app.wait_for_refresh(), "Layout barrier must run outside the app's message task"
+        await pilot.pause(0)
+
+
 async def idle(app: NagentsApp, pilot: Pilot[None]) -> None:
     try:
         async with asyncio.timeout(HANG_GUARD):
