@@ -99,7 +99,7 @@ feature gaps.
 ## From source
 
 ```sh
-./ngn/dev            # build and launch the current checkout
+./ngn/dev            # build and launch with existing provider settings
 ./ngn/dev --test     # build and run the installed-candidate acceptance suite
 ```
 

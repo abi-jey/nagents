@@ -164,6 +164,28 @@ fn private_file(path: &Path) -> Result<File> {
 }
 
 impl Store {
+    /// Build a self-contained SQLite file in private staging, never in a live workspace.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn stage_archive(
+        directory: &Path,
+        write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<()>,
+    ) -> Result<()> {
+        let store = Self::open(directory)?;
+        let mut connection = store
+            .connection
+            .lock()
+            .map_err(|_| anyhow::anyhow!("State lock poisoned"))?;
+        let transaction = connection.transaction()?;
+        write(&transaction)?;
+        transaction.commit()?;
+        let mode: String = connection.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))?;
+        ensure!(
+            mode == "delete",
+            "Cannot close staged Rust state as a single file"
+        );
+        Ok(())
+    }
+
     pub fn open(directory: &Path) -> Result<Self> {
         fs::create_dir_all(directory)?;
         ensure!(
@@ -185,7 +207,7 @@ impl Store {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            version <= 4,
+            version <= 5,
             "Rust host database was created by a newer unsupported schema version"
         );
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -222,7 +244,20 @@ impl Store {
             boundary_id TEXT NOT NULL, accepted_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS steering_run ON steering_inputs(run_id, position);
             CREATE INDEX IF NOT EXISTS steering_pending ON steering_inputs(status);")?;
-        transaction.pragma_update(None, "user_version", 4)?;
+        if version < 5 {
+            transaction.execute_batch(
+                "CREATE TABLE archived_sessions (
+                     session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id),
+                     python_id TEXT UNIQUE NOT NULL);
+                 CREATE TRIGGER archive_no_runs BEFORE INSERT ON runs
+                     WHEN EXISTS (SELECT 1 FROM archived_sessions WHERE session_id = NEW.session_id)
+                     BEGIN SELECT RAISE(ABORT, 'Python archives are read-only; start a new session'); END;
+                 CREATE TRIGGER archive_no_queue BEFORE INSERT ON session_queues
+                     WHEN EXISTS (SELECT 1 FROM archived_sessions WHERE session_id = NEW.session_id)
+                     BEGIN SELECT RAISE(ABORT, 'Python archives are read-only; start a new session'); END;",
+            )?;
+            transaction.pragma_update(None, "user_version", 5)?;
+        }
         crate::steering::settle(&transaction, None)?;
         let interrupted: Vec<(String, String)> = {
             let mut statement =
@@ -706,7 +741,7 @@ mod tests {
             .with(|db| Ok(db.pragma_query_value(None, "user_version", |row| row.get(0))?))
             .await
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     #[tokio::test]
@@ -743,7 +778,7 @@ mod tests {
                 ))
                 .await
                 .unwrap(),
-            4
+            5
         );
         assert_eq!(
             std::fs::read(directory.path().join("nagents.sqlite3")).unwrap(),
@@ -751,14 +786,14 @@ mod tests {
         );
         drop(store);
         let db = Connection::open(&path).unwrap();
-        db.pragma_update(None, "user_version", 5).unwrap();
+        db.pragma_update(None, "user_version", 6).unwrap();
         drop(db);
         assert!(Store::open(directory.path()).is_err());
         let db = Connection::open(&path).unwrap();
         assert_eq!(
             db.pragma_query_value::<u32, _>(None, "user_version", |row| row.get(0))
                 .unwrap(),
-            5
+            6
         );
     }
 }

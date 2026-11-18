@@ -14,7 +14,13 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{host::Host, store::Run, subagents::Execution, tools::ProcessGroup};
+use crate::{
+    host::Host,
+    logs::{RuntimeEvent, WIRE_LOG_CAPABILITY, WIRE_LOG_ENV, WIRE_LOG_ID_ENV},
+    store::Run,
+    subagents::Execution,
+    tools::ProcessGroup,
+};
 
 #[derive(Debug)]
 pub(crate) struct RunOutput {
@@ -124,8 +130,20 @@ pub(crate) async fn stdio(
         .stderr(Stdio::null())
         .kill_on_drop(true);
     host.config.runner_environment(&mut command);
+    let wire_log = host.wire_log_path();
+    command.env_remove(WIRE_LOG_ENV).env_remove(WIRE_LOG_ID_ENV);
+    if let Some(path) = wire_log {
+        let identity = host
+            .logs
+            .wire_identity()?
+            .context("Cannot bind runner to the host wire log")?;
+        command
+            .env(WIRE_LOG_ENV, path)
+            .env(WIRE_LOG_ID_ENV, identity);
+    }
     #[cfg(unix)]
     command.process_group(0);
+    host.logs.record(RuntimeEvent::RunnerStarting);
     let mut child = command.spawn().context("Cannot start agent runner; install integrations/nagents into the runner's Python environment")?;
     let _group = ProcessGroup(child.id());
     let mut writer = child.stdin.take().context("No runner stdin")?;
@@ -142,10 +160,15 @@ pub(crate) async fn stdio(
     let safe_steering = match ready.message {
         RuntimeMessage::Ready { capabilities, .. } => {
             validate_capabilities(&capabilities, provider.auth)?;
+            ensure!(
+                wire_log.is_none() || capabilities.iter().any(|cap| cap == WIRE_LOG_CAPABILITY),
+                "Runtime lacks provider_wire_log. Update the Python runtime and adapter, or pass --no-wire-log."
+            );
             steering_capability(&capabilities)?
         }
         _ => bail!("Expected runtime ready handshake"),
     };
+    host.logs.record(RuntimeEvent::RunnerReady);
     host.negotiate_steering(run, safe_steering).await?;
     let mut system_prompt = host.config.system_prompt.clone();
     if let Some(task) = &execution.task {
@@ -184,6 +207,7 @@ pub(crate) async fn stdio(
         tools: host.catalog(execution),
         max_tool_rounds: host.config.max_tool_rounds,
         steering: safe_steering,
+        wire_log: wire_log.is_some(),
     };
     send(&mut writer, run, HostMessage::Start { run: start }).await?;
     let mut calls = HashSet::new();
@@ -299,6 +323,13 @@ fn validate_capabilities(capabilities: &[String], auth: ProviderAuth) -> Result<
                 .iter()
                 .any(|capability| capability == "chatgpt_auth"),
         "Runtime lacks chatgpt_auth. ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5. Install nagents>=0.28.6 and the matching adapter, or source-built equivalents containing that API."
+    );
+    ensure!(
+        auth != ProviderAuth::Codex
+            || capabilities
+                .iter()
+                .any(|capability| capability == "codex_auth"),
+        "Runtime lacks codex_auth. Update the bundled ngn runtime, or choose an API-key or ChatGPT connection."
     );
     Ok(())
 }
@@ -533,6 +564,9 @@ mod tests {
         assert!(steering_capability(&modern).unwrap());
         modern.retain(|capability| capability != "chatgpt_auth");
         assert!(validate_capabilities(&modern, ProviderAuth::Chatgpt).is_err());
+        assert!(validate_capabilities(&modern, ProviderAuth::Codex).is_err());
+        modern.push("codex_auth".into());
+        assert!(validate_capabilities(&modern, ProviderAuth::Codex).is_ok());
         assert!(validate_capabilities(&[], ProviderAuth::Chatgpt).is_err());
     }
 

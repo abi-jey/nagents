@@ -889,6 +889,17 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         view::plain(&host.config.workspace.display().to_string()),
         app.session
     );
+    if let Some(path) = host.runtime_log_path() {
+        println!("Runtime log: {}", view::plain(&path.display().to_string()));
+    } else {
+        println!("Runtime log: unavailable");
+    }
+    if let Some(path) = host.wire_log_path() {
+        println!("Wire log: {}", view::plain(&path.display().to_string()));
+        println!("Sensitive request/response payload logging enabled");
+    } else {
+        println!("Wire log off · metadata only; no request/response payloads");
+    }
     Ok(())
 }
 
@@ -916,11 +927,8 @@ mod tests {
         };
         assert!(!submit_from_enter(&mut app, &host).await);
         assert!(app.failed);
-        assert!(
-            app.status
-                .starts_with("Not sent: No provider is configured")
-        );
-        assert!(app.status.contains("--config FILE"));
+        assert!(app.status.starts_with("Not sent: No provider selected"));
+        assert!(app.status.contains("providers.json"));
         assert_eq!(app.input, "keep this draft");
         assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
     }

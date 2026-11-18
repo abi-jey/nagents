@@ -27,6 +27,7 @@ from nagents.tools import ToolRegistry
 from nagents.types import JsonSchema
 from nagents.types import ToolCall
 
+from . import wire
 from .auth import Auth
 from .auth import auth_factory
 from .auth import identity_guard
@@ -60,6 +61,7 @@ class Start:
     max_tool_rounds: int
     auth_store: Path | None = None
     steering: bool = False
+    wire_log: bool = False
 
     @classmethod
     def parse(cls, message: dict[str, object]) -> Start:
@@ -70,11 +72,14 @@ class Start:
         fields(
             run,
             {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"},
-            frozenset({"auth_store", "steering"}),
+            frozenset({"auth_store", "steering", "wire_log"}),
         )
         steering = run.get("steering", False)
         if type(steering) is not bool:
             raise ProtocolError("Invalid host steering acknowledgment")
+        wire_log = "wire_log" in run
+        if wire_log and (run["wire_log"] is not True or not wire.available()):
+            raise ProtocolError("Invalid host provider wire logging acknowledgment")
         provider = mapping(run["provider"])
         mode = validate_provider(provider)
         auth_store = None
@@ -116,6 +121,7 @@ class Start:
             rounds,
             auth_store,
             steering,
+            wire_log,
         )
 
 
@@ -177,9 +183,9 @@ def validate_provider(settings: dict[str, object]) -> str:
     for key in settings:
         text(settings, key, 4096, empty=key in {"api", "base_url", "api_key_env"})
     mode = text(settings, "auth", 16) if "auth" in settings else "api_key"
-    if mode not in {"api_key", "chatgpt"}:
+    if mode not in {"api_key", "chatgpt", "codex"}:
         raise ProtocolError("Unsupported provider authentication mode")
-    if mode == "chatgpt":
+    if mode in {"chatgpt", "codex"}:
         if (
             settings["kind"] != "openai"
             or settings["api_key_env"] != ""
@@ -193,6 +199,24 @@ def validate_provider(settings: dict[str, object]) -> str:
     elif re.fullmatch(r"[A-Za-z0-9_]{1,128}", text(settings, "api_key_env", 128)) is None:
         raise ProtocolError("api_key_env must name an environment variable")
     return mode
+
+
+def _create_codex_provider(settings: dict[str, object]) -> Provider:
+    from nagents.provider.openai import OpenAIProvider
+
+    try:
+        home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+        if not ((home / "auth.json").exists() or (home / "config.toml").exists()):
+            raise ProtocolError("Local Codex configuration was not found; sign in with Codex or check CODEX_HOME")
+        # Local files select the route; keep Codex's own configured OAuth/API-key
+        # policy, including profile, credential and endpoint precedence.
+        return OpenAIProvider(model=text(settings, "model", 128), home=home)
+    except ProtocolError:
+        raise
+    except (OSError, RuntimeError, ValueError):
+        raise ProtocolError(
+            "Local Codex credentials or configuration are unusable; check CODEX_HOME and sign in with Codex if needed"
+        ) from None
 
 
 def create_provider(settings: dict[str, object]) -> Provider:
@@ -259,6 +283,8 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
     status = "failed"
     error = "Agent ended without a successful terminal event"
     try:
+        if start.wire_log:
+            ownership.enter_context(wire.open_host_log().capture(start.session_id))
         if validate_provider(start.provider) == "chatgpt":
             if start.auth_store is None:
                 raise ProtocolError("ChatGPT requires an explicit host-owned auth store")
@@ -271,6 +297,10 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
             # Explicit callback bypasses CODEX_HOME/discovery and all API-key fallbacks.
             # A default public base_url is validated above, never forwarded to OAuth.
             provider = OpenAIProvider(credentials=auth.credentials, model=text(start.provider, "model", 128))
+        elif validate_provider(start.provider) == "codex":
+            if start.auth_store is not None:
+                raise ProtocolError("auth_store is only allowed for ChatGPT authentication")
+            provider = _create_codex_provider(start.provider)
         else:
             if start.auth_store is not None:
                 raise ProtocolError("auth_store is only allowed for ChatGPT authentication")

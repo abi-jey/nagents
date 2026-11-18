@@ -30,6 +30,7 @@ from ngn_nagents.protocol import Emitter
 from ngn_nagents.protocol import ProtocolError
 from ngn_nagents.runtime import HostExecutor
 from ngn_nagents.runtime import Start
+from ngn_nagents.runtime import _create_codex_provider
 from ngn_nagents.runtime import create_agent
 from ngn_nagents.runtime import create_provider
 from ngn_nagents.runtime import run_agent
@@ -598,6 +599,59 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
             (base / ".identity").symlink_to(target, target_is_directory=True)
             with self.assertRaises(auth.AuthFailure), auth.mutation_guard(base / "auth/openai.json"):
                 self.fail("Symlink ownership directory accepted")
+
+
+class CodexAuthTests(unittest.IsolatedAsyncioTestCase):
+    """Codex must be locally selected; its configured OAuth/API-key policy wins."""
+
+    def codex(self) -> dict[str, object]:
+        return subscription() | {"auth": "codex", "api": "auto"}
+
+    def test_codex_wire_needs_no_host_store_or_host_api_key(self) -> None:
+        wire = message(self.codex(), "/host/auth/openai.json")
+        run = wire["run"]
+        assert isinstance(run, dict)
+        del run["auth_store"]
+        self.assertIsNone(Start.parse(wire).auth_store)
+        with self.assertRaises(ProtocolError):
+            create_provider(self.codex())
+        for changes in (
+            {"api_key_env": "OPENAI_API_KEY"},
+            {"kind": "anthropic"},
+            {"base_url": "https://example.invalid/v1"},
+            {"api": "chat_completions"},
+        ):
+            run["provider"] = self.codex() | changes
+            with self.subTest(changes=changes), self.assertRaises(ProtocolError):
+                Start.parse(wire)
+
+    async def test_codex_requires_local_configuration_before_using_any_key(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.dict(os.environ, {"CODEX_HOME": root, "OPENAI_API_KEY": "environment-fixture"}, clear=True),
+        ):
+            with self.assertRaisesRegex(ProtocolError, "sign in with Codex"):
+                _create_codex_provider(self.codex())
+
+            home = Path(root)
+            (home / "config.toml").write_text('forced_login_method = "api"\n')
+            provider = _create_codex_provider(self.codex())
+            try:
+                self.assertEqual(provider.api_key, "environment-fixture")
+            finally:
+                await provider.close()
+
+            (home / "config.toml").unlink()
+            (home / "auth.json").write_text('{"auth_mode":"apikey","OPENAI_API_KEY":"cached-fixture"}')
+            provider = _create_codex_provider(self.codex())
+            try:
+                self.assertEqual(provider.api_key, "cached-fixture")
+            finally:
+                await provider.close()
+
+            (home / "auth.json").write_text('{"auth_mode":"chatgpt","tokens":{}}')
+            with self.assertRaisesRegex(ProtocolError, "configuration are unusable"):
+                _create_codex_provider(self.codex())
 
 
 if __name__ == "__main__":

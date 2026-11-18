@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, env, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    env,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, ensure};
 use ngn_protocol::{ProviderAuth, ProviderConfig};
@@ -40,13 +44,24 @@ pub struct Config {
     /// The explicitly supplied native configuration, if any.
     #[serde(skip)]
     pub source: Option<PathBuf>,
+    /// Python ngn configuration directory to select providers from, read-only.
+    /// Set by `load` only when no native config file was supplied.
+    #[serde(skip)]
+    pub legacy_directory: Option<PathBuf>,
+    /// Legacy files that supplied the provider selection.
+    #[serde(skip)]
+    pub legacy_sources: Vec<PathBuf>,
+    /// Legacy connections the Rust host cannot run yet, with the reason.
+    #[serde(skip)]
+    pub unavailable: BTreeMap<String, String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         let base = env::var_os("XDG_DATA_HOME")
+            .filter(|path| !path.is_empty())
             .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+            .or_else(|| env::home_dir().map(|home| home.join(".local/share")))
             .unwrap_or_else(|| PathBuf::from(".local/share"));
         Self {
             config_version: 1,
@@ -64,29 +79,52 @@ impl Default for Config {
             subagents: SubagentLimits::default(),
             bundled_runtime: None,
             source: None,
+            legacy_directory: None,
+            legacy_sources: Vec::new(),
+            unavailable: BTreeMap::new(),
         }
     }
 }
 
 impl Config {
-    pub fn load(path: Option<&std::path::Path>) -> Result<Self> {
-        Self::load_for_executable(path, &std::env::current_exe()?)
+    /// Directory for existing Python ngn settings when `--config` is omitted.
+    fn python_config_directory() -> Result<Option<PathBuf>> {
+        if let Some(base) = env::var_os("XDG_CONFIG_HOME").filter(|base| !base.is_empty()) {
+            let base = PathBuf::from(base);
+            ensure!(
+                base.is_absolute(),
+                "XDG_CONFIG_HOME must be an absolute path"
+            );
+            return Ok(Some(base.join("ngn")));
+        }
+        Ok(env::home_dir().map(|home| home.join(".config/ngn")))
     }
 
-    fn load_for_executable(
-        path: Option<&std::path::Path>,
-        executable: &std::path::Path,
-    ) -> Result<Self> {
-        let (mut config, explicit_runner): (Self, bool) = match path {
+    pub fn load(path: Option<&Path>) -> Result<Self> {
+        let mut config = Self::load_for_executable(path, &env::current_exe()?)?;
+        if path.is_none() {
+            config.legacy_directory = Self::python_config_directory()?;
+        }
+        Ok(config)
+    }
+
+    fn load_for_executable(explicit: Option<&Path>, executable: &Path) -> Result<Self> {
+        let (mut config, explicit_runner): (Self, bool) = match explicit {
             Some(path) => {
-                let bytes =
-                    std::fs::read(path).context("Cannot read explicit Rust ngn configuration")?;
+                let bytes = std::fs::read(path).with_context(|| {
+                    format!("Cannot read Rust ngn configuration {}", path.display())
+                })?;
                 ensure!(bytes.len() <= 262_144, "Configuration exceeds 256 KiB");
-                let value: serde_json::Value = serde_json::from_slice(&bytes)
-                    .context("Invalid Rust ngn configuration (legacy configs are not imported)")?;
+                let invalid = || {
+                    format!(
+                        "Invalid Rust ngn configuration {} (--config accepts the native format)",
+                        path.display()
+                    )
+                };
+                let value: serde_json::Value =
+                    serde_json::from_slice(&bytes).with_context(invalid)?;
                 let explicit = value.get("runner").is_some();
-                let mut config: Self = serde_json::from_value(value)
-                    .context("Invalid Rust ngn configuration (legacy configs are not imported)")?;
+                let mut config: Self = serde_json::from_value(value).with_context(invalid)?;
                 config.source = Some(path.to_owned());
                 (config, explicit)
             }
@@ -105,7 +143,12 @@ impl Config {
         }
     }
 
-    pub fn resolve(mut self) -> Result<Self> {
+    pub fn resolve(self) -> Result<Self> {
+        self.resolve_with_model(None)
+    }
+
+    /// Apply the model override after discovery, before validating connections.
+    pub fn resolve_with_model(mut self, model: Option<String>) -> Result<Self> {
         ensure!(self.config_version == 1, "Unsupported config_version");
         self.workspace = self
             .workspace
@@ -113,6 +156,35 @@ impl Config {
             .context("Workspace does not exist")?;
         ensure!(self.workspace.is_dir(), "Workspace must be a directory");
         self.data_dir = std::path::absolute(&self.data_dir)?;
+        if let Some(python_data) = crate::legacy::python_data_directory() {
+            let python_data = std::path::absolute(python_data)?;
+            let same_directory = self
+                .data_dir
+                .canonicalize()
+                .ok()
+                .zip(python_data.canonicalize().ok())
+                .is_some_and(|(native, python)| native == python);
+            ensure!(
+                crate::paths::without_system_aliases(&self.data_dir)
+                    != crate::paths::without_system_aliases(&python_data)
+                    && !same_directory,
+                "Rust state and ChatGPT authentication require a separate data directory; do not use Python ngn's data directory"
+            );
+        }
+        if self.backend == Backend::Nagents
+            && self.providers.is_empty()
+            && let Some(directory) = &self.legacy_directory
+        {
+            let environment = crate::legacy::Environment::discover()?;
+            let selection = crate::legacy::select(directory, &self.workspace, &environment)?;
+            self.read_only |= selection.read_only;
+            if self.provider.is_empty() {
+                self.provider = selection.provider;
+            }
+            self.providers = selection.providers;
+            self.unavailable = selection.unavailable;
+            self.legacy_sources = selection.sources;
+        }
         ensure!(
             !self.runner.is_empty() && !self.runner[0].is_empty(),
             "Runner executable is required"
@@ -150,72 +222,38 @@ impl Config {
             "subagents.timeout_seconds must be 1..600"
         );
         if self.backend == Backend::Nagents {
-            if !self.provider.is_empty() {
+            if let Some(model) = model {
+                let mut provider = self
+                    .selected_provider()
+                    .map_err(|error| {
+                        anyhow::anyhow!("--model requires a selected provider connection: {error}")
+                    })?
+                    .clone();
+                provider.model = model;
+                validate_provider(&provider)?;
+                self.providers.insert(self.provider.clone(), provider);
+            }
+            if !self.legacy_sources.is_empty() {
+                // Python ngn files: set aside connections the Rust host cannot run
+                // so one stale entry never prevents startup; Enter explains why.
+                let invalid: Vec<(String, String)> = self
+                    .providers
+                    .iter()
+                    .filter_map(|(name, provider)| {
+                        validate_provider(provider)
+                            .err()
+                            .map(|error| (name.clone(), error.to_string()))
+                    })
+                    .collect();
+                for (name, reason) in invalid {
+                    self.providers.remove(&name);
+                    self.unavailable.insert(name, reason);
+                }
+            } else if !self.provider.is_empty() {
                 self.selected_provider()?;
             }
             for provider in self.providers.values() {
-                ensure!(
-                    !provider.model.trim().is_empty(),
-                    "Provider model is required"
-                );
-                if provider.auth == ProviderAuth::Chatgpt {
-                    ensure!(
-                        provider.kind == "openai",
-                        "ChatGPT auth requires kind openai"
-                    );
-                    ensure!(
-                        provider.api_key_env.is_empty(),
-                        "ChatGPT auth cannot use api_key_env; remove the API-key connection setting"
-                    );
-                    ensure!(
-                        matches!(
-                            provider.base_url.as_str(),
-                            "" | "https://api.openai.com/v1" | "https://api.openai.com/v1/"
-                        ),
-                        "ChatGPT auth cannot use a custom endpoint"
-                    );
-                    ensure!(
-                        matches!(provider.api.as_str(), "" | "auto" | "responses"),
-                        "ChatGPT auth requires auto/responses API"
-                    );
-                    ensure!(
-                        provider.model.len() <= 128
-                            && provider
-                                .model
-                                .bytes()
-                                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)),
-                        "ChatGPT model must be a bounded model ID (letters, digits, dot, underscore, hyphen)"
-                    );
-                } else {
-                    ensure!(
-                        !provider.api_key_env.is_empty()
-                            && provider
-                                .api_key_env
-                                .bytes()
-                                .all(|c| c.is_ascii_alphanumeric() || c == b'_'),
-                        "api_key_env must be an environment variable name, not a key value"
-                    );
-                }
-                ensure!(
-                    matches!(
-                        provider.kind.as_str(),
-                        "openai"
-                            | "openai_compatible"
-                            | "anthropic"
-                            | "gemini_native"
-                            | "openrouter"
-                            | "litellm"
-                            | "azure_openai_compatible_v1"
-                    ),
-                    "Unsupported provider kind"
-                );
-                ensure!(
-                    matches!(
-                        provider.api.as_str(),
-                        "" | "auto" | "responses" | "chat_completions" | "messages"
-                    ),
-                    "Unsupported provider API"
-                );
+                validate_provider(provider)?;
             }
         }
         Ok(self)
@@ -224,18 +262,45 @@ impl Config {
     pub fn selected_provider(&self) -> Result<&ProviderConfig> {
         self.providers
             .get(&self.provider)
-            .with_context(|| match &self.source {
-                Some(path) if self.provider.is_empty() => format!(
-                    "No provider selected in {}. Set \"provider\" or pass --provider-id",
-                    path.display()
+            .with_context(|| match self.unavailable.get(&self.provider) {
+                Some(reason) => format!(
+                    "Provider connection {:?} cannot run in the Rust host: {reason}. Choose another with --provider-id",
+                    self.provider
                 ),
-                Some(path) => format!(
-                    "Provider {:?} is not defined in {}. Choose a configured connection with --provider-id",
+                None if !self.legacy_sources.is_empty() && !self.provider.is_empty() => format!(
+                    "Provider connection {:?} is not defined in {}",
                     self.provider,
-                    path.display()
+                    self.legacy_sources
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" or ")
                 ),
-                None => "No provider is configured. Pass --config FILE with a native Rust provider configuration (see config.example.json)".into(),
+                None => self.missing_provider_help(),
             })
+    }
+
+    fn missing_provider_help(&self) -> String {
+        match &self.source {
+            Some(path) if !self.provider.is_empty() => format!(
+                "Provider {:?} is not defined in {}. Choose a configured connection with --provider-id",
+                self.provider,
+                path.display()
+            ),
+            Some(path) => format!(
+                "No provider selected in {}. Set \"provider\" to one of its \"providers\" or pass --provider-id",
+                path.display()
+            ),
+            None => {
+                let registry = self.legacy_directory.as_ref().map_or_else(
+                    || "~/.config/ngn/providers.json".into(),
+                    |path| path.join("providers.json").display().to_string(),
+                );
+                format!(
+                    "No provider selected. Configure a connection in Python ngn settings ({registry}) or select an existing connection with --provider-id"
+                )
+            }
+        }
     }
 
     pub fn state_dir(&self) -> PathBuf {
@@ -247,6 +312,72 @@ impl Config {
     pub fn auth_store(&self) -> PathBuf {
         self.data_dir.join("auth").join("openai.json")
     }
+}
+
+fn validate_provider(provider: &ProviderConfig) -> Result<()> {
+    ensure!(
+        !provider.model.trim().is_empty(),
+        "Provider model is required"
+    );
+    if matches!(provider.auth, ProviderAuth::Chatgpt | ProviderAuth::Codex) {
+        ensure!(
+            provider.kind == "openai",
+            "ChatGPT auth requires kind openai"
+        );
+        ensure!(
+            provider.api_key_env.is_empty(),
+            "ChatGPT auth cannot use api_key_env; remove the API-key connection setting"
+        );
+        ensure!(
+            matches!(
+                provider.base_url.as_str(),
+                "" | "https://api.openai.com/v1" | "https://api.openai.com/v1/"
+            ),
+            "ChatGPT auth cannot use a custom endpoint"
+        );
+        ensure!(
+            matches!(provider.api.as_str(), "" | "auto" | "responses"),
+            "ChatGPT auth requires auto/responses API"
+        );
+        ensure!(
+            provider.model.len() <= 128
+                && provider
+                    .model
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)),
+            "ChatGPT model must be a bounded model ID (letters, digits, dot, underscore, hyphen)"
+        );
+    } else {
+        ensure!(
+            !provider.api_key_env.is_empty()
+                && provider
+                    .api_key_env
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_'),
+            "api_key_env must be an environment variable name, not a key value"
+        );
+    }
+    ensure!(
+        matches!(
+            provider.kind.as_str(),
+            "openai"
+                | "openai_compatible"
+                | "anthropic"
+                | "gemini_native"
+                | "openrouter"
+                | "litellm"
+                | "azure_openai_compatible_v1"
+        ),
+        "Unsupported provider kind"
+    );
+    ensure!(
+        matches!(
+            provider.api.as_str(),
+            "" | "auto" | "responses" | "chat_completions" | "messages"
+        ),
+        "Unsupported provider API"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -327,10 +458,82 @@ mod tests {
     }
 
     #[test]
-    fn demo_is_explicit_and_state_is_separate() {
+    fn python_provider_files_select_the_connection_when_a_directory_is_available() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let legacy = directory.path().join("ngn");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::write(
+            legacy.join("providers.json"),
+            r#"{"version":2,"revision":"r","active":"key","providers":{
+                "key":{"kind":"anthropic","api_key_env":"MY_KEY"},
+                "azure":{"kind":"foundry","auth":"entra","base_url":"https://example.invalid"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(legacy.join("config.json"), r#"{"model":"claude-x"}"#).unwrap();
+        let base = Config {
+            workspace: directory.path().into(),
+            data_dir: directory.path().join("state"),
+            ..Config::default()
+        };
+        // Plain programmatic defaults do not consult settings on disk.
+        let untouched = base.clone().resolve().unwrap();
+        assert!(untouched.providers.is_empty() && untouched.legacy_sources.is_empty());
+        let config = Config {
+            legacy_directory: Some(legacy.clone()),
+            ..base.clone()
+        }
+        .resolve()
+        .unwrap();
+        let provider = config.selected_provider().unwrap();
+        assert_eq!(
+            (provider.kind.as_str(), provider.model.as_str()),
+            ("anthropic", "claude-x")
+        );
+        assert_eq!(provider.api_key_env, "MY_KEY");
+        // An unsupported selection still starts, and Enter explains why.
+        let unsupported = Config {
+            legacy_directory: Some(legacy),
+            provider: "azure".into(),
+            ..base
+        }
+        .resolve()
+        .unwrap();
+        let error = unsupported.selected_provider().unwrap_err().to_string();
+        assert!(
+            error.contains("azure") && error.contains("not supported"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn codex_auth_has_the_same_shape_rules_as_chatgpt() {
+        let mut source = chatgpt();
+        source["providers"]["subscription"]["auth"] = serde_json::json!("codex");
+        let config: Config = serde_json::from_value(source.clone()).unwrap();
+        assert_eq!(
+            config.resolve().unwrap().selected_provider().unwrap().auth,
+            ProviderAuth::Codex
+        );
+        source["providers"]["subscription"]["api_key_env"] = serde_json::json!("OPENAI_API_KEY");
+        let config: Config = serde_json::from_value(source).unwrap();
+        assert!(config.resolve().is_err());
+    }
+
+    #[test]
+    fn default_backend_is_nagents_and_state_is_separate() {
         let config = Config::default();
         assert_eq!(config.backend, Backend::Nagents);
         assert!(config.data_dir.ends_with("ngn-rust"));
+    }
+
+    #[test]
+    fn demo_backend_is_only_available_in_process() {
+        assert!(serde_json::from_str::<Config>(r#"{"backend":"demo"}"#).is_err());
+        let config = Config {
+            backend: Backend::Demo,
+            ..Config::default()
+        };
+        assert!(serde_json::to_value(config).is_err());
     }
 
     fn chatgpt() -> serde_json::Value {

@@ -271,7 +271,7 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
                 with self.assertRaises(ValueError):
                     runtime_config(path, Path("/fresh/runtime"))
 
-    def test_default_uses_no_config_override(self) -> None:
+    def test_default_leaves_discovery_to_the_native_cli(self) -> None:
         result = command(
             Path("/stage/app/ngn"), Invocation("", "", ["doctor"]), Path("/stage/config.json"), Path("/dev/state")
         )

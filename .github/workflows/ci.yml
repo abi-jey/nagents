@@ -35,6 +35,11 @@ on:
         default: false
         type: boolean
 
+# Supersede stale checks on the same PR without interrupting publishing runs.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # =============================================================================
   # LINT

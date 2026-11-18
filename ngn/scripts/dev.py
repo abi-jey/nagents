@@ -296,7 +296,8 @@ def main() -> int:
         description=__doc__,
         epilog=(
             "Other arguments are forwarded unchanged to the Rust CLI. Pass --config PATH to use an explicit "
-            "provider config with the staged runtime. Use doctor to inspect the selection."
+            "provider config with the staged runtime; otherwise ngn checks existing Python provider settings. "
+            "Use doctor to inspect the selection."
         ),
     )
     parser.add_argument(
@@ -312,7 +313,7 @@ def main() -> int:
     options, arguments = parser.parse_known_args()
     version_check()
     settings = invocation(arguments)
-    # The launcher only rewrites an explicit config.
+    # The launcher handles only explicit config; the native CLI handles discovery.
     original_config = Path(settings.config).expanduser().resolve() if settings.config else None
     if not options.test and original_config is not None and not original_config.is_file():
         raise ValueError(f"The explicit Rust --config file does not exist: {original_config}")

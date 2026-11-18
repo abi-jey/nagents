@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Without `--config`, native ngn reads the existing Python ngn provider and model
+  settings without writing them or requiring a new configuration file.
+- Native ngn honors Python's `read_only` setting without adopting its approval
+  or tool policy. Python ChatGPT credentials stay separate: when Python's
+  connection would use ChatGPT, select a native configuration and sign in to the
+  intended account instead of falling back to another route.
+- Python ngn `auth: "codex"` connections require local Codex files
+  (`$CODEX_HOME` or `~/.codex`) and honor their OAuth or API-key policy.
+- The welcome screen explains when no provider is usable and how to fix it.
+  `ngn doctor` also lists legacy files read and unavailable connections.
+- Add opt-in wire logs and local diagnostic logs.
+- Add an explicit `ngn upgrade` command that copies supported Python ngn history
+  into separate Rust-owned databases without changing the original.
+- Not yet supported from legacy files: Foundry/Azure `api_version` routes, Entra
+  auth, and the `assistant.md` system prompt (the Rust default prompt is used).
+
 ## 0.100.6
 
 - Remove native Rust `--demo`. `ngn doctor` still works without loading a runtime

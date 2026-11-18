@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use clap::{Parser, Subcommand};
 use ngn_core::auth::{self, Operation};
 use ngn_core::{ApprovalMode, Config, Host};
@@ -43,7 +43,7 @@ pub(crate) async fn shutdown_signal() -> std::io::Result<()> {
 struct Cli {
     #[arg(short = 'C', long, global = true)]
     workspace: Option<PathBuf>,
-    /// Explicit, trusted Rust configuration. Legacy Python configs are not imported.
+    /// Trusted Rust configuration file; omit to use existing Python ngn provider settings.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[arg(long, global = true)]
@@ -58,8 +58,31 @@ struct Cli {
     resume: Option<String>,
     #[arg(short = 'c', long = "continue", global = true)]
     continue_session: bool,
+    /// Capture sensitive provider HTTP payloads in a private local log (off by default).
+    #[arg(long, global = true, overrides_with_all = ["wire_log", "no_wire_log"])]
+    wire_log: bool,
+    /// Disable provider payload logging, even if NGN_WIRE_LOG is set.
+    #[arg(long, global = true, overrides_with_all = ["wire_log", "no_wire_log"])]
+    no_wire_log: bool,
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+fn wire_log_enabled(wire_log_override: Option<bool>) -> Result<bool> {
+    if let Some(enabled) = wire_log_override {
+        return Ok(enabled);
+    }
+    match std::env::var("NGN_WIRE_LOG") {
+        Ok(value) => match value.to_ascii_lowercase().as_str() {
+            "true" | "1" => Ok(true),
+            "false" | "0" => Ok(false),
+            _ => anyhow::bail!("NGN_WIRE_LOG must be true/false or 1/0"),
+        },
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("NGN_WIRE_LOG must be true/false or 1/0")
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -68,6 +91,12 @@ enum Commands {
     Install(install::Install),
     /// Update only this managed installation, without touching running hosts/state.
     Update(install::Update),
+    /// Import a Python sessions backup as read-only history into fresh Rust workspace state.
+    Upgrade {
+        /// Offline, single-file SQLite backup (not the live sessions.db).
+        #[arg(long = "from", value_name = "BACKUP")]
+        backup: PathBuf,
+    },
     /// Explicit ChatGPT device login and local status/logout. No browser is opened.
     Auth {
         #[command(subcommand)]
@@ -199,7 +228,37 @@ async fn headless(host: Arc<Host>, session: &str, prompt: &str, json: bool) -> R
     }
 }
 
-async fn execute(cli: Cli) -> Result<i32> {
+async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
+    if let Some(Commands::Upgrade { backup }) = &cli.command {
+        ensure!(
+            cli.config.is_none()
+                && !cli.read_only
+                && cli.provider_id.is_none()
+                && cli.model.is_none()
+                && cli.resume.is_none()
+                && !cli.continue_session
+                && wire_log_override.is_none(),
+            "Host configuration and run options cannot be used with upgrade; select paths with -C and --data-dir"
+        );
+        let report = ngn_core::upgrade::import_python_backup(
+            backup,
+            cli.workspace.as_deref(),
+            cli.data_dir.as_deref(),
+        )
+        .await?;
+        println!(
+            "Imported {} read-only Python archives ({} text messages, {} skipped rows).\n\
+             Rust state: {}\nOpen the native session picker to inspect them; start a new session to run prompts.",
+            report.sessions,
+            report.messages,
+            report.skipped_messages,
+            view::plain(&report.destination.display().to_string()),
+        );
+        if !report.directory_synced {
+            eprintln!("Archive published, but workspace parent could not be synced to disk.");
+        }
+        return Ok(0);
+    }
     if let Some(command @ (Commands::Install(_) | Commands::Update(_))) = &cli.command {
         let cancel = tokio_util::sync::CancellationToken::new();
         let operation = async {
@@ -233,14 +292,7 @@ async fn execute(cli: Cli) -> Result<i32> {
     if let Some(provider) = cli.provider_id {
         config.provider = provider;
     }
-    if let Some(model) = cli.model {
-        let provider = config
-            .providers
-            .get_mut(&config.provider)
-            .context("--model requires a selected provider connection")?;
-        provider.model = model;
-    }
-    let config = config.resolve()?;
+    let config = config.resolve_with_model(cli.model)?;
     if let Some(Commands::Auth { operation }) = &cli.command {
         let cancel = tokio_util::sync::CancellationToken::new();
         let command = auth::run(
@@ -273,16 +325,22 @@ async fn execute(cli: Cli) -> Result<i32> {
         });
     }
     if matches!(cli.command, Some(Commands::Doctor)) {
-        let source = config.source.as_ref().map_or_else(
-            || "built-in defaults; pass --config FILE to select a provider".into(),
-            |path| view::plain(&path.display().to_string()),
-        );
+        let source = if let Some(path) = &config.source {
+            path.display().to_string()
+        } else if let Some(directory) = &config.legacy_directory {
+            format!(
+                "built-in defaults; checking Python ngn settings in {} (read-only)",
+                directory.display()
+            )
+        } else {
+            "built-in defaults (no Python ngn settings directory found)".into()
+        };
         let selected = config.selected_provider();
         println!(
-            "ngn {}\nAgent Runtime Protocol: {}\nConfig: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nNo legacy state was imported. No runner or network request was started.",
+            "ngn {}\nAgent Runtime Protocol: {}\nConfig: {}\nWorkspace: {}\nRust state: {}\nBackend: {:?}\nProvider: {}\nRead only: {}\nRunner: {}\nPython ngn settings are only read, never modified or migrated. No runner or network request was started.",
             env!("CARGO_PKG_VERSION"),
             ngn_protocol::VERSION,
-            source,
+            view::plain(&source),
             config.workspace.display(),
             config.state_dir().display(),
             config.backend,
@@ -300,6 +358,24 @@ async fn execute(cli: Cli) -> Result<i32> {
             ),
             Err(error) => println!("Provider setup: {}", view::plain(&error.to_string())),
         }
+        if !config.legacy_sources.is_empty() {
+            println!(
+                "Python ngn provider files (read-only): {}",
+                config
+                    .legacy_sources
+                    .iter()
+                    .map(|path| view::plain(&path.display().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for (name, reason) in &config.unavailable {
+            println!(
+                "Unavailable connection {}: {}",
+                view::plain(name),
+                view::plain(reason)
+            );
+        }
         if let Some(runtime) = &config.bundled_runtime {
             println!(
                 "Bundled CPython: {}\nBundled runtime: {}",
@@ -309,7 +385,11 @@ async fn execute(cli: Cli) -> Result<i32> {
         }
         return Ok(0);
     }
-    let host = Host::open(config)?;
+    let wire_log = wire_log_enabled(wire_log_override)?;
+    let host = Host::open_with_wire_log(config, wire_log)?;
+    if cli.command.is_some() && host.runtime_log_path().is_none() {
+        eprintln!("ngn: runtime log unavailable; continuing without it");
+    }
     let result = async {
         match cli.command {
             Some(Commands::Run { json, prompt }) => {
@@ -342,7 +422,8 @@ async fn execute(cli: Cli) -> Result<i32> {
                 Commands::Doctor
                 | Commands::Auth { .. }
                 | Commands::Install(_)
-                | Commands::Update(_),
+                | Commands::Update(_)
+                | Commands::Upgrade { .. },
             ) => unreachable!(),
             None => {
                 ensure!(
@@ -362,7 +443,24 @@ async fn execute(cli: Cli) -> Result<i32> {
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    let code = match execute(Cli::parse()).await {
+    let args: Vec<_> = std::env::args_os().collect();
+    let cli = Cli::parse_from(&args);
+    // Clap propagates global arguments between parser levels, but does not
+    // preserve the relative order of different flag IDs across a subcommand.
+    let wire_log_override = if cli.wire_log || cli.no_wire_log {
+        args.iter()
+            .skip(1)
+            .take_while(|arg| *arg != "--")
+            .filter_map(|arg| match arg.to_str() {
+                Some("--wire-log") => Some(true),
+                Some("--no-wire-log") => Some(false),
+                _ => None,
+            })
+            .last()
+    } else {
+        None
+    };
+    let code = match execute(cli, wire_log_override).await {
         Ok(code) => code,
         Err(error) => {
             eprintln!("ngn: {}", view::plain(&error.to_string()));

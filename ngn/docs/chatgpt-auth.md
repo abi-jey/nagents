@@ -22,9 +22,12 @@ Copy `config.chatgpt.example.json` and choose a model your subscription can use.
 The self-contained installed bundle supplies its own runtime when `runner` is
 omitted. For a source/small-native installation, set `runner` to the trusted
 environment's absolute Python executable and argv.
-The host executes argv directly, never through a shell. It does not import old
-configuration, discover `CODEX_HOME`, read `~/.codex`, copy credentials, or use a
-cached/environment API key as a subscription fallback.
+The host executes argv directly, never through a shell. On this explicit ChatGPT
+route it does not consult Codex credentials or fall back to an API key. Implicit
+discovery checks only for the presence of the Python ngn login file to avoid
+switching accounts. If Python would use ChatGPT (or explicitly selects it),
+use the native configuration below and sign in to the same intended account.
+Rust never copies or refreshes credentials in the Python ngn store.
 
 ```sh
 ngn --config /path/to/chatgpt-config.json auth status

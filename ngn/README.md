@@ -66,6 +66,22 @@ cargo run -p ngn -- --config config.local.json
 cargo run -p ngn -- --config config.local.json serve
 ```
 
+Without `--config`, ngn reads the existing Python ngn provider settings:
+`$XDG_CONFIG_HOME/ngn/` (normally `~/.config/ngn/`), including `providers.json`,
+its per-workspace overlay, `assistant.md` model bindings, and `config.json`'s
+model and `read_only` settings. These files are only read; no new config file is
+needed. `NGN_READ_ONLY=true` (or `1`) and `--read-only` can also tighten native
+permissions; other Python approval or tool settings are not imported.
+Pass `--config FILE` to use an explicit Rust configuration instead.
+Custom Python provider-registry paths are not used implicitly; select the
+intended account with an explicit native configuration.
+For OpenAI `auth: "auto"`, a saved Python ChatGPT login takes precedence over
+local Codex configuration, then the named API-key environment variable. Rust
+stops instead of copying the Python login or substituting a different account:
+select an explicit native ChatGPT config and sign in to the intended account.
+`auth: "codex"` requires local Codex files and uses their configured OAuth or
+API-key policy. `ngn doctor` shows the selected connection or why it cannot run.
+
 The managed bundle automatically uses its embedded runtime when `runner` is
 omitted, as in the examples. For a source/small-native installation, `runner` is
 an argv array. Use an absolute environment interpreter path if the
@@ -191,6 +207,28 @@ instructions; nested instruction/skill execution is still a separate migration g
 Approved shell commands and a trusted runtime have full access as your user:
 **this is not an OS sandbox**. See [security](docs/security.md).
 
+## Local diagnostics
+
+The TUI prints its runtime log path on exit. Rust hosts write lifecycle metadata
+under the effective data directory (`--data-dir`, if passed), in
+`logs/tui-<unique>.jsonl`. This log does not contain prompts, tool payloads,
+provider credentials, or runner stderr. Logs stay local; nothing is uploaded.
+If the runtime log cannot be written safely, the host continues normally and the
+TUI reports it as unavailable. Explicit wire capture fails if its private log
+cannot be set up.
+
+Provider HTTP payload capture is **off by default**. Enable it for one invocation
+with `--wire-log` or use `NGN_WIRE_LOG=true|false|1|0` as a default. Use
+`--no-wire-log` to override the environment. Flags work before or after the
+subcommand; the last flag wins. This requires POSIX
+file protections and a compatible runtime. The separate `logs/wire-<unique>.jsonl`
+file has owner-only permissions, and the TUI prints its path when enabled.
+Transport authentication and unknown headers are redacted, and diagnostic URLs
+omit user credentials, queries, and fragments. Payloads can still contain private
+prompts, model output, tool data and other sensitive content. Inspect the file
+before sharing it and delete it when no longer needed; there is no automatic
+rotation or retention cleanup.
+
 ## Development
 
 ### Build and run exactly the installed application
@@ -199,7 +237,7 @@ From the repository root, on Linux x86_64 with Python 3.13, Rust 1.93+ and a C
 compiler:
 
 ```sh
-./ngn/dev                                  # Launch for local inspection
+./ngn/dev                                  # Launch with existing provider settings
 ./ngn/dev --config /path/to/rust-config.json  # Or use an explicit Rust config
 ./ngn/dev --config /path/to/rust-config.json serve --port 18768
 ./ngn/dev --test                  # Build + actual CLI/HTTP/WebSocket/PTY acceptance

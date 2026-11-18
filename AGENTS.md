@@ -9,6 +9,8 @@ Nagents (this Repository) is provider agnosetic agent framework built to be simp
 ### Development
 You can use the Playwright tools to research API documentation above and use them for implementation.
 
+Delegate work to an available subagent when its description makes it the right fit.
+
 After implementing the changes the User must be notified on what has changed, and provide an explanation of the implementation.
 
 You can use poetry for dependency management and packaging and running any task should run withing python venv.
