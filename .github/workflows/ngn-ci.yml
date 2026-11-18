@@ -126,11 +126,15 @@ jobs:
           echo "$RUNNER_TEMP/ngn-venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$RUNNER_TEMP/ngn-venv" >> "$GITHUB_ENV"
       - name: Rust tests
-        run: cargo test --manifest-path ngn/Cargo.toml --locked
+        run: cargo test --manifest-path ngn/Cargo.toml --locked --no-fail-fast
       - name: Packaging script tests
+        # Independent of the Rust tests: report every failing gate in one run.
+        if: ${{ !cancelled() }}
         working-directory: ngn/scripts
         run: python -m unittest test_bundle test_release test_install_bootstrap -v
       - name: Build, package and verify the native binary
+        # Independent of the Rust tests: report every failing gate in one run.
+        if: ${{ !cancelled() }}
         run: |
           cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
           python ngn/scripts/release.py package --output artifacts --binary ngn/target/release/ngn
