@@ -1,5 +1,9 @@
 # Inspecting and messaging delegated agents
 
+This page describes the **Python ngn** task inspector and HTTP contract. Native
+Rust supervision/queues use a separate API and state model; see
+[native migration and safety](native-ngn-migration.md).
+
 The WebUI uses the authenticated ngn server connection for task history, live
 activity, settings, and messages. Opening an agent does not execute it, change
 the selected root session, or send its transcript to a provider or channel.

@@ -1,5 +1,9 @@
 # Foundry authentication and GPT-Live
 
+This page describes the Python library and optional Python client integrations,
+not a Foundry/voice feature migrated into the [native Rust bundle](native-ngn-migration.md).
+Run Python installation commands in your selected virtual environment.
+
 Use an existing Foundry resource and deployed models. Set `base_url` to the API
 **prefix** `https://RESOURCE.openai.azure.com/openai/v1`, and `model` to the
 deployment name. This integration is GPT-Live, not Azure Voice Live or the
@@ -12,7 +16,7 @@ Async Azure Identity credentials are preferred for voice applications. Nagents
 has no runtime Azure SDK dependency, Azure extra, or mandatory Azure imports.
 `azure-identity` is declared only in the repository's development dependency group
 for SDK integration tests. Applications using Azure Identity install it themselves
-(`pip install nagents azure-identity`) and choose their credential:
+(`python -m pip install nagents azure-identity`) and choose their credential:
 
 ```python
 import asyncio
@@ -118,7 +122,7 @@ and redirects remain blocked. Do not put a renewable Entra token into `api_key`.
 
 For repository development, install the SDK's **dev group** with
 `poetry install --with dev -E dev -E voice`. For application use, install your own
-SDK: `pip install 'nagents[voice]' azure-identity python-dotenv`.
+SDK: `python -m pip install 'nagents[voice]' azure-identity python-dotenv`.
 With this repository checked out:
 
 ```bash

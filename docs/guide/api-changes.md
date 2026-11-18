@@ -1,5 +1,9 @@
 # API changes in 0.23
 
+This is a versioned **Python library/client migration reference**, not the
+native Rust HTTP/configuration contract. Its historical version number is
+intentional; use [native migration and safety](native-ngn-migration.md) for that application.
+
 Version 0.23 removes superseded server implementations and compatibility APIs.
 Update callers to the following interfaces before upgrading.
 

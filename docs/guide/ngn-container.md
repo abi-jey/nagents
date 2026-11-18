@@ -1,4 +1,10 @@
-# ngn container: configuration and authentication
+# Python ngn container: configuration and authentication
+
+!!! info "Python runtime image"
+    These are existing Python/React deployment recipes, not the native Rust
+    bundle. The [native host](native-ngn.md) is loopback-only and has no migrated
+    Docker/Kubernetes deployment contract. Publishing an image in CI does not
+    deploy it; live changes require separate explicit operator authorization.
 
 The runtime image in `dockerfiles/Runtime.Dockerfile` starts `ngn serve --host
 0.0.0.0` as root inside the container, in `/home/agent/workspace`. It serves the web UI **with
@@ -31,7 +37,7 @@ docker run --rm --user 0:0 --cap-drop ALL \
   --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
   -p 127.0.0.1:8765:8765 \
-  ghcr.io/abi-jey/nagents/agent-server@sha256:<reviewed-digest>
+  "ghcr.io/abi-jey/nagents/agent-server@sha256:${REVIEWED_DIGEST:?Set the reviewed published image digest}"
 ```
 
 Package installations change the container's writable layer. They disappear

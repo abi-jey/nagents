@@ -1,4 +1,9 @@
-# Configuration
+# Python library configuration
+
+These examples configure the Python `Agent`/`Provider` APIs, not either client's
+JSON schema. Model IDs are illustrative, not a current catalog or entitlement
+guarantee; choose an account-supported model and use [discovery](../guide/providers.md#explicit-catalog-discovery)
+where available. For the Rust bundle, use [native configuration](../guide/native-ngn.md#configure-the-bundled-agent-runtime).
 
 ## Provider Configuration
 
@@ -69,7 +74,7 @@ agent = Agent(
 1. Optional system prompt to define agent behavior.
 2. Optional list of tool functions.
 3. Optional HTTP traffic logging for debugging.
-4. Whether to raise an exception when the LLM calls an unknown tool.
+4. Whether an unknown tool stops the run with an error event instead of returning a recoverable tool error.
 
 ---
 
@@ -89,7 +94,7 @@ config = GenerationConfig(
 
 async for event in agent.run(
     "Write a story",
-    generation_config=config,
+    config=config,
 ):
     ...
 ```
@@ -139,7 +144,7 @@ provider = Provider(
 )
 ```
 
-1. Install with `pip install python-dotenv`
+1. Install in your selected virtual environment with `python -m pip install python-dotenv`.
 
 ---
 
@@ -163,34 +168,18 @@ agent = Agent(
     - **Responses**: Status code, headers, and body
     - **SSE chunks**: Individual server-sent events during streaming
 
+!!! warning "Sensitive diagnostic output"
+    Library `log_file=` uses `FileHTTPLogger`, not the Python client's separate
+    guarded `wire_log` facility. It logs payloads/URLs and only partially masks
+    selected request authentication headers; it is not a universal secret
+    scrubber. Choose a private log path, disable logging when no longer needed,
+    and review/redact files before sharing them.
+
 ??? example "Sample Log Output"
 
     ```
-    ================================================================================
-    [2024-01-15 10:30:45.123] SESSION: a1b2c3d4
-    ================================================================================
-
-    --- REQUEST ---
-    [10:30:45.124] POST https://api.openai.com/v1/chat/completions
-    Headers: {
-      "Authorization": "Bearer sk-...",
-      "Content-Type": "application/json"
-    }
-    Body: {
-      "model": "gpt-4o-mini",
-      "messages": [{"role": "user", "content": "Hello"}],
-      "stream": true
-    }
-
-    --- RESPONSE ---
-    [10:30:45.456] Status: 200
-    Headers: {...}
-
-    --- SSE CHUNK ---
-    [10:30:45.460] data: {"choices":[{"delta":{"content":"Hello"}}]}
-
-    --- SSE CHUNK ---
-    [10:30:45.465] data: {"choices":[{"delta":{"content":"!"}}]}
+    [2026-01-15T10:30:45.124+00:00] [example-session] >>> REQUEST {"method": "POST", "url": "https://example.invalid/v1/chat/completions", "headers": {}, "body": {"model": "YOUR_MODEL_ID", "messages": [{"role": "user", "content": "Hello"}]}}
+    [2026-01-15T10:30:45.460+00:00] [example-session] <<< SSE {"url": "https://example.invalid/v1/chat/completions", "data": {"choices": [{"delta": {"content": "Hello"}}]}}
     ```
 
 ---
@@ -214,10 +203,10 @@ When an LLM tries to call a tool that doesn't exist, you can control the behavio
 
     1. Default behavior - returns error to LLM, allowing it to self-correct.
 
-=== "Strict: Raise Exception"
+=== "Strict: Stop the Run"
 
     ```python
-    from nagents import Agent, ToolHallucinationError
+    from nagents import Agent, ErrorEvent
 
     agent = Agent(
         provider=provider,
@@ -226,26 +215,28 @@ When an LLM tries to call a tool that doesn't exist, you can control the behavio
         fail_on_invalid_tool=True,  # (1)!
     )
 
-    try:
-        async for event in agent.run("Search for restaurants"):
-            ...
-    except ToolHallucinationError as e:
-        print(f"Unknown tool: {e.tool_name}")
-        print(f"Available: {e.available_tools}")
+    async for event in agent.run("Search for restaurants"):
+        if isinstance(event, ErrorEvent):
+            print(event.message)
     ```
 
-    1. Raises `ToolHallucinationError` immediately when an unknown tool is called.
+    1. Emits an `ErrorEvent` and stops the text run when an unknown tool is called.
 
 ---
 
 ## Non-Streaming Mode
 
-By default, nagents streams responses. For non-streaming mode:
+`Agent` defaults to **non-streaming**. Select streaming when constructing the
+agent (`streaming=True`), not with a `stream` keyword on `run()`. For a complete
+answer without chunk handling:
 
 ```python
-async for event in agent.run("Hello", stream=False):
-    if isinstance(event, TextDoneEvent):
-        print(event.text)  # Complete response at once
+from nagents import Agent, DoneEvent
+
+agent = Agent(provider=provider, session_manager=session_manager, streaming=False)
+async for event in agent.run("Hello"):
+    if isinstance(event, DoneEvent):
+        print(event.final_text)
 ```
 
 !!! tip "When to Use Non-Streaming"

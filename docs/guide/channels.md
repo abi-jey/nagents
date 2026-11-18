@@ -1,5 +1,8 @@
 # Channels and Listening
 
+This page covers the Python library and Python ngn integration. Channels are not
+yet migrated into the [native Rust bundle](native-ngn-migration.md).
+
 A listening session represents **one persistent agent identity**. Telegram chats,
 GitHub issue events, webhooks, and other sources can all feed that identity's
 shared conversation. Source conversation IDs do not create separate sessions.
@@ -11,11 +14,13 @@ a Telegram callback query, are separate from model-authored responses.
 
 ## Attach connectors
 
-The channel API is introduced in the 0.6 prerelease series. Install a testing
-release explicitly while the feature is under review:
+The channel API is part of the current Python source; the old 0.6 prerelease
+introduction is historical, not a reason to force prerelease installation now.
+In your selected virtual environment, install the core and any separately
+maintained connector you intend to use:
 
 ```bash
-python -m pip install --pre nagents nagents-channel-telegram-bot
+python -m pip install nagents nagents-channel-telegram-bot
 ```
 
 ```python
@@ -50,6 +55,9 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+The third-party Telegram package is not bundled with the core/native installer;
+check its own release compatibility and credentials before running this example.
 
 Reuse the database, session ID, and connector names on restart. This restores
 the shared transcript and queued input. Each connector installation is explicit;
@@ -600,12 +608,15 @@ filters; inspect the installed descriptor for those fields and any
 Maintainers can publish a tested core prerelease without merging a draft PR:
 
 ```bash
-gh workflow run ci.yml --ref feature/channels -f publish_alpha=true
+gh workflow run ci.yml --ref YOUR_FEATURE_BRANCH -f publish_alpha=true
 ```
 
-The workflow runs all platform tests and asset checks, stamps the build as
-`0.6.0a<run-number-and-attempt>`, and publishes those artifacts using PyPI Trusted
-Publishing. It neither bumps the branch nor publishes a stable release. Reruns
+Select an existing reviewed feature branch; the historical `feature/channels`
+branch name is not a current requirement. The workflow runs all platform tests
+and asset checks, stamps the checked-out base version as
+`<base-version>a<run-number*100+attempt>`, and publishes those artifacts using PyPI
+Trusted Publishing. It neither bumps the branch nor publishes a stable release
+or extra GitHub release. See [coordinated releases](releases.md). Reruns
 receive a fresh alpha number. Consumers should pin the exact tested version when
 reproducibility matters. The Telegram connector repository provides its own
 feature-ref alpha publication workflow.

@@ -1,5 +1,9 @@
 # Tools
 
+These are Python library APIs and **Python ngn** extension workflows. The Rust
+bundle executes its own native tools; it does not load these Python plugins or
+automatic tool modules. See [native scope](native-ngn-migration.md).
+
 Tools allow your agent to call Python functions during conversations, enabling it to perform actions, fetch data, and interact with external systems.
 
 ## Reusable managed shell

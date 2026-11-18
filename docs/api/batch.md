@@ -19,6 +19,9 @@ when finished. The reference follows the current source checkout.
         - register_callback
         - add_callback
         - create_batch
+        - get_batch
+        - get_results
+        - cancel_batch
         - resume_all
         - close
 

@@ -1,5 +1,8 @@
 # Configure Channels From Chat
 
+This is a **Python ngn** web/connector workflow, not a feature of the native
+Rust bundle. See [native migration gaps](native-ngn-migration.md).
+
 In the [local web client](ngn-web.md), ask the agent to discover installed
 connectors, configure one using credentials you supply in chat, and enable it.
 The agent uses approved tools and applies the change when its current turn has
