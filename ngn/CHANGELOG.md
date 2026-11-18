@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.5
+
+- Native macOS bundles: install.sh now installs self-contained ngn on Apple silicon and Intel Macs (macOS 11+), alongside Linux x86_64.
+
 ## 0.100.4
 
 - Fix: ngn no longer refuses to start when a state parent directory such as ~/.local is group-writable (umask 0002); only world-writable parents are refused.
