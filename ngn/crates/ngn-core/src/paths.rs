@@ -32,6 +32,22 @@ pub fn trusted_system_alias(_path: &Path, _metadata: &Metadata) -> Option<PathBu
     None
 }
 
+/// Spell `path` without OS aliases (macOS `/var` becomes `/private/var`) so a
+/// recorded location matches the canonical path of the running executable.
+/// Untrusted symlinks are left in place for the ancestry checks to refuse.
+pub fn without_system_aliases(path: &Path) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        resolved.push(component);
+        if let Ok(metadata) = resolved.symlink_metadata()
+            && let Some(target) = trusted_system_alias(&resolved, &metadata)
+        {
+            resolved = target;
+        }
+    }
+    resolved
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -46,6 +62,19 @@ mod tests {
         assert_eq!(trusted_system_alias(&root.join("alias"), &metadata), None);
         let real = root.join("real").symlink_metadata().unwrap();
         assert_eq!(trusted_system_alias(&root.join("real"), &real), None);
+    }
+
+    #[test]
+    fn spelling_without_aliases_keeps_untrusted_symlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = without_system_aliases(directory.path());
+        assert_eq!(root, fs::canonicalize(directory.path()).unwrap());
+        fs::create_dir(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        assert_eq!(
+            without_system_aliases(&root.join("alias/prefix")),
+            root.join("alias/prefix")
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -21,7 +21,7 @@ use ngn_core::bundle::{
     BundleManifest, MAX_COMPRESSED, MAX_EXPANDED, MAX_MANIFEST, MAX_MEMBERS, ReleaseManifest,
     ReleaseVersion, file_hash, hex, relative_path, release_manifest_name, supported_platform,
 };
-use ngn_core::paths::trusted_system_alias;
+use ngn_core::paths::{trusted_system_alias, without_system_aliases};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::{io::AsyncReadExt, process::Command};
@@ -508,6 +508,11 @@ struct Installation {
 
 impl Installation {
     fn prepare(prefix: PathBuf, bin_dir: PathBuf) -> Result<Self> {
+        // Record locations as the running executable will later see them.
+        let (prefix, bin_dir) = (
+            without_system_aliases(&prefix),
+            without_system_aliases(&bin_dir),
+        );
         ensure!(
             !prefix.starts_with(&bin_dir) && !bin_dir.starts_with(&prefix),
             "Prefix and bin-dir must be separate directories"
