@@ -13,6 +13,16 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use sha2::{Digest, Sha256};
 
+/// The validated native target this binary was built for. Each release ships
+/// one bundle per platform; any other target can only build from source.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const PLATFORM: &str = "macos-arm64";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub const PLATFORM: &str = "macos-x86_64";
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64")
+)))]
 pub const PLATFORM: &str = "linux-x86_64";
 pub const MAX_MANIFEST: u64 = 8 * 1024 * 1024;
 pub const MAX_COMPRESSED: u64 = 256 * 1024 * 1024;
@@ -49,10 +59,23 @@ impl fmt::Display for ReleaseVersion {
 
 pub fn supported_platform() -> Result<()> {
     ensure!(
-        cfg!(all(target_os = "linux", target_arch = "x86_64")),
-        "Bundled installation is currently validated only on Linux x86_64; use a source/native installation on this platform"
+        cfg!(any(
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64")
+        )),
+        "Bundled installation is validated only on Linux x86_64 and macOS (arm64, x86_64); use a source installation on this platform"
     );
     Ok(())
+}
+
+/// Linux keeps the original manifest name so earlier installers keep updating.
+pub fn release_manifest_name() -> String {
+    if PLATFORM == "linux-x86_64" {
+        "release-manifest.json".into()
+    } else {
+        format!("release-manifest-{PLATFORM}.json")
+    }
 }
 
 pub fn hex(value: &str, length: usize) -> bool {
@@ -188,7 +211,8 @@ impl ReleaseManifest {
             relative_path(name)?;
             ensure!(
                 !name.contains('/')
-                    && !matches!(name.as_str(), "SHA256SUMS" | "release-manifest.json")
+                    && name != "SHA256SUMS"
+                    && !(name.starts_with("release-manifest") && name.ends_with(".json"))
                     && hex(hash, 64),
                 "Invalid release artifact inventory"
             );

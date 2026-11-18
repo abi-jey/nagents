@@ -107,6 +107,8 @@ fn installer_and_unmanaged_check_dispatch_before_config_workspace_and_host() {
 /// A real native binary with INERT inventory placeholders. Used only to prove
 /// doctor/check never launch Python; not a functioning bundled runtime fixture.
 fn managed(root: &Path) -> (PathBuf, PathBuf, BundleManifest) {
+    // Record locations as `ngn install` does: without OS aliases (macOS /var).
+    let root = &fs::canonicalize(root).unwrap();
     let prefix = root.join("prefix");
     let release = prefix.join("releases").join(env!("CARGO_PKG_VERSION"));
     let bin = root.join("bin");

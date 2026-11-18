@@ -137,9 +137,24 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
         "playwright install --with-deps chromium",
     ):
         assert gate in build_runs
+    macos = native["jobs"]["build-macos"]
+    assert {entry["platform"] for entry in macos["strategy"]["matrix"]["include"]} == {"macos-arm64", "macos-x86_64"}
+    macos_runs = "\n".join(step.get("run", "") for step in macos["steps"])
+    for gate in (
+        "git merge-base --is-ancestor HEAD origin/main",
+        "git diff --exit-code",
+        "--bundle --published-core",
+        "--require-bundle",
+        "install_smoke.py",
+        "cargo test",
+    ):
+        assert gate in macos_runs
     publish = native["jobs"]["publish"]
-    assert publish["needs"] == "build"
+    assert publish["needs"] == ["build", "build-macos"]
     publish_run = next(step["run"] for step in publish["steps"] if "gh release create" in step.get("run", ""))
+    assert publish_run.index("release.py merge") < publish_run.index("--require-bundle")
+    for platform in ("linux-x86_64", "macos-arm64", "macos-x86_64"):
+        assert f"--source platforms/ngn-release-{platform}" in publish_run
     assert '--title "$RELEASE_TAG"' in publish_run and '--title "ngn ' not in publish_run
     assert publish_run.count("gh release create") == 1
     assert (

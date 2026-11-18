@@ -12,20 +12,41 @@ fail() {
 
 if [ "${1:-}" = --help ] || [ "${1:-}" = -h ]; then
     printf '%s\n' \
-        'Install the self-contained ngn harness (Linux x86_64).' \
+        'Install the self-contained ngn harness (Linux x86_64, macOS arm64/x86_64).' \
         'Usage: sh install.sh [--prefix DIRECTORY] [--bin-dir DIRECTORY]' \
         'No Python, pip, Rust or Node installation is required.' \
         'Existing unrelated ngn executables and application state are not replaced.'
     exit 0
 fi
 
-[ "$(uname -s)" = Linux ] || fail 'Only Linux x86_64 bundles are currently validated.'
-case "$(uname -m)" in
-    x86_64|amd64) ;;
-    *) fail 'Only Linux x86_64 bundles are currently validated.' ;;
+unsupported='Native bundles are validated for Linux x86_64 and macOS (Apple silicon or Intel) only.'
+case "$(uname -s)" in
+    Linux)
+        case "$(uname -m)" in
+            x86_64|amd64) platform=linux-x86_64 ;;
+            *) fail "$unsupported" ;;
+        esac
+        ;;
+    Darwin)
+        case "$(uname -m)" in
+            arm64|aarch64) platform=macos-arm64 ;;
+            x86_64)
+                # An x86_64 shell under Rosetta still gets the native Apple silicon build.
+                if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then
+                    platform=macos-arm64
+                else
+                    platform=macos-x86_64
+                fi
+                ;;
+            *) fail "$unsupported" ;;
+        esac
+        ;;
+    *) fail "$unsupported" ;;
 esac
+asset=ngn-installer-$platform
 
-command -v curl >/dev/null 2>&1 || fail 'curl is needed for this shell bootstrap; alternatively download and run the native ngn-installer-linux-x86_64 release asset directly.'
+command -v curl >/dev/null 2>&1 || fail "curl is needed for this shell bootstrap; alternatively download and run the native $asset release asset directly."
+
 if command -v sha256sum >/dev/null 2>&1; then
     hash_tool=sha256sum
 elif command -v shasum >/dev/null 2>&1; then
@@ -45,7 +66,6 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 base="https://github.com/abi-jey/nagents/releases/download/v$NGN_BOOTSTRAP_VERSION"
-asset=ngn-installer-linux-x86_64
 download() {
     curl --fail --silent --show-error --location --max-redirs 5 \
         --proto '=https' --proto-redir '=https' --tlsv1.2 \

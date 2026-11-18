@@ -252,14 +252,16 @@ mod tests {
     fn omitted_runner_is_verified_and_generation_pinned_but_explicit_argv_is_verbatim() {
         use crate::bundle::tests::fixture;
         use std::fs;
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let old = directory.path().join("releases/old");
-        let next = directory.path().join("releases/next");
+        let temporary = crate::test_support::private_tempdir().unwrap();
+        // The runner is resolved from the canonical executable (macOS /var is an alias).
+        let directory = fs::canonicalize(temporary.path()).unwrap();
+        let old = directory.join("releases/old");
+        let next = directory.join("releases/next");
         fixture(&old);
         fixture(&next);
-        let current = directory.path().join("current");
+        let current = directory.as_path().join("current");
         std::os::unix::fs::symlink("releases/old", &current).unwrap();
-        let config_path = directory.path().join("config.json");
+        let config_path = directory.as_path().join("config.json");
         fs::write(&config_path, b"{}").unwrap();
         let default = Config::load_for_executable(None, &current.join("ngn")).unwrap();
         let omitted =
@@ -276,7 +278,7 @@ mod tests {
             default.bundled_runtime.unwrap().python(),
             old.join("runtime/bin/python3")
         );
-        let venv_python = directory.path().join("venv-python");
+        let venv_python = directory.as_path().join("venv-python");
         std::os::unix::fs::symlink("/usr/bin/python3", &venv_python).unwrap();
         let argv = vec![
             venv_python.to_str().unwrap(),

@@ -1,4 +1,7 @@
-"""Build the Linux x86_64 distribution with a hash-pinned, relocatable Python.
+"""Build the native distribution with a hash-pinned, relocatable Python.
+
+Supported platforms: Linux x86_64, macOS arm64 and macOS x86_64. Each has its
+own reviewed runtime lock and vendored upstream notices (see PLATFORMS).
 
 Only the builder needs Python. Dependencies are installed from reviewed binary
 wheels, never resolved or compiled during a build. The runtime's own pip performs
@@ -36,8 +39,56 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zipfile import ZipFile, ZipInfo
 
 ROOT = Path(__file__).resolve().parents[2]
-LOCK = ROOT / "ngn/runtime-lock.json"
-PLATFORM = "linux-x86_64"
+
+
+@dataclass(frozen=True)
+class PlatformSpec:
+    """One validated native target. Linux keeps its original lock/notice paths."""
+
+    name: str
+    system: str
+    machines: tuple[str, ...]
+    triple: str
+    wheel_tag: str
+
+    def lock_path(self, root: Path) -> Path:
+        suffix = "" if self.name == "linux-x86_64" else f".{self.name}"
+        return root / f"ngn/runtime-lock{suffix}.json"
+
+    def notices_dir(self, root: Path) -> Path:
+        suffix = "" if self.name == "linux-x86_64" else f"-{self.name}"
+        return root / f"ngn/runtime-licenses{suffix}"
+
+    def wheel_compatible(self, filename_or_tag: str) -> bool:
+        """Accept py3-none-any or a CPython 3.13 binary tag for exactly this target."""
+        tags = filename_or_tag.removesuffix(".whl").split("-")[-3:] if filename_or_tag.endswith(".whl") else None
+        if tags is not None:
+            python, abi, platforms = tags
+            return all(self.wheel_compatible(f"{python}-{abi}-{platform_tag}") for platform_tag in platforms.split("."))
+        if filename_or_tag == "py3-none-any":
+            return True
+        return re.fullmatch(rf"cp313-cp313-{self.wheel_tag}", filename_or_tag) is not None
+
+
+PLATFORMS = {
+    spec.name: spec
+    for spec in (
+        PlatformSpec("linux-x86_64", "Linux", ("x86_64",), "x86_64-unknown-linux-gnu", r"manylinux[0-9_]+_x86_64"),
+        PlatformSpec("macos-arm64", "Darwin", ("arm64",), "aarch64-apple-darwin", r"macosx_\d+_\d+_arm64"),
+        PlatformSpec("macos-x86_64", "Darwin", ("x86_64",), "x86_64-apple-darwin", r"macosx_\d+_\d+_x86_64"),
+    )
+}
+
+
+def host_platform() -> str:
+    """The validated target this host builds for; empty when unsupported."""
+    for spec in PLATFORMS.values():
+        if platform.system() == spec.system and platform.machine() in spec.machines:
+            return spec.name
+    return ""
+
+
+PLATFORM = host_platform() or "linux-x86_64"
 RUNNER = ["runtime/bin/python3", "-I", "-B", "-m", "ngn_nagents"]
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -415,11 +466,9 @@ def _wheel_metadata(path: Path, name: str, version: str, limits: Limits = LIMITS
         if wheel_metadata["Wheel-Version"] != "1.0":
             raise ValueError("Unsupported wheel format")
         tags = wheel_metadata.get_all("Tag", [])
-        if not tags or not all(
-            str(tag) == "py3-none-any" or re.fullmatch(r"cp313-cp313-(manylinux[0-9_]+_x86_64\.?)+", str(tag))
-            for tag in tags
-        ):
-            raise ValueError("Wheel is not compatible with the pinned CPython/Linux target")
+        spec = PLATFORMS[PLATFORM]
+        if not tags or not all(spec.wheel_compatible(str(tag)) for tag in tags):
+            raise ValueError(f"Wheel is not compatible with the pinned CPython/{spec.name} target")
         return distribution
 
 
@@ -713,7 +762,8 @@ def _notices(lock: dict[str, object]) -> dict[str, bytes]:
         "https://github.com/astral-sh/python-build-standalone/releases/download/"
     ):
         raise ValueError("Python notices require matching full-build provenance")
-    directory = ROOT / "ngn/runtime-licenses"
+    spec = PLATFORMS[_text(lock["platform"])]
+    directory = spec.notices_dir(ROOT)
     with _regular(directory / "PROVENANCE.json") as stream:
         contents = stream.read(LIMITS.manifest + 1)
     if hashlib.sha256(contents).hexdigest() != _checksum(notices["provenance_sha256"]):
@@ -756,10 +806,7 @@ def _notices(lock: dict[str, object]) -> dict[str, bytes]:
     ):
         raise ValueError("Complete upstream Python/third-party license notices are required")
     metadata = _json(files["PYTHON.json"])
-    if (
-        metadata.get("python_version") != python["version"]
-        or metadata.get("target_triple") != "x86_64-unknown-linux-gnu"
-    ):
+    if metadata.get("python_version") != python["version"] or metadata.get("target_triple") != spec.triple:
         raise ValueError("Python notice metadata version mismatch")
     required = _license_paths(metadata)
     if not required or not required.issubset(files):
@@ -786,7 +833,7 @@ def _license_paths(value: object) -> set[str]:
 
 
 def _load_lock() -> dict[str, object]:
-    with _regular(LOCK) as source:
+    with _regular(PLATFORMS[PLATFORM].lock_path(ROOT)) as source:
         lock = _json(source.read(LIMITS.manifest + 1))
     if lock.get("lock_schema") != 1 or lock.get("platform") != PLATFORM:
         raise ValueError("Unsupported runtime lock schema/platform")
@@ -795,7 +842,8 @@ def _load_lock() -> dict[str, object]:
     version = _text(python["version"])
     if python.get("implementation") != "cpython" or re.fullmatch(r"3\.13\.\d+", version) is None:
         raise ValueError("Only pinned non-free-threaded CPython 3.13 is supported")
-    expected = f"cpython-{version}+{_text(python['release'])}-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+    triple = PLATFORMS[PLATFORM].triple
+    expected = f"cpython-{version}+{_text(python['release'])}-{triple}-install_only_stripped.tar.gz"
     if artifact.filename != expected:
         raise ValueError("Unexpected standalone Python target/build flavor")
     if COMMIT.fullmatch(_text(python["release_commit"])) is None:
@@ -1144,8 +1192,8 @@ def build_bundle(
     in the installed, relocated runtime. Source-built core wheels are explicitly
     unofficial. The caller retains the outer release/publication guards.
     """
-    if platform.system() != "Linux" or platform.machine() != "x86_64":
-        raise ValueError("Only Linux x86_64 bundles are supported; other platforms are not validated")
+    if host_platform() != PLATFORM:
+        raise ValueError("Bundles are built natively; build each validated platform on that platform")
     if COMMIT.fullmatch(source_commit) is None:
         raise ValueError("source_commit must be 40 lowercase hexadecimal characters")
     if not isinstance(official, bool):

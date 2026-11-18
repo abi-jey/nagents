@@ -26,7 +26,8 @@ class BundleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Canonical: macOS temp dirs sit behind the /var -> /private/var alias.
+        self.root = Path(self.temporary.name).resolve()
         self.archive = self.root / "python.tar.gz"
         self.extracted = self.root / "extracted"
         self.extracted.mkdir(mode=0o700)
@@ -79,7 +80,9 @@ class BundleTests(unittest.TestCase):
         notices = bundle._notices(lock)
         self.assertEqual(len(notices), 46)
         metadata = bundle._json(notices["PYTHON.json"])
-        self.assertEqual(len(bundle._license_paths(metadata)), 18)
+        # macOS CPython links fewer third-party libraries than the Linux build.
+        expected = {"linux-x86_64": 18, "macos-arm64": 14, "macos-x86_64": 14}[bundle.PLATFORM]
+        self.assertEqual(len(bundle._license_paths(metadata)), expected)
         self.assertNotEqual(notices["LICENSES/LICENSE.cpython.txt"], notices["PYTHON-RUNTIME/LICENSE.txt"])
 
     def test_notice_version_bump_requires_matching_new_notice_provenance(self) -> None:
@@ -92,8 +95,10 @@ class BundleTests(unittest.TestCase):
 
     def test_missing_or_modified_notices_fail_closed(self) -> None:
         lock = bundle._load_lock()
-        target = self.root / "ngn/runtime-licenses"
-        shutil.copytree(bundle.ROOT / "ngn/runtime-licenses", target)
+        spec = bundle.PLATFORMS[bundle.PLATFORM]
+        target = spec.notices_dir(self.root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(spec.notices_dir(bundle.ROOT), target)
         (target / "LICENSES/LICENSE.openssl-3.txt").write_text("missing actual legal text")
         with patch.object(bundle, "ROOT", self.root), self.assertRaisesRegex(ValueError, "corrupt Python license"):
             bundle._notices(lock)
@@ -571,8 +576,8 @@ class BundleTests(unittest.TestCase):
             )
 
         with (
-            patch.object(platform, "system", return_value="Darwin"),
-            self.assertRaisesRegex(ValueError, "Only Linux"),
+            patch.object(platform, "system", return_value="FreeBSD"),
+            self.assertRaisesRegex(ValueError, "built natively"),
         ):
             build()
         with self.assertRaisesRegex(ValueError, "source_commit"):
@@ -588,7 +593,8 @@ class CoreDistributionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Canonical: macOS temp dirs sit behind the /var -> /private/var alias.
+        self.root = Path(self.temporary.name).resolve()
         self.project = b'[project]\nname = "nagents"\nversion = "0.100.2"\n'
         self.sources = {
             "src/nagents/__init__.py": b"VALUE = 1\n",

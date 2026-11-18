@@ -1,0 +1,152 @@
+{
+ "lock_schema": 1,
+ "platform": "macos-arm64",
+ "core": {
+  "name": "nagents",
+  "version": "0.100.4",
+  "official_metadata": "https://pypi.org/pypi/nagents/0.100.4/json"
+ },
+ "python": {
+  "implementation": "cpython",
+  "version": "3.13.18",
+  "release": "20261110",
+  "release_commit": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+  "artifact": {
+   "filename": "cpython-3.13.18+20261110-aarch64-apple-darwin-install_only_stripped.tar.gz",
+   "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-aarch64-apple-darwin-install_only_stripped.tar.gz",
+   "size": 25479437,
+   "sha256": "7a2384641584ab9984221fcb0fc9265df465922af71be71410529e2a9c3f0540"
+  }
+ },
+ "python_notices": {
+  "provenance_sha256": "b66a59c117cced4a30d1e659d3d91a50a01e866aff72456115d842b63a42ee83",
+  "source": {
+   "filename": "cpython-3.13.18+20261110-aarch64-apple-darwin-pgo+lto-full.tar.zst",
+   "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-aarch64-apple-darwin-pgo%2Blto-full.tar.zst",
+   "size": 61374878,
+   "sha256": "11c316dfa24e1184e91de3c1434ed1d3e986c30b2d7a0273257067efe611a677"
+  }
+ },
+ "wheels": [
+  {
+   "name": "aiohappyeyeballs",
+   "version": "2.7.1",
+   "artifact": {
+    "filename": "aiohappyeyeballs-2.7.1-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/71/43/1947f06babed6b3f1d7f38b0c767f52df66bfb2bc10b468c4a7de9eceff2/aiohappyeyeballs-2.7.1-py3-none-any.whl",
+    "size": 15038,
+    "sha256": "9243213661e29250eb41368e5daa826fc017156c3b8a11440826b2e3ed376472"
+   }
+  },
+  {
+   "name": "aiohttp",
+   "version": "3.14.5",
+   "artifact": {
+    "filename": "aiohttp-3.14.5-cp313-cp313-macosx_11_0_arm64.whl",
+    "url": "https://files.pythonhosted.org/packages/15/e5/b57e58695a757fd4c02497c033fced96a69c631b13866c43d336530c9670/aiohttp-3.14.5-cp313-cp313-macosx_11_0_arm64.whl",
+    "size": 545786,
+    "sha256": "e1cc2bfaee8c214f06080a7c7d5772419b8a1108e8e5349236189811823fb02a"
+   }
+  },
+  {
+   "name": "aiosignal",
+   "version": "1.4.0",
+   "artifact": {
+    "filename": "aiosignal-1.4.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl",
+    "size": 7490,
+    "sha256": "053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e"
+   }
+  },
+  {
+   "name": "aiosqlite",
+   "version": "0.22.1",
+   "artifact": {
+    "filename": "aiosqlite-0.22.1-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl",
+    "size": 17405,
+    "sha256": "21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb"
+   }
+  },
+  {
+   "name": "attrs",
+   "version": "26.1.0",
+   "artifact": {
+    "filename": "attrs-26.1.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl",
+    "size": 67548,
+    "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309"
+   }
+  },
+  {
+   "name": "certifi",
+   "version": "2026.10.23",
+   "artifact": {
+    "filename": "certifi-2026.10.23-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl",
+    "size": 135082,
+    "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1"
+   }
+  },
+  {
+   "name": "frozenlist",
+   "version": "1.8.0",
+   "artifact": {
+    "filename": "frozenlist-1.8.0-cp313-cp313-macosx_11_0_arm64.whl",
+    "url": "https://files.pythonhosted.org/packages/0c/ab/6e5080ee374f875296c4243c381bbdef97a9ac39c6e3ce1d5f7d42cb78d6/frozenlist-1.8.0-cp313-cp313-macosx_11_0_arm64.whl",
+    "size": 49417,
+    "sha256": "f21f00a91358803399890ab167098c131ec2ddd5f8f5fd5fe9c9f2c6fcd91e40"
+   }
+  },
+  {
+   "name": "idna",
+   "version": "3.20",
+   "artifact": {
+    "filename": "idna-3.20-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl",
+    "size": 69583,
+    "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c"
+   }
+  },
+  {
+   "name": "multidict",
+   "version": "7.2.1",
+   "artifact": {
+    "filename": "multidict-7.2.1-cp313-cp313-macosx_11_0_arm64.whl",
+    "url": "https://files.pythonhosted.org/packages/06/18/29874e132d78ce182305e818a1553c4ddae238471ba55903a1ea38b5c4ee/multidict-7.2.1-cp313-cp313-macosx_11_0_arm64.whl",
+    "size": 103438,
+    "sha256": "4bebc9587cc29359e3b045518a7a09264fa882a7d165b0d143fdac8eeb7ea948"
+   }
+  },
+  {
+   "name": "propcache",
+   "version": "0.5.4",
+   "artifact": {
+    "filename": "propcache-0.5.4-cp313-cp313-macosx_11_0_arm64.whl",
+    "url": "https://files.pythonhosted.org/packages/25/7d/c1ab1ef09e9d4d835be5d58c0a32a1e1de8397abaa4e502a9d4141328cad/propcache-0.5.4-cp313-cp313-macosx_11_0_arm64.whl",
+    "size": 51425,
+    "sha256": "44149f46500a0a41b95b4d99c2e586a77319539730607b9892974a092788b111"
+   }
+  },
+  {
+   "name": "PyYAML",
+   "version": "6.0.3",
+   "artifact": {
+    "filename": "pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl",
+    "url": "https://files.pythonhosted.org/packages/b1/16/95309993f1d3748cd644e02e38b75d50cbc0d9561d21f390a76242ce073f/pyyaml-6.0.3-cp313-cp313-macosx_11_0_arm64.whl",
+    "size": 173252,
+    "sha256": "2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1"
+   }
+  },
+  {
+   "name": "yarl",
+   "version": "1.25.1",
+   "artifact": {
+    "filename": "yarl-1.25.1-cp313-cp313-macosx_11_0_arm64.whl",
+    "url": "https://files.pythonhosted.org/packages/a8/aa/50acc5c3e5da04172ae3c281c75405af4d2ca911e16120ab0563f4dffb66/yarl-1.25.1-cp313-cp313-macosx_11_0_arm64.whl",
+    "size": 103677,
+    "sha256": "0f12afda4eea8c8994a76d4df1875c765194f5fbe8a9d197929ea303caee29ec"
+   }
+  }
+ ]
+}

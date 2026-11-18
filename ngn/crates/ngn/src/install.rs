@@ -19,8 +19,9 @@ use flate2::read::MultiGzDecoder;
 use fs2::FileExt;
 use ngn_core::bundle::{
     BundleManifest, MAX_COMPRESSED, MAX_EXPANDED, MAX_MANIFEST, MAX_MEMBERS, ReleaseManifest,
-    ReleaseVersion, file_hash, hex, relative_path, supported_platform,
+    ReleaseVersion, file_hash, hex, relative_path, release_manifest_name, supported_platform,
 };
+use ngn_core::paths::{trusted_system_alias, without_system_aliases};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::{io::AsyncReadExt, process::Command};
@@ -206,7 +207,7 @@ async fn discover<T: Transport>(
     };
     let manifest: ReleaseManifest = json(
         transport,
-        &format!("{DOWNLOAD}/v{version}/release-manifest.json"),
+        &format!("{DOWNLOAD}/v{version}/{}", release_manifest_name()),
     )
     .await?;
     manifest.validate(version)?;
@@ -227,7 +228,8 @@ struct Identity {
 fn ancestry(path: &Path, create: bool) -> Result<()> {
     ensure!(path.is_absolute(), "Installation paths must be absolute");
     let mut current = PathBuf::new();
-    for component in path.components() {
+    let last = path.components().count() - 1;
+    for (index, component) in path.components().enumerate() {
         ensure!(
             !matches!(component, Component::ParentDir | Component::CurDir),
             "Installation path contains traversal"
@@ -248,9 +250,18 @@ fn ancestry(path: &Path, create: bool) -> Result<()> {
                 }
             }
         }
-        let info = current
+        let mut info = current
             .symlink_metadata()
             .context("Cannot inspect installation ancestry")?;
+        if index < last
+            && let Some(target) = trusted_system_alias(&current, &info)
+        {
+            // e.g. macOS /var -> /private/var; only root can create or replace it.
+            current = target;
+            info = current
+                .symlink_metadata()
+                .context("Cannot inspect installation ancestry")?;
+        }
         ensure!(
             info.is_dir() && !info.file_type().is_symlink(),
             "Installation ancestors must be real directories, not symlinks"
@@ -258,7 +269,7 @@ fn ancestry(path: &Path, create: bool) -> Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let root_sticky = info.uid() == 0 && info.mode() & 0o1000 != 0 && current != path;
+            let root_sticky = info.uid() == 0 && info.mode() & 0o1000 != 0 && index != last;
             let euid = nix::unistd::geteuid().as_raw();
             // Group-writable parents (e.g. ~/.local/bin under umask 0002) are
             // accepted; only world-writable or foreign-owned ones are refused.
@@ -497,6 +508,11 @@ struct Installation {
 
 impl Installation {
     fn prepare(prefix: PathBuf, bin_dir: PathBuf) -> Result<Self> {
+        // Record locations as the running executable will later see them.
+        let (prefix, bin_dir) = (
+            without_system_aliases(&prefix),
+            without_system_aliases(&bin_dir),
+        );
         ensure!(
             !prefix.starts_with(&bin_dir) && !bin_dir.starts_with(&prefix),
             "Prefix and bin-dir must be separate directories"
@@ -628,7 +644,7 @@ fn symlink(target: &Path, link: &Path) -> Result<()> {
     #[cfg(not(unix))]
     {
         let _ = (target, link);
-        bail!("Bundled installation currently supports only Linux x86_64")
+        bail!("Bundled installation requires a Unix platform")
     }
 }
 
