@@ -162,7 +162,9 @@ class StateFieldDemo(App[None]):
 
     def on_mount(self) -> None:
         self.query_one("#timings").display = False
-        if self.lifecycle.phase == "intro":
+        if self.lifecycle.phase in {"intro", "opening"}:
+            # Time the first transition from mount, not construction: a slow
+            # startup must not consume the opening sweep before it is shown.
             self.lifecycle.since = monotonic()
         for selector, order in (
             ("brand", 0.05),
