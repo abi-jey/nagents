@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import bundle
 import release
 import yaml
 
@@ -99,9 +100,162 @@ class ReleaseTests(unittest.TestCase):
         files = [path for path in self.output.iterdir() if path.name != "SHA256SUMS"]
         (self.output / "SHA256SUMS").write_text("".join(f"{release.digest(path)}  {path.name}\n" for path in files))
 
+    def schema_two(self) -> None:
+        self.manifest["schema_version"] = 2
+        self.manifest["bundle"] = f"ngn-v{self.version}-linux-x86_64-bundle.tar.gz"
+        for name in (
+            str(self.manifest["bundle"]),
+            "ngn-installer-linux-x86_64",
+            "install.sh",
+            f"nagents-{self.version}-py3-none-any.whl",
+            f"nagents-{self.version}.tar.gz",
+        ):
+            (self.output / name).write_bytes(b"bounded synthetic payload; never executed")
+        self.manifest["artifacts"] = {
+            path.name: release.digest(path)
+            for path in self.output.iterdir()
+            if path.name not in {"release-manifest.json", "SHA256SUMS"}
+        }
+        self.save_manifest()
+
     def test_tag_must_match_component_versions(self) -> None:
         with self.assertRaisesRegex(ValueError, "tag does not match"):
             release.version_check("v0.100.999999")
+
+    def test_root_core_version_cannot_diverge_from_native_adapter_and_browser(self) -> None:
+        (self.output / "pyproject.toml").write_text('[project]\nversion = "0.100.1"\n')
+        with (
+            patch.object(release, "ROOT", self.output),
+            self.assertRaisesRegex(AssertionError, "share the same version"),
+        ):
+            release.version_check()
+
+    def test_schema_two_requires_both_core_assets_and_rejects_corruption(self) -> None:
+        for name in (f"nagents-{self.version}-py3-none-any.whl", f"nagents-{self.version}.tar.gz"):
+            self.schema_two()
+            artifacts = dict(self.manifest["artifacts"])
+            artifacts.pop(name)
+            self.manifest["artifacts"] = artifacts
+            self.save_manifest()
+            with (
+                self.subTest(name=name, failure="missing"),
+                self.assertRaisesRegex(AssertionError, "unexpected release assets"),
+            ):
+                release.verify(self.output)
+            self.schema_two()
+            (self.output / name).write_bytes(b"corrupt bytes")
+            with self.subTest(name=name, failure="corrupt"), self.assertRaisesRegex(AssertionError, "Corrupt artifact"):
+                release.verify(self.output)
+
+    def test_official_schema_two_verification_requires_exact_public_core_bytes(self) -> None:
+        self.schema_two()
+        with (
+            patch.object(bundle, "verify_core_artifacts", side_effect=RuntimeError("public-core-gate")) as verify,
+            self.assertRaisesRegex(RuntimeError, "public-core-gate"),
+        ):
+            release.verify(self.output, require_bundle=True)
+        self.assertEqual(verify.call_args.kwargs["published"], True)
+        self.assertEqual(
+            verify.call_args.args[0],
+            bundle.CoreArtifacts(
+                self.output / f"nagents-{self.version}-py3-none-any.whl", self.output / f"nagents-{self.version}.tar.gz"
+            ),
+        )
+
+    def test_schema_one_keeps_its_original_three_asset_contract(self) -> None:
+        with (
+            patch.object(release, "ZipFile", side_effect=RuntimeError("legacy-assets-accepted")),
+            self.assertRaisesRegex(RuntimeError, "legacy-assets-accepted"),
+        ):
+            release.verify(self.output)
+
+    def test_official_core_acquisition_uses_public_downloads_and_never_executes_sdist_build_hooks(self) -> None:
+        core = bundle.CoreArtifacts(self.output / "core.whl", self.output / "core.tar.gz")
+        with (
+            patch.object(bundle, "download_published_core", return_value=core) as download,
+            patch.object(release, "commit", return_value="a" * 40),
+            patch.object(subprocess, "run") as execute,
+        ):
+            self.assertEqual(release.core_artifacts(self.output, published=True), core)
+        execute.assert_not_called()
+        self.assertEqual(download.call_args.kwargs["version"], self.version)
+
+    def test_development_core_builds_wheel_and_sdist_without_resolving_runtime_dependencies(self) -> None:
+        destination = self.output / "core"
+        destination.mkdir()
+
+        def build(arguments: list[str], *, cwd: Path, check: bool) -> None:
+            (destination / f"nagents-{self.version}-py3-none-any.whl").write_bytes(b"source wheel fixture")
+            (destination / f"nagents-{self.version}.tar.gz").write_bytes(b"source archive fixture")
+
+        with (
+            patch.object(subprocess, "run", side_effect=build) as execute,
+            patch.object(release, "commit", return_value="a" * 40),
+            patch.object(bundle, "verify_core_artifacts"),
+        ):
+            result = release.core_artifacts(destination, published=False)
+        self.assertEqual(execute.call_args.args[0][1:5], ["-m", "build", "--wheel", "--sdist"])
+        self.assertNotIn("pip", execute.call_args.args[0])
+        self.assertEqual(result.sdist.name, f"nagents-{self.version}.tar.gz")
+
+    def test_attached_wheel_binding_is_checked_before_executing_native_installer(self) -> None:
+        self.schema_two()
+        with (
+            patch.object(bundle, "verify_bundle_core", side_effect=RuntimeError("embedded-wheel-gate")) as verify,
+            self.assertRaisesRegex(RuntimeError, "embedded-wheel-gate"),
+        ):
+            release.verify_bundled_install(self.output, self.manifest, require_published=True)
+        self.assertEqual(verify.call_args.args[1], self.output / f"nagents-{self.version}-py3-none-any.whl")
+        self.assertEqual(verify.call_args.kwargs["official"], True)
+
+    def test_bundled_packaging_retains_core_wheel_and_sdist_in_manifest_and_checksums(self) -> None:
+        source = self.output / "input"
+        source.mkdir()
+        core = bundle.CoreArtifacts(
+            source / f"nagents-{self.version}-py3-none-any.whl", source / f"nagents-{self.version}.tar.gz"
+        )
+        core.wheel.write_bytes(b"exact source wheel fixture")
+        core.sdist.write_bytes(b"exact source archive fixture")
+        binary = source / "native"
+        binary.write_bytes(b"native fixture, never executed")
+        destination = self.output / "artifacts"
+
+        def run(arguments: list[str], **kwargs: object) -> None:
+            if "wheel" in arguments:
+                (destination / f"ngn_nagents-{self.version}-py3-none-any.whl").write_bytes(b"adapter fixture")
+            elif arguments[:2] == ["git", "archive"]:
+                Path(arguments[arguments.index("-o") + 1]).write_bytes(b"source snapshot fixture")
+            else:
+                raise AssertionError(arguments)
+
+        def small_archive(target: Path, binary: Path, source: Path) -> None:
+            target.write_bytes(b"small native fixture")
+
+        def build(output: Path, binary: Path, **kwargs: object) -> Path:
+            self.assertEqual(kwargs["core_wheel"], core.wheel)
+            self.assertEqual(kwargs["official"], False)
+            target = output / f"ngn-v{self.version}-linux-x86_64-bundle.tar.gz"
+            target.write_bytes(b"bundle fixture")
+            return target
+
+        with (
+            patch.object(release.subprocess, "check_output", side_effect=["", f"ngn {self.version}"]),
+            patch.object(release.subprocess, "run", side_effect=run),
+            patch.object(release, "commit", return_value="a" * 40),
+            patch.object(release, "binary_archive", side_effect=small_archive),
+            patch.object(release, "core_artifacts", return_value=core),
+            patch.object(bundle, "build_bundle", side_effect=build),
+            patch.object(release, "verify"),
+        ):
+            release.package(destination, binary, bundled=True)
+        manifest = json.loads((destination / "release-manifest.json").read_text())
+        checksums = (destination / "SHA256SUMS").read_text()
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(len(manifest["artifacts"]), 8)
+        for asset in (core.wheel, core.sdist):
+            self.assertEqual((destination / asset.name).read_bytes(), asset.read_bytes())
+            self.assertEqual(manifest["artifacts"][asset.name], release.digest(asset))
+            self.assertIn(f"{release.digest(asset)}  {asset.name}\n", checksums)
 
     def test_foreign_commit_is_rejected(self) -> None:
         self.manifest["commit"] = "0" * 40

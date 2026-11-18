@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import cast
 from zipfile import ZipFile
 
+import bundle
+
 ROOT = Path(__file__).resolve().parents[2]
 NGN = ROOT / "ngn"
 
@@ -25,12 +27,19 @@ def version_check(tag: str = "") -> str:
     version = tomllib.loads((NGN / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     assert isinstance(version, str), "Rust workspace version must be text"
     if re.fullmatch(r"0\.100\.\d+", version) is None:
-        raise ValueError("Rust releases must use the reserved 0.100.x series")
+        raise ValueError("Coordinated releases must use the 0.100.x series")
     if tag and tag != f"v{version}":
         raise ValueError("Release tag does not match Rust version")
+    core = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    assert core == version, "Core, native application, adapter and browser must share the same version"
+    runtime_lock = json.loads((NGN / "runtime-lock.json").read_text())["core"]
+    assert (
+        runtime_lock["version"] == version
+        and runtime_lock["official_metadata"] == f"https://pypi.org/pypi/nagents/{version}/json"
+    ), "Runtime lock must bind the shared core version to fixed public PyPI metadata"
     adapter = tomllib.loads((NGN / "integrations/nagents/pyproject.toml").read_text())
     assert adapter["project"]["version"] == version, "Adapter version mismatch"
-    assert "nagents>=0.28.6,<0.29" in adapter["project"]["dependencies"], (
+    assert f"nagents>={version},<0.101" in adapter["project"]["dependencies"], (
         "Bundle requires the public-auth core dependency"
     )
     assert json.loads((NGN / "package.json").read_text())["version"] == version, "Browser version mismatch"
@@ -68,30 +77,25 @@ def binary_archive(destination: Path, binary: Path, source: Path) -> None:
             target.add(source / name, arcname=name)
 
 
-def core_wheel(destination: Path, *, published: bool) -> Path:
-    """Never resolve an official core from an editable checkout or private index."""
+def core_artifacts(destination: Path, *, published: bool) -> bundle.CoreArtifacts:
+    """Keep both exact core distributions; never build a downloaded source archive."""
     version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-    arguments = [sys.executable, "-m", "pip"]
+    assert isinstance(version, str)
     if published:
-        arguments.extend(
-            [
-                "--isolated",
-                "download",
-                "--index-url",
-                "https://pypi.org/simple",
-                "--only-binary=:all:",
-                "--no-deps",
-                "--dest",
-                str(destination),
-                f"nagents=={version}",
-            ]
-        )
-    else:
-        arguments.extend(["wheel", "--no-deps", "--wheel-dir", str(destination), str(ROOT)])
-    subprocess.run(arguments, cwd=destination, check=True)
-    wheels = list(destination.glob("*.whl"))
-    assert len(wheels) == 1 and wheels[0].name == f"nagents-{version}-py3-none-any.whl", "Core wheel mismatch"
-    return wheels[0]
+        return bundle.download_published_core(destination, version=version, source_commit=commit())
+    subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--sdist", "--outdir", str(destination), str(ROOT)],
+        cwd=destination,
+        check=True,
+    )
+    artifacts = bundle.CoreArtifacts(
+        destination / f"nagents-{version}-py3-none-any.whl", destination / f"nagents-{version}.tar.gz"
+    )
+    assert {path.name for path in destination.iterdir()} == {artifacts.wheel.name, artifacts.sdist.name}, (
+        "Core distributions mismatch"
+    )
+    bundle.verify_core_artifacts(artifacts, version=version, source_commit=commit())
+    return artifacts
 
 
 def package(output: Path, binary: Path, *, bundled: bool = False, published_core: bool = False) -> None:
@@ -103,9 +107,7 @@ def package(output: Path, binary: Path, *, bundled: bool = False, published_core
     assert subprocess.check_output([str(binary), "--version"], text=True).strip() == f"ngn {version}"
     assert not published_core or bundled, "--published-core requires --bundle"
     if bundled:
-        from bundle import prepare_output
-
-        prepare_output(output)
+        bundle.prepare_output(output)
     else:
         output.mkdir(parents=True, exist_ok=True)
     assert not list(output.iterdir()), "Use a new artifact directory; never overwrite an existing release"
@@ -138,18 +140,19 @@ def package(output: Path, binary: Path, *, bundled: bool = False, published_core
         check=True,
     )
     if bundled:
-        from bundle import build_bundle
-
         with tempfile.TemporaryDirectory(prefix="ngn-bundle-core-", dir=output.parent) as temporary:
-            build_bundle(
+            core = core_artifacts(Path(temporary), published=published_core)
+            bundle.build_bundle(
                 output,
                 binary,
-                core_wheel=core_wheel(Path(temporary), published=published_core),
+                core_wheel=core.wheel,
                 adapter_wheel=output / f"ngn_nagents-{version}-py3-none-any.whl",
                 official=published_core,
                 source_commit=commit(),
                 cache=Path.home() / ".cache/ngn-runtime-artifacts",
             )
+            for path in (core.wheel, core.sdist):
+                shutil.copyfile(path, output / path.name)
         shutil.copy2(binary, output / "ngn-installer-linux-x86_64")
         shutil.copyfile(NGN / "install.sh", output / "install.sh")
     manifest = {
@@ -192,6 +195,13 @@ def verify_bundled_install(output: Path, manifest: dict[str, object], *, require
     """Use the real verified native extractor/installer, not a Python extraction bypass."""
     archive = output / str(manifest["bundle"])
     installer = output / "ngn-installer-linux-x86_64"
+    bundle.verify_bundle_core(
+        archive,
+        output / f"nagents-{manifest['nagents_version']}-py3-none-any.whl",
+        version=str(manifest["nagents_version"]),
+        source_commit=str(manifest["commit"]),
+        official=require_published,
+    )
     with tarfile.open(archive, "r:gz") as source:
         member = source.getmember("ngn/bundle.json")
         assert member.isfile() and 0 < member.size <= 8 * 1024 * 1024, "Invalid bundle metadata member"
@@ -269,6 +279,7 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
         bundle_name = f"ngn-v{version}-linux-x86_64-bundle.tar.gz"
         assert manifest.get("bundle") == bundle_name, "Invalid bundled archive name"
         expected.update({bundle_name, "ngn-installer-linux-x86_64", "install.sh"})
+        expected.update({f"nagents-{version}-py3-none-any.whl", f"nagents-{version}.tar.gz"})
     assert set(manifest["artifacts"]) == expected, "Missing or unexpected release assets"
     for name, checksum in manifest["artifacts"].items():
         assert Path(name).name == name and digest(output / name) == checksum, f"Corrupt artifact: {name}"
@@ -279,6 +290,13 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
     for name, checksum in checksums.items():
         assert digest(output / name) == checksum, f"Checksum failed: {name}"
     assert {path.name for path in output.iterdir()} == expected | {"release-manifest.json", "SHA256SUMS"}
+    if schema == 2:
+        bundle.verify_core_artifacts(
+            bundle.CoreArtifacts(output / f"nagents-{version}-py3-none-any.whl", output / f"nagents-{version}.tar.gz"),
+            version=version,
+            source_commit=commit(),
+            published=require_bundle,
+        )
     with ZipFile(output / f"ngn_nagents-{version}-py3-none-any.whl") as wheel:
         for source in (NGN / "integrations/nagents/src/ngn_nagents").glob("*.py"):
             assert wheel.read(f"ngn_nagents/{source.name}") == source.read_bytes(), (

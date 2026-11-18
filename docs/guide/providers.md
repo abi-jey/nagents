@@ -2,6 +2,12 @@
 
 nagents supports multiple LLM providers with a unified interface, making it easy to switch between providers without changing your application logic.
 
+This page describes the **Python library**; its `ngn` settings/login sections
+refer to the existing **Python client**, not the [native Rust configuration](native-ngn.md#configure-the-bundled-agent-runtime).
+Model identifiers in older snippets are illustrative only, not an exhaustive or
+current upstream catalog. Choose a model/deployment your endpoint and account
+support; use explicit discovery where implemented.
+
 ## Provider Types
 
 | Provider | Type | Description |
@@ -12,6 +18,9 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 | Google | `ProviderType.GEMINI_NATIVE` | Google Gemini API |
 | OpenRouter | `ProviderType.OPENROUTER` | OpenAI-compatible API with OpenRouter identification |
 | LiteLLM | `ProviderType.LITELLM` | API-key gateway with an explicit API prefix |
+| Azure v1 | `ProviderType.AZURE_OPENAI_COMPATIBLE_V1` | Explicit Azure API prefix; API key or caller-owned bearer credential |
+| Versioned Azure | `ProviderType.AZURE_OPENAI_COMPATIBLE` | Azure deployment name, API prefix and explicit API version |
+| Azure AI Foundry | `FoundryProvider` | API key or caller-owned Azure credential; see [authentication](foundry-authentication.md) |
 
 Provider identity is separate from authentication and the wire protocol.
 `OpenAIProvider` (also importable from `nagents.provider.openai`) identifies native
@@ -92,7 +101,8 @@ existing credential callback continues to work for application-owned OAuth.
 
 ### Explicit catalog discovery
 
-`await provider.get_model_list() -> list[str]` is included in v0.15.0. See the
+`await provider.get_model_list() -> list[str]` is available in the current API
+(v0.15.0 is historical introduction evidence, not a latest-version recommendation). See the
 [Provider API example](../api/provider.md#explicit-model-discovery) for a complete
 async example using your own `OPENAI_API_KEY` environment variable.
 
@@ -137,26 +147,25 @@ Works with OpenAI API and any compatible service (Azure, local models, etc.):
     )
     ```
 
-    **Available models:**
-
-    - `gpt-4o` - Most capable
-    - `gpt-4o-mini` - Fast and affordable
-    - `gpt-4-turbo` - Previous generation
-    - `gpt-3.5-turbo` - Legacy, fastest
+    Set `model="YOUR_MODEL_ID"` to an API-key model available to your account.
+    Use the [explicit catalog](#explicit-catalog-discovery) when supported;
+    this guide does not maintain OpenAI's changing model catalog or pricing.
 
 === "Azure OpenAI"
 
     ```python
     provider = Provider(
-        provider_type=ProviderType.OPENAI_COMPATIBLE,
+        provider_type=ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
         api_key="your-azure-key",
-        model="gpt-4",
-        base_url="https://your-resource.openai.azure.com/openai/deployments/gpt-4",
+        model="YOUR_DEPLOYMENT_NAME",
+        base_url="https://your-resource.openai.azure.com/openai/v1",
     )
     ```
 
     !!! note "Azure Configuration"
-        Set `base_url` to your Azure OpenAI deployment endpoint.
+        Use the explicit Azure route and its API prefix, not a complete
+        generation endpoint. The versioned Azure route additionally requires
+        `api_version`; see [Provider API](../api/provider.md).
 
 === "Local Models"
 
@@ -184,7 +193,8 @@ Works with OpenAI API and any compatible service (Azure, local models, etc.):
 
 ## Anthropic Claude
 
-Native Anthropic API support with all Claude models:
+Native Anthropic Messages support; individual models and capabilities depend
+on your account and endpoint:
 
 ```python
 from nagents import Provider, ProviderType
@@ -192,21 +202,13 @@ from nagents import Provider, ProviderType
 provider = Provider(
     provider_type=ProviderType.ANTHROPIC,
     api_key="sk-ant-...",
-    model="claude-3-5-sonnet-20241022",
+    model="YOUR_ANTHROPIC_MODEL_ID",
 )
 ```
 
-**Available models:**
-
-| Model | Description |
-|-------|-------------|
-| `claude-3-5-sonnet-20241022` | Best balance of intelligence and speed |
-| `claude-3-opus-20240229` | Most capable, best for complex tasks |
-| `claude-3-sonnet-20240229` | Balanced performance |
-| `claude-3-haiku-20240307` | Fastest, best for simple tasks |
-
-!!! tip "Model Selection"
-    Start with `claude-3-5-sonnet` for most use cases. Use `opus` for complex reasoning and `haiku` for high-throughput, simple tasks.
+Replace the placeholder with a supported model ID. The generic library
+`get_model_list()` does not implement Anthropic discovery; do not infer that
+from the Python client's separate provider metadata integrations.
 
 ---
 
@@ -220,17 +222,14 @@ from nagents import Provider, ProviderType
 provider = Provider(
     provider_type=ProviderType.GEMINI_NATIVE,
     api_key="...",
-    model="gemini-2.0-flash",
+    model="YOUR_GEMINI_MODEL_ID",
 )
 ```
 
-**Available models:**
-
-| Model | Description |
-|-------|-------------|
-| `gemini-2.0-flash` | Latest, fastest multimodal model |
-| `gemini-1.5-pro` | Most capable, large context window |
-| `gemini-1.5-flash` | Fast and efficient |
+Replace the placeholder with a supported model ID. Native Gemini verification
+uses its own API; generic `get_model_list()` discovery is not implemented for
+this route. Context and media support are model-specific, not fixed values for
+all Gemini models.
 
 ---
 
@@ -317,8 +316,12 @@ calling `main()`. Choose a model available to your account.
     | Streaming | :material-check: | :material-check: | :material-check: |
     | Tool Calling | :material-check: | :material-check: | :material-check: |
     | Vision | :material-check: | :material-check: | :material-check: |
-    | Max Context | 128K | 200K | 2M |
-    | Custom Base URL | :material-check: | :material-close: | :material-close: |
+    | Context limit | Model/endpoint-specific | Model/endpoint-specific | Model/endpoint-specific |
+    | Custom API prefix | `base_url` | `base_url` with Messages-compatible service | `base_url` with native-compatible service |
+
+    These are implementation routes, not guarantees that every model supports
+    every feature. Authentication, payload shape and capability checks remain
+    provider-specific; a custom prefix is not permission to forward subscription credentials.
 
 ---
 
@@ -327,6 +330,6 @@ calling `main()`. Choose a model available to your account.
 !!! tip "Recommendations"
 
     1. **Use environment variables** for API keys
-    2. **Start with smaller models** (gpt-4o-mini, claude-3-haiku, gemini-flash) for development
+    2. **Choose an account-supported model** with the capabilities/cost profile your application needs
     3. **Implement fallback logic** for production systems
     4. **Monitor token usage** via the `usage` field in events

@@ -1,4 +1,9 @@
-# ngn configuration reference
+# Python ngn configuration reference
+
+!!! info "Python client schema"
+    This is the existing Python harness's layered configuration and provider
+    registry. It is not the Rust application's explicit JSON schema; use
+    [native configuration](native-ngn.md#configure-the-bundled-agent-runtime) for that bundle.
 
 This page describes the current source-checkout `ngn` harness, which can differ
 from an installed release or another coding assistant. See
@@ -454,31 +459,38 @@ loading configuration does not read its secret value.
 
 | Provider string | Aliases | Default endpoint/behavior |
 | --- | --- | --- |
-| `openai_compatible` | `openai` | `https://api.openai.com/v1`; API-key requests use the OpenAI-compatible protocol. |
+| `openai` | None | Fixed native OpenAI host; API key, ngn ChatGPT login or explicit local Codex discovery. |
+| `openai_compatible` | None | Explicit compatible API prefix required in named connections; API-key authentication. |
 | `openrouter` | None | `https://openrouter.ai/api/v1`; choose a model exposed by OpenRouter. |
 | `anthropic` | None | `https://api.anthropic.com/v1`; native Messages protocol with `api: auto`. |
-| `gemini_native` | `gemini`, `google` | `https://generativelanguage.googleapis.com/v1beta`; native Gemini protocol with `api: auto`. |
-| `azure_openai_compatible` | `azure` | Explicit Azure resource endpoint and nonempty `api_version` required. |
+| `gemini` | None in named connections | `https://generativelanguage.googleapis.com/v1beta`; native Gemini protocol with `api: auto`. |
+| `azure_openai_compatible` | None in named connections | Explicit Azure resource endpoint and nonempty `api_version` required. |
 | `azure_openai_compatible_v1` | None | Explicit Azure endpoint required; use the endpoint form expected by that route, rather than assuming the versioned Azure configuration is interchangeable. |
 | `foundry` | None | Azure AI Foundry OpenAI-compatible v1; explicit API prefix; API key or Microsoft Entra ID. |
 | `litellm` | None | Explicit `base_url` required. This is a connection to your gateway, not an embedded proxy or a LiteLLM SDK dependency. |
 
-`api: auto` retains provider-specific routing: Chat Completions for
-OpenAI-compatible, OpenRouter, LiteLLM, and Azure; Messages for Anthropic; native
-Gemini for `gemini_native`. The three explicit API choices refer to `/chat/completions`, `/responses`, and
+This table describes named `providers.json` kinds, not the library's enum values
+or compatibility aliases in programmatic/CLI selection. `api: auto` retains
+provider-specific routing: native OpenAI chooses by model/authentication;
+compatible gateways and versioned Azure retain their supported defaults;
+Messages is used for Anthropic and native Gemini for `gemini`. The three explicit API choices refer to `/chat/completions`, `/responses`, and
 `/messages` respectively under the configured API base, where that provider/endpoint
 supports the route. Native Gemini routing is not one of those OpenAI/Anthropic-style
-paths. OpenAI-compatible, OpenRouter, and LiteLLM support selecting the explicit
-contracts, subject to server/model support. Anthropic accepts only `auto` or
-`messages`; Azure accepts only `auto` or `chat_completions`; native Gemini requires
-`auto`. OpenAI-compatible `messages` requires an explicit compatible `base_url`
-rather than the default OpenAI endpoint.
+paths. Named OpenAI and Azure v1 connections accept `auto`, `responses` or
+`chat_completions`; Foundry accepts `responses` or `chat_completions`.
+OpenRouter accepts `auto`, `responses` or `chat_completions`; compatible and
+LiteLLM connections also accept `messages`. Anthropic accepts `auto` or
+`messages`; versioned Azure accepts `auto` or `chat_completions`; native Gemini
+requires `auto`. Server/model support remains necessary.
 
-`auth: auto` prefers a saved ChatGPT login for the default OpenAI provider
-endpoint only when `api: auto`; otherwise it uses `api_key_env`. `"api-key"` forces API-key selection.
+For named `openai` connections, `auth: auto` prefers a saved ngn ChatGPT login,
+then local Codex configuration when present, then the referenced API key.
+A broken selected Codex configuration does not authorize switching accounts.
+`"api-key"` forces API-key selection. Use `api: auto` with automatic/subscription
+authentication; set `auth: api-key` when explicitly selecting an API-key protocol.
 `"chatgpt"` requires an ngn login and uses the dedicated Codex Responses route,
-not a general-purpose OpenAI API credential. It requires `provider: openai`
-or `"openai_compatible"` without `base_url` and with `api: auto`. Explicitly
+not a general-purpose OpenAI API credential. Named registry connections require
+`kind: "openai"` without `base_url` and with `api: auto`. Explicitly
 combining `auth: chatgpt` with an `api` override is rejected, even for
 `api: responses`. When explicitly selecting an API-key protocol, set
 `auth: api-key` alongside `api` instead of relying on automatic login
@@ -508,7 +520,7 @@ credentials.
 Integer fields reject floats and booleans even if numerically equivalent.
 Subagent concurrency, per-run job counts, and result-size budgets are
 additional safeguards, not extra JSON fields. See
-[subagents](ngn.md#native-background-subagents). Subagent runs have no overall
+[subagents](ngn.md#native-agent-sessions). Subagent runs have no overall
 execution timeout; individual tools and network operations retain their deadlines.
 
 The model receives the active shell timeout, output cap, and whole-file read

@@ -5,8 +5,6 @@ on:
     branches: [main]
     tags:
       - 'v*'
-      # The Rust harness reserves v0.100.x; do not publish nagents to PyPI for it.
-      - '!v0.100.*'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -22,7 +20,7 @@ on:
         default: false
         type: boolean
       version_bump:
-        description: 'Version bump type (automatically publishes stable release)'
+        description: 'Legacy Python-only bump; update coordinated 0.100.x metadata together in source'
         required: false
         default: 'none'
         type: choice
@@ -53,6 +51,16 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
+
+      - name: Reject Python-only bumps of coordinated versions
+        if: github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'
+        shell: python
+        run: |
+          from pathlib import Path
+          import tomllib
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          if version.startswith('0.100.'):
+              raise SystemExit('Update all component metadata together and tag verified main; Python-only automatic bumps are disabled for 0.100.x.')
 
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
@@ -270,6 +278,8 @@ jobs:
               config = toml.load(f)
 
           current = config['project']['version']
+          if current.startswith('0.100.'):
+              raise SystemExit('Update all component metadata together and tag verified main; Python-only automatic bumps are disabled for 0.100.x.')
           major, minor, patch = Version(current).release
 
           if bump_type == 'major':
@@ -407,12 +417,16 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           python - <<'PY'
           import os
+          import subprocess
+          import sys
           import tomllib
           from pathlib import Path
           version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
           ref = os.environ['GITHUB_REF']
           if ref.startswith('refs/tags/'):
               assert ref == f'refs/tags/v{version}', 'Release tag must match artifact version'
+          if ref.startswith('refs/tags/v0.100.'):
+              subprocess.run([sys.executable, 'ngn/scripts/release.py', 'check', '--tag', ref.removeprefix('refs/tags/')], check=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\n')
           PY
@@ -587,10 +601,10 @@ jobs:
           cache-to: type=gha,mode=max
 
   # =============================================================================
-  # PUBLISH & RELEASE (Stable)
+  # PUBLISH CORE TO PYPI (the shared tag calls the sole GitHub publisher below)
   # =============================================================================
   publish-stable:
-    name: Publish & Release (Stable)
+    name: Publish Core to PyPI (Stable)
     runs-on: ubuntu-latest
     needs: [bump-version, build]
     if: |
@@ -603,7 +617,7 @@ jobs:
       url: https://pypi.org/project/nagents/
     permissions:
       id-token: write
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -664,40 +678,14 @@ jobs:
         with:
           packages-dir: dist/
 
-      - name: Get previous stable tag
-        id: prev_tag
-        run: |
-          PREV_TAG=$(git tag --merged HEAD -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vE '^v0\.100\.[0-9]+$' | grep -vx 'v${{ steps.version.outputs.version }}' | head -1 || true)
-          if [ -z "$PREV_TAG" ]; then
-            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
-          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
-          echo "Previous stable tag: $PREV_TAG"
-
-      - name: Generate release notes
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          PREV_TAG="${{ steps.prev_tag.outputs.prev_tag }}"
-
-          echo "## What's Changed" > release_notes.md
-          echo "" >> release_notes.md
-
-          git log ${PREV_TAG}..HEAD --pretty=format:"* %s (%h)" --no-merges >> release_notes.md
-
-          echo "" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...v${VERSION}" >> release_notes.md
-
-          cat release_notes.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          target_commitish: ${{ needs.bump-version.outputs.commit || github.sha }}
-          body_path: release_notes.md
-          files: dist/*
+  publish-ngn:
+    name: Publish Coordinated Native/Core GitHub Release
+    needs: [publish-stable]
+    if: ${{ !cancelled() && needs.publish-stable.result == 'success' && startsWith(github.ref, 'refs/tags/v0.100.') }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/ngn-release.yml
+    secrets: inherit
 
   # =============================================================================
   # FEATURE-BRANCH ALPHAS (same tested SHA and built artifacts, no branch changes)
@@ -742,10 +730,10 @@ jobs:
           packages-dir: dist/
 
   # =============================================================================
-  # PUBLISH & RELEASE (Dev)
+  # PUBLISH CORE TO PYPI (Dev; no separate GitHub release)
   # =============================================================================
   publish-dev:
-    name: Publish & Release (Dev)
+    name: Publish Core to PyPI (Dev)
     runs-on: ubuntu-latest
     needs: [build]
     if: github.event_name == 'workflow_dispatch' && inputs.publish_dev
@@ -754,7 +742,7 @@ jobs:
       url: https://pypi.org/project/nagents/
     permissions:
       id-token: write
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -787,13 +775,3 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          tag_name: v${{ needs.build.outputs.version }}
-          name: Dev v${{ needs.build.outputs.version }}
-          target_commitish: ${{ needs.build.outputs.sha }}
-          prerelease: true
-          generate_release_notes: true
-          files: dist/*

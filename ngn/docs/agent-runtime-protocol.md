@@ -214,7 +214,7 @@ The host verifies this capability **before sending start**. Without it, a
 subscription run fails with a safe installation error. API-key starts omit both
 new fields, preserving their original v1 wire representation and compatibility
 with earlier runtimes. This adapter's package now requires the public-auth core
-`nagents>=0.28.6,<0.29`; the previous 0.100.1 API-key adapter remains unchanged.
+`nagents>=0.100.2,<0.101`; the previous 0.100.1 API-key adapter remains unchanged.
 Missing public core auth never triggers Codex cache discovery, legacy imports,
 API-key fallback, or an implicit login.
 

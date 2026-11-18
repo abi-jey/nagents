@@ -1,5 +1,9 @@
 # Browser voice E2E capture
 
+This example exercises the **Python/React client**, not the native Rust bundle.
+See [Python web-client setup](../../../docs/guide/ngn-web.md); native voice remains
+an explicit [migration gap](../../../docs/guide/native-ngn-migration.md).
+
 This harness sends known spoken audio through the real browser microphone
 capture worklet and ngn WebSocket, then records the real rendered speaker graph
 after the playback worklet and volume control. It runs only when explicitly
@@ -228,9 +232,12 @@ and verifies its SHA-256 before decoding it.
 
 ## Chrome DevTools MCP procedure
 
-Follow the repository [shared-browser skill](../../../.agents/skills/shared-browser/SKILL.md)
-for the configured shared Chrome connection. Never replace browser flags or
-close existing user tabs. Create one dedicated context with `new_page`:
+This manual route requires an externally configured Chrome DevTools MCP
+connection. Its environment-specific shared-browser instructions are not shipped
+in this repository. Without that setup, use the repository's
+[automated loopback CDP runner](#automated-loopback-cdp-runner) instead.
+Follow the configured connection's ownership rules: never replace browser flags
+or close existing user tabs. Create one dedicated context with `new_page`:
 
 ```json
 {"url":"about:blank","isolatedContext":"ngn-voice-e2e-baseline","background":true}

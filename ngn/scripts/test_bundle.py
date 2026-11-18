@@ -579,5 +579,248 @@ class BundleTests(unittest.TestCase):
             build()
 
 
+class CoreDistributionTests(unittest.TestCase):
+    """Fast public-asset/source/runtime binding tests; downloaded code is never run."""
+
+    VERSION = "0.100.2"
+    COMMIT = "a" * 40
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.project = b'[project]\nname = "nagents"\nversion = "0.100.2"\n'
+        self.sources = {
+            "src/nagents/__init__.py": b"VALUE = 1\n",
+            "src/nagents/provider/device_auth.py": b"# public source fixture\n",
+            "src/nagents/py.typed": b"",
+        }
+        self.response_metadata: dict[str, object] = {}
+        self.core = bundle.CoreArtifacts(
+            self.root / f"nagents-{self.VERSION}-py3-none-any.whl", self.root / f"nagents-{self.VERSION}.tar.gz"
+        )
+        self.source_patch = patch.object(bundle, "_git_files", side_effect=self.git_files)
+        self.source_patch.start()
+        self.addCleanup(self.source_patch.stop)
+        self.write_wheel({})
+        self.write_sdist({})
+
+    def git_files(self, commit: str, paths: tuple[str, ...], *, suffixes: tuple[str, ...] = ()) -> dict[str, bytes]:
+        self.assertEqual(commit, self.COMMIT)
+        return {"pyproject.toml": self.project} if paths == ("pyproject.toml",) else self.sources.copy()
+
+    def wheel_files(self) -> dict[str, bytes]:
+        distribution = f"nagents-{self.VERSION}.dist-info"
+        return {
+            **{name.removeprefix("src/"): contents for name, contents in self.sources.items()},
+            f"{distribution}/METADATA": f"Metadata-Version: 2.4\nName: nagents\nVersion: {self.VERSION}\n".encode(),
+            f"{distribution}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
+            f"{distribution}/RECORD": b"",
+            f"{distribution}/licenses/LICENSE": b"retained upstream license\n",
+        }
+
+    def write_wheel(self, changes: dict[str, bytes]) -> None:
+        with ZipFile(self.core.wheel, "w") as wheel:
+            for name, contents in (self.wheel_files() | changes).items():
+                wheel.writestr(name, contents)
+
+    def sdist_files(self) -> dict[str, bytes]:
+        return {
+            "PKG-INFO": f"Name: nagents\nVersion: {self.VERSION}\n".encode(),
+            "pyproject.toml": self.project,
+            **self.sources,
+        }
+
+    def write_sdist(
+        self, changes: dict[str, bytes], *, extra: str = "", root: str = "", kind: bytes = tarfile.REGTYPE
+    ) -> None:
+        prefix = root or f"nagents-{self.VERSION}"
+        with tarfile.open(self.core.sdist, "w:gz") as source:
+            for name, contents in (self.sdist_files() | changes).items():
+                member = tarfile.TarInfo(f"{prefix}/{name}")
+                member.size = len(contents)
+                source.addfile(member, io.BytesIO(contents))
+            if extra:
+                member = tarfile.TarInfo(extra)
+                member.type, member.linkname = kind, "../../escape"
+                source.addfile(member, io.BytesIO())
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "info": {"name": "nagents", "version": self.VERSION},
+            "urls": [
+                {
+                    "filename": path.name,
+                    "packagetype": kind,
+                    "yanked": False,
+                    "url": f"https://files.pythonhosted.org/packages/fixture/{path.name}",
+                    "size": path.stat().st_size,
+                    "digests": {"sha256": bundle.digest(path)},
+                }
+                for path, kind in ((self.core.wheel, "bdist_wheel"), (self.core.sdist, "sdist"))
+            ],
+        }
+
+    def download(self, url: str, stream: BinaryIO, maximum: int) -> int:
+        if url == f"https://pypi.org/pypi/nagents/{self.VERSION}/json":
+            return stream.write(json.dumps(self.response_metadata or self.metadata()).encode())
+        for path in (self.core.wheel, self.core.sdist):
+            if url == f"https://files.pythonhosted.org/packages/fixture/{path.name}":
+                return stream.write(path.read_bytes())
+        raise AssertionError(f"Unexpected public URL: {url}")
+
+    def test_both_source_distributions_match_git_without_build_hooks_or_imports(self) -> None:
+        with patch.object(subprocess, "run") as execute:
+            binding = bundle.verify_core_artifacts(self.core, version=self.VERSION, source_commit=self.COMMIT)
+        execute.assert_not_called()
+        self.assertEqual(binding["source_python_files"], 3)
+        self.assertEqual(binding["wheel_sha256"], bundle.digest(self.core.wheel))
+        self.assertEqual(binding["sdist_sha256"], bundle.digest(self.core.sdist))
+
+    def test_official_download_fetches_exact_public_wheel_and_sdist_without_pip(self) -> None:
+        with patch.object(bundle, "_download", side_effect=self.download), patch.object(subprocess, "run") as execute:
+            result = bundle.download_published_core(
+                self.root / "downloaded", version=self.VERSION, source_commit=self.COMMIT
+            )
+            bundle.verify_core_artifacts(result, version=self.VERSION, source_commit=self.COMMIT, published=True)
+        execute.assert_not_called()
+        self.assertEqual(result.wheel.read_bytes(), self.core.wheel.read_bytes())
+        self.assertEqual(result.sdist.read_bytes(), self.core.sdist.read_bytes())
+
+    def test_official_verification_rejects_public_hash_mismatch_for_either_asset(self) -> None:
+        for index in (0, 1):
+            metadata = self.metadata()
+            entries = bundle._items(metadata["urls"])
+            item = bundle._object(entries[index])
+            item["digests"] = {"sha256": "0" * 64}
+            entries[index] = item
+            metadata["urls"] = entries
+            self.response_metadata = metadata
+            with (
+                self.subTest(index=index),
+                patch.object(bundle, "_download", side_effect=self.download),
+                self.assertRaisesRegex(ValueError, "exact public PyPI bytes"),
+            ):
+                bundle.verify_core_artifacts(self.core, version=self.VERSION, source_commit=self.COMMIT, published=True)
+
+    def test_public_metadata_requires_both_unyanked_unique_distributions_from_the_fixed_provider(self) -> None:
+        for mutation in ("missing-wheel", "missing-sdist", "yanked", "duplicate", "foreign-url", "version"):
+            metadata = self.metadata()
+            entries = bundle._items(metadata["urls"])
+            if mutation.startswith("missing-"):
+                entries.pop(0 if mutation == "missing-wheel" else 1)
+            elif mutation == "duplicate":
+                entries.append(entries[1])
+            elif mutation == "version":
+                metadata["info"] = {"name": "nagents", "version": "0.100.1"}
+            else:
+                item = bundle._object(entries[1])
+                if mutation == "yanked":
+                    item["yanked"] = True
+                else:
+                    item["url"] = f"https://example.org/{self.core.sdist.name}"
+                entries[1] = item
+            metadata["urls"] = entries
+            self.response_metadata = metadata
+            with (
+                self.subTest(mutation=mutation),
+                patch.object(bundle, "_download", side_effect=self.download),
+                self.assertRaises(ValueError),
+            ):
+                bundle.verify_core_artifacts(self.core, version=self.VERSION, source_commit=self.COMMIT, published=True)
+
+    def test_wrong_wheel_name_version_and_module_bytes_are_rejected(self) -> None:
+        metadata = f"nagents-{self.VERSION}.dist-info/METADATA"
+        for changes in (
+            {metadata: b"Name: other\nVersion: 0.100.2\n"},
+            {metadata: b"Name: nagents\nVersion: 0.100.1\n"},
+            {"nagents/__init__.py": b"# foreign implementation\n"},
+        ):
+            self.write_wheel(changes)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                bundle.verify_core_artifacts(self.core, version=self.VERSION, source_commit=self.COMMIT)
+
+    def test_sdist_metadata_source_and_archive_path_negative_cases(self) -> None:
+        cases = (
+            ({"PKG-INFO": b"Name: foreign\nVersion: 0.100.2\n"}, "", "", tarfile.REGTYPE),
+            ({"PKG-INFO": b"Name: nagents\nVersion: 0.100.1\n"}, "", "", tarfile.REGTYPE),
+            ({"pyproject.toml": self.project.replace(b"0.100.2", b"0.100.1")}, "", "", tarfile.REGTYPE),
+            ({"src/nagents/__init__.py": b"# foreign code"}, "", "", tarfile.REGTYPE),
+            ({}, f"nagents-{self.VERSION}/PKG-INFO", "", tarfile.REGTYPE),
+            ({}, f"nagents-{self.VERSION}/../escape", "", tarfile.REGTYPE),
+            ({}, "/absolute", "", tarfile.REGTYPE),
+            ({}, "", "foreign", tarfile.REGTYPE),
+            ({}, f"nagents-{self.VERSION}/link", "", tarfile.LNKTYPE),
+            ({}, f"nagents-{self.VERSION}/link", "", tarfile.SYMTYPE),
+        )
+        for changes, extra, prefix, kind in cases:
+            self.write_sdist(changes, extra=extra, root=prefix, kind=kind)
+            with self.subTest(extra=extra, prefix=prefix, kind=kind, changes=changes), self.assertRaises(ValueError):
+                bundle.verify_core_artifacts(self.core, version=self.VERSION, source_commit=self.COMMIT)
+
+    def test_sdist_limits_are_enforced_without_extraction(self) -> None:
+        for limits in (
+            bundle.Limits(compressed=1),
+            bundle.Limits(expanded=1),
+            bundle.Limits(members=1),
+            bundle.Limits(manifest=1),
+        ):
+            with self.subTest(limits=limits), self.assertRaises(ValueError):
+                bundle._core_sdist(self.core.sdist, version=self.VERSION, source_commit=self.COMMIT, limits=limits)
+
+    def embedded(self, *, mutation: str = "") -> Path:
+        site = "runtime/lib/python3.13/site-packages/"
+        contents = {site + name: data for name, data in self.wheel_files().items()}
+        provenance: dict[str, object] = {
+            "source_commit": self.COMMIT,
+            "core": {
+                "filename": self.core.wheel.name,
+                "sha256": "0" * 64 if mutation == "wheel" else bundle.digest(self.core.wheel),
+                "kind": "public-pypi-wheel",
+            },
+        }
+        contents["notices/provenance.json"] = json.dumps(provenance).encode()
+        files = {name: hashlib.sha256(data).hexdigest() for name, data in contents.items()}
+        if mutation == "inventory":
+            files[site + "nagents/__init__.py"] = "0" * 64
+        if mutation == "provenance":
+            files["notices/provenance.json"] = "0" * 64
+        contents["bundle.json"] = json.dumps(
+            {
+                "source_commit": self.COMMIT,
+                "nagents_version": self.VERSION,
+                "official": mutation != "unofficial",
+                "files": files,
+            }
+        ).encode()
+        if mutation == "bytes":
+            contents[site + "nagents/__init__.py"] = b"foreign embedded implementation"
+        if mutation == "extra":
+            contents[site + "nagents/injected.py"] = b"extra code"
+        if mutation == "missing":
+            del contents[site + "nagents/__init__.py"]
+        path = self.root / "bundle.tar.gz"
+        with tarfile.open(path, "w:gz") as archive:
+            for name, data in contents.items():
+                member = tarfile.TarInfo("ngn/" + name)
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+        return path
+
+    def test_attached_wheel_is_bound_to_embedded_provenance_inventory_and_all_payload_bytes(self) -> None:
+        bundle.verify_bundle_core(
+            self.embedded(), self.core.wheel, version=self.VERSION, source_commit=self.COMMIT, official=True
+        )
+        for mutation in ("wheel", "bytes", "extra", "missing", "inventory", "provenance", "unofficial"):
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                bundle.verify_bundle_core(
+                    self.embedded(mutation=mutation),
+                    self.core.wheel,
+                    version=self.VERSION,
+                    source_commit=self.COMMIT,
+                    official=True,
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
