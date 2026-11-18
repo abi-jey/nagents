@@ -26,7 +26,8 @@ class BundleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Canonical: macOS temp dirs sit behind the /var -> /private/var alias.
+        self.root = Path(self.temporary.name).resolve()
         self.archive = self.root / "python.tar.gz"
         self.extracted = self.root / "extracted"
         self.extracted.mkdir(mode=0o700)
@@ -92,8 +93,10 @@ class BundleTests(unittest.TestCase):
 
     def test_missing_or_modified_notices_fail_closed(self) -> None:
         lock = bundle._load_lock()
-        target = self.root / "ngn/runtime-licenses"
-        shutil.copytree(bundle.ROOT / "ngn/runtime-licenses", target)
+        spec = bundle.PLATFORMS[bundle.PLATFORM]
+        target = spec.notices_dir(self.root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(spec.notices_dir(bundle.ROOT), target)
         (target / "LICENSES/LICENSE.openssl-3.txt").write_text("missing actual legal text")
         with patch.object(bundle, "ROOT", self.root), self.assertRaisesRegex(ValueError, "corrupt Python license"):
             bundle._notices(lock)
@@ -588,7 +591,8 @@ class CoreDistributionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Canonical: macOS temp dirs sit behind the /var -> /private/var alias.
+        self.root = Path(self.temporary.name).resolve()
         self.project = b'[project]\nname = "nagents"\nversion = "0.100.2"\n'
         self.sources = {
             "src/nagents/__init__.py": b"VALUE = 1\n",

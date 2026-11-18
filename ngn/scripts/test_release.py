@@ -75,10 +75,13 @@ class ReleaseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.output = Path(self.temporary.name)
+        self.output = Path(self.temporary.name).resolve()
         self.version = release.version_check()
+        # verify() checks the host's own platform release (Linux CI, macOS runners).
+        self.platform = bundle.host_platform() or release.LINUX
+        self.manifest_file = release.manifest_name(self.platform)
         for name in (
-            f"ngn-v{self.version}-linux-x86_64.tar.gz",
+            f"ngn-v{self.version}-{self.platform}.tar.gz",
             f"ngn-v{self.version}-source.tar.gz",
             f"ngn_nagents-{self.version}-py3-none-any.whl",
         ):
@@ -91,22 +94,22 @@ class ReleaseTests(unittest.TestCase):
                 "version"
             ],
             "runtime_protocol": 1,
-            "platform": "linux-x86_64",
+            "platform": self.platform,
             "artifacts": {path.name: release.digest(path) for path in self.output.iterdir()},
         }
         self.save_manifest()
 
     def save_manifest(self) -> None:
-        (self.output / "release-manifest.json").write_text(json.dumps(self.manifest))
+        (self.output / self.manifest_file).write_text(json.dumps(self.manifest))
         files = [path for path in self.output.iterdir() if path.name != "SHA256SUMS"]
         (self.output / "SHA256SUMS").write_text("".join(f"{release.digest(path)}  {path.name}\n" for path in files))
 
     def schema_two(self) -> None:
         self.manifest["schema_version"] = 2
-        self.manifest["bundle"] = f"ngn-v{self.version}-linux-x86_64-bundle.tar.gz"
+        self.manifest["bundle"] = f"ngn-v{self.version}-{self.platform}-bundle.tar.gz"
         for name in (
             str(self.manifest["bundle"]),
-            "ngn-installer-linux-x86_64",
+            f"ngn-installer-{self.platform}",
             "install.sh",
             f"nagents-{self.version}-py3-none-any.whl",
             f"nagents-{self.version}.tar.gz",
@@ -115,7 +118,7 @@ class ReleaseTests(unittest.TestCase):
         self.manifest["artifacts"] = {
             path.name: release.digest(path)
             for path in self.output.iterdir()
-            if path.name not in {"release-manifest.json", "SHA256SUMS"}
+            if path.name not in {self.manifest_file, "SHA256SUMS"}
         }
         self.save_manifest()
 
@@ -268,7 +271,7 @@ class ReleaseTests(unittest.TestCase):
         def build(output: Path, binary: Path, **kwargs: object) -> Path:
             self.assertEqual(kwargs["core_wheel"], core.wheel)
             self.assertEqual(kwargs["official"], False)
-            target = output / f"ngn-v{self.version}-linux-x86_64-bundle.tar.gz"
+            target = output / f"ngn-v{self.version}-{self.platform}-bundle.tar.gz"
             target.write_bytes(b"bundle fixture")
             return target
 
@@ -282,7 +285,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(release, "verify"),
         ):
             release.package(destination, binary, bundled=True)
-        manifest = json.loads((destination / "release-manifest.json").read_text())
+        manifest = json.loads((destination / self.manifest_file).read_text())
         checksums = (destination / "SHA256SUMS").read_text()
         self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(len(manifest["artifacts"]), 8)
@@ -317,7 +320,7 @@ class ReleaseTests(unittest.TestCase):
             "nagents_version": self.manifest["nagents_version"],
             "source_commit": self.manifest["commit"],
             "runtime_protocol": 1,
-            "platform": "linux-x86_64",
+            "platform": self.platform,
             "runner": ["runtime/bin/python3", "-I", "-B", "-m", "ngn_nagents"],
             "official": False,
         }
@@ -364,9 +367,7 @@ class ReleaseTests(unittest.TestCase):
     def test_checksums_cannot_omit_the_manifest(self) -> None:
         checksum = self.output / "SHA256SUMS"
         checksum.write_text(
-            "".join(
-                line for line in checksum.read_text().splitlines(keepends=True) if "release-manifest.json" not in line
-            )
+            "".join(line for line in checksum.read_text().splitlines(keepends=True) if self.manifest_file not in line)
         )
         with self.assertRaises(AssertionError):
             release.verify(self.output)
@@ -417,7 +418,8 @@ class MergeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Canonical: macOS temp dirs sit behind the /var -> /private/var alias.
+        self.root = Path(self.temporary.name).resolve()
         self.version = release.version_check()
 
     def platform_dir(self, platform_name: str) -> Path:
