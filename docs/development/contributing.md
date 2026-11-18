@@ -10,6 +10,13 @@ Thank you for your interest in contributing to nagents! This guide will help you
 - [Poetry](https://python-poetry.org/) for the workflow below, or an existing virtual environment with pip
 - Git for version control
 
+These are the Python library/client prerequisites. Native harness development
+also requires **Rust 1.93+, a C compiler** (bundled SQLite), and **Python 3.13**
+for the installed-source launcher. The native browser assets need no Node build.
+The separate React frontend uses Node **24.20.0** to match the distribution-build
+workflow. Root pre-commit also runs native Rust and browser checks, so running
+all hooks requires the Rust/C toolchain and Node even for a documentation edit.
+
 ### Development Setup
 
 === "Quick Setup"
@@ -62,7 +69,8 @@ The build backend is Hatchling, regardless of the environment manager.
 
 !!! important "Test the checkout, not a release snapshot"
     Published wheels include the terminal/headless CLI and built `ngn serve`
-    frontend, verified in v0.15.0. Use an editable checkout for development; it
+    frontend (v0.15.0 is historical packaging evidence, not a latest-version
+    recommendation). Use an editable checkout for development; it
     can contain changes beyond an installed release, and matching version
     metadata alone does not prove matching code. See
     [release availability](../guide/ngn-installation.md#release-availability).
@@ -206,8 +214,10 @@ poetry run pytest -v
 
 ### Writing Tests
 
-Tests use ordinary synchronous pytest functions and `asyncio.run()` for async
-scenarios; `pytest-asyncio` is not a declared dependency. Use `tmp_path` for
+Tests use both synchronous pytest functions with `asyncio.run()` and async pytest
+scenarios. **`pytest-asyncio>=1.0` is declared in the `dev` extra**, with the
+default fixture loop scope configured in `pyproject.toml`. Follow the surrounding
+test's style; there is no need to convert existing synchronous tests. Use `tmp_path` for
 databases and synthetic credentials with mocked providers/HTTP, not real API
 keys. `tests/conftest.py` isolates user configuration and data directories.
 
@@ -251,7 +261,8 @@ tests by file or `-k` expression instead of assuming those categories exist.
 After `pre-commit install`, hooks run automatically on `git commit`. The checked-in
 `.pre-commit-config.yaml` is authoritative for hook versions and arguments. It
 includes whitespace, YAML, large-file and merge-conflict checks, Ruff linting
-and formatting, and mypy. In particular, the YAML hook allows MkDocs' Python
+and formatting, mypy, and the native Rust/adapter/browser checks (17 hooks in
+total). In particular, the YAML hook allows MkDocs' Python
 tags; do not replace its configuration with a generic YAML example.
 
 Run hooks manually:
@@ -261,7 +272,7 @@ Run hooks manually:
 poetry run pre-commit run --all-files
 
 # Run specific hook
-poetry run pre-commit run ruff --all-files
+poetry run pre-commit run ruff-check --all-files
 ```
 
 ## Documentation
@@ -404,27 +415,18 @@ flowchart TD
 
 ## Release Process
 
-A version tag triggers the stable release workflow, including publication to
-PyPI. Update `[project].version` in `pyproject.toml` in the reviewed change first.
-Require the final PR commit to pass lint, every platform test job, and Build
-Distribution. After merging, verify the exact merge commit, its main-branch CI
-and documentation build, and the built wheel/sdist before tagging. The tag
-version must match the distribution metadata; never move or reuse a release tag.
+Follow [coordinated releases and candidate integrity](../guide/releases.md).
+The upcoming shared release is **0.100.2**, with one exact tested main commit,
+one tag/GitHub release `v0.100.2`, and matching PyPI core/native/adapter versions.
+Root CI publishes the verified core to PyPI before calling the reusable native
+release workflow; the latter verifies exact published artifacts and official
+bundle/browser acceptance before creating the single GitHub release.
 
-From a clean checkout of that verified merge commit, with its virtual environment
-active:
-
-```bash
-release_sha=$(git rev-parse HEAD)
-release_version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-git tag -a "v${release_version}" "$release_sha" -m "nagents ${release_version}"
-git push origin "refs/tags/v${release_version}"
-```
-
-Wait for the tag workflow to finish, including both package publication and the
-container build. Verify the published version, tag commit, and distribution
-hashes against that workflow's artifacts. Documentation deployment is a separate
-workflow; package publication does not wait for it.
+Do not bump already-correct `0.100.2` metadata merely to trigger publication,
+reuse/force a tag, overwrite artifacts, or infer release readiness from a local
+source run. Alpha/dev are PyPI-only. A CI image push is not a production rollout.
+Documentation deployment is a separate workflow. Release actions require explicit
+maintainer authorization; this guide does not authorize tagging or deployment.
 
 Version numbering follows [Semantic Versioning](https://semver.org/):
 

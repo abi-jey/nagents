@@ -77,7 +77,8 @@ already-started parent generation, including when the first token arrives late.
 
 ## TextChunkEvent
 
-Emitted for each streaming text chunk:
+Emitted for each streaming text chunk when the agent was constructed with
+`streaming=True` (streaming is opt-in):
 
 ```python
 @dataclass
@@ -97,7 +98,8 @@ async for event in agent.run("Tell me a story"):
 
 ## TextDoneEvent
 
-Emitted when complete text is available (non-streaming mode):
+Emitted when complete model-response text is available, including after
+streaming. Do not print both chunks and completed text unless you want duplicates.
 
 This text event does not close a model generation. Use terminal
 `ResponseMetadataEvent` for that boundary; a generation may also produce tool
@@ -110,7 +112,10 @@ class TextDoneEvent(Event):
 ```
 
 ```python title="non_streaming.py"
-async for event in agent.run("Hello", stream=False):
+from nagents import Agent, TextDoneEvent
+
+agent = Agent(provider=provider, session_manager=session_manager, streaming=False)
+async for event in agent.run("Hello"):
     if isinstance(event, TextDoneEvent):
         print(event.text)
 ```

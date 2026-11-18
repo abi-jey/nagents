@@ -1,5 +1,8 @@
 # Remote agents over A2A
 
+This is the Python library's optional A2A integration and **Python ngn** CLI,
+not a migrated native Rust command. See [native migration gaps](native-ngn-migration.md).
+
 Nagents can expose a **native framework `Agent`** as a separate authenticated
 A2A service. The `ngn a2a serve` command is an optional adapter for an ngn agent
 profile using the same service boundary. Neither requires the local browser UI.
@@ -9,10 +12,10 @@ server's resources. A local agent calls it through A2A instead of receiving SSH
 credentials or exposing the server's filesystem directly. Providers, tools,
 workspace and exported profile remain server configuration.
 
-Install only where needed:
+Install only where needed, in your selected Python virtual environment:
 
 ```sh
-pip install 'nagents[a2a]'
+python -m pip install 'nagents[a2a]'
 ```
 
 The integration uses official `a2a-sdk>=1.2.3` (locked to 1.2.3), protocol **1.0**, JSON-RPC at

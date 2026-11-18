@@ -1,4 +1,10 @@
-# Private ngn Web Deployment
+# Private Python ngn web deployment
+
+!!! warning "Existing Python client only; deployment is a separate action"
+    This does not deploy or configure the native Rust bundle, whose browser host
+    is loopback-only. A CI/GHCR image publication is not a Kubernetes rollout.
+    Do not apply these recipes to production without explicit operator approval;
+    see [native scope and gaps](native-ngn-migration.md#native-scope-and-remaining-gaps).
 
 This reusable example is for an explicitly owner-approved, single-user deployment
 of the React client and HTTP API in [ngn serve](ngn-web.md). It is a narrowly

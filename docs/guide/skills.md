@@ -1,5 +1,8 @@
 # Skills
 
+These are Python library/Python ngn skills. The separate Rust bundle does not
+yet migrate the Python client's skill discovery; see [native scope](native-ngn-migration.md).
+
 Skills provide specialized task instructions **on demand**. Nagents advertises a
 small catalog of names, descriptions, and locations, then loads a selected skill's
 text when the model or user asks for it. The catalog is dynamic: adding, editing,

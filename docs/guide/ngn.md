@@ -1,4 +1,9 @@
-# ngn: the terminal harness
+# Python ngn: the terminal harness
+
+!!! info "Existing Python client"
+    This guide describes the Python harness/Textual TUI and its React web client,
+    not the separate Rust application. Its plugins, login, voice, settings and
+    CLI recipes are not native-bundle instructions. See [native installer and usage](native-ngn.md).
 
 `ngn` puts a terminal interface on top of the nagents library. The same assistant
 harness powers interactive and headless use. Python extensions change the agent's
@@ -329,8 +334,8 @@ supply an explicit title; ngn does not substitute a larger model or another conn
 
 Shift+Enter inserts a newline. Ctrl+J and Alt+Enter remain fallbacks for terminals
 that do not transmit Shift+Enter distinctly. Pasted multiline text is never
-submitted automatically. Tab cycles agent profiles by default, and Shift+Tab
-cycles backward. Agent switching waits until the current run is finished or stopped.
+submitted automatically. Use `/agent` to select a profile; switching waits until
+the current run is finished or stopped. Tab/Shift+Tab use ordinary widget navigation.
 
 New prompts and plugin/skill commands submitted during work queue in FIFO order
 by default. `--submit-mode interrupt` instead cancels and awaits the current run

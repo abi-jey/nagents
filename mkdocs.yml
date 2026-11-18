@@ -1,9 +1,14 @@
 site_name: nagents
-site_description: A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration
+site_description: A lightweight Python agents library, Python clients, and a native Rust harness with a self-contained installer
 site_author: abi-jey
 site_url: https://abi-jey.github.io/nagents/
 repo_name: abi-jey/nagents
 repo_url: https://github.com/abi-jey/nagents
+
+validation:
+  links:
+    not_found: warn
+    anchors: warn
 
 theme:
   name: material
@@ -79,18 +84,21 @@ plugins:
 nav:
   - Home: index.md
   - Getting Started:
-      - Installation: getting-started/installation.md
-      - Quick Start: getting-started/quickstart.md
-      - Configuration: getting-started/configuration.md
+      - Choose an Installation: getting-started/installation.md
+      - Native ngn Installer and Usage: guide/native-ngn.md
+      - Python Library Quick Start: getting-started/quickstart.md
+      - Python Library Configuration: getting-started/configuration.md
   - User Guide:
-      - ngn Terminal Harness: guide/ngn.md
-      - ngn Installation: guide/ngn-installation.md
+      - Native ngn Migration and Safety: guide/native-ngn-migration.md
+      - Python ngn Terminal Harness: guide/ngn.md
+      - Python ngn Installation: guide/ngn-installation.md
       - API Changes in 0.23: guide/api-changes.md
-      - ngn Configuration: guide/ngn-configuration.md
-      - Agent Definitions: guide/agent-definitions.md
-      - ngn Local Web Client: guide/ngn-web.md
-      - Inspecting Delegated Agents: guide/task-inspection.md
-      - Private Web Deployment: guide/ngn-web-deployment.md
+      - Python ngn Configuration: guide/ngn-configuration.md
+      - Python ngn Agent Definitions: guide/agent-definitions.md
+      - Python ngn Local Web Client: guide/ngn-web.md
+      - Python ngn Delegated Agents: guide/task-inspection.md
+      - Python ngn Container: guide/ngn-container.md
+      - Python ngn Private Web Deployment: guide/ngn-web-deployment.md
       - Remote Agents over A2A: guide/a2a.md
       - Providers: guide/providers.md
       - Foundry Authentication: guide/foundry-authentication.md
@@ -113,6 +121,7 @@ nav:
       - Events: api/events.md
       - Session: api/session.md
       - Context Statistics: api/context-stats.md
+      - Conversation Cache: api/conversation-cache.md
       - Channels: api/channels.md
       - Channel Execution Events: api/channel-execution-events.md
       - Tools: api/tools.md
@@ -120,6 +129,7 @@ nav:
       - Batch: api/batch.md
   - Development:
       - Contributing: development/contributing.md
+      - Coordinated Releases: guide/releases.md
       - Harness Research: development/harness-research.md
       - A2A Interoperability: development/a2a-conformance.md
       - Built-in UI Channels Design: development/builtin-ui-channels.md

@@ -1,5 +1,8 @@
 # Agent definitions
 
+This page describes **Python ngn** agent definitions, not a migrated Rust-bundle
+feature. See [native migration and safety](native-ngn-migration.md) for its gaps.
+
 ngn can discover named agents from Markdown and Codex TOML files. Start a named
 agent with the canonical `to_agent(prompt=..., agent="name")` tool, which shares
 execution limits, guarded approvals, child history, and result delivery with the

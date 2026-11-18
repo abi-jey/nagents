@@ -1,4 +1,10 @@
-# Install ngn
+# Install the Python ngn client
+
+!!! info "Python client, not the native installer"
+    This page installs the existing Python CLI/Textual/React client from the
+    `nagents` package. For the separate Rust application, bundled Python runtime,
+    `ngn install` and `ngn update`, use [native installer and usage](native-ngn.md).
+    Both commands are named `ngn`; keep their environments/paths distinct.
 
 `ngn` is the terminal and headless client for nagents. Choose a published
 distribution for a release snapshot, or an editable checkout for current
@@ -8,11 +14,15 @@ development. Do not let Poetry and uv independently manage the same virtualenv.
 
 Published distributions provide the `ngn` console entry point, terminal client,
 coding harness, and headless commands. The verified
-[v0.15.0 wheel](https://pypi.org/project/nagents/0.15.0/) also includes `ngn serve`,
+[v0.15.0 wheel](https://pypi.org/project/nagents/0.15.0/) historically demonstrated `ngn serve`,
 the `web` extra, and built React assets under `nagents/web/static/`, alongside the
-`tui` and `voice` extras. The web client is not source-only.
+`tui` and `voice` extras. That is historical packaging evidence, **not the latest
+version recommendation**. The web client is not source-only; current package
+extras and bundled assets remain defined by the source/package metadata.
 
-Install the terminal client into your chosen virtual environment:
+Install the terminal client into your chosen, activated virtual environment
+(see [environment setup](../getting-started/installation.md#install-the-python-library-from-pypi)
+if you need a new one):
 
 ```bash
 python -m pip install 'nagents[tui]'
@@ -52,7 +62,7 @@ well as `ngn --version` when verifying feature availability.
 - A provider account/API key for live model requests, or eligible ChatGPT/Codex
   device login for the default OpenAI route. Neither is needed for `--demo`.
 
-The base runtime dependencies are `aiohttp>=3.9.0`, `aiosqlite>=0.20.0`, and
+The base runtime dependencies are `aiohttp>=3.14.4`, `aiosqlite>=0.20.0`, and
 `pyyaml>=6.0`; the TUI adds `textual>=8.2.8` and its dependencies. The project uses minimum
 version constraints, not a promise that one frozen dependency set is always the
 latest. A fresh uv pip install resolves versions satisfying those constraints;
@@ -61,6 +71,8 @@ or a heavyweight gateway SDK. Connecting to a LiteLLM server does not install or
 start that server.
 
 ## macOS notes
+
+These notes apply to the **Python** client, not the Linux-only native bundle.
 
 The coding harness targets Linux and macOS. CI exercises Python 3.11-3.14 on
 `macos-latest`, plus Python 3.13 on an Intel macOS runner. It uses fake audio and
@@ -285,7 +297,7 @@ approval is a preview only; approving it does not edit a file.
 | Changes do not appear in an isolated `uvx` run | It is non-editable. Use the local editable workflow for development, or `uvx --no-cache --isolated --from '/absolute/path/nagents[tui]' ngn --demo` for a fresh build. |
 | Missing API key | Configure an environment-variable **name** with `api_key_env`, set its value outside JSON, or use eligible OpenAI device login. `--demo` needs neither. |
 | A setting in the environment seems ignored | JSON has higher priority than `NGN_*` defaults. Check [precedence](ngn-configuration.md#precedence). |
-| New fields or extras are unavailable | Compare the installed distribution with its release notes and the current source. The verified v0.15.0 distribution includes `voice`, `tui`, and `web`; newer configuration fields can still require a later release or checkout. |
+| New fields or extras are unavailable | Compare the installed distribution with its release notes and the current source. The v0.15.0 packaging check is historical evidence, not a current version recommendation; newer fields can require a later release or checkout. |
 
 Continue with the [usage guide](ngn.md) and the
 [complete configuration reference](ngn-configuration.md).

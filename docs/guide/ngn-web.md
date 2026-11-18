@@ -1,4 +1,10 @@
-# Local Web Client
+# Python ngn local web client
+
+!!! info "Python/React client, not the native browser host"
+    This guide describes the existing Python `ngn serve` and React UI. The Rust
+    bundle has a separate embedded browser client, configuration and loopback-only
+    host. Use [native installer and usage](native-ngn.md) for that application;
+    do not apply this page's remote hosting, voice or settings recipes to it.
 
 `ngn serve` serves a React client for the existing **ngn Harness**. It shares the
 terminal client's workspace-scoped sessions, tools, provider configuration, and
@@ -77,12 +83,13 @@ budget-reset timing. Global/workspace **Execution limits** controls configure
 concurrency, executions per root run and depth. An agent's proposed change opens
 the usual approval UI with exact old/new values, scope and next-generation timing;
 it requires a one-time decision. Saving limits does not cancel work or reset its
-accounting. See [Native background subagents](ngn.md#native-background-subagents).
+accounting. See [Python harness agent sessions](ngn.md#native-agent-sessions).
 
 ## Source Availability
 
 Published distributions include `ngn serve`, the `web` extra, and built
-frontend assets, verified in [v0.15.0](https://github.com/abi-jey/nagents/releases/tag/v0.15.0).
+frontend assets. The [v0.15.0](https://github.com/abi-jey/nagents/releases/tag/v0.15.0)
+check is historical packaging evidence, not a latest-version recommendation.
 To use a published wheel in your active virtual environment:
 
 ```bash
@@ -98,7 +105,7 @@ For development, use the editable source workflow below.
 ## Start From Source
 
 From the repository root, with your Python virtual environment active and
-Node 20.19 or newer installed:
+Node **24.20.0** installed to match the current distribution-build workflow:
 
 ```bash
 python -m pip install -e '.[web]'

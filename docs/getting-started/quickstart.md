@@ -1,6 +1,9 @@
-# Quick Start
+# Python library quick start
 
-This guide will help you get started with nagents in minutes.
+This guide uses the Python `nagents` library. For the standalone Rust application,
+see [native installer and usage](../guide/native-ngn.md). Install/import needs no
+API key; the model-calling examples below need your selected endpoint's credentials.
+Model IDs are illustrative, not a current upstream catalog or access guarantee.
 
 ## Basic Usage
 
