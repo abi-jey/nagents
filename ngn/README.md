@@ -107,8 +107,12 @@ matching published core. The API is **not available in nagents
   (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
   Send and Stop preserve composer focus and Stop retains an unsent draft.
 - **Esc** cancels active work and pauses pending inputs. Completed actions are not rolled back.
-- **F1** or **`/help`** shows shortcuts and commands. **F2** lists sessions,
-  **F3** creates one, **F4** toggles tool details.
+- **F1** or **`/help`** shows shortcuts and commands. **F2**, **`/sessions`**,
+  or bare **`/resume`** opens the session picker. Type to filter by title or ID,
+  use **↑/↓** and **Enter** to open a session or choose **+ New session**,
+  or press **Esc** to close without changing the draft or scroll position.
+  **`/resume ID`** opens an exact ID directly. **F3** creates a session and
+  **F4** toggles tool details.
 - **F5** opens the agent catalog; **Enter** inspects a child conversation and
   **Ctrl+X** cancels that child and its descendants, not its parent or siblings.
 - **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
