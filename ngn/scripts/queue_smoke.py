@@ -422,7 +422,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
             stderr=slave,
             start_new_session=True,
         )
-        wait_for(lambda: b"F6 queue" in visible(), "Resumed queue TUI did not render")
+        wait_for(lambda: b"F1 help" in visible(), "Resumed queue TUI did not render")
         os.write(master, b"\x1b[17~")
         wait_for(
             lambda: b"Input queue: PAUSED" in visible() and b"read persisted input" in visible(),
