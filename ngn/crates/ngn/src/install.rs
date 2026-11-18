@@ -21,6 +21,7 @@ use ngn_core::bundle::{
     BundleManifest, MAX_COMPRESSED, MAX_EXPANDED, MAX_MANIFEST, MAX_MEMBERS, ReleaseManifest,
     ReleaseVersion, file_hash, hex, relative_path, release_manifest_name, supported_platform,
 };
+use ngn_core::paths::trusted_system_alias;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::{io::AsyncReadExt, process::Command};
@@ -227,7 +228,8 @@ struct Identity {
 fn ancestry(path: &Path, create: bool) -> Result<()> {
     ensure!(path.is_absolute(), "Installation paths must be absolute");
     let mut current = PathBuf::new();
-    for component in path.components() {
+    let last = path.components().count() - 1;
+    for (index, component) in path.components().enumerate() {
         ensure!(
             !matches!(component, Component::ParentDir | Component::CurDir),
             "Installation path contains traversal"
@@ -248,9 +250,18 @@ fn ancestry(path: &Path, create: bool) -> Result<()> {
                 }
             }
         }
-        let info = current
+        let mut info = current
             .symlink_metadata()
             .context("Cannot inspect installation ancestry")?;
+        if index < last
+            && let Some(target) = trusted_system_alias(&current, &info)
+        {
+            // e.g. macOS /var -> /private/var; only root can create or replace it.
+            current = target;
+            info = current
+                .symlink_metadata()
+                .context("Cannot inspect installation ancestry")?;
+        }
         ensure!(
             info.is_dir() && !info.file_type().is_symlink(),
             "Installation ancestors must be real directories, not symlinks"
@@ -258,7 +269,7 @@ fn ancestry(path: &Path, create: bool) -> Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let root_sticky = info.uid() == 0 && info.mode() & 0o1000 != 0 && current != path;
+            let root_sticky = info.uid() == 0 && info.mode() & 0o1000 != 0 && index != last;
             let euid = nix::unistd::geteuid().as_raw();
             // Group-writable parents (e.g. ~/.local/bin under umask 0002) are
             // accepted; only world-writable or foreign-owned ones are refused.

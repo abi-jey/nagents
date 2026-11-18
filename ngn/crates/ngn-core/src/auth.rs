@@ -46,8 +46,9 @@ impl IdentityGuard {
             "Identity ownership requires an absolute data directory"
         );
         let mut current = PathBuf::new();
+        let last = directory.components().count() - 1;
         // Reject aliases and writable ancestors before touching a stable flock inode.
-        for component in directory.components() {
+        for (index, component) in directory.components().enumerate() {
             ensure!(
                 !matches!(component, Component::ParentDir),
                 "Identity data directory cannot contain parent traversal"
@@ -64,9 +65,18 @@ impl IdentityGuard {
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
                 Err(_) => bail!("Cannot open private identity ownership metadata"),
             }
-            let metadata = current
+            let mut metadata = current
                 .symlink_metadata()
                 .context("Cannot inspect identity ownership directory")?;
+            if index < last
+                && let Some(target) = crate::paths::trusted_system_alias(&current, &metadata)
+            {
+                // e.g. macOS /var -> /private/var; only root can create or replace it.
+                current = target;
+                metadata = current
+                    .symlink_metadata()
+                    .context("Cannot inspect identity ownership directory")?;
+            }
             ensure!(
                 metadata.is_dir() && !metadata.file_type().is_symlink(),
                 "Identity ownership directories cannot be symlinks"
@@ -80,7 +90,7 @@ impl IdentityGuard {
                     metadata.mode() & 0o002 == 0 || trusted_sticky,
                     "Identity ownership requires non-world-writable parent directories"
                 );
-                if current == directory {
+                if index == last {
                     ensure!(
                         metadata.mode() & 0o777 == 0o700,
                         "Identity ownership directory must be private (700)"
