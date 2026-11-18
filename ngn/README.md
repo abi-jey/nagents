@@ -106,7 +106,12 @@ matching published core. The API is **not available in nagents
 - On touch/coarse-pointer browsers, **Return inserts a newline**; tap Send/Queue
   (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
   Send and Stop preserve composer focus and Stop retains an unsent draft.
-- **Esc** cancels active work and pauses pending inputs. Completed actions are not rolled back.
+- In the terminal, type **`/`** to discover native commands. **↑/↓** selects;
+  **Tab** or **Enter** fills the command without running it. Press **Enter**
+  again to run it, or type any arguments first. **Esc** dismisses suggestions
+  without changing the draft. Plugins and skills aren't listed.
+- Outside suggestions and menus, **Esc** cancels active work and pauses pending
+  inputs. Completed actions are not rolled back.
 - **F1** or **`/help`** shows shortcuts and commands. **F2**, **`/sessions`**,
   or bare **`/resume`** opens the session picker. Type to filter by title or ID,
   use **↑/↓** and **Enter** to open a session or choose **+ New session**,
