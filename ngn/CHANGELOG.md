@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.4
+
+- Fix: ngn no longer refuses to start when a state parent directory such as ~/.local is group-writable (umask 0002); only world-writable parents are refused.
+
 ## 0.100.3
 
 - Fix: the installer no longer rejects group-writable parent directories such as ~/.local/bin (only world-writable or foreign-owned ones), and release publishing restores the installer exec bit.
