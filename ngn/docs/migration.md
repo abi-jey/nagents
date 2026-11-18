@@ -1,4 +1,4 @@
-# Rust migration status · 0.100.2 development
+# Rust migration status · 0.100.2
 
 ## Decision
 

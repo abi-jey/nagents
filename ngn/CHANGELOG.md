@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.100.2 — development, not yet released
+## Official 0.100.2 — self-contained installation (2026-11-18)
 
 - Self-contained Linux x86_64 installer with pinned relocatable CPython 3.13.18,
   hashed binary dependency wheels, CA certificates and upstream redistribution
@@ -48,7 +48,7 @@
   changing existing unsafe paths. Acceptance also launches the extracted offline,
   read-only app in the real cache ancestry, not only independent fixture state.
 
-This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
+This release is not a rewritten `v0.100.0` or a claim of full legacy
 parity. Production deployment and paid-provider/Codex validation are separate gates.
 
 ## Official 0.100.1 — durable input queues
