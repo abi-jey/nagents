@@ -416,7 +416,7 @@ flowchart TD
 ## Release Process
 
 Follow [coordinated releases and candidate integrity](../guide/releases.md).
-The upcoming shared release is **0.100.2**, with one exact tested main commit,
+Starting with **0.100.2**, shared releases use one exact tested main commit,
 one tag/GitHub release `v0.100.2`, and matching PyPI core/native/adapter versions.
 Root CI publishes the verified core to PyPI before calling the reusable native
 release workflow; the latter verifies exact published artifacts and official

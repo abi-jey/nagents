@@ -33,10 +33,10 @@ not submodules to publish, and not implicitly deleted.
 | Safe-boundary steering, durable FIFO choices and touch composer behavior | Legacy implementation retained. Native touch Return/focus, mobile conversation selection and approval-preview layout are implemented and tested; Rust's durable FIFO is distinct from active-run steering. No silent Python-harness fallback is installed. |
 | Tests, usage dashboard work and existing branch commits | Already retained by current main; the preservation merge records provenance rather than reverting later fixes. |
 
-The migration does not delete `src/nagents/`, couple Python's version to Rust's,
-rewrite published tags, or import legacy configuration/databases. The public core
-API advances independently in 0.28.6; native parity changes ship as later tested
-`0.100.x` releases.
+The migration does not delete `src/nagents/`, rewrite published tags, or import
+legacy configuration/databases. Starting at 0.100.2, the reusable core, native
+application and adapter share the same release version; their API and runtime
+protocol boundaries remain distinct.
 
 ## Other-branch review
 

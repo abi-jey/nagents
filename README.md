@@ -13,12 +13,14 @@ A lightweight LLM agent framework with direct HTTP-based provider integration.
 
 This repository also contains **[ngn, the Rust harness, TUI and web host](ngn/README.md)**
 under `ngn/`. The Python `nagents` library remains under `src/nagents/`, with its
-own package version and existing interfaces. The two communicate through a private,
+existing interfaces and independently usable APIs. The two communicate through a private,
 versioned runtime protocol; Python does not own Rust tool execution or approvals.
 
-Rust `v0.100.x` releases use a separate [release pipeline](.github/workflows/ngn-release.yml)
-and publish installable Linux binaries and the optional adapter wheel on this
-repository's [Releases page](https://github.com/abi-jey/nagents/releases).
+Starting with **0.100.2**, the library, native application and adapter share one
+version and tag. [CI](.github/workflows/ci.yml) publishes the tested core to PyPI
+first, then calls the [native release workflow](.github/workflows/ngn-release.yml).
+One GitHub release, titled only `v0.100.2`, carries the native assets and the exact
+published core wheel/source distribution; no separate Python GitHub release is created.
 The Rust client is **not yet a feature-complete replacement** for the Python client
 described below; see the [migration checklist](ngn/docs/migration.md).
 Use an extracted Rust binary by its explicit path so it cannot be confused with
@@ -30,7 +32,31 @@ dependencies are bundled, with no Python/Rust/Node/pip prerequisite for end user
 It refuses to overwrite an unrelated Python `ngn` installation. Bundled installer
 assets are published from v0.100.2; the earlier 0.100.0/0.100.1 releases are unchanged.
 
-## Features
+## Install native ngn
+
+Use the [native installer and usage guide](docs/guide/native-ngn.md) for the
+Linux x86_64/glibc 2.39+ bundle. It includes CPython 3.13.18, the matching core
+and adapter, locked dependencies and CA certificates: no end-user Python, pip,
+Rust, Node or compiler setup is needed.
+
+After the official [v0.100.2 assets](https://github.com/abi-jey/nagents/releases/tag/v0.100.2)
+are published:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/abi-jey/nagents/releases/download/v0.100.2/install.sh | sh
+"$HOME/.local/bin/ngn" doctor
+"$HOME/.local/bin/ngn" --demo
+```
+
+Before publication, those URLs fail; `sh ngn/install.sh` also downloads release
+assets rather than compiling source. `./ngn/dev` is the available source-preview
+route and requires development tools. Both clients are named `ngn`: the installer
+refuses to overwrite an existing Python/unrelated command. Choose a separate
+bin directory as described in the guide. Native and Python configuration and
+login commands are not interchangeable; existing state is not migrated.
+
+## Python library and client features
 
 - **Multi-Provider Support**: OpenAI, Anthropic Claude, and Google Gemini APIs
 - **Streaming Events**: Real-time text chunks, tool calls, and usage statistics
@@ -39,15 +65,18 @@ assets are published from v0.100.2; the earlier 0.100.0/0.100.1 releases are unc
 - **Batch Processing**: Process multiple requests efficiently
 - **Python Harness Extensions**: Custom context transforms, lifecycle hooks, and replaceable compaction algorithms
 - **Optional Terminal Client**: `ngn` provides interactive coding, approvals, sessions, and headless JSON events
-- **Minimal Dependencies**: Only `aiohttp` and `aiosqlite` required
+- **Minimal Dependencies**: Three direct dependencies: `aiohttp`, `aiosqlite`, and `PyYAML`; no mandatory provider SDK
 
 ## Library Installation
 
-```bash
-pip install nagents
+Use your selected Python 3.11+ virtual environment, or `poetry add nagents` in an
+existing Poetry project. Do not replace an existing environment:
+
+```sh
+python -m pip install nagents
 ```
 
-## ngn Terminal Client
+## Python ngn terminal client
 
 `ngn` is an optional terminal and headless coding harness, available in published
 distributions with the `tui` extra. Published wheels also include `ngn serve`,
@@ -90,11 +119,11 @@ With the environment activated, use `ngn run --json "your prompt"` for headless
 integration. Non-interactive approvals fail closed.
 
 Type `/` for selectable commands from the harness, skills, and trusted plugins.
-Shift+Enter inserts a newline; Tab cycles agent profiles. Input queues while work
+Shift+Enter inserts a newline; Tab navigates widgets. Use `/agent` or `--agent`
+to select a configured profile; `assistant` is the default. Input queues while work
 is active, or use `--submit-mode interrupt`. The default `terminal` theme inherits
 terminal colors; try `--theme graphite`, `ocean`, or `ember`, and disable motion
-with `--no-animations`. Build-capable delegation uses the built-in `agent` profile
-by default, never exceeds the parent's permissions, and defaults to depth two
+with `--no-animations`. Delegation never exceeds the parent's permissions and defaults to depth two
 (root 0, child 1, grandchild 2).
 
 For local Live voice, install `nagents[tui,voice]` (or
@@ -132,7 +161,7 @@ remains an optional dependency. See the [ngn usage guide](docs/guide/ngn.md),
 [custom Python behavior example](examples/harness/custom_behavior.py), and
 [upstream research](docs/development/harness-research.md).
 
-## Web Client and HTTP API
+## Python web client and HTTP API
 
 `ngn serve` runs the React client and HTTP API for the ngn coding harness,
 sharing its workspace sessions, tools, and approvals. It is also the Docker
@@ -186,18 +215,17 @@ asyncio.run(main())
 
 ## Providers
 
-nagents integrates with OpenAI, Anthropic, and Google Gemini, alongside
-OpenAI-compatible services. Current text and tool-use model examples, verified
-against the official catalogs on **November 6, 2026**:
+nagents integrates with OpenAI, Anthropic, Google Gemini and OpenAI-compatible
+services. Select an exact model ID offered by your account and endpoint; example
+IDs are not a current catalog or an entitlement guarantee.
 
-| Provider (official model catalog) | Type | Example model IDs |
-|----------|------|--------|
-| [OpenAI](https://developers.openai.com/api/docs/models) | `ProviderType.OPENAI_COMPATIBLE` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna` |
-| [Anthropic](https://platform.claude.com/docs/en/models/overview) | `ProviderType.ANTHROPIC` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` |
-| [Google Gemini](https://aistudio.google.com/docs/models) | `ProviderType.GEMINI_NATIVE` | `gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.5-flash-lite` |
+| Provider documentation | Library type |
+| --- | --- |
+| [OpenAI](https://developers.openai.com/api/docs/models) | `ProviderType.OPENAI_COMPATIBLE` |
+| [Anthropic](https://platform.claude.com/docs/en/models/overview) | `ProviderType.ANTHROPIC` |
+| [Google Gemini](https://ai.google.dev/gemini-api/docs/models) | `ProviderType.GEMINI_NATIVE` |
 
-Pass the exact model ID as `model`; these examples are not an exhaustive list.
-Availability depends on your account and endpoint. For OpenAI-compatible
+For OpenAI-compatible
 connections, `await provider.get_model_list()` discovers the endpoint's catalog;
 see [model discovery and provider-specific limits](docs/guide/providers.md#discover-model-ids).
 
@@ -239,6 +267,9 @@ async for event in agent.run("Remember my name is Alice", session_id="user-123")
 
 ## Documentation
 
+- [Native ngn installer and usage](docs/guide/native-ngn.md)
+- [Native migration and safety](docs/guide/native-ngn-migration.md)
+- [Shared-version release workflow](docs/guide/releases.md)
 - [ngn Installation](docs/guide/ngn-installation.md)
 - [API Changes in 0.23](docs/guide/api-changes.md)
 - [ngn Usage Guide](docs/guide/ngn.md)

@@ -9,9 +9,9 @@ There are three related products. Choose the one you want before installing:
 | **Existing Python ngn client** | [Python client installation](../guide/ngn-installation.md) | Feature-rich Textual TUI, React web client, plugins, voice, channels and other Python harness integrations through optional extras. |
 
 !!! warning "Native release availability"
-    The self-contained installer is **0.100.2 development, not yet published**.
-    Its release download URLs will not work until the official `v0.100.2`
-    release passes publication gates. Published native `0.100.0` and `0.100.1`
+    The self-contained installer starts at **0.100.2**. Its download URLs require
+    the official `v0.100.2` assets; a source checkout is not publication evidence.
+    Until publication passes, the URLs will not work. Native `0.100.0` and `0.100.1`
     remain unchanged and do not contain this bundle/installer. The native guide
     includes an available-now source-development route.
 

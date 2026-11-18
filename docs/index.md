@@ -17,9 +17,9 @@ an existing feature-rich Python client, and a separate native Rust harness.
 | The existing Textual/React client, voice, plugins and integrations | [Python ngn client installation](guide/ngn-installation.md) |
 
 !!! warning "Native installer release status"
-    The self-contained installer is **0.100.2 development, not yet published**.
-    The guide's version-bound GitHub download commands will work only after
-    the official `v0.100.2` release. It also documents a source-development
+    The self-contained installer starts at **0.100.2**. The guide's version-bound
+    downloads require the official `v0.100.2` assets and fail before publication;
+    a source checkout alone does not establish availability. It also documents a source-development
     route available now. Native bundles initially support Linux x86_64/glibc
     2.39+; the Python client has its own support matrix.
 

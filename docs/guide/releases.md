@@ -2,15 +2,16 @@
 
 ## Shared 0.100.2 release contract
 
-The upcoming stable release uses **one common version, `0.100.2`**, for the PyPI
+Starting with this release, **one common version, `0.100.2`**, identifies the PyPI
 `nagents` core, native ngn application, runtime adapter and embedded browser
 release. It uses **one Git tag and one GitHub release, `v0.100.2`**, at the same
 tested commit. The GitHub release title is version-only: **`v0.100.2`**.
 
-!!! warning "Upcoming pipeline, not publication evidence"
-    The self-contained native assets and shared core `0.100.2` are not yet
-    published. This describes the coordinated publication contract; a passing
-    local checkout does not prove final CI or public artifact availability.
+!!! warning "Source documentation is not publication evidence"
+    Installation requires the assets on the official
+    [v0.100.2 release](https://github.com/abi-jey/nagents/releases/tag/v0.100.2).
+    A passing local checkout does not prove final CI or public availability;
+    download URLs fail if that release has not yet been published.
     The already published native `0.100.0` and `0.100.1` releases are immutable.
     The former separate `0.28.6` core publication / reserved native-only tag
     plan is superseded, not a prerequisite to follow now.
@@ -19,6 +20,8 @@ Version metadata, Cargo/adapter metadata, embedded lock/manifests, bootstrap
 version and core dependency binding must agree. If metadata is already
 `0.100.2`, **do not request a patch bump to `0.100.3`** merely to trigger a
 release. Use the unused tag matching the final reviewed/tested main commit.
+The former Python-only automatic bump is rejected for the coordinated series:
+update all component metadata together in reviewed source instead.
 Never force-move a tag, overwrite a published asset, bypass hooks/provenance
 checks, or waive a missing gate because a prior candidate passed.
 
@@ -51,11 +54,13 @@ The coordinated workflow order is:
 6. Only after all gates pass does publication create the **single GitHub
    release `v0.100.2`**, targeting the same verified tag/commit, with the tested
    core/native assets and version-only title. Do not publish a separate release
-   for the adapter or browser.
+   for the adapter or browser. The release is created as a draft before being
+   made public; an existing release is never overwritten.
 
 The combined release contains the core wheel/sdist, complete native bundle,
 small native archive, native source archive, adapter wheel, native installer,
-`install.sh` bootstrap, core/native provenance manifests and `SHA256SUMS`.
+`install.sh` bootstrap, `release-manifest.json` and `SHA256SUMS`, with runtime
+provenance inside the bundle.
 The small native archive is not the complete Python-inclusive bundle; users
 wanting no preinstalled Python should follow the [native installer](native-ngn.md).
 

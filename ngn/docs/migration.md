@@ -61,7 +61,7 @@ initial browser client proves the new shared lifecycle and tool boundary.
   scrollable approval previews, with real desktop/touch Chromium acceptance.
 - [x] Bounded workspace-root/nested `.gitignore` discovery and ancestor-aware search,
   retaining non-negatable protected paths and instruction-payload isolation.
-- [x] Explicit development ChatGPT subscription configuration, capability-gated
+- [x] Explicit ChatGPT subscription configuration, capability-gated
   runtime credentials callback and bounded native `auth login|status|logout`.
   Shared host/runtime identity guards exclude concurrent identity mutations.
 - [x] Bounded explicit active-root [steering API](steering.md), two-sided runtime

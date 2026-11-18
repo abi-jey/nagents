@@ -1,4 +1,4 @@
-# Bounded active-run steering · development 0.100.2
+# Bounded active-run steering · 0.100.2
 
 This is an explicit host/API/client boundary, **not legacy UI parity**. The browser
 has a separate **Steer active turn** button; the TUI uses **`/steer TEXT`**.

@@ -32,7 +32,7 @@ jobs:
       - name: Create isolated test environment
         run: |
           python -m venv "$RUNNER_TEMP/ngn-venv"
-          "$RUNNER_TEMP/ngn-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents ruff mypy playwright
+          "$RUNNER_TEMP/ngn-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents ruff mypy playwright 'build>=1.2'
           echo "$RUNNER_TEMP/ngn-venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$RUNNER_TEMP/ngn-venv" >> "$GITHUB_ENV"
       - name: All Rust/adapter/browser gates

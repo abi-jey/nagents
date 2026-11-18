@@ -8,7 +8,7 @@ implementation in
 The same Rust application provides the terminal UI, headless CLI, local browser
 host and explicit updater.
 
-!!! warning "0.100.2 development — download assets not yet published"
+!!! warning "Check version-bound release availability"
     The public commands below become usable **only after** the official
     `v0.100.2` release is published. Until then, these release URLs will fail;
     running `sh ngn/install.sh` from a checkout does not avoid that requirement.

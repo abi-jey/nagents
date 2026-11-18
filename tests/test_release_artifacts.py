@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -70,12 +71,6 @@ def test_publications_verify_artifacts_before_upload_and_pin_sha() -> None:
         assert any(step.get("with", {}).get("name") == "release-manifest" for step in steps)
         for step in steps:
             assert "git pull" not in step.get("run", "")
-        release = next((step for step in steps if step.get("uses", "").startswith("softprops/")), None)
-        if release:
-            assert (
-                "github.sha" in release["with"]["target_commitish"]
-                or "needs.build.outputs.sha" in release["with"]["target_commitish"]
-            )
     bump_checkout = jobs["bump-version"]["steps"][0]
     assert bump_checkout["with"]["ref"] == "${{ github.sha }}"
     for name in ("build", "docker-build"):
@@ -95,29 +90,83 @@ def test_stable_tag_must_equal_distribution_version() -> None:
     assert 'test "$TAG_SHA" = "$RELEASE_SHA"' in verify["run"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Release notes use the Linux publish job's POSIX shell")
-@pytest.mark.parametrize(
-    "tags,expected",
-    [
-        ("v0.100.2\nv0.100.1\nv0.100.0\nv0.28.6\nv0.28.5\nv0.28.4\n", "v0.28.5"),
-        ("v0.100.2\nv0.100.1\nv0.28.6\nv0.28.5rc1\n", ""),
-    ],
-)
-def test_python_release_notes_exclude_reserved_rust_tags(tags: str, expected: str) -> None:
+@pytest.mark.parametrize("name", ["publish-stable", "publish-alpha", "publish-dev"])
+def test_core_publish_jobs_are_pypi_only_and_cannot_create_separate_github_releases(name: str) -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    step = next(step for step in workflow["jobs"]["publish-stable"]["steps"] if step.get("id") == "prev_tag")
-    assignment = next(line for line in step["run"].splitlines() if line.strip().startswith("PREV_TAG=$("))
-    pipeline = assignment.strip().removeprefix("PREV_TAG=$(").removesuffix(")")
-    # Execute the workflow's real filtering, supplying already-sorted tags instead
-    # of invoking Git or inheriting fixture repository/index configuration.
-    filters = pipeline.split(" | ", 1)[1].replace("${{ steps.version.outputs.version }}", "0.28.6")
-    result = subprocess.run(
-        ["bash", "-c", 'printf "%s" "$1" | ' + filters, "ngn-previous-python-tag", tags],
-        check=True,
-        capture_output=True,
-        text=True,
+    job = workflow["jobs"][name]
+    assert job["permissions"] == {"id-token": "write", "contents": "read"}
+    assert any(step.get("uses", "").startswith("pypa/") for step in job["steps"])
+    for step in job["steps"]:
+        text = json.dumps(step).lower()
+        assert all(
+            token not in text for token in ("softprops/", "action-gh-release", "gh release", "gh api", "/releases")
+        )
+
+
+def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github_release() -> None:
+    workflow = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
+    native = yaml.load((ROOT / ".github/workflows/ngn-release.yml").read_text(), Loader=yaml.BaseLoader)
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    assert version == "0.100.2"
+    assert tomllib.loads((ROOT / "ngn/Cargo.toml").read_text())["workspace"]["package"]["version"] == version
+    adapter = tomllib.loads((ROOT / "ngn/integrations/nagents/pyproject.toml").read_text())["project"]
+    assert adapter["version"] == version and adapter["dependencies"] == [f"nagents>={version},<0.101"]
+    assert json.loads((ROOT / "ngn/package.json").read_text())["version"] == version
+    assert json.loads((ROOT / "ngn/runtime-lock.json").read_text())["core"]["version"] == version
+    assert workflow["on"]["push"]["tags"] == ["v*"]
+    assert set(native["on"]) == {"workflow_call"}
+    caller = workflow["jobs"]["publish-ngn"]
+    assert caller["needs"] == ["publish-stable"]
+    assert "!cancelled()" in caller["if"] and "needs.publish-stable.result == 'success'" in caller["if"]
+    assert "startsWith(github.ref, 'refs/tags/v0.100.')" in caller["if"]
+    assert caller["uses"] == "./.github/workflows/ngn-release.yml" and caller["secrets"] == "inherit"
+    assert caller["permissions"] == {"contents": "write"}
+    candidate = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "candidate")
+    assert "ngn/scripts/release.py', 'check', '--tag'" in candidate["run"]
+    assert "Python-only automatic bumps are disabled" in str(workflow["jobs"]["bump-version"])
+    build_runs = "\n".join(step.get("run", "") for step in native["jobs"]["build"]["steps"])
+    for gate in (
+        "git merge-base --is-ancestor HEAD origin/main",
+        "pre-commit run --all-files",
+        "git diff --exit-code",
+        "--bundle --published-core",
+        "--require-bundle",
+        "install_smoke.py",
+        "browser_smoke.py",
+        "playwright install --with-deps chromium",
+    ):
+        assert gate in build_runs
+    publish = native["jobs"]["publish"]
+    assert publish["needs"] == "build"
+    publish_run = next(step["run"] for step in publish["steps"] if "gh release create" in step.get("run", ""))
+    assert '--title "$RELEASE_TAG"' in publish_run and '--title "ngn ' not in publish_run
+    assert publish_run.count("gh release create") == 1
+    assert (
+        publish_run.index("--require-bundle")
+        < publish_run.index("gh release view")
+        < publish_run.index("gh release create")
     )
-    assert result.stdout.strip() == expected
+    assert "Refusing to overwrite an existing release" in publish_run
+    assert "--verify-tag" in publish_run and "--draft\n" in publish_run and "--draft=false --latest" in publish_run
+
+
+@pytest.mark.parametrize("version,success", [("0.100.2", False), ("1.2.3", True)])
+def test_python_only_automatic_bump_guard_executes_before_expensive_lint_gates(
+    tmp_path: Path, version: str, success: bool
+) -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"]["lint"]["steps"]
+    index = next(
+        i for i, step in enumerate(steps) if step.get("name") == "Reject Python-only bumps of coordinated versions"
+    )
+    guard = steps[index]
+    assert "inputs.version_bump != 'none'" in guard["if"]
+    assert index < next(i for i, step in enumerate(steps) if step.get("name") == "Run pre-commit")
+    (tmp_path / "pyproject.toml").write_text(f'[project]\nversion = "{version}"\n')
+    result = subprocess.run([sys.executable, "-c", guard["run"]], cwd=tmp_path, capture_output=True, text=True)
+    assert (result.returncode == 0) == success
+    if not success:
+        assert "Update all component metadata together and tag verified main" in result.stderr
 
 
 @pytest.mark.parametrize(
