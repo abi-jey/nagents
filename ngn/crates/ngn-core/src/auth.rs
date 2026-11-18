@@ -75,9 +75,10 @@ impl IdentityGuard {
             {
                 use std::os::unix::fs::MetadataExt;
                 let trusted_sticky = metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
+                // Group-writable parents (umask 0002) are accepted; world-writable are not.
                 ensure!(
-                    metadata.mode() & 0o022 == 0 || trusted_sticky,
-                    "Identity ownership requires non-writable parent directories"
+                    metadata.mode() & 0o002 == 0 || trusted_sticky,
+                    "Identity ownership requires non-world-writable parent directories"
                 );
                 if current == directory {
                     ensure!(
@@ -587,23 +588,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn explicitly_public_fixture_ancestor_still_fails_closed() {
+    fn group_writable_parent_is_accepted_but_world_writable_fails_closed() {
         use std::os::unix::fs::PermissionsExt;
         let directory = crate::test_support::private_tempdir().unwrap();
+        let parent = directory.path().join("group-parent");
+        fs::create_dir(&parent).unwrap();
+        // Like ~/.local created under the Debian/Ubuntu default umask 0002.
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(IdentityGuard::host(&parent.join("state")).is_ok());
         let public = directory.path().join("public-parent");
         fs::create_dir(&public).unwrap();
-        // Only this newly created, test-owned bad fixture is made public. This
-        // must remain unsafe even when the invoking shell uses umask 0022.
-        fs::set_permissions(&public, fs::Permissions::from_mode(0o775)).unwrap();
-        assert_eq!(
-            public.metadata().unwrap().permissions().mode() & 0o777,
-            0o775
-        );
+        fs::set_permissions(&public, fs::Permissions::from_mode(0o777)).unwrap();
         let error = IdentityGuard::host(&public.join("state")).err().unwrap();
         assert!(
             error
                 .to_string()
-                .contains("non-writable parent directories")
+                .contains("non-world-writable parent directories")
         );
     }
 }
