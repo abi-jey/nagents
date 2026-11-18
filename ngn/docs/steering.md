@@ -123,7 +123,7 @@ persisted session, same agent and same host activation. Its first
 An empty final decision atomically seals admission before the host sends it.
 Racing later requests get 409, never an accepted-but-lost input.
 
-The [typed NDJSON extension](agent-runtime-protocol.md#optional-safe-steering-01002-development)
+The [typed NDJSON extension](agent-runtime-protocol.md#optional-safe-steering-01002)
 does not expose an asynchronous injection channel. The host alone assigns
 receipt identities, ordering and run attribution. Runtime boundary/ack messages
 cannot admit input, choose another run or forge host acceptance. The selected
