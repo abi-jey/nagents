@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use crossterm::{
     event::{
         DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
-        KeyEventKind, KeyModifiers,
+        KeyEvent, KeyEventKind, KeyModifiers,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -20,7 +20,7 @@ use ngn_core::{
     host::Approval,
     queues::{QueueAction, QueueState},
     steering::{SteeringState, SteeringStatus},
-    store::{Run, Session},
+    store::Run,
 };
 use ngn_protocol::{EventRecord, TaskInfo};
 use ratatui::{
@@ -36,16 +36,21 @@ use uuid::Uuid;
 
 use crate::view;
 
+mod completion;
 mod footer;
+mod picker;
+
+use completion::Command;
 
 const HELP: &str = "\
-F2  Conversations (/sessions, /resume ID)
+F2  Conversations (/sessions, /resume; /resume ID opens directly)
 F3  New conversation (/new)
 F4  Toggle tool details
 F5  Subagents (/tasks)
 F6  Input queue (/queue [pause|resume|clear])
 F7  Steering receipts (/steering)
 Enter  Send or queue · Shift+Enter  Newline
+/  Show commands · Up/Down select · Tab/Enter fill · Esc close
 /steer TEXT  Steer the active turn explicitly
 Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
@@ -70,10 +75,10 @@ struct SteeringSubmission {
 #[derive(Default)]
 struct App {
     session: String,
-    sessions: Vec<Session>,
     records: Vec<EventRecord>,
     after: i64,
     input: String,
+    completion: completion::Completion,
     status: String,
     /// The last Enter submission failed; render its reason as an error, not a hint.
     failure: Option<String>,
@@ -83,8 +88,7 @@ struct App {
     scroll: u16,
     preview_scroll: u16,
     details: bool,
-    picker: bool,
-    picker_index: usize,
+    picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
     task_picker: bool,
     task_index: usize,
@@ -175,6 +179,13 @@ impl App {
             != approval.as_ref().map(|approval| &approval.id)
         {
             self.preview_scroll = 0;
+            // The pending modal and durable transcript have separate sources.
+            // Pick up a committed decision before drawing the newly exposed row.
+            if self.approval.is_some()
+                && let Err(error) = self.catch_up(host).await
+            {
+                self.status = format!("Cannot load conversation: {error}");
+            }
         }
         self.approval = approval;
         self.sync_activity();
@@ -254,7 +265,37 @@ impl App {
     }
 
     fn shows_overlay(&self) -> bool {
-        self.help || self.picker || self.task_picker || self.queue_picker || self.steering_picker
+        self.help
+            || self.picker.is_some()
+            || self.task_picker
+            || self.queue_picker
+            || self.steering_picker
+    }
+
+    fn composer_available(&self) -> bool {
+        !self.shows_overlay() && self.approval.is_none()
+    }
+
+    fn completion_key(&mut self, key: KeyEvent) -> bool {
+        self.composer_available() && self.completion.key(&mut self.input, key)
+    }
+
+    async fn open_picker(&mut self, host: &Host) -> Result<()> {
+        self.picker = Some(picker::Picker::new(host.store.sessions().await?));
+        Ok(())
+    }
+
+    async fn picker_key(&mut self, host: &Host, key: KeyEvent) -> Result<()> {
+        match self.picker.as_mut().and_then(|picker| picker.key(key)) {
+            Some(picker::Choice::Close) => self.picker = None,
+            Some(picker::Choice::New) => {
+                self.switch(host, host.store.create_session().await?.id)
+                    .await?;
+            }
+            Some(picker::Choice::Existing(id)) => self.switch(host, id).await?,
+            None => (),
+        }
+        Ok(())
     }
 
     async fn switch(&mut self, host: &Host, id: String) -> Result<()> {
@@ -263,7 +304,7 @@ impl App {
         self.after = 0;
         self.records.clear();
         self.scroll = 0;
-        self.picker = false;
+        self.picker = None;
         self.task_picker = false;
         self.task_detail = false;
         self.queue_picker = false;
@@ -308,6 +349,7 @@ fn footer_area(area: Rect) -> Rect {
 }
 
 fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
+    let wall_ms = ngn_core::store::now_ms();
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
     let area = frame.area();
@@ -318,10 +360,20 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     } else {
         body.height
     });
-    let header_height = 3.min(body.height.saturating_sub(composer + 2));
+    let menu = app
+        .composer_available()
+        .then(|| app.completion.menu(&app.input))
+        .flatten();
+    let menu_height = menu.as_ref().map_or(0, |menu| {
+        menu.height().min(body.height.saturating_sub(composer + 3))
+    });
+    let header_height = 3
+        .min(body.height.saturating_sub(composer + 2))
+        .min(body.height.saturating_sub(composer + menu_height + 1));
     let rows = Layout::vertical([
         Constraint::Length(header_height),
         Constraint::Min(0),
+        Constraint::Length(menu_height),
         Constraint::Length(composer),
     ])
     .split(body);
@@ -346,7 +398,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     let text = if app.records.is_empty() {
         welcome(&host.config)
     } else {
-        view::transcript(&app.records, app.details)
+        view::transcript(&app.records, app.details, wall_ms)
     };
     let mut lines: Vec<Line<'_>> = text.lines().map(Line::raw).collect();
     if let Some(reason) = &app.failure {
@@ -364,6 +416,9 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
         .saturating_sub(rows[1].height.saturating_sub(1))
         .saturating_sub(app.scroll);
     frame.render_widget(paragraph.scroll((top, 0)), rows[1]);
+    if let Some(menu) = menu {
+        menu.draw(frame, rows[2], accent, muted);
+    }
     let input_lines = app.input.lines().count().max(1) as u16;
     frame.render_widget(
         Paragraph::new(view::plain(&app.input))
@@ -378,38 +433,9 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                     ))
                     .border_style(Style::new().fg(accent)),
             ),
-        rows[2],
+        rows[3],
     );
     app.activity.draw(frame, footer, app, &host.config, now);
-    if app.picker {
-        let area = center(frame.area(), 90, 22);
-        frame.render_widget(Clear, area);
-        let items = app.sessions.iter().enumerate().map(|(index, session)| {
-            ListItem::new(format!(
-                "{}{}  {}",
-                if index == app.picker_index {
-                    "› "
-                } else {
-                    "  "
-                },
-                view::plain(&session.title),
-                session.id
-            ))
-            .style(if index == app.picker_index {
-                Style::new().fg(accent)
-            } else {
-                Style::default()
-            })
-        });
-        let mut selection = ListState::default().with_selected(Some(app.picker_index));
-        frame.render_stateful_widget(
-            List::new(items).block(
-                Block::bordered().title(" Conversations · ↑/↓ select · Enter open · Esc close "),
-            ),
-            area,
-            &mut selection,
-        );
-    }
     if app.task_picker {
         let area = center(frame.area(), 110, 30);
         frame.render_widget(Clear, area);
@@ -418,7 +444,7 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 .tasks
                 .get(app.task_index)
                 .map_or("Subagent", |task| task.title.as_str());
-            let text = view::transcript(&app.task_records, app.details);
+            let text = view::transcript(&app.task_records, app.details, wall_ms);
             let paragraph =
                 Paragraph::new(text)
                     .wrap(Wrap { trim: false })
@@ -536,6 +562,9 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 ),
             area,
         );
+    }
+    if let Some(picker) = &app.picker {
+        picker.draw(frame, accent, muted);
     }
 }
 
@@ -675,104 +704,91 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     if input.is_empty() {
         return Ok(false);
     }
-    if matches!(input.as_str(), "/quit" | "/exit") {
-        return Ok(true);
-    }
-    if input == "/steering" {
-        app.steering_picker = true;
-        app.steering_scroll = 0;
-        app.steering_dirty = true;
-        app.state(host).await;
-        app.input.clear();
-        return Ok(false);
-    }
-    if input == "/steer" || input.starts_with("/steer ") {
-        steer(
-            app,
-            host,
-            input.strip_prefix("/steer").unwrap().trim_start(),
-        )
-        .await?;
-        return Ok(false);
-    }
-    if input == "/tasks" {
-        app.task_picker = true;
-        app.task_detail = false;
-        app.task_index = 0;
-        app.state(host).await;
-        app.input.clear();
-        return Ok(false);
-    }
-    if input == "/queue" {
-        app.queue_picker = true;
-        app.state(host).await;
-        app.input.clear();
-        return Ok(false);
-    }
-    if let Some(action) = input.strip_prefix("/queue ") {
-        let action = match action {
-            "pause" => QueueAction::Pause,
-            "resume" => QueueAction::Resume,
-            "clear" => QueueAction::Clear,
-            _ => anyhow::bail!("Use /queue pause, /queue resume or /queue clear"),
-        };
-        host.control_queue(&app.session, action).await?;
-        app.state(host).await;
-        app.input.clear();
-        return Ok(false);
-    }
-    if input == "/new" {
-        app.switch(host, host.store.create_session().await?.id)
-            .await?;
-    } else if input == "/sessions" {
-        app.sessions = host.store.sessions().await?;
-        app.picker_index = 0;
-        app.picker = true;
-    } else if let Some(id) = input.strip_prefix("/resume ") {
-        app.switch(host, id.trim().to_owned()).await?;
-    } else if input == "/help" {
-        app.help = true;
-        app.help_scroll = 0;
-    } else {
-        ensure!(!input.starts_with('/'), "Unknown command; try /help");
-        ensure!(
-            !app.steering_submissions
-                .iter()
-                .any(|binding| binding.prompt == input),
-            "This text is bound to steering; retry /steer TEXT, never implicitly Queue"
-        );
-        ensure!(
+    let (name, args) = input
+        .split_once(' ')
+        .map_or((input.as_str(), None), |(name, args)| (name, Some(args)));
+    match (Command::lookup(name), args) {
+        (Some(Command::Exit), None) => return Ok(true),
+        (Some(Command::Steering), None) => {
+            app.steering_picker = true;
+            app.steering_scroll = 0;
+            app.steering_dirty = true;
+            app.state(host).await;
+        }
+        (Some(Command::Steer), args) => {
+            steer(app, host, args.unwrap_or_default().trim_start()).await?;
+        }
+        (Some(Command::Tasks), None) => {
+            app.task_picker = true;
+            app.task_detail = false;
+            app.task_index = 0;
+            app.state(host).await;
+        }
+        (Some(Command::Queue), None) => {
+            app.queue_picker = true;
+            app.state(host).await;
+        }
+        (Some(Command::Queue), Some(action)) => {
+            let action = match action {
+                "pause" => QueueAction::Pause,
+                "resume" => QueueAction::Resume,
+                "clear" => QueueAction::Clear,
+                _ => anyhow::bail!("Use /queue pause, /queue resume or /queue clear"),
+            };
+            host.control_queue(&app.session, action).await?;
+            app.state(host).await;
+        }
+        (Some(Command::New), None) => {
+            app.switch(host, host.store.create_session().await?.id)
+                .await?;
+        }
+        (Some(Command::Sessions | Command::Resume), None) => app.open_picker(host).await?,
+        (Some(Command::Resume), Some(id)) => app.switch(host, id.trim().to_owned()).await?,
+        (Some(Command::Help), None) => {
+            app.help = true;
+            app.help_scroll = 0;
+        }
+        _ => {
+            ensure!(!input.starts_with('/'), "Unknown command; try /help");
+            ensure!(
+                !app.steering_submissions
+                    .iter()
+                    .any(|binding| binding.prompt == input),
+                "This text is bound to steering; retry /steer TEXT, never implicitly Queue"
+            );
+            ensure!(
             !app.submission
                 .as_ref()
                 .is_some_and(|(session, prompt, _)| prompt == &input && session != &app.session),
             "This FIFO draft is bound to its original session; resume there to retry, never rebind"
         );
-        if !app
-            .submission
-            .as_ref()
-            .is_some_and(|(session, prompt, _)| session == &app.session && prompt == &input)
-        {
-            app.submission = Some((
-                app.session.clone(),
-                input.clone(),
-                Uuid::new_v4().to_string(),
-            ));
+            if !app
+                .submission
+                .as_ref()
+                .is_some_and(|(session, prompt, _)| session == &app.session && prompt == &input)
+            {
+                app.submission = Some((
+                    app.session.clone(),
+                    input.clone(),
+                    Uuid::new_v4().to_string(),
+                ));
+            }
+            let request = &app
+                .submission
+                .as_ref()
+                .expect("submission was just initialized")
+                .2;
+            let accepted = host
+                .submit(&app.session, &input, request, ApprovalMode::Interactive)
+                .await?;
+            app.submission = None;
+            app.status = if accepted.status == ngn_protocol::RunStatus::Queued {
+                "Input queued · F6 inspect · /queue resume if paused".into()
+            } else {
+                String::new()
+            };
+            app.scroll = 0;
         }
-        let request = &app
-            .submission
-            .as_ref()
-            .expect("submission was just initialized")
-            .2;
-        let accepted = host
-            .submit(&app.session, &input, request, ApprovalMode::Interactive)
-            .await?;
-        app.submission = None;
-        app.status = if accepted.status == ngn_protocol::RunStatus::Queued {
-            "Input queued · F6 inspect · /queue resume if paused".into()
-        } else {
-            String::new()
-        };
-        app.scroll = 0;
     }
     app.input.clear();
     Ok(false)
@@ -784,7 +800,12 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
     }
     app.failure = None;
     match submit(app, host).await {
-        Ok(quit) => quit,
+        Ok(quit) => {
+            if app.input.is_empty() {
+                app.completion.edited(&app.input);
+            }
+            quit
+        }
         Err(error) => {
             app.failure = Some(format!("Not sent: {error}"));
             app.scroll = 0;
@@ -797,7 +818,6 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let mut app = App {
         session,
-        sessions: Vec::new(),
         records: Vec::new(),
         after: 0,
         input: String::new(),
@@ -811,8 +831,6 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         scroll: 0,
         preview_scroll: 0,
         details: false,
-        picker: false,
-        picker_index: 0,
         tasks: Vec::new(),
         task_picker: false,
         task_index: 0,
@@ -876,6 +894,10 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if control && key.code == KeyCode::Char('q') { break; }
                         if control && key.code == KeyCode::Char('c') { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } else { break; } continue; }
+                        if app.picker.is_some() {
+                            app.picker_key(&host, key).await?;
+                            continue;
+                        }
                         if key.code == KeyCode::F(7) { app.steering_picker = !app.steering_picker; app.steering_scroll = 0; app.steering_dirty = true; app.state(&host).await; continue; }
                         if app.steering_picker {
                             match key.code {
@@ -935,34 +957,37 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             }
                             app.state(&host).await; continue;
                         }
-                        if app.picker {
-                            match key.code {
-                                KeyCode::Esc => app.picker = false,
-                                KeyCode::Up => app.picker_index = app.picker_index.saturating_sub(1),
-                                KeyCode::Down => app.picker_index = (app.picker_index + 1).min(app.sessions.len().saturating_sub(1)),
-                                KeyCode::Enter => { if let Some(session) = app.sessions.get(app.picker_index) { let id = session.id.clone(); app.switch(&host, id).await?; } },
-                                _ => (),
-                            }
-                            continue;
-                        }
+                        if app.completion_key(key) { continue; }
                         match key.code {
                             KeyCode::Esc => { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } },
                             KeyCode::F(1) => { app.help = true; app.help_scroll = 0; },
-                            KeyCode::F(2) => { app.sessions = host.store.sessions().await?; app.picker = true; app.picker_index = 0; },
+                            KeyCode::F(2) => app.open_picker(&host).await?,
                             KeyCode::F(3) => { app.switch(&host, host.store.create_session().await?.id).await?; },
                             KeyCode::F(4) => app.details = !app.details,
                             KeyCode::F(5) => { app.task_picker = true; app.task_detail = false; app.task_index = 0; app.state(&host).await; },
                             KeyCode::F(6) => { app.queue_picker = true; app.queue_index = 0; app.state(&host).await; },
                             KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
                             KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
-                            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); } },
+                            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); app.completion.edited(&app.input); } },
                             KeyCode::Enter => { if submit_from_enter(&mut app, &host).await { break; } app.state(&host).await; },
-                            KeyCode::Backspace => { app.input.pop(); },
-                            KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => app.input.push(character),
+                            KeyCode::Backspace => { if app.input.pop().is_some() { app.completion.edited(&app.input); } },
+                            KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => { app.input.push(character); app.completion.edited(&app.input); },
                             _ => (),
                         }
                     }
-                    TerminalEvent::Paste(text) if !app.shows_overlay() => { let text = view::plain(&text); if app.input.len() + text.len() <= 32_000 { app.input.push_str(&text); } else { app.status = "Paste exceeds 32000 UTF-8 bytes".into(); } },
+                    TerminalEvent::Paste(text) => {
+                        if let Some(picker) = &mut app.picker {
+                            picker.paste(&text);
+                        } else if !app.shows_overlay() {
+                            let text = view::plain(&text);
+                            if app.input.len() + text.len() > 32_000 {
+                                app.status = "Paste exceeds 32000 UTF-8 bytes".into();
+                            } else if !text.is_empty() {
+                                app.input.push_str(&text);
+                                app.completion.edited(&app.input);
+                            }
+                        }
+                    }
                     _ => (),
                 }
             }
@@ -1014,6 +1039,7 @@ mod tests {
             input: "keep this draft".into(),
             ..App::default()
         };
+        assert!(!app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
         assert!(!submit_from_enter(&mut app, &host).await);
         let reason = app.failure.as_deref().unwrap();
         assert!(reason.starts_with("Not sent: No provider selected"));
@@ -1267,30 +1293,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let mut app = App {
+        let app = App {
             session: "ngn-test".into(),
-            sessions: Vec::new(),
-            records: Vec::new(),
-            after: 0,
             input: "hello".into(),
             status: "Ready".into(),
-            active: None,
-            approval: None,
-            scroll: 0,
-            preview_scroll: 0,
-            details: false,
-            picker: false,
-            picker_index: 0,
-            tasks: Vec::new(),
-            task_picker: false,
-            task_index: 0,
-            task_detail: false,
-            task_records: Vec::new(),
-            task_after: 0,
-            queue: QueueState::default(),
-            queue_picker: false,
-            queue_index: 0,
-            submission: None,
             ..App::default()
         };
         for (width, height) in [(1, 1), (20, 6), (40, 12), (120, 40)] {
@@ -1300,30 +1306,125 @@ mod tests {
                 .draw(|frame| draw(frame, &app, &host, Instant::now()))
                 .unwrap();
         }
-        app.picker = true;
-        app.picker_index = 29;
-        app.sessions = (0..30)
-            .map(|index| Session {
-                id: format!("session-{index}"),
-                title: format!("Conversation{index}"),
-                updated_at_ms: 0,
-            })
-            .collect();
-        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
-        terminal
-            .draw(|frame| draw(frame, &app, &host, Instant::now()))
+    }
+
+    #[tokio::test]
+    async fn session_picker_preserves_draft_and_active_work_and_opens_exact_id() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let first = host.store.create_session().await.unwrap();
+        let second = host.store.create_session().await.unwrap();
+        assert_eq!(first.title, second.title);
+        let run = host
+            .start(
+                &first.id,
+                "demo hold",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Interactive,
+            )
+            .await
             .unwrap();
-        let contents: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(
-            contents.contains("Conversation29"),
-            "Selected conversation must scroll into view"
-        );
+        let mut app = App {
+            session: first.id.clone(),
+            input: "unsent draft".into(),
+            scroll: 13,
+            ..App::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.state(&host).await;
+        app.open_picker(&host).await.unwrap(); // F2
+        app.picker_key(&host, key(KeyCode::Char('x')))
+            .await
+            .unwrap();
+        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap(); // no match
+        assert!(app.picker.is_some());
+        assert_eq!(app.session, first.id);
+        app.picker_key(&host, key(KeyCode::Esc)).await.unwrap();
+        assert!(app.picker.is_none());
+        assert_eq!(app.input, "unsent draft");
+        assert_eq!(app.scroll, 13);
+        assert!(host.active().await.iter().any(|active| active.id == run.id));
+
+        for (draft, suggestion, hint) in [
+            ("/", "› /help", "Tab/Enter fill"),
+            ("/se", "› /sessions", "Tab/Enter fill"),
+            ("/unknown", "", "No matching commands"),
+        ] {
+            app.input = draft.into();
+            app.completion.edited(&app.input);
+            for (width, height) in [(42, 12), (120, 32)] {
+                let mut terminal =
+                    Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| draw(frame, &app, &host, Instant::now()))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let row = |y| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
+                assert!(row(height - 6).contains(draft));
+                let status = row(height - 2);
+                assert!(status.contains("Esc"), "{width} columns: {status}");
+                let menu_rows = height - 12..height - 7;
+                assert!(menu_rows.clone().any(|y| row(y).contains(hint)));
+                if !suggestion.is_empty() {
+                    assert!(menu_rows.clone().any(|y| row(y).contains(suggestion)));
+                }
+            }
+        }
+
+        app.input = "/se".into();
+        app.completion.edited(&app.input);
+        assert!(app.completion_key(key(KeyCode::Esc)));
+        assert_eq!(app.input, "/se");
+        assert!(app.completion.menu(&app.input).is_none());
+        assert!(!app.completion_key(key(KeyCode::Tab)));
+        assert!(host.active().await.iter().any(|active| active.id == run.id));
+        app.input.pop();
+        app.completion.edited(&app.input);
+        app.input.push('e');
+        app.completion.edited(&app.input);
+        assert!(app.completion_key(key(KeyCode::Tab)));
+        assert_eq!(app.input, "/sessions ");
+        assert!(app.picker.is_none());
+        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(!app.completion_key(key(KeyCode::Enter)));
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.input.is_empty());
+        app.picker
+            .as_mut()
+            .unwrap()
+            .paste(&second.id.to_uppercase());
+        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap();
+        assert_eq!(app.session, second.id);
+        assert!(app.picker.is_none());
+        assert_eq!(host.store.sessions().await.unwrap().len(), 2);
+        assert!(host.active().await.iter().any(|active| active.id == run.id));
+
+        app.input = format!("/resume {}", &first.id[..12]);
+        assert!(submit(&mut app, &host).await.is_err());
+        assert_eq!(app.session, second.id);
+        app.input = format!("/resume {}", first.id);
+        assert!(!app.completion_key(key(KeyCode::Enter)));
+        assert!(!submit(&mut app, &host).await.unwrap());
+        assert_eq!(app.session, first.id);
+        assert!(app.picker.is_none());
+
+        app.input = "/resume".into();
+        assert!(!submit(&mut app, &host).await.unwrap());
+        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap(); // explicit New row
+        assert_ne!(app.session, first.id);
+        assert_ne!(app.session, second.id);
+        assert_eq!(host.store.sessions().await.unwrap().len(), 3);
+        host.shutdown().await;
     }
 
     #[tokio::test]
@@ -1367,18 +1468,15 @@ mod tests {
         .unwrap();
         let mut app = App {
             session: session.id.clone(),
-            sessions: Vec::new(),
             records: Vec::new(),
             after: 0,
-            input: String::new(),
+            input: "/se".into(),
             status: String::new(),
             active: None,
             approval: None,
             scroll: 0,
             preview_scroll: 0,
             details: false,
-            picker: false,
-            picker_index: 0,
             tasks: Vec::new(),
             task_picker: true,
             task_index: 0,
@@ -1392,6 +1490,16 @@ mod tests {
             ..App::default()
         };
         app.state(&host).await;
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        for code in [KeyCode::Tab, KeyCode::Esc] {
+            assert!(!app.completion_key(key(code)));
+        }
+        app.task_picker = false;
+        for code in [KeyCode::Tab, KeyCode::Esc] {
+            assert!(!app.completion_key(key(code))); // approval alone still takes priority
+        }
+        app.task_picker = true;
+        assert_eq!(app.input, "/se");
         let approval = app.approval.as_ref().unwrap();
         assert_eq!(approval.run_id, child_id);
         assert_eq!(approval.agent_title, "Preview child");
