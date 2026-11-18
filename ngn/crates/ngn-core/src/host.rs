@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::{
     Config,
     config::Backend,
+    logs::{Logs, RuntimeEvent},
     queues::{QueueAction, QueueState},
     runner::{self, RunOutput},
     steering::{self, SteeringReceipt, SteeringState},
@@ -70,6 +71,7 @@ pub struct Host {
     pub store: Store,
     pub tools: Tools,
     pub events: broadcast::Sender<EventRecord>,
+    pub(crate) logs: Logs,
     active: Mutex<HashMap<String, ActiveRun>>,
     pending: Mutex<HashMap<String, Pending>>,
     workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
@@ -80,6 +82,11 @@ pub struct Host {
 
 impl Host {
     pub fn open(config: Config) -> Result<Arc<Self>> {
+        Self::open_with_wire_log(config, false)
+    }
+
+    /// Enable local provider payload capture for this host invocation only.
+    pub fn open_with_wire_log(config: Config, wire_log: bool) -> Result<Arc<Self>> {
         let identity_guard = crate::auth::IdentityGuard::host(&config.data_dir)?;
         let store = Store::open(&config.state_dir())?;
         let protected = config.data_dir.canonicalize()?;
@@ -87,15 +94,22 @@ impl Host {
             &config.workspace,
             &protected,
             config.read_only,
-            config.backend == Backend::Demo,
             config.shell_timeout_seconds,
         )?;
+        #[cfg(any(test, feature = "test-support"))]
+        let tools = if config.backend == Backend::Demo {
+            tools.with_demo_preview()
+        } else {
+            tools
+        };
         let (events, _) = broadcast::channel(1024);
+        let logs = Logs::open(&protected, wire_log)?;
         Ok(Arc::new(Self {
             config,
             store,
             tools,
             events,
+            logs,
             active: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             workers: Mutex::new(Vec::new()),
@@ -103,6 +117,14 @@ impl Host {
             closed: AtomicBool::new(false),
             _identity_guard: identity_guard,
         }))
+    }
+
+    pub fn runtime_log_path(&self) -> Option<&std::path::Path> {
+        self.logs.runtime_path()
+    }
+
+    pub fn wire_log_path(&self) -> Option<&std::path::Path> {
+        self.logs.wire_path()
     }
 
     pub async fn start(
@@ -511,9 +533,11 @@ impl Host {
         completed: watch::Sender<bool>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(async move {
+            self.logs.record(RuntimeEvent::RunStarted);
             let mut output = {
                 let runtime = async {
                     match self.config.backend {
+                        #[cfg(any(test, feature = "test-support"))]
                         Backend::Demo => {
                             runner::demo(&self, &execution.run, &prompt, execution.cancel.clone())
                                 .await
@@ -528,7 +552,13 @@ impl Host {
                         let _ = tokio::time::timeout(Duration::from_secs(5), &mut runtime).await;
                         RunOutput::cancelled()
                     }
-                    result = &mut runtime => match result { Ok(output) => output, Err(error) => RunOutput::failed(error.to_string()) },
+                    result = &mut runtime => match result {
+                        Ok(output) => output,
+                        Err(error) => {
+                            self.logs.record(RuntimeEvent::RunnerFailed);
+                            RunOutput::failed(error.to_string())
+                        },
+                    },
                     _ = tokio::time::sleep(Duration::from_secs(self.config.subagents.timeout_seconds)), if execution.task.is_some() => {
                         execution.cancel.cancel();
                         let _ = tokio::time::timeout(Duration::from_secs(5), &mut runtime).await;
@@ -577,6 +607,11 @@ impl Host {
                 .store
                 .finish(&execution.run, output.status, &output.text, &output.error)
                 .await;
+            self.logs.record(match output.status {
+                RunStatus::Completed => RuntimeEvent::RunCompleted,
+                RunStatus::Cancelled => RuntimeEvent::RunCancelled,
+                _ => RuntimeEvent::RunFailed,
+            });
             active.remove(&execution.run.id);
             let _ = completed.send(true);
             match records {
@@ -585,12 +620,16 @@ impl Host {
                         let _ = self.events.send(record);
                     }
                 }
-                Err(_) => eprintln!(
-                    "ngn: unable to persist final run status; it will be marked interrupted on restart"
-                ),
+                Err(_) => {
+                    self.logs.record(RuntimeEvent::PersistenceFailed);
+                    eprintln!(
+                        "ngn: unable to persist final run status; it will be marked interrupted on restart"
+                    );
+                }
             }
             drop(_emission);
             if self.dispatch(&mut active).await.is_err() {
+                self.logs.record(RuntimeEvent::DispatchFailed);
                 eprintln!(
                     "ngn: unable to dispatch pending inputs; inspect the queue before resuming"
                 );
@@ -858,6 +897,7 @@ impl Host {
         );
         self.emit(run, Event::ToolStarted { call: call.clone() })
             .await?;
+        self.logs.record(RuntimeEvent::ToolStarted);
         let mut clock = ToolClock::new(Instant::now());
         let result: Result<Value> = async {
             match call.name.as_str() {
@@ -907,8 +947,14 @@ impl Host {
             tools.execute(prepared, owner.cancel.clone()).await
         }.await;
         let (result, error) = match result {
-            Ok(result) => (result, String::new()),
-            Err(error) => (Value::Null, error.to_string()),
+            Ok(result) => {
+                self.logs.record(RuntimeEvent::ToolCompleted);
+                (result, String::new())
+            }
+            Err(error) => {
+                self.logs.record(RuntimeEvent::ToolFailed);
+                (Value::Null, error.to_string())
+            }
         };
         let result = ToolResult {
             call_id: call.call_id,
@@ -928,7 +974,7 @@ impl Host {
     }
 
     pub async fn shutdown(&self) {
-        self.closed.store(true, Ordering::Release);
+        let first_shutdown = !self.closed.swap(true, Ordering::AcqRel);
         let mut active = self.active.lock().await;
         {
             let _emission = self.emission.lock().await;
@@ -938,9 +984,12 @@ impl Host {
                         let _ = self.events.send(record);
                     }
                 }
-                Err(_) => eprintln!(
-                    "ngn: unable to persist paused queues; recovery will pause unstarted inputs"
-                ),
+                Err(_) => {
+                    self.logs.record(RuntimeEvent::ShutdownFailed);
+                    eprintln!(
+                        "ngn: unable to persist paused queues; recovery will pause unstarted inputs"
+                    );
+                }
             }
         }
         for active in active.values_mut() {
@@ -951,6 +1000,7 @@ impl Host {
                 .await
                 .is_err()
             {
+                self.logs.record(RuntimeEvent::ShutdownFailed);
                 eprintln!(
                     "ngn: unable to settle steering receipts; recovery will mark them unconfirmed"
                 );
@@ -964,9 +1014,13 @@ impl Host {
                 .await
                 .is_err()
             {
+                self.logs.record(RuntimeEvent::ShutdownFailed);
                 worker.abort();
                 let _ = worker.await;
             }
+        }
+        if first_shutdown {
+            self.logs.record(RuntimeEvent::HostStopped);
         }
     }
 }

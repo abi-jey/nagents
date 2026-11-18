@@ -88,11 +88,9 @@ def runtime_config(source: Path, runtime: Path) -> dict[str, object]:
     return settings
 
 
-def command(binary: Path, settings: Invocation, config: Path, state: Path, *, demo: bool) -> list[str]:
-    prefix = [str(binary), "--config", str(config), "--data-dir", str(state)]
-    if demo and "--demo" not in settings.arguments:
-        prefix.append("--demo")
-    return [*prefix, *settings.arguments]
+def command(binary: Path, settings: Invocation, config: Path, state: Path) -> list[str]:
+    config_args = ["--config", str(config)] if settings.config else []
+    return [str(binary), *config_args, "--data-dir", str(state), *settings.arguments]
 
 
 def run(arguments: list[str], *, directory: Path, environment: dict[str, str]) -> None:
@@ -141,21 +139,22 @@ def offline_cache_probe(stage: Path) -> None:
     """Check real launcher ancestry, not only smoke fixtures; never use operator state."""
     workspace = stage / "offline-probe-workspace"
     workspace.mkdir(mode=0o700)
+    config = stage / "offline-probe-config.json"
+    config.write_text("{}\n")
+    state = stage / "offline-probe-state"
     result = subprocess.run(
         [
             str(stage / "app/ngn"),
-            "--demo",
+            "--config",
+            str(config),
             "--read-only",
             "-C",
             str(workspace),
             "--data-dir",
-            str(stage / "offline-probe-state"),
-            "run",
-            "--json",
-            "offline development cache ancestry acceptance",
+            str(state),
+            "sessions",
         ],
-        # No Python or provider command is available. Demo is always explicit,
-        # even when --test was invoked with a live --config or --data-dir.
+        # `sessions` opens the real host state without starting an agent runner.
         env={"PATH": str(stage / "app")},
         capture_output=True,
         text=True,
@@ -164,11 +163,11 @@ def offline_cache_probe(stage: Path) -> None:
     )
     if result.returncode:
         raise ValueError(f"Offline installed cache/state probe failed: {result.stderr[:4096]}")
-    events = [json.loads(line) for line in result.stdout.splitlines()]
-    if not events or events[-1].get("status") != "completed":
-        raise ValueError("Offline installed cache/state probe did not complete")
+    if result.stdout.strip() or not any(state.rglob("host.sqlite3")):
+        raise ValueError("Offline installed cache/state probe did not initialize fresh session state")
     print(
-        "PASS: extracted offline/read-only launch in actual cache ancestry, without Python or model access", flush=True
+        "PASS: extracted native session store initialized in actual cache ancestry, without Python or model access",
+        flush=True,
     )
 
 
@@ -295,7 +294,11 @@ def build(root: Path, cache: Path, *, published_core: bool) -> tuple[Path, Path,
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
-        epilog="Other arguments are forwarded unchanged to the Rust CLI. No config defaults to the offline demo; live runs require --config.",
+        epilog=(
+            "Other arguments are forwarded unchanged to the Rust CLI. Pass --config PATH to use an explicit "
+            "provider config with the staged runtime; otherwise ngn discovers its usual provider config. "
+            "Use doctor to inspect the selection."
+        ),
     )
     parser.add_argument(
         "--test",
@@ -310,20 +313,15 @@ def main() -> int:
     options, arguments = parser.parse_known_args()
     version_check()
     settings = invocation(arguments)
-    # Resolve paths before building. Neither old Python configuration nor .env is read.
-    original_config = (
-        Path(settings.config).expanduser().resolve() if settings.config else ROOT / "ngn/config.example.json"
-    )
-    if not original_config.is_file():
-        raise ValueError("The explicit Rust --config file does not exist")
+    # The launcher handles only explicit config; the native CLI handles discovery.
+    original_config = Path(settings.config).expanduser().resolve() if settings.config else None
+    if not options.test and original_config is not None and not original_config.is_file():
+        raise ValueError(f"The explicit Rust --config file does not exist: {original_config}")
     identity = hashlib.sha256(str(ROOT).encode()).hexdigest()[:16]
     cache_home = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
     cache = Path(os.environ.get("NGN_DEV_CACHE", str(cache_home / "ngn-rust-dev" / identity))).expanduser().resolve()
     state = Path(settings.data_dir).expanduser().resolve() if settings.data_dir else cache / "state"
     stage, runtime, environment = build(ROOT, cache, published_core=options.published_core)
-    config = stage / "config.json"
-    config.write_text(json.dumps(runtime_config(original_config, runtime), indent=2) + "\n")
-    config.chmod(0o600)
     python = str(runtime / "bin/python")
     if options.test:
         offline_cache_probe(stage)
@@ -335,9 +333,11 @@ def main() -> int:
         print("PASS: release-shaped local installation acceptance", flush=True)
         return 0
     print(f"Development state: {state}", flush=True)
-    if not settings.config:
-        print("No --config: starting the offline Rust demo. Use --config PATH for a real model.", flush=True)
-    argv = command(stage / "app/ngn", settings, config, state, demo=not settings.config)
+    config = stage / "config.json"
+    if original_config is not None:
+        config.write_text(json.dumps(runtime_config(original_config, runtime), indent=2) + "\n")
+        config.chmod(0o600)
+    argv = command(stage / "app/ngn", settings, config, state)
     os.execve(argv[0], argv, environment)
     return 0
 

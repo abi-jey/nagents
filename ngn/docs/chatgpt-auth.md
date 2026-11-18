@@ -22,9 +22,12 @@ Copy `config.chatgpt.example.json` and choose a model your subscription can use.
 The self-contained installed bundle supplies its own runtime when `runner` is
 omitted. For a source/small-native installation, set `runner` to the trusted
 environment's absolute Python executable and argv.
-The host executes argv directly, never through a shell. It does not import old
-configuration, discover `CODEX_HOME`, read `~/.codex`, copy credentials, or use a
-cached/environment API key as a subscription fallback.
+The host executes argv directly, never through a shell. On this explicit ChatGPT
+route it does not consult Codex credentials or fall back to an API key. Implicit
+discovery checks only for the presence of the Python ngn login file to avoid
+switching accounts. If Python would use ChatGPT (or explicitly selects it),
+use the native configuration below and sign in to the same intended account.
+Rust never copies or refreshes credentials in the Python ngn store.
 
 ```sh
 ngn --config /path/to/chatgpt-config.json auth status
@@ -81,7 +84,7 @@ identity changes are not rolled back; check status after interruption.
 ## Identity ownership
 
 Every native `Host` holds a **shared** flock on
-`<data_dir>/.identity/host.lock`, including API-key/demo hosts and hosts for other
+`<data_dir>/.identity/host.lock`, including API-key hosts and hosts for other
 workspaces. Subscription runtimes also retain a shared guard through their own
 provider/auth cleanup, so an orphaned runner cannot lose identity protection
 merely because its Rust parent exited.
@@ -138,4 +141,3 @@ mutation/active-host gating, broader account/refresh coverage, macOS and non-loc
 filesystem validation remain separate unfinished gates. A live web steering attempt
 ended before admission; no steering request or FIFO fallback was submitted, so
 installed synthetic safe-point tests, not that attempt, establish steering behavior.
-The native offline demo still requires no Python, credentials or network.

@@ -3,6 +3,7 @@ pub mod bundle;
 pub mod config;
 pub mod host;
 pub mod legacy;
+mod logs;
 pub mod paths;
 pub mod queues;
 pub mod runner;
@@ -13,6 +14,7 @@ pub mod subagents;
 mod test_support;
 mod timing;
 pub mod tools;
+pub mod upgrade;
 
 pub use config::Config;
 pub use host::{ApprovalMode, Host};

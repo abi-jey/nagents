@@ -8,6 +8,7 @@ from contextlib import suppress
 from nagents.tools import ToolRegistry
 
 from . import auth
+from . import wire
 from .protocol import MAX_FRAME
 from .protocol import HostFrame
 from .protocol import ProtocolError
@@ -31,6 +32,8 @@ async def serve() -> int:
             capabilities.append("chatgpt_auth")
         # The local Codex login is discovered by nagents itself (CODEX_HOME/~/.codex).
         capabilities.append("codex_auth")
+        if wire.available():
+            capabilities.append(wire.CAPABILITY)
         output("", {"type": "ready", "runtime": "nagents", "capabilities": capabilities})
         first = await read(reader)
         start = Start.parse(first.message)

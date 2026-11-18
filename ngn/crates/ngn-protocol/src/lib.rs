@@ -80,6 +80,10 @@ pub struct StartRun {
     /// Host acknowledgment, sent only after the runtime advertises safe_steering.
     #[serde(default, skip_serializing_if = "disabled")]
     pub steering: bool,
+    /// Host acknowledgment, sent only after `provider_wire_log` negotiation.
+    /// The host selects the destination out of band; the protocol carries no path.
+    #[serde(default, skip_serializing_if = "disabled")]
+    pub wire_log: bool,
 }
 
 fn disabled(enabled: &bool) -> bool {

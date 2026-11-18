@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, env, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    env,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, ensure};
 use ngn_protocol::{ProviderAuth, ProviderConfig};
@@ -11,6 +15,8 @@ use crate::subagents::SubagentLimits;
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
+    #[cfg(any(test, feature = "test-support"))]
+    #[serde(skip)]
     Demo,
     #[default]
     Nagents,
@@ -35,11 +41,11 @@ pub struct Config {
     /// Derived only from verified metadata next to the canonical executable.
     #[serde(skip)]
     pub bundled_runtime: Option<BundledRuntime>,
-    /// The file this configuration was read from; `None` means built-in defaults.
+    /// The explicitly supplied native config file, if any.
     #[serde(skip)]
     pub source: Option<PathBuf>,
     /// Python ngn configuration directory to select providers from, read-only.
-    /// Set only by `load` when no Rust configuration file exists.
+    /// Set by `load` only when no native config file was supplied.
     #[serde(skip)]
     pub legacy_directory: Option<PathBuf>,
     /// Legacy files that supplied the provider selection.
@@ -53,8 +59,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         let base = env::var_os("XDG_DATA_HOME")
+            .filter(|path| !path.is_empty())
             .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+            .or_else(|| env::home_dir().map(|home| home.join(".local/share")))
             .unwrap_or_else(|| PathBuf::from(".local/share"));
         Self {
             config_version: 1,
@@ -80,48 +87,29 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The Rust-native configuration read when `--config` is omitted:
-    /// `$XDG_CONFIG_HOME/ngn/rust.json`, else `~/.config/ngn/rust.json`.
-    /// Legacy Python files in the same directory are never read.
-    pub fn default_path() -> Option<PathBuf> {
-        env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-            .map(|base| base.join("ngn").join("rust.json"))
+    /// Directory for existing Python ngn settings when `--config` is omitted.
+    fn python_config_directory() -> Result<Option<PathBuf>> {
+        if let Some(base) = env::var_os("XDG_CONFIG_HOME").filter(|base| !base.is_empty()) {
+            let base = PathBuf::from(base);
+            ensure!(
+                base.is_absolute(),
+                "XDG_CONFIG_HOME must be an absolute path"
+            );
+            return Ok(Some(base.join("ngn")));
+        }
+        Ok(env::home_dir().map(|home| home.join(".config/ngn")))
     }
 
-    pub fn load(path: Option<&std::path::Path>) -> Result<Self> {
-        let discovered = match path {
-            Some(_) => None,
-            None => Self::default_path().filter(|path| path.exists()),
-        };
-        let mut config = Self::load_from(path, discovered.as_deref(), &std::env::current_exe()?)?;
-        if config.source.is_none() {
-            // Behave like the Python ngn: its provider files select the connection.
-            config.legacy_directory = Self::default_path()
-                .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+    pub fn load(path: Option<&Path>) -> Result<Self> {
+        let mut config = Self::load_for_executable(path, &env::current_exe()?)?;
+        if path.is_none() {
+            config.legacy_directory = Self::python_config_directory()?;
         }
         Ok(config)
     }
 
-    #[cfg(test)]
-    fn load_for_executable(
-        path: Option<&std::path::Path>,
-        executable: &std::path::Path,
-    ) -> Result<Self> {
-        Self::load_from(path, None, executable)
-    }
-
-    fn load_from(
-        explicit: Option<&std::path::Path>,
-        discovered: Option<&std::path::Path>,
-        executable: &std::path::Path,
-    ) -> Result<Self> {
-        if let Some(path) = discovered {
-            trusted_default(path)?;
-        }
-        let (mut config, explicit_runner): (Self, bool) = match explicit.or(discovered) {
+    fn load_for_executable(explicit: Option<&Path>, executable: &Path) -> Result<Self> {
+        let (mut config, explicit_runner): (Self, bool) = match explicit {
             Some(path) => {
                 let bytes = std::fs::read(path).with_context(|| {
                     format!("Cannot read Rust ngn configuration {}", path.display())
@@ -129,7 +117,7 @@ impl Config {
                 ensure!(bytes.len() <= 262_144, "Configuration exceeds 256 KiB");
                 let invalid = || {
                     format!(
-                        "Invalid Rust ngn configuration {} (legacy configs are not imported)",
+                        "Invalid Rust ngn configuration {} (--config accepts the native format)",
                         path.display()
                     )
                 };
@@ -155,7 +143,12 @@ impl Config {
         }
     }
 
-    pub fn resolve(mut self) -> Result<Self> {
+    pub fn resolve(self) -> Result<Self> {
+        self.resolve_with_model(None)
+    }
+
+    /// Apply the model override after discovery, before validating connections.
+    pub fn resolve_with_model(mut self, model: Option<String>) -> Result<Self> {
         ensure!(self.config_version == 1, "Unsupported config_version");
         self.workspace = self
             .workspace
@@ -163,19 +156,34 @@ impl Config {
             .context("Workspace does not exist")?;
         ensure!(self.workspace.is_dir(), "Workspace must be a directory");
         self.data_dir = std::path::absolute(&self.data_dir)?;
+        if let Some(python_data) = crate::legacy::python_data_directory() {
+            let python_data = std::path::absolute(python_data)?;
+            let same_directory = self
+                .data_dir
+                .canonicalize()
+                .ok()
+                .zip(python_data.canonicalize().ok())
+                .is_some_and(|(native, python)| native == python);
+            ensure!(
+                crate::paths::without_system_aliases(&self.data_dir)
+                    != crate::paths::without_system_aliases(&python_data)
+                    && !same_directory,
+                "Rust state and ChatGPT authentication require a separate data directory; do not use Python ngn's data directory"
+            );
+        }
         if self.backend == Backend::Nagents
             && self.providers.is_empty()
-            && let Some(directory) = self.legacy_directory.clone()
+            && let Some(directory) = &self.legacy_directory
         {
-            let logins = crate::legacy::Logins::discover(self.auth_store());
-            if let Some(selection) = crate::legacy::select(&directory, &self.workspace, &logins)? {
-                if self.provider.is_empty() {
-                    self.provider = selection.provider;
-                }
-                self.providers = selection.providers;
-                self.unavailable = selection.unavailable;
-                self.legacy_sources = selection.sources;
+            let environment = crate::legacy::Environment::discover()?;
+            let selection = crate::legacy::select(directory, &self.workspace, &environment)?;
+            self.read_only |= selection.read_only;
+            if self.provider.is_empty() {
+                self.provider = selection.provider;
             }
+            self.providers = selection.providers;
+            self.unavailable = selection.unavailable;
+            self.legacy_sources = selection.sources;
         }
         ensure!(
             !self.runner.is_empty() && !self.runner[0].is_empty(),
@@ -214,6 +222,17 @@ impl Config {
             "subagents.timeout_seconds must be 1..600"
         );
         if self.backend == Backend::Nagents {
+            if let Some(model) = model {
+                let mut provider = self
+                    .selected_provider()
+                    .map_err(|error| {
+                        anyhow::anyhow!("--model requires a selected provider connection: {error}")
+                    })?
+                    .clone();
+                provider.model = model;
+                validate_provider(&provider)?;
+                self.providers.insert(self.provider.clone(), provider);
+            }
             if !self.legacy_sources.is_empty() {
                 // Python ngn files: set aside connections the Rust host cannot run
                 // so one stale entry never prevents startup; Enter explains why.
@@ -245,7 +264,7 @@ impl Config {
             .get(&self.provider)
             .with_context(|| match self.unavailable.get(&self.provider) {
                 Some(reason) => format!(
-                    "Provider connection {:?} cannot run in the Rust host: {reason}. Choose another with --provider-id, or use --demo",
+                    "Provider connection {:?} cannot run in the Rust host: {reason}. Choose another with --provider-id",
                     self.provider
                 ),
                 None if !self.legacy_sources.is_empty() && !self.provider.is_empty() => format!(
@@ -257,8 +276,26 @@ impl Config {
                         .collect::<Vec<_>>()
                         .join(" or ")
                 ),
-                None => missing_provider_help(self.source.as_deref()),
+                None => self.missing_provider_help(),
             })
+    }
+
+    fn missing_provider_help(&self) -> String {
+        match &self.source {
+            Some(path) => format!(
+                "No provider selected in {}. Set \"provider\" to one of its \"providers\" or pass --provider-id",
+                path.display()
+            ),
+            None => {
+                let registry = self.legacy_directory.as_ref().map_or_else(
+                    || "~/.config/ngn/providers.json".into(),
+                    |path| path.join("providers.json").display().to_string(),
+                );
+                format!(
+                    "No provider selected. Configure a connection in Python ngn settings ({registry}) or select an existing connection with --provider-id"
+                )
+            }
+        }
     }
 
     pub fn state_dir(&self) -> PathBuf {
@@ -335,50 +372,6 @@ fn validate_provider(provider: &ProviderConfig) -> Result<()> {
         ),
         "Unsupported provider API"
     );
-    Ok(())
-}
-
-/// Actionable guidance shown wherever a prompt cannot start without a provider.
-pub fn missing_provider_help(source: Option<&std::path::Path>) -> String {
-    match source {
-        Some(path) => format!(
-            "No provider selected in {}. Set \"provider\" to one of its \"providers\" (see config.example.json), pass --provider-id, or use --demo",
-            path.display()
-        ),
-        None => format!(
-            "No provider configured. Create {} (see config.example.json), pass --config FILE, or use --demo",
-            Config::default_path().map_or_else(
-                || "~/.config/ngn/rust.json".into(),
-                |path| path.display().to_string()
-            )
-        ),
-    }
-}
-
-/// The implicit file can choose the runner executable, so it must be as
-/// trusted as the user's shell startup files: a regular file nobody else can modify.
-fn trusted_default(path: &std::path::Path) -> Result<()> {
-    let metadata =
-        std::fs::metadata(path).with_context(|| format!("Cannot inspect {}", path.display()))?;
-    ensure!(
-        metadata.is_file(),
-        "{} must be a regular file",
-        path.display()
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        ensure!(
-            metadata.uid() == nix::unistd::Uid::current().as_raw(),
-            "{} must be owned by the current user",
-            path.display()
-        );
-        ensure!(
-            metadata.permissions().mode() & 0o022 == 0,
-            "{} must not be group- or world-writable (chmod go-w)",
-            path.display()
-        );
-    }
     Ok(())
 }
 
@@ -459,30 +452,8 @@ mod tests {
         assert!(Config::load_for_executable(None, &binary).is_err());
     }
 
-    #[cfg(unix)]
     #[test]
-    fn discovered_rust_config_must_be_private_and_is_reported() {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let binary = directory.path().join("ngn");
-        std::fs::write(&binary, b"inert native fixture").unwrap();
-        let path = directory.path().join("rust.json");
-        std::fs::write(&path, br#"{"read_only":true}"#).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let config = Config::load_from(None, Some(&path), &binary).unwrap();
-        assert!(config.read_only);
-        assert_eq!(config.source.as_deref(), Some(path.as_path()));
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o620)).unwrap();
-        assert!(
-            Config::load_from(None, Some(&path), &binary)
-                .unwrap_err()
-                .to_string()
-                .contains("writable")
-        );
-    }
-
-    #[test]
-    fn python_provider_files_select_the_connection_only_when_requested() {
+    fn python_provider_files_select_the_connection_when_a_directory_is_available() {
         let directory = crate::test_support::private_tempdir().unwrap();
         let legacy = directory.path().join("ngn");
         std::fs::create_dir(&legacy).unwrap();
@@ -499,7 +470,7 @@ mod tests {
             data_dir: directory.path().join("state"),
             ..Config::default()
         };
-        // Without an explicit opt-in (tests, --config, rust.json) nothing is read.
+        // Plain programmatic defaults do not consult settings on disk.
         let untouched = base.clone().resolve().unwrap();
         assert!(untouched.providers.is_empty() && untouched.legacy_sources.is_empty());
         let config = Config {
@@ -544,10 +515,20 @@ mod tests {
     }
 
     #[test]
-    fn demo_is_explicit_and_state_is_separate() {
+    fn default_backend_is_nagents_and_state_is_separate() {
         let config = Config::default();
         assert_eq!(config.backend, Backend::Nagents);
         assert!(config.data_dir.ends_with("ngn-rust"));
+    }
+
+    #[test]
+    fn demo_backend_is_only_available_in_process() {
+        assert!(serde_json::from_str::<Config>(r#"{"backend":"demo"}"#).is_err());
+        let config = Config {
+            backend: Backend::Demo,
+            ..Config::default()
+        };
+        assert!(serde_json::to_value(config).is_err());
     }
 
     fn chatgpt() -> serde_json::Value {

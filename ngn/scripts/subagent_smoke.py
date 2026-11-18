@@ -305,7 +305,7 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
         require(process.returncode == 0, "Subagent web host did not exit cleanly")
 
 
-def tui_check(binary: Path, workspace: Path, data: Path) -> None:
+def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
     import fcntl
     import pty
     import select
@@ -317,7 +317,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
     before = termios.tcgetattr(slave)
     process = subprocess.Popen(
-        [str(binary), "--demo", "-C", str(workspace), "--data-dir", str(data)],
+        [str(binary), "--config", str(config), "-C", str(workspace), "--data-dir", str(data)],
         stdin=slave,
         stdout=slave,
         stderr=slave,
@@ -347,7 +347,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
             raise AssertionError(explanation)
 
         wait_for(lambda: b"Welcome to ngn" in visible(), "Subagent TUI did not render")
-        os.write(master, b"demo subagents wait\r")
+        os.write(master, b"delegate hold\r")
         database = next(data.rglob("host.sqlite3"))
 
         def started() -> bool:
@@ -357,7 +357,7 @@ def tui_check(binary: Path, workspace: Path, data: Path) -> None:
         wait_for(started, "TUI did not start a Rust-supervised child")
         os.write(master, b"\x1b[15~")  # F5 opens the shared task catalog.
         wait_for(
-            lambda: b"Workspace reviewer" in visible() and b"Ctrl+X" in visible(),
+            lambda: b"Waiting delegate" in visible() and b"Ctrl+X" in visible(),
             "TUI task pane did not show supervised child controls",
         )
         os.write(master, b"\r")

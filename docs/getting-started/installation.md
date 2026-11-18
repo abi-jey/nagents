@@ -100,4 +100,4 @@ variable; see [configuration](configuration.md) and [providers](../guide/provide
 The library and both clients do **not** automatically load a `.env` file. If
 your own application deliberately uses one, install `python-dotenv` in its
 virtual environment and call `load_dotenv()` explicitly. Never commit keys.
-Native installation, `ngn doctor`, and the offline `--demo` require no login.
+Native installation and `ngn doctor` require no provider login.

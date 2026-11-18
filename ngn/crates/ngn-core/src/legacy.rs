@@ -1,7 +1,6 @@
 //! Read-only compatibility with the Python ngn connection files.
 //!
-//! When neither `--config` nor `rust.json` exists, `ngn` selects the same
-//! provider connection and model the Python ngn did:
+//! Without `--config`, `ngn` reads Python ngn's provider and model settings:
 //! `providers.json` (global) overlaid by `workspaces/<id>/providers.json`,
 //! and the model binding from `assistant.md` (workspace, then global), falling
 //! back to `config.json`'s `model`. Nothing is written, and credential values
@@ -9,6 +8,7 @@
 
 use std::{
     collections::BTreeMap,
+    env,
     path::{Path, PathBuf},
 };
 
@@ -62,29 +62,89 @@ pub struct Selection {
     pub unavailable: BTreeMap<String, String>,
     /// Files that contributed, for diagnostics.
     pub sources: Vec<PathBuf>,
+    /// An inherited permission ceiling; never authorizes native mutations.
+    pub read_only: bool,
 }
 
-/// Where local logins live; injectable so tests never inspect the real home.
-pub struct Logins {
-    /// The Rust host's own ChatGPT device-login store.
-    pub chatgpt: PathBuf,
+/// Implicit Python settings and login locations, injectable in tests.
+#[derive(Default)]
+pub(crate) struct Environment {
+    python_chatgpt: Option<PathBuf>,
     /// `$CODEX_HOME`, else `~/.codex`.
-    pub codex: Option<PathBuf>,
+    codex: Option<PathBuf>,
+    read_only: bool,
+    provider_id: Option<String>,
 }
 
-impl Logins {
-    pub fn discover(chatgpt: PathBuf) -> Self {
-        let codex = std::env::var_os("CODEX_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")));
-        Self { chatgpt, codex }
-    }
+pub(crate) fn python_data_directory() -> Option<PathBuf> {
+    env::var_os("XDG_DATA_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::home_dir().map(|home| home.join(".local/share")))
+        .map(|base| base.join("ngn"))
+}
 
-    fn codex_exists(&self) -> bool {
-        self.codex.as_ref().is_some_and(|home| {
-            home.join("auth.json").exists() || home.join("config.toml").exists()
+impl Environment {
+    pub(crate) fn discover() -> Result<Self> {
+        let home = env::home_dir();
+        let codex = env::var_os("CODEX_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .map(|path| match (&home, path.strip_prefix("~")) {
+                (Some(home), Ok(rest)) => home.join(rest),
+                _ => path,
+            })
+            .or_else(|| home.map(|home| home.join(".codex")));
+        let read_only = match env::var("NGN_READ_ONLY") {
+            Ok(value) => match value.to_ascii_lowercase().as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => bail!("NGN_READ_ONLY must be true/false or 1/0"),
+            },
+            Err(env::VarError::NotPresent) => false,
+            Err(env::VarError::NotUnicode(_)) => bail!("NGN_READ_ONLY must be true/false or 1/0"),
+        };
+        let provider_id = match env::var("NGN_PROVIDER_ID") {
+            Ok(value) => Some(value),
+            Err(env::VarError::NotPresent) => None,
+            Err(env::VarError::NotUnicode(_)) => bail!("NGN_PROVIDER_ID must be a provider name"),
+        };
+        let python_data = python_data_directory();
+        ensure!(
+            python_data.as_ref().is_none_or(|path| path.is_absolute()),
+            "XDG_DATA_HOME must be an absolute path to discover Python ngn accounts"
+        );
+        Ok(Self {
+            python_chatgpt: python_data.map(|path| path.join("auth/openai.json")),
+            codex,
+            read_only,
+            provider_id,
         })
     }
+
+    fn python_chatgpt_may_exist(&self) -> bool {
+        self.python_chatgpt
+            .as_deref()
+            .is_some_and(login_file_may_exist)
+    }
+
+    fn codex_exists(&self) -> Result<bool> {
+        let Some(home) = &self.codex else {
+            return Ok(false);
+        };
+        ensure!(
+            home.is_absolute(),
+            "Set CODEX_HOME to an absolute path before using Codex discovery in Rust"
+        );
+        Ok(login_file_may_exist(&home.join("auth.json"))
+            || login_file_may_exist(&home.join("config.toml")))
+    }
+}
+
+fn login_file_may_exist(path: &Path) -> bool {
+    // Do not open credential files. Anything except a confirmed absence must
+    // not cause auto routing to switch to another account.
+    !matches!(path.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// Python's workspace overlay identifier: the resolved path's SHA-256, 32 hex digits.
@@ -148,16 +208,21 @@ fn binding(path: &Path) -> Result<(String, String)> {
         return Ok(Default::default());
     };
     let text = String::from_utf8_lossy(&bytes);
-    let Some(rest) = text.strip_prefix("---\n") else {
+    let mut document = text.lines();
+    if document.next() != Some("---") {
         return Ok(Default::default());
-    };
-    let front = rest.split("\n---").next().unwrap_or_default();
-    let mut lines = front.lines().peekable();
+    }
+    let mut lines = document.take_while(|line| *line != "---").peekable();
     while let Some(line) = lines.next() {
         let Some(value) = line.strip_prefix("model:") else {
             continue;
         };
         if !value.trim().is_empty() {
+            ensure!(
+                !value.trim_start().starts_with('{'),
+                "The inline model binding in {} is not supported by Rust; select the intended provider with an explicit --config FILE",
+                path.display()
+            );
             return Ok((String::new(), unquote(value)));
         }
         let (mut provider, mut id) = (String::new(), String::new());
@@ -172,27 +237,48 @@ fn binding(path: &Path) -> Result<(String, String)> {
                 id = unquote(value);
             }
         }
+        ensure!(
+            provider.is_empty() || !id.is_empty(),
+            "The model binding in {} is missing its model ID",
+            path.display()
+        );
         return Ok((provider, id));
     }
     Ok(Default::default())
 }
 
-fn config_model(path: &Path) -> Result<String> {
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct UserSettings {
+    read_only: bool,
+    provider_id: Option<String>,
+    model: Option<ConfigModel>,
+    providers: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ConfigModel {
+    Id(String),
+    Binding { provider: String, id: String },
+}
+
+fn user_settings(path: &Path) -> Result<UserSettings> {
     let Some(bytes) = read_bounded(path)? else {
-        return Ok(String::new());
+        return Ok(Default::default());
     };
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("{} is not valid JSON", path.display()))?;
-    Ok(match value.get("model") {
-        Some(serde_json::Value::String(model)) => model.trim().to_owned(),
-        Some(serde_json::Value::Object(binding)) => binding
-            .get("id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_owned(),
-        _ => String::new(),
-    })
+    let settings: UserSettings = serde_json::from_slice(&bytes)
+        .with_context(|| format!("Invalid Python ngn settings in {}", path.display()))?;
+    ensure!(
+        settings.providers.is_null()
+            || settings
+                .providers
+                .as_object()
+                .is_some_and(serde_json::Map::is_empty),
+        "Python ngn settings in {} reference a custom provider registry. Pass an explicit Rust --config FILE for the intended account",
+        path.display()
+    );
+    Ok(settings)
 }
 
 fn default_key(kind: &str) -> &'static str {
@@ -206,7 +292,7 @@ fn default_key(kind: &str) -> &'static str {
     }
 }
 
-fn map(profile: &Profile, model: &str, logins: &Logins) -> Result<ProviderConfig> {
+fn map(profile: &Profile, model: &str, environment: &Environment) -> Result<ProviderConfig> {
     let kind = match profile.kind.as_str() {
         "gemini" => "gemini_native",
         "openai"
@@ -218,13 +304,20 @@ fn map(profile: &Profile, model: &str, logins: &Logins) -> Result<ProviderConfig
         other => bail!("provider kind {other} is not supported by the Rust host yet"),
     };
     let openai = kind == "openai";
+    let native_chatgpt = "use an explicit Rust --config FILE with kind openai and auth chatgpt, then run ngn --config FILE auth login and sign in to the intended account";
     let auth = match (profile.auth.as_str(), openai) {
         ("api-key", _) | ("auto", false) => ProviderAuth::ApiKey,
-        ("chatgpt", true) => ProviderAuth::Chatgpt,
+        ("chatgpt", true) => bail!(
+            "this connection requires ChatGPT. Rust does not reuse Python ngn credentials; {native_chatgpt}"
+        ),
+        ("auto", true) if environment.python_chatgpt_may_exist() => bail!(
+            "Python ngn's saved ChatGPT login takes precedence over Codex and API keys. Rust does not reuse it or verify the account of an existing native login; {native_chatgpt}"
+        ),
+        ("codex", true) if !environment.codex_exists()? => {
+            bail!("local Codex configuration was not found. Sign in with Codex or check CODEX_HOME")
+        }
         ("codex", true) => ProviderAuth::Codex,
-        // Python order: an existing ChatGPT login, then a local Codex login, then the key.
-        ("auto", true) if logins.chatgpt.exists() => ProviderAuth::Chatgpt,
-        ("auto", true) if logins.codex_exists() => ProviderAuth::Codex,
+        ("auto", true) if environment.codex_exists()? => ProviderAuth::Codex,
         ("auto", true) => ProviderAuth::ApiKey,
         (other, _) => bail!(
             "{other} authentication for {} is not supported by the Rust host yet",
@@ -240,14 +333,21 @@ fn map(profile: &Profile, model: &str, logins: &Logins) -> Result<ProviderConfig
             api_key_env: if profile.api_key_env.is_empty() {
                 default_key(&profile.kind).into()
             } else {
-                profile.api_key_env.clone()
+                profile
+                    .api_key_env
+                    .strip_prefix("${")
+                    .and_then(|name| name.strip_suffix('}'))
+                    .unwrap_or(&profile.api_key_env)
+                    .into()
             },
             auth,
         },
         ProviderAuth::Chatgpt | ProviderAuth::Codex => ProviderConfig {
             kind: kind.into(),
             model: model.into(),
-            api: profile.api.clone(),
+            // Python's Codex route takes its wire API from local Codex settings,
+            // not from the named connection's API-key settings.
+            api: "auto".into(),
             base_url: String::new(),
             api_key_env: String::new(),
             auth,
@@ -255,17 +355,24 @@ fn map(profile: &Profile, model: &str, logins: &Logins) -> Result<ProviderConfig
     })
 }
 
-/// `None` when no legacy registry exists, so built-in defaults stay untouched.
-pub fn select(directory: &Path, workspace: &Path, logins: &Logins) -> Result<Option<Selection>> {
+pub(crate) fn select(
+    directory: &Path,
+    workspace: &Path,
+    environment: &Environment,
+) -> Result<Selection> {
+    let settings = user_settings(&directory.join("config.json"))?;
+    let mut selection = Selection {
+        read_only: settings.read_only || environment.read_only,
+        ..Selection::default()
+    };
     let local_directory = directory.join("workspaces").join(workspace_id(workspace));
     let global_path = directory.join("providers.json");
     let local_path = local_directory.join("providers.json");
     let global = registry(&global_path)?;
     let local = registry(&local_path)?;
     if global.is_none() && local.is_none() {
-        return Ok(None);
+        return Ok(selection);
     }
-    let mut selection = Selection::default();
     let mut profiles = BTreeMap::new();
     let mut active = String::new();
     for (path, registry) in [(global_path, global), (local_path, local)] {
@@ -277,24 +384,41 @@ pub fn select(directory: &Path, workspace: &Path, logins: &Logins) -> Result<Opt
             profiles.extend(registry.providers);
         }
     }
-    let mut chosen = binding(&local_directory.join("assistant.md"))?;
-    if chosen.1.is_empty() {
-        chosen = binding(&directory.join("assistant.md"))?;
+    let (mut provider, mut model) = binding(&local_directory.join("assistant.md"))?;
+    let workspace_model = !model.is_empty();
+    if !workspace_model {
+        (provider, model) = binding(&directory.join("assistant.md"))?;
     }
-    let (bound_provider, mut model) = chosen;
-    if model.is_empty() {
-        model = config_model(&directory.join("config.json"))?;
+    if provider.is_empty() {
+        provider = active;
+    }
+    if let Some(provider_id) = &environment.provider_id {
+        provider.clone_from(provider_id);
+    }
+    match settings.model {
+        Some(ConfigModel::Binding {
+            provider: binding,
+            id,
+        }) if !workspace_model => {
+            provider = binding;
+            model = id;
+        }
+        Some(ConfigModel::Binding { .. }) => (),
+        model_setting => {
+            if let Some(provider_id) = settings.provider_id {
+                provider = provider_id;
+            }
+            if !workspace_model && let Some(ConfigModel::Id(id)) = model_setting {
+                model = id;
+            }
+        }
     }
     if model.is_empty() {
         model = DEFAULT_MODEL.into();
     }
-    selection.provider = if bound_provider.is_empty() {
-        active
-    } else {
-        bound_provider
-    };
+    selection.provider = provider;
     for (name, profile) in &profiles {
-        match map(profile, &model, logins) {
+        match map(profile, &model, environment) {
             Ok(provider) => {
                 selection.providers.insert(name.clone(), provider);
             }
@@ -305,17 +429,18 @@ pub fn select(directory: &Path, workspace: &Path, logins: &Logins) -> Result<Opt
             }
         }
     }
-    Ok(Some(selection))
+    Ok(selection)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn logins(root: &Path) -> Logins {
-        Logins {
-            chatgpt: root.join("absent-chatgpt.json"),
+    fn environment(root: &Path) -> Environment {
+        Environment {
+            python_chatgpt: Some(root.join("python-ngn/auth/openai.json")),
             codex: Some(root.join("codex")),
+            ..Environment::default()
         }
     }
 
@@ -325,13 +450,20 @@ mod tests {
     }
 
     #[test]
-    fn no_registry_means_no_selection() {
+    fn read_only_is_inherited_even_without_a_registry() {
         let root = tempfile::tempdir().unwrap();
-        assert!(
-            select(root.path(), root.path(), &logins(root.path()))
-                .unwrap()
-                .is_none()
-        );
+        write(&root.path().join("config.json"), r#"{"read_only":true}"#);
+        let env = environment(root.path());
+        let selected = select(root.path(), root.path(), &env).unwrap();
+        assert!(selected.providers.is_empty() && selected.read_only);
+        write(&root.path().join("config.json"), r#"{"read_only":false}"#);
+        let env = Environment {
+            read_only: true,
+            ..env
+        };
+        assert!(select(root.path(), root.path(), &env).unwrap().read_only);
+        write(&root.path().join("config.json"), r#"{"read_only":"true"}"#);
+        assert!(select(root.path(), root.path(), &env).is_err());
     }
 
     #[test]
@@ -362,9 +494,8 @@ mod tests {
             &local.join("assistant.md"),
             "---\nname: assistant\nmodel:\n  provider: sub\n  id: \"gpt-6.1-sol\"\n---\n",
         );
-        let selection = select(root.path(), &workspace, &logins(root.path()))
-            .unwrap()
-            .unwrap();
+        write(&root.path().join("codex/config.toml"), "");
+        let selection = select(root.path(), &workspace, &environment(root.path())).unwrap();
         assert_eq!(selection.provider, "sub");
         let sub = &selection.providers["sub"];
         assert_eq!(sub.auth, ProviderAuth::Codex);
@@ -383,9 +514,7 @@ mod tests {
             &root.path().join("providers.json"),
             r#"{"version":2,"revision":"r","active":"key","providers":{"key":{"kind":"gemini","api_key_env":"MY_KEY"}}}"#,
         );
-        let selection = select(root.path(), root.path(), &logins(root.path()))
-            .unwrap()
-            .unwrap();
+        let selection = select(root.path(), root.path(), &environment(root.path())).unwrap();
         assert_eq!(selection.provider, "key");
         assert_eq!(selection.providers["key"].model, DEFAULT_MODEL);
         assert_eq!(selection.providers["key"].kind, "gemini_native");
@@ -394,32 +523,42 @@ mod tests {
             &root.path().join("config.json"),
             r#"{"model":"from-config"}"#,
         );
-        let selection = select(root.path(), root.path(), &logins(root.path()))
-            .unwrap()
-            .unwrap();
+        let selection = select(root.path(), root.path(), &environment(root.path())).unwrap();
         assert_eq!(selection.providers["key"].model, "from-config");
     }
 
     #[test]
-    fn openai_auto_prefers_chatgpt_then_codex_then_key() {
+    fn openai_routing_preserves_python_precedence_without_reusing_python_chatgpt_credentials() {
         let root = tempfile::tempdir().unwrap();
         write(
             &root.path().join("providers.json"),
-            r#"{"version":2,"revision":"r","active":"o","providers":{"o":{"kind":"openai","auth":"auto"}}}"#,
+            r#"{"version":2,"revision":"r","active":"auto","providers":{
+                "auto":{"kind":"openai","auth":"auto","api_key_env":"${NAMED_KEY}"},
+                "chatgpt":{"kind":"openai","auth":"chatgpt"},
+                "codex":{"kind":"openai","auth":"codex"},
+                "key":{"kind":"openai","auth":"api-key"}}}"#,
         );
-        let mut logins = logins(root.path());
-        let auth = |logins: &Logins| {
-            select(root.path(), root.path(), logins)
-                .unwrap()
-                .unwrap()
-                .providers["o"]
-                .auth
-        };
-        assert_eq!(auth(&logins), ProviderAuth::ApiKey);
+        let env = environment(root.path());
+        let discover = || select(root.path(), root.path(), &env).unwrap();
+        write(&root.path().join("ngn-rust/auth/openai.json"), "native");
+        let selected = discover();
+        assert_eq!(selected.providers["auto"].auth, ProviderAuth::ApiKey);
+        assert_eq!(selected.providers["auto"].api_key_env, "NAMED_KEY");
+        assert!(selected.unavailable["codex"].contains("CODEX_HOME"));
+        assert!(selected.unavailable["chatgpt"].contains("auth login"));
         write(&root.path().join("codex/auth.json"), "{}");
-        assert_eq!(auth(&logins), ProviderAuth::Codex);
-        logins.chatgpt = root.path().join("codex/auth.json");
-        assert_eq!(auth(&logins), ProviderAuth::Chatgpt);
+        assert_eq!(discover().providers["auto"].auth, ProviderAuth::Codex);
+        let legacy_chatgpt = env.python_chatgpt.as_deref().unwrap();
+        write(legacy_chatgpt, "private fixture");
+        let selected = discover();
+        assert!(!selected.providers.contains_key("auto"));
+        assert!(selected.unavailable["auto"].contains("takes precedence"));
+        assert_eq!(selected.providers["codex"].auth, ProviderAuth::Codex);
+        assert_eq!(selected.providers["key"].auth, ProviderAuth::ApiKey);
+        assert_eq!(
+            std::fs::read_to_string(legacy_chatgpt).unwrap(),
+            "private fixture"
+        );
     }
 
     #[test]
@@ -429,11 +568,11 @@ mod tests {
             &root.path().join("providers.json"),
             r#"{"version":3,"revision":"r","active":"","providers":{}}"#,
         );
-        assert!(select(root.path(), root.path(), &logins(root.path())).is_err());
+        assert!(select(root.path(), root.path(), &environment(root.path())).is_err());
         write(
             &root.path().join("providers.json"),
             r#"{"version":2,"revision":"r","active":"","providers":{},"extra":1}"#,
         );
-        assert!(select(root.path(), root.path(), &logins(root.path())).is_err());
+        assert!(select(root.path(), root.path(), &environment(root.path())).is_err());
     }
 }

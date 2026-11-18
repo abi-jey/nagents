@@ -23,8 +23,6 @@ with `download/vX.Y.Z`.
 
 ```sh
 ngn doctor          # paths and bundled runtime; no network or model request
-ngn --demo          # offline demo; no model, never edits files
-ngn --demo serve    # same, in the browser at the printed loopback URL
 ```
 
 Options: `sh -s -- --prefix DIR --bin-dir DIR`. The installer never overwrites an
@@ -101,7 +99,7 @@ feature gaps.
 ## From source
 
 ```sh
-./ngn/dev            # build and launch the current checkout (offline demo without --config)
+./ngn/dev            # build and launch with existing provider settings
 ./ngn/dev --test     # build and run the installed-candidate acceptance suite
 ```
 

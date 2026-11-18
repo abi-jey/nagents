@@ -14,15 +14,16 @@ not embedded Python and not a wrapper around the old Python harness.
   `schema_version: 1` are independently versioned contracts.
 - v1 starts **one process per run**, not one per tool. Conversation storage survives
   process restart. No Python object, callable or pickle crosses the boundary.
-- Stdout is protocol-only. Runtime logging uses stderr; the initial host discards
-  it to avoid exposing raw provider payloads. Terminal errors are bounded and safe.
+- Stdout is protocol-only. The host discards runner stderr; it is never part of
+  the local metadata-only runtime log. Terminal errors are bounded and safe.
 - Version mismatch is fatal. No negotiation downgrade or automatic fallback.
 - Required capabilities are `host_tools` and `cancel`. The optional `safe_steering`
   extension below requires both the Ready capability and `start.run.steering: true`
   before using its boundary handshake; runtimes lacking it retain baseline v1
   behavior and cannot admit steering. The independent `chatgpt_auth` extension
-  must be negotiated before its extra auth fields are sent. Other unknown optional
-  capability labels may be ignored.
+  must be negotiated before its extra auth fields are sent. Provider wire logging
+  is another independent opt-in extension (`provider_wire_log`). Other unknown
+  optional capability labels may be ignored.
 
 ## Handshake
 
@@ -31,6 +32,14 @@ The runtime speaks first; the host waits at most ten seconds:
 ```json
 {"protocol_version":1,"run_id":"","message":{"type":"ready","runtime":"nagents","capabilities":["host_tools","cancel"]}}
 ```
+
+For explicitly enabled provider payload capture, the host requires
+`provider_wire_log` in Ready and adds `"wire_log": true` to `start.run`.
+Otherwise the field is omitted. The bundled host binds the subprocess to a
+preallocated private file and its device/inode through the child's environment;
+there is no runtime-supplied path and no wire payload in protocol frames. The
+adapter validates the binding before model execution and writes only the
+library's credential-redacted HTTP observations.
 
 The host then sends `start`, binding all further frames to a host-generated ID:
 
@@ -219,10 +228,12 @@ Missing public core auth never triggers Codex cache discovery, legacy imports,
 API-key fallback, or an implicit login.
 
 A runtime advertising `codex_auth` may receive `provider.auth: "codex"`, with the
-same shape rules as `chatgpt` but no `run.auth_store`. The adapter constructs
-`OpenAIProvider(model=…)` without credentials, so nagents uses the local Codex
-login (`$CODEX_HOME` or `~/.codex`), exactly as the Python ngn did. It never falls
-back to an API key. The host verifies `codex_auth` before sending start.
+same shape rules as `chatgpt` but no `run.auth_store`. The adapter first requires
+`config.toml` or `auth.json` under `$CODEX_HOME` (or `~/.codex`), then uses
+`OpenAIProvider` without host-supplied credentials. The local Codex policy can
+select OAuth, a cached key, or an environment key. An unrelated environment key
+alone cannot select Codex, and an unusable Codex OAuth login does not switch to a
+key. The host verifies `codex_auth` before sending start.
 
 ## Optional safe steering (0.100.2)
 

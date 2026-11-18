@@ -231,15 +231,9 @@ impl App {
 }
 
 fn welcome(config: &ngn_core::Config) -> String {
-    let next = if config.backend == ngn_core::config::Backend::Demo {
-        "Type a prompt and press Enter. Try `demo approval` or `demo subagents`.".to_owned()
-    } else {
-        match config.selected_provider() {
-            Ok(_) => "Type a prompt and press Enter.".to_owned(),
-            Err(error) => format!(
-                "Prompts cannot be sent yet. {error}.\nLegacy ~/.config/ngn/providers.json is not imported."
-            ),
-        }
+    let next = match config.selected_provider() {
+        Ok(_) => "Type a prompt and press Enter.".to_owned(),
+        Err(error) => format!("Prompts cannot be sent yet. {error}"),
     };
     format!(
         "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\n{next}\n\nF2 conversations · F3 new · F4 tool detail · Ctrl+Q quit"
@@ -268,14 +262,11 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         Constraint::Length(1),
     ])
     .split(frame.area());
-    let provider = if host.config.backend == ngn_core::config::Backend::Demo {
-        "offline Rust demo".to_string()
-    } else {
-        host.config
-            .selected_provider()
-            .map(|provider| format!("nagents · {}", provider.model))
-            .unwrap_or_else(|_| "provider not configured · see config.example.json".into())
-    };
+    let provider = host
+        .config
+        .selected_provider()
+        .map(|provider| format!("nagents · {}", provider.model))
+        .unwrap_or_else(|_| "provider not configured".into());
     let header = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
@@ -875,17 +866,23 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     drop(terminal);
     drop(restore);
     println!(
-        "ngn {} · Session {}\nResume with: ngn -C {} --resume {}{}",
+        "ngn {} · Session {}\nResume with: ngn -C {} --resume {}",
         env!("CARGO_PKG_VERSION"),
         app.session,
         view::plain(&host.config.workspace.display().to_string()),
-        app.session,
-        if host.config.backend == ngn_core::config::Backend::Demo {
-            " --demo"
-        } else {
-            ""
-        }
+        app.session
     );
+    if let Some(path) = host.runtime_log_path() {
+        println!("Runtime log: {}", view::plain(&path.display().to_string()));
+    } else {
+        println!("Runtime log: unavailable");
+    }
+    if let Some(path) = host.wire_log_path() {
+        println!("Wire log: {}", view::plain(&path.display().to_string()));
+        println!("Sensitive request/response payload logging enabled");
+    } else {
+        println!("Wire log off · metadata only; no request/response payloads");
+    }
     Ok(())
 }
 

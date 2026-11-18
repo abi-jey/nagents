@@ -93,11 +93,14 @@ def trace_config() -> aiohttp.TraceConfig:
         attempt.set(context.attempt_id)
         context.http_attempt = HTTPAttempt(context.attempt_id, monotonic())
         http_attempt.set(context.http_attempt)
+        url = params.url
+        if url.raw_user is not None or url.raw_password is not None:
+            url = url.with_user(None)
         observe(
             "http_request",
             attempt_id=context.attempt_id,
             method=params.method,
-            url=str(params.url.with_query(None)),
+            url=str(url.with_query(None).with_fragment(None)),
             headers=headers(params.headers),
         )
 

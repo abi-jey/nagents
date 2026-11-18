@@ -2,7 +2,7 @@
 
 ```sh
 curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh
-ngn doctor && ngn --demo
+ngn doctor
 ngn update --check && ngn update
 ```
 

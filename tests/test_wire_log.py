@@ -5,15 +5,21 @@ from __future__ import annotations
 import asyncio
 import json
 from io import StringIO
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from aiohttp import ClientSession
+from aiohttp import TraceRequestStartParams
 from aiohttp import web
+from multidict import CIMultiDict
 from rich.console import Console
+from yarl import URL
 
 from nagents.harness.wire_log import WireLog
 from nagents.observation import observe
 from nagents.observation import observer
+from nagents.observation import trace_config
 from nagents.tui.exit_summary import print_exit_summary
 
 pytestmark = pytest.mark.requires_posix
@@ -38,11 +44,7 @@ def test_wire_log_transport(tmp_path: Path) -> None:
         port = runner.addresses[0][1]
         wire = WireLog(tmp_path)
         try:
-            import aiohttp
-
-            from nagents.observation import trace_config
-
-            async with aiohttp.ClientSession(trace_configs=[trace_config()]) as client:
+            async with ClientSession(trace_configs=[trace_config()]) as client:
                 with wire.capture("session-one"):
                     async with client.post(
                         f"http://127.0.0.1:{port}/generate",
@@ -68,6 +70,36 @@ def test_wire_log_transport(tmp_path: Path) -> None:
             assert observer.get() is None
         finally:
             await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
+def test_request_observation_redacts_url_credentials_without_sending_a_request(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        wire = WireLog(tmp_path)
+        trace = trace_config()
+        seen: list[dict[str, object]] = []
+        token = observer.set(lambda _, data: seen.append(data))
+        try:
+            async with ClientSession(trace_configs=[trace]) as client:
+                # Emit the trace start signal directly; no DNS lookup or HTTP request.
+                params = TraceRequestStartParams(
+                    "GET",
+                    URL(
+                        "https://fixture%40user:fixture%3Apass@[2001:db8::2]:8443/v1/models"
+                        "?key=fixture-query#fixture-fragment"
+                    ),
+                    CIMultiDict({"Authorization": "Basic fixture-header"}),
+                )
+                with wire.capture("redaction-test"):
+                    await trace.on_request_start.send(client, SimpleNamespace(), params)
+        finally:
+            observer.reset(token)
+        assert len(seen) == 1
+        assert seen[0]["url"] == "https://[2001:db8::2]:8443/v1/models"
+        assert seen[0]["headers"] == {"Authorization": "[redacted]"}
+        logged = json.loads(wire.path.read_text())
+        assert logged["data"] == seen[0]
 
     asyncio.run(scenario())
 

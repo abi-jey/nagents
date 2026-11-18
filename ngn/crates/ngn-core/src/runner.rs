@@ -10,10 +10,17 @@ use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
 };
+#[cfg(any(test, feature = "test-support"))]
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{host::Host, store::Run, subagents::Execution, tools::ProcessGroup};
+use crate::{
+    host::Host,
+    logs::{RuntimeEvent, WIRE_LOG_CAPABILITY, WIRE_LOG_ENV, WIRE_LOG_ID_ENV},
+    store::Run,
+    subagents::Execution,
+    tools::ProcessGroup,
+};
 
 #[derive(Debug)]
 pub(crate) struct RunOutput {
@@ -123,8 +130,20 @@ pub(crate) async fn stdio(
         .stderr(Stdio::null())
         .kill_on_drop(true);
     host.config.runner_environment(&mut command);
+    let wire_log = host.wire_log_path();
+    command.env_remove(WIRE_LOG_ENV).env_remove(WIRE_LOG_ID_ENV);
+    if let Some(path) = wire_log {
+        let identity = host
+            .logs
+            .wire_identity()?
+            .context("Cannot bind runner to the host wire log")?;
+        command
+            .env(WIRE_LOG_ENV, path)
+            .env(WIRE_LOG_ID_ENV, identity);
+    }
     #[cfg(unix)]
     command.process_group(0);
+    host.logs.record(RuntimeEvent::RunnerStarting);
     let mut child = command.spawn().context("Cannot start agent runner; install integrations/nagents into the runner's Python environment")?;
     let _group = ProcessGroup(child.id());
     let mut writer = child.stdin.take().context("No runner stdin")?;
@@ -141,10 +160,15 @@ pub(crate) async fn stdio(
     let safe_steering = match ready.message {
         RuntimeMessage::Ready { capabilities, .. } => {
             validate_capabilities(&capabilities, provider.auth)?;
+            ensure!(
+                wire_log.is_none() || capabilities.iter().any(|cap| cap == WIRE_LOG_CAPABILITY),
+                "Runtime lacks provider_wire_log. Update the Python runtime and adapter, or pass --no-wire-log."
+            );
             steering_capability(&capabilities)?
         }
         _ => bail!("Expected runtime ready handshake"),
     };
+    host.logs.record(RuntimeEvent::RunnerReady);
     host.negotiate_steering(run, safe_steering).await?;
     let mut system_prompt = host.config.system_prompt.clone();
     if let Some(task) = &execution.task {
@@ -183,6 +207,7 @@ pub(crate) async fn stdio(
         tools: host.catalog(execution),
         max_tool_rounds: host.config.max_tool_rounds,
         steering: safe_steering,
+        wire_log: wire_log.is_some(),
     };
     send(&mut writer, run, HostMessage::Start { run: start }).await?;
     let mut calls = HashSet::new();
@@ -381,6 +406,7 @@ impl SteeringHandshake {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn demo(
     host: &Arc<Host>,
     run: &Run,
@@ -413,7 +439,7 @@ pub(crate) async fn demo(
         })
         .unwrap_or_default();
     let mut text = format!(
-        "OFFLINE DEMO · ngn {}\n\nThe harness, tools, TUI and web server are running in Rust. No Python runtime, network or model request was used.\n\nWorkspace files:\n{listing}\n\nTry `demo approval` for a no-write approval preview or `demo subagents` for Rust-supervised background agents.\n",
+        "OFFLINE DEMO · ngn {}\n\nThe harness, tools, TUI and web server are running in Rust. No Python runtime, network or model request was used.\n\nWorkspace files:\n{listing}\n",
         env!("CARGO_PKG_VERSION")
     );
     if prompt.starts_with("demo subagents") {
