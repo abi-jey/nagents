@@ -123,11 +123,39 @@ cp "$DOWNLOADS/${url##*/}" "$output"
                 self.assertFalse(list(self.scratch.iterdir()))
 
     def test_unsupported_platform_is_rejected_without_downloading(self) -> None:
-        self.tool("uname", '#!/bin/sh\nprintf "Darwin\\n"\n')
-        result = self.invoke()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Only Linux x86_64", result.stderr)
-        self.assertFalse(self.calls.exists())
+        for system, machine in (("FreeBSD", "amd64"), ("Linux", "aarch64"), ("Darwin", "ppc")):
+            with self.subTest(system=system, machine=machine):
+                self.uname(system, machine)
+                result = self.invoke()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("validated for Linux x86_64 and macOS", result.stderr)
+                self.assertFalse(self.calls.exists())
+
+    def uname(self, system: str, machine: str) -> None:
+        self.tool("uname", f'#!/bin/sh\ncase "$1" in -s) printf "{system}\\n" ;; -m) printf "{machine}\\n" ;; esac\n')
+
+    def test_macos_selects_the_native_installer_for_its_architecture(self) -> None:
+        payload = b'#!/bin/sh\nprintf "%s\\n" "$@" > "$INVOCATION"\n'
+        checksum = hashlib.sha256(payload).hexdigest()
+        for machine, translated, platform in (
+            ("arm64", "0", "macos-arm64"),
+            ("x86_64", "0", "macos-x86_64"),
+            # An x86_64 shell under Rosetta 2 still installs the native Apple silicon build.
+            ("x86_64", "1", "macos-arm64"),
+        ):
+            with self.subTest(machine=machine, translated=translated):
+                self.calls.unlink(missing_ok=True)
+                self.invocation.unlink(missing_ok=True)
+                self.uname("Darwin", machine)
+                self.tool("sysctl", f'#!/bin/sh\nprintf "{translated}\\n"\n')
+                (self.downloads / f"ngn-installer-{platform}").write_bytes(payload)
+                (self.downloads / "SHA256SUMS").write_text(
+                    f"{'0' * 64}  ngn-installer-linux-x86_64\n{checksum}  ngn-installer-{platform}\n"
+                )
+                result = self.invoke()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(self.calls.read_text().splitlines()[-1].endswith(f"/ngn-installer-{platform}"))
+                self.assertEqual(self.invocation.read_text().splitlines()[:3], ["install", "--version", self.version])
 
     def test_no_hash_or_download_tool_is_not_a_reason_to_skip_verification(self) -> None:
         (self.tools / "sha256sum").unlink()

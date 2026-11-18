@@ -27,8 +27,8 @@ curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.s
 ngn doctor && ngn --demo
 ```
 
-Self-contained (bundled Python, core, adapter and dependencies) for Linux x86_64,
-glibc 2.39+. It never overwrites an existing Python `ngn`; see the
+Self-contained (bundled Python, core, adapter and dependencies) for Linux x86_64 (glibc 2.39+) and macOS 11+ (Apple silicon or Intel).
+It never overwrites an existing Python `ngn`; see the
 [native installer guide](docs/guide/native-ngn.md) for options, configuration and updates.
 
 ## Python library and client features

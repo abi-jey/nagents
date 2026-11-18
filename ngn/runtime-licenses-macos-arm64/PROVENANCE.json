@@ -1,0 +1,255 @@
+{
+ "schema_version": 1,
+ "generated_utc": "2026-11-18T14:35:56Z",
+ "generator": "ngn/scripts/runtime_lock.py",
+ "purpose": "Redistribution notices for the pinned CPython runtime shipped by ngn on this platform. PYTHON.json and LICENSES/ were extracted from the full archive of the same upstream release; PYTHON-RUNTIME/LICENSE.txt from the stripped runtime itself; PIP/ and UPSTREAM/ are reused from the reviewed Linux notices because the runtime bundles the same pip wheel.",
+ "pin": {
+  "runtime_asset": "cpython-3.13.18+20261110-aarch64-apple-darwin-install_only_stripped.tar.gz",
+  "runtime_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-aarch64-apple-darwin-install_only_stripped.tar.gz",
+  "runtime_size": 25479437,
+  "runtime_sha256": "7a2384641584ab9984221fcb0fc9265df465922af71be71410529e2a9c3f0540",
+  "python_version": "3.13.18",
+  "target_triple": "aarch64-apple-darwin",
+  "threading": "gil-enabled (non-freethreaded)"
+ },
+ "full_archive": {
+  "asset": "cpython-3.13.18+20261110-aarch64-apple-darwin-pgo+lto-full.tar.zst",
+  "asset_id": 733712233,
+  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18%2B20261110-aarch64-apple-darwin-pgo%2Blto-full.tar.zst",
+  "size": 61374878,
+  "sha256": "11c316dfa24e1184e91de3c1434ed1d3e986c30b2d7a0273257067efe611a677",
+  "release_tag": "20261110",
+  "release_commit": "9244801782b78e4c4afc5c82a4524aa2101d3298",
+  "verification": [
+   "GitHub API asset digest == sha256:11c316dfa24e1184e91de3c1434ed1d3e986c30b2d7a0273257067efe611a677",
+   "locally recomputed sha256 of the download == same hash"
+  ]
+ },
+ "files": [
+  {
+   "vendor_path": "LICENSES/LICENSE.bdb.txt",
+   "size": 7293,
+   "sha256": "3bdff06e69991c94664f2ef5c5f8096f60b7dbec071756ea6cc26b445e06ec5b"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.bzip2.txt",
+   "size": 1743,
+   "sha256": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.cpython.txt",
+   "size": 36164,
+   "sha256": "86e61415828a8b5b06ec8d024e6f086ce155a8b85fd0c419c0ba4dc004e74fdd"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.expat.txt",
+   "size": 1144,
+   "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.libX11.txt",
+   "size": 47018,
+   "sha256": "2daec087a88e7c9b8082557cdeebad5bbb8155a4137472f0b22e269cd99d0c1e"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.libXau.txt",
+   "size": 1148,
+   "sha256": "56abe29bb1d9806a9e04fa9f80fed2c0f18027594df3f098148d814aef6bddfa"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.libedit.txt",
+   "size": 1614,
+   "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.libffi.txt",
+   "size": 1132,
+   "sha256": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.liblzma.txt",
+   "size": 660,
+   "sha256": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.libuuid.txt",
+   "size": 1432,
+   "sha256": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.libxcb.txt",
+   "size": 1337,
+   "sha256": "c5ffbfeaa501071ceeb97b7de2c0d703fdaa35de01c0fb6cbac1c28453a3e9fd"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.mpdecimal.txt",
+   "size": 1284,
+   "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.ncurses.txt",
+   "size": 1447,
+   "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.openssl-3.txt",
+   "size": 10175,
+   "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.sqlite.txt",
+   "size": 1481,
+   "sha256": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.tcl.txt",
+   "size": 2255,
+   "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.tix.txt",
+   "size": 2826,
+   "sha256": "3ac5cdd0bef6c43ce34c6a7ced452081d9e5a0bf94082b9f9147d23ec9e214f5"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.zlib-ng.txt",
+   "size": 867,
+   "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.zlib.txt",
+   "size": 1002,
+   "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+  },
+  {
+   "vendor_path": "LICENSES/LICENSE.zstd.txt",
+   "size": 1549,
+   "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+  },
+  {
+   "vendor_path": "PIP/AUTHORS.txt",
+   "size": 12239,
+   "sha256": "f8998e1ed3151771c2fbc899ccf0e18b0817d425dff4983eb0fede4e48db47e4"
+  },
+  {
+   "vendor_path": "PIP/LICENSE.txt",
+   "size": 1093,
+   "sha256": "634300a669d49aeae65b12c6c48c924c51a4cdf3d1ff086dc3456dc8bcaa2104"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/cachecontrol/LICENSE.txt",
+   "size": 558,
+   "sha256": "86eeee87be2a43f3ff1f56496f451f69243926f025fedbb033666c304c4c161b"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/certifi/LICENSE",
+   "size": 989,
+   "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/distlib/LICENSE.txt",
+   "size": 14531,
+   "sha256": "808e10c8a6ab8deb149ff9b3fb19f447a808094606d712a9ca57fead3552599d"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/distro/LICENSE",
+   "size": 11325,
+   "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/idna/LICENSE.md",
+   "size": 1541,
+   "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/msgpack/COPYING",
+   "size": 614,
+   "sha256": "492dedba85da5872f78e6091bcd1fea474d660d35acb4dee964b8aab3f007427"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/packaging/LICENSE",
+   "size": 197,
+   "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/packaging/LICENSE.APACHE",
+   "size": 10174,
+   "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/packaging/LICENSE.BSD",
+   "size": 1344,
+   "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/pkg_resources/LICENSE",
+   "size": 1023,
+   "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/platformdirs/LICENSE",
+   "size": 1089,
+   "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/pygments/LICENSE",
+   "size": 1331,
+   "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/pyproject_hooks/LICENSE",
+   "size": 1081,
+   "sha256": "1b22b049b5267d6dfc23a67bf4a84d8ec04b9fdfb1a51d360e42b4342c8b4154"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/requests/LICENSE",
+   "size": 10142,
+   "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/resolvelib/LICENSE",
+   "size": 751,
+   "sha256": "f388fd38cad13112c1dc0f669bbe80e7f84541edbafb72f3030d2ca7642c3c9d"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/rich/LICENSE",
+   "size": 1056,
+   "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/tomli/LICENSE",
+   "size": 1072,
+   "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/tomli_w/LICENSE",
+   "size": 1072,
+   "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/truststore/LICENSE",
+   "size": 1086,
+   "sha256": "33be7b7e8fa4fd19b1760e1a8ed8a668bdab852c91b692dd41424bcb725a9fca"
+  },
+  {
+   "vendor_path": "PIP/src/pip/_vendor/urllib3/LICENSE.txt",
+   "size": 1093,
+   "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+  },
+  {
+   "vendor_path": "PYTHON-RUNTIME/LICENSE.txt",
+   "size": 13809,
+   "sha256": "78b12c3a81360b357002334f0e70ea0e92eebf7a9b358805c03c48484945f3bb"
+  },
+  {
+   "vendor_path": "PYTHON.json",
+   "size": 125471,
+   "sha256": "e0595f35f98f39ecf1d601d3327686a4460e38c45755f319f98109f16a38ea3f"
+  },
+  {
+   "vendor_path": "UPSTREAM/MPL-2.0.txt",
+   "size": 16725,
+   "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+  }
+ ]
+}

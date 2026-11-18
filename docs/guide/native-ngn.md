@@ -4,7 +4,11 @@ The native Rust `ngn` (TUI, headless CLI, local browser host and updater) ships 
 self-contained bundle: CPython 3.13.18, the matching nagents core and adapter, locked
 dependency wheels and CA certificates. No Python, pip, Rust, Node or compiler is needed.
 
-Supported: **Linux x86_64, glibc 2.39+** (Ubuntu 24.04 or newer).
+Supported:
+
+- **Linux x86_64**, glibc 2.39+ (Ubuntu 24.04 or newer)
+- **macOS 11+** on Apple silicon (`macos-arm64`) or Intel (`macos-x86_64`); an x86_64
+  shell under Rosetta still gets the native Apple silicon build
 
 ## Install
 
@@ -29,11 +33,14 @@ It refuses world-writable or foreign-owned parent directories.
 
 ### Manual install
 
+Pick the installer for your platform: `linux-x86_64`, `macos-arm64` or `macos-x86_64`.
+
 ```sh
+platform=linux-x86_64
 base=https://github.com/abi-jey/nagents/releases/latest/download
-curl -fsSL -O "$base/ngn-installer-linux-x86_64" -O "$base/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS
-chmod +x ngn-installer-linux-x86_64 && ./ngn-installer-linux-x86_64 install
+curl -fsSL -O "$base/ngn-installer-$platform" -O "$base/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+chmod +x "ngn-installer-$platform" && "./ngn-installer-$platform" install
 ```
 
 For an offline bundle, add `--bundle FILE --sha256 HASH --version X.Y.Z`.

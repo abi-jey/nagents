@@ -133,6 +133,8 @@ class ReleaseTests(unittest.TestCase):
             "ngn/install.sh",
             "ngn/web/index.html",
             "ngn/runtime-lock.json",
+            "ngn/runtime-lock.macos-arm64.json",
+            "ngn/runtime-lock.macos-x86_64.json",
             "ngn/CHANGELOG.md",
             "ngn/integrations/nagents/pyproject.toml",
             "ngn/integrations/nagents/src/ngn_nagents/__init__.py",
@@ -344,7 +346,7 @@ class ReleaseTests(unittest.TestCase):
     def test_unsupported_platform_is_rejected(self) -> None:
         self.manifest["platform"] = "windows"
         self.save_manifest()
-        with self.assertRaisesRegex(AssertionError, "Unsupported release platform"):
+        with self.assertRaisesRegex(AssertionError, "does not match this host"):
             release.verify(self.output)
 
     def test_corrupt_wheel_is_rejected_before_extraction(self) -> None:
@@ -407,3 +409,62 @@ class ReleaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MergeTests(unittest.TestCase):
+    """Combining natively built platform directories into one published release."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.version = release.version_check()
+
+    def platform_dir(self, platform_name: str) -> Path:
+        directory = self.root / platform_name
+        directory.mkdir()
+        names = release.platform_assets(self.version, platform_name) | release.shared_assets(self.version)
+        for name in names:
+            # Shared assets deliberately differ per build: the merge must keep Linux's copy.
+            (directory / name).write_bytes(f"{platform_name}:{name}".encode())
+        manifest = {
+            "schema_version": 2,
+            "commit": release.commit(),
+            "ngn_version": self.version,
+            "runtime_protocol": 1,
+            "platform": platform_name,
+            "bundle": f"ngn-v{self.version}-{platform_name}-bundle.tar.gz",
+            "artifacts": {name: release.digest(directory / name) for name in sorted(names)},
+        }
+        (directory / release.manifest_name(platform_name)).write_text(json.dumps(manifest))
+        (directory / "SHA256SUMS").write_text("stale per-platform sums")
+        return directory
+
+    def test_merge_keeps_linux_shared_assets_and_adds_only_platform_assets(self) -> None:
+        sources = [self.platform_dir(name) for name in ("macos-arm64", "linux-x86_64", "macos-x86_64")]
+        output = self.root / "merged"
+        release.merge(output, sources)
+        names = {path.name for path in output.iterdir()}
+        expected = release.shared_assets(self.version) | {"SHA256SUMS", "release-manifest.json"}
+        for platform_name in bundle.PLATFORMS:
+            expected |= release.platform_assets(self.version, platform_name)
+        expected |= {"release-manifest-macos-arm64.json", "release-manifest-macos-x86_64.json"}
+        self.assertEqual(names, expected)
+        for name in release.shared_assets(self.version):
+            self.assertEqual((output / name).read_bytes(), f"linux-x86_64:{name}".encode())
+        mac = json.loads((output / "release-manifest-macos-arm64.json").read_text())
+        self.assertEqual(set(mac["artifacts"]), release.platform_assets(self.version, "macos-arm64"))
+        sums = dict(reversed(line.split("  ", 1)) for line in (output / "SHA256SUMS").read_text().splitlines())
+        self.assertEqual(set(sums), names - {"SHA256SUMS"})
+        self.assertTrue(all(release.digest(output / name) == checksum for name, checksum in sums.items()))
+
+    def test_merge_rejects_missing_linux_corrupt_or_duplicate_platforms(self) -> None:
+        mac = self.platform_dir("macos-arm64")
+        with self.assertRaisesRegex(AssertionError, "Linux release supplies"):
+            release.merge(self.root / "a", [mac])
+        linux = self.platform_dir("linux-x86_64")
+        with self.assertRaisesRegex(AssertionError, "Duplicate platform"):
+            release.merge(self.root / "b", [linux, mac, mac])
+        (mac / "ngn-installer-macos-arm64").write_bytes(b"tampered")
+        with self.assertRaisesRegex(AssertionError, "Corrupt macos-arm64 artifact"):
+            release.merge(self.root / "c", [linux, mac])

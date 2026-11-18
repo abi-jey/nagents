@@ -571,8 +571,8 @@ class BundleTests(unittest.TestCase):
             )
 
         with (
-            patch.object(platform, "system", return_value="Darwin"),
-            self.assertRaisesRegex(ValueError, "Only Linux"),
+            patch.object(platform, "system", return_value="FreeBSD"),
+            self.assertRaisesRegex(ValueError, "built natively"),
         ):
             build()
         with self.assertRaisesRegex(ValueError, "source_commit"):

@@ -19,7 +19,7 @@ use flate2::read::MultiGzDecoder;
 use fs2::FileExt;
 use ngn_core::bundle::{
     BundleManifest, MAX_COMPRESSED, MAX_EXPANDED, MAX_MANIFEST, MAX_MEMBERS, ReleaseManifest,
-    ReleaseVersion, file_hash, hex, relative_path, supported_platform,
+    ReleaseVersion, file_hash, hex, relative_path, release_manifest_name, supported_platform,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -206,7 +206,7 @@ async fn discover<T: Transport>(
     };
     let manifest: ReleaseManifest = json(
         transport,
-        &format!("{DOWNLOAD}/v{version}/release-manifest.json"),
+        &format!("{DOWNLOAD}/v{version}/{}", release_manifest_name()),
     )
     .await?;
     manifest.validate(version)?;
@@ -628,7 +628,7 @@ fn symlink(target: &Path, link: &Path) -> Result<()> {
     #[cfg(not(unix))]
     {
         let _ = (target, link);
-        bail!("Bundled installation currently supports only Linux x86_64")
+        bail!("Bundled installation requires a Unix platform")
     }
 }
 

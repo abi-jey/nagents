@@ -18,7 +18,7 @@ an existing feature-rich Python client, and a separate native Rust harness.
 
 !!! tip "Install native ngn"
     `curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh`
-    (Linux x86_64, glibc 2.39+). The Python client has its own support matrix.
+    (Linux x86_64 (glibc 2.39+) and macOS 11+ (Apple silicon or Intel)). The Python client has its own support matrix.
 
 Both clients use the name `ngn`, but configuration, auth and feature sets differ.
 The native installer refuses to overwrite an existing Python/foreign command.

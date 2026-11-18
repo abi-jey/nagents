@@ -21,7 +21,7 @@ curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.s
 ngn update --check && ngn update
 ```
 
-Self-contained Linux x86_64 (glibc 2.39+) bundle; nothing else needs installing.
+Self-contained bundle for Linux x86_64 (glibc 2.39+) and macOS 11+ (Apple silicon or Intel); nothing else needs installing.
 See [installation](docs/installation.md).
 
 ## Source-only offline demo (development tools required)

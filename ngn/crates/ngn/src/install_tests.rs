@@ -188,7 +188,7 @@ fn network(manifest: &BundleManifest) -> FixtureTransport {
                     .unwrap(),
             ),
             (
-                format!("{DOWNLOAD}/{tag}/release-manifest.json"),
+                format!("{DOWNLOAD}/{tag}/{}", release_manifest_name()),
                 serde_json::to_vec(&outer).unwrap(),
             ),
             (format!("{DOWNLOAD}/{tag}/{}", outer.bundle), payload),
@@ -385,7 +385,7 @@ async fn network_requires_official_inner_metadata_and_matching_commit_core_and_a
         let install = installation(directory.path());
         let bundle = metadata("0.100.2", mutation != "unofficial");
         let mut transport = network(&bundle);
-        let url = format!("{DOWNLOAD}/v0.100.2/release-manifest.json");
+        let url = format!("{DOWNLOAD}/v0.100.2/{}", release_manifest_name());
         if mutation != "unofficial" {
             let mut outer: serde_json::Value =
                 serde_json::from_slice(&transport.bodies[&url]).unwrap();

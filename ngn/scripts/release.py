@@ -21,6 +21,27 @@ import bundle
 
 ROOT = Path(__file__).resolve().parents[2]
 NGN = ROOT / "ngn"
+LINUX = "linux-x86_64"
+
+
+def manifest_name(platform_name: str) -> str:
+    """Linux keeps the original name so earlier native installers still update."""
+    return "release-manifest.json" if platform_name == LINUX else f"release-manifest-{platform_name}.json"
+
+
+def platform_assets(version: str, platform_name: str, *, bundled: bool = True) -> set[str]:
+    """Assets that differ per platform; everything else in a release is shared."""
+    names = {f"ngn-v{version}-{platform_name}.tar.gz"}
+    if bundled:
+        names.update({f"ngn-v{version}-{platform_name}-bundle.tar.gz", f"ngn-installer-{platform_name}"})
+    return names
+
+
+def shared_assets(version: str, *, bundled: bool = True) -> set[str]:
+    names = {f"ngn-v{version}-source.tar.gz", f"ngn_nagents-{version}-py3-none-any.whl"}
+    if bundled:
+        names.update({"install.sh", f"nagents-{version}-py3-none-any.whl", f"nagents-{version}.tar.gz"})
+    return names
 
 
 def version_check(tag: str = "") -> str:
@@ -32,11 +53,12 @@ def version_check(tag: str = "") -> str:
         raise ValueError("Release tag does not match Rust version")
     core = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
     assert core == version, "Core, native application, adapter and browser must share the same version"
-    runtime_lock = json.loads((NGN / "runtime-lock.json").read_text())["core"]
-    assert (
-        runtime_lock["version"] == version
-        and runtime_lock["official_metadata"] == f"https://pypi.org/pypi/nagents/{version}/json"
-    ), "Runtime lock must bind the shared core version to fixed public PyPI metadata"
+    for spec in bundle.PLATFORMS.values():
+        runtime_lock = json.loads(spec.lock_path(ROOT).read_text())["core"]
+        assert (
+            runtime_lock["version"] == version
+            and runtime_lock["official_metadata"] == f"https://pypi.org/pypi/nagents/{version}/json"
+        ), f"Runtime lock for {spec.name} must bind the shared core version to fixed public PyPI metadata"
     adapter = tomllib.loads((NGN / "integrations/nagents/pyproject.toml").read_text())
     assert adapter["project"]["version"] == version, "Adapter version mismatch"
     assert f"nagents>={version},<0.101" in adapter["project"]["dependencies"], (
@@ -77,8 +99,14 @@ def bump(version: str, notes: str, root: Path = ROOT) -> None:
             f'__version__ = "{version}"',
         ),
         (ngn / "install.sh", rf"(?m)^NGN_BOOTSTRAP_VERSION={old}$", f"NGN_BOOTSTRAP_VERSION={version}"),
-        (ngn / "runtime-lock.json", rf'"version": "{old}"', f'"version": "{version}"'),
-        (ngn / "runtime-lock.json", rf"pypi/nagents/{old}/json", f"pypi/nagents/{version}/json"),
+        *(
+            replacement
+            for spec in bundle.PLATFORMS.values()
+            for replacement in (
+                (spec.lock_path(root), rf'"version": "{old}"', f'"version": "{version}"'),
+                (spec.lock_path(root), rf"pypi/nagents/{old}/json", f"pypi/nagents/{version}/json"),
+            )
+        ),
         (ngn / "web/index.html", rf'<span id="version">{old}</span>', f'<span id="version">{version}</span>'),
     ]
     for crate in ("ngn", "ngn-core", "ngn-protocol"):
@@ -152,7 +180,8 @@ def package(output: Path, binary: Path, *, bundled: bool = False, published_core
     assert not subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip(), (
         "Commit the complete candidate before packaging"
     )
-    assert platform.system() == "Linux" and platform.machine() == "x86_64", "Only Linux x86_64 binaries are validated"
+    platform_name = bundle.host_platform()
+    assert platform_name, f"Unvalidated build host: {platform.system()} {platform.machine()}"
     assert subprocess.check_output([str(binary), "--version"], text=True).strip() == f"ngn {version}"
     assert not published_core or bundled, "--published-core requires --bundle"
     if bundled:
@@ -173,7 +202,7 @@ def package(output: Path, binary: Path, *, bundled: bool = False, published_core
         ],
         check=True,
     )
-    archive = output / f"ngn-v{version}-linux-x86_64.tar.gz"
+    archive = output / f"ngn-v{version}-{platform_name}.tar.gz"
     binary_archive(archive, binary, NGN)
     subprocess.run(
         [
@@ -202,7 +231,7 @@ def package(output: Path, binary: Path, *, bundled: bool = False, published_core
             )
             for path in (core.wheel, core.sdist):
                 shutil.copyfile(path, output / path.name)
-        shutil.copy2(binary, output / "ngn-installer-linux-x86_64")
+        shutil.copy2(binary, output / f"ngn-installer-{platform_name}")
         shutil.copyfile(NGN / "install.sh", output / "install.sh")
     manifest = {
         "schema_version": 2 if bundled else 1,
@@ -210,14 +239,88 @@ def package(output: Path, binary: Path, *, bundled: bool = False, published_core
         "ngn_version": version,
         "nagents_version": tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"],
         "runtime_protocol": 1,
-        "platform": "linux-x86_64",
+        "platform": platform_name,
         "artifacts": {path.name: digest(path) for path in sorted(output.iterdir())},
     }
     if bundled:
-        manifest["bundle"] = f"ngn-v{version}-linux-x86_64-bundle.tar.gz"
-    (output / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        manifest["bundle"] = f"ngn-v{version}-{platform_name}-bundle.tar.gz"
+    (output / manifest_name(platform_name)).write_text(json.dumps(manifest, indent=2) + "\n")
     (output / "SHA256SUMS").write_text("".join(f"{digest(path)}  {path.name}\n" for path in sorted(output.iterdir())))
     verify(output, require_bundle=published_core)
+
+
+def merge(output: Path, sources: list[Path]) -> None:
+    """Combine natively built, already verified platform directories into one release.
+
+    The Linux directory supplies every shared asset unchanged (earlier installers
+    read its release-manifest.json). Other platforms contribute only their own
+    binary archive, bundle and installer, with a manifest listing exactly those.
+    """
+    version = version_check()
+    output.mkdir(parents=True)
+    assert not list(output.iterdir()), "Use a new artifact directory; never overwrite an existing release"
+    by_platform: dict[str, Path] = {}
+    for source in sources:
+        found = [name for name in (manifest_name(name) for name in bundle.PLATFORMS) if (source / name).is_file()]
+        assert len(found) == 1, f"{source} must contain exactly one platform release manifest"
+        platform_name = json.loads((source / found[0]).read_text())["platform"]
+        assert platform_name not in by_platform, f"Duplicate platform {platform_name}"
+        by_platform[platform_name] = source
+    assert LINUX in by_platform, "The Linux release supplies the shared assets"
+    linux = by_platform.pop(LINUX)
+    for path in linux.iterdir():
+        if path.name != "SHA256SUMS":
+            shutil.copy2(path, output / path.name)
+    for platform_name, source in sorted(by_platform.items()):
+        manifest = json.loads((source / manifest_name(platform_name)).read_text())
+        own = platform_assets(version, platform_name)
+        assert own <= set(manifest["artifacts"]), f"{platform_name} release is missing platform assets"
+        for name in sorted(own):
+            assert digest(source / name) == manifest["artifacts"][name], f"Corrupt {platform_name} artifact: {name}"
+            assert not (output / name).exists(), f"Platform asset collision: {name}"
+            shutil.copy2(source / name, output / name)
+        manifest["artifacts"] = {name: manifest["artifacts"][name] for name in sorted(own)}
+        (output / manifest_name(platform_name)).write_text(json.dumps(manifest, indent=2) + "\n")
+    (output / "SHA256SUMS").write_text("".join(f"{digest(path)}  {path.name}\n" for path in sorted(output.iterdir())))
+    print(f"PASS: merged {', '.join(sorted([LINUX, *by_platform]))} into {output}")
+
+
+def verify_platform_static(output: Path, platform_name: str, *, require_published: bool) -> None:
+    """Check a non-host platform in a merged release without executing its binaries."""
+    version = version_check()
+    manifest = json.loads((output / manifest_name(platform_name)).read_text())
+    assert manifest["schema_version"] == 2 and manifest["commit"] == commit(), "Foreign or legacy platform release"
+    assert manifest["ngn_version"] == version and manifest["runtime_protocol"] == 1
+    assert manifest["platform"] == platform_name, "Platform manifest mismatch"
+    assert manifest["bundle"] == f"ngn-v{version}-{platform_name}-bundle.tar.gz", "Invalid bundled archive name"
+    assert set(manifest["artifacts"]) == platform_assets(version, platform_name), "Unexpected platform assets"
+    for name, checksum in manifest["artifacts"].items():
+        assert digest(output / name) == checksum, f"Corrupt artifact: {name}"
+    archive = output / str(manifest["bundle"])
+    bundle.verify_bundle_core(
+        archive,
+        output / f"nagents-{manifest['nagents_version']}-py3-none-any.whl",
+        version=str(manifest["nagents_version"]),
+        source_commit=str(manifest["commit"]),
+        official=require_published,
+    )
+    with tarfile.open(archive, "r:gz") as source:
+        stream = source.extractfile("ngn/bundle.json")
+        assert stream is not None
+        metadata = json.loads(stream.read())
+        validate_bundle_metadata(metadata, manifest, require_published=require_published)
+        native = source.extractfile("ngn/ngn")
+        assert native is not None, "Missing bundled native application"
+        assert hashlib.sha256(native.read()).hexdigest() == digest(output / f"ngn-installer-{platform_name}"), (
+            "Bundled application and native installer differ"
+        )
+    with tarfile.open(output / f"ngn-v{version}-{platform_name}.tar.gz") as binary_archive_file:
+        native = binary_archive_file.extractfile("ngn")
+        assert native is not None
+        assert hashlib.sha256(native.read()).hexdigest() == digest(output / f"ngn-installer-{platform_name}"), (
+            "Binary archive and installer differ"
+        )
+    print(f"PASS: {platform_name} assets statically verified (built and executed on their native runner)")
 
 
 def validate_bundle_metadata(
@@ -243,7 +346,7 @@ def validate_bundle_metadata(
 def verify_bundled_install(output: Path, manifest: dict[str, object], *, require_published: bool) -> None:
     """Use the real verified native extractor/installer, not a Python extraction bypass."""
     archive = output / str(manifest["bundle"])
-    installer = output / "ngn-installer-linux-x86_64"
+    installer = output / f"ngn-installer-{manifest['platform']}"
     bundle.verify_bundle_core(
         archive,
         output / f"nagents-{manifest['nagents_version']}-py3-none-any.whl",
@@ -308,7 +411,9 @@ def verify_bundled_install(output: Path, manifest: dict[str, object], *, require
 
 def verify(output: Path, *, require_bundle: bool = False) -> None:
     version = version_check()
-    manifest = json.loads((output / "release-manifest.json").read_text())
+    platform_name = bundle.host_platform()
+    assert platform_name, "Verification executes the release; run it on a validated platform"
+    manifest = json.loads((output / manifest_name(platform_name)).read_text())
     schema = manifest["schema_version"]
     assert type(schema) is int and schema in (1, 2) and manifest["commit"] == commit(), (
         "Artifacts do not belong to this exact tested commit"
@@ -318,27 +423,32 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
     assert manifest["nagents_version"] == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"], (
         "Python core provenance mismatch"
     )
-    assert manifest["platform"] == "linux-x86_64", "Unsupported release platform"
-    expected = {
-        f"ngn-v{version}-linux-x86_64.tar.gz",
-        f"ngn-v{version}-source.tar.gz",
-        f"ngn_nagents-{version}-py3-none-any.whl",
-    }
+    assert manifest["platform"] == platform_name, "Release platform does not match this host"
+    expected = platform_assets(version, platform_name, bundled=schema == 2) | shared_assets(
+        version, bundled=schema == 2
+    )
     if schema == 2:
-        bundle_name = f"ngn-v{version}-linux-x86_64-bundle.tar.gz"
-        assert manifest.get("bundle") == bundle_name, "Invalid bundled archive name"
-        expected.update({bundle_name, "ngn-installer-linux-x86_64", "install.sh"})
-        expected.update({f"nagents-{version}-py3-none-any.whl", f"nagents-{version}.tar.gz"})
+        assert manifest.get("bundle") == f"ngn-v{version}-{platform_name}-bundle.tar.gz", "Invalid bundled archive name"
+    # A merged release also carries other platforms: their own manifest and assets only.
+    others = {
+        name: name.removeprefix("release-manifest-").removesuffix(".json")
+        for name in (manifest_name(other) for other in bundle.PLATFORMS if other != platform_name)
+        if (output / name).is_file()
+    }
+    foreign = {name for other in others.values() for name in platform_assets(version, other)} | set(others)
     assert set(manifest["artifacts"]) == expected, "Missing or unexpected release assets"
     for name, checksum in manifest["artifacts"].items():
         assert Path(name).name == name and digest(output / name) == checksum, f"Corrupt artifact: {name}"
     checksums = {
         line.split("  ", 1)[1]: line.split("  ", 1)[0] for line in (output / "SHA256SUMS").read_text().splitlines()
     }
-    assert set(checksums) == expected | {"release-manifest.json"}
+    own_manifest = manifest_name(platform_name)
+    assert set(checksums) == expected | {own_manifest} | foreign
     for name, checksum in checksums.items():
         assert digest(output / name) == checksum, f"Checksum failed: {name}"
-    assert {path.name for path in output.iterdir()} == expected | {"release-manifest.json", "SHA256SUMS"}
+    assert {path.name for path in output.iterdir()} == expected | {own_manifest, "SHA256SUMS"} | foreign
+    for other in others.values():
+        verify_platform_static(output, other, require_published=require_bundle)
     if schema == 2:
         bundle.verify_core_artifacts(
             bundle.CoreArtifacts(output / f"nagents-{version}-py3-none-any.whl", output / f"nagents-{version}.tar.gz"),
@@ -370,7 +480,7 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
         verify_bundled_install(output, manifest, require_published=require_bundle)
     with tempfile.TemporaryDirectory(prefix="ngn-install-", dir=output.parent) as temporary:
         extracted = Path(temporary)
-        with tarfile.open(output / f"ngn-v{version}-linux-x86_64.tar.gz") as archive:
+        with tarfile.open(output / f"ngn-v{version}-{platform_name}.tar.gz") as archive:
             archive.extractall(extracted, filter="data")
         for name in ("config.example.json", "config.chatgpt.example.json"):
             assert (extracted / name).read_bytes() == (NGN / name).read_bytes(), (
@@ -407,7 +517,7 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("bump", "check", "package", "verify"))
+    parser.add_argument("action", choices=("bump", "check", "package", "verify", "merge"))
     parser.add_argument("version", nargs="?", default="", help="bump: the new shared 0.100.x version")
     parser.add_argument("--notes", default="", help="bump: one-line release notes")
     parser.add_argument("--tag", default="")
@@ -420,6 +530,7 @@ def main() -> None:
     parser.add_argument(
         "--require-bundle", action="store_true", help="Reject legacy or unofficial bundles before publication"
     )
+    parser.add_argument("--source", type=Path, action="append", default=[], help="merge: one platform directory")
     arguments = parser.parse_args()
     if arguments.action == "bump":
         bump(arguments.version, arguments.notes)
@@ -433,6 +544,8 @@ def main() -> None:
             bundled=arguments.bundle,
             published_core=arguments.published_core,
         )
+    elif arguments.action == "merge":
+        merge(arguments.output.absolute(), [source.resolve() for source in arguments.source])
     else:
         verify(arguments.output.resolve(), require_bundle=arguments.require_bundle)
 
