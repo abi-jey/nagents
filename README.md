@@ -24,11 +24,11 @@ described below; see the [migration checklist](ngn/docs/migration.md).
 Use an extracted Rust binary by its explicit path so it cannot be confused with
 the Python `ngn` console script. No installed defaults or legacy data are migrated.
 
-The 0.100.2 development line adds a [self-contained per-user installer and
+Release 0.100.2 adds a [self-contained per-user installer and
 `ngn update`](ngn/docs/installation.md): pinned Python, the core/adapter and
 dependencies are bundled, with no Python/Rust/Node/pip prerequisite for end users.
-It refuses to overwrite an unrelated Python `ngn` installation. These new bundled
-assets are not yet published; the existing 0.100.0/0.100.1 releases are unchanged.
+It refuses to overwrite an unrelated Python `ngn` installation. Bundled installer
+assets are published from v0.100.2; the earlier 0.100.0/0.100.1 releases are unchanged.
 
 ## Features
 

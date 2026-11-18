@@ -10,7 +10,7 @@ not embedded Python and not a wrapper around the old Python harness.
 - Every envelope contains exactly `protocol_version`, `run_id`, `message`.
 - Maximum frame including newline: **1,048,576 bytes**. Oversized/incomplete frames,
   unknown fields, unknown message types, wrong versions and wrong run IDs fail closed.
-- Official baseline **0.100.0**, development candidate **0.100.2**, runtime protocol **1**, and browser event
+- Official baseline **0.100.0**, release **0.100.2**, runtime protocol **1**, and browser event
   `schema_version: 1` are independently versioned contracts.
 - v1 starts **one process per run**, not one per tool. Conversation storage survives
   process restart. No Python object, callable or pickle crosses the boundary.
@@ -218,7 +218,7 @@ with earlier runtimes. This adapter's package now requires the public-auth core
 Missing public core auth never triggers Codex cache discovery, legacy imports,
 API-key fallback, or an implicit login.
 
-## Optional safe steering (0.100.2 development)
+## Optional safe steering (0.100.2)
 
 The supplied adapter now advertises `safe_steering` alongside the required
 capabilities. Baseline runtimes are still accepted without it; steering is refused

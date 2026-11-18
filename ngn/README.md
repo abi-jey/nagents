@@ -1,4 +1,4 @@
-# ngn · 0.100.2 development
+# ngn · 0.100.2
 
 A standalone **Rust harness, TUI and local web server**, with a versioned agent
 runtime protocol. The optional **nagents** adapter runs the Python agent/model
@@ -14,7 +14,7 @@ parity**. See [migration status](docs/migration.md) and [release notes](docs/rel
 `0.100.1` adds durable Rust-owned FIFO input queues with matching TUI/web controls.
 See the [patch notes](docs/releases/0.100.1.md) before upgrading important state.
 
-## Install and update (0.100.2 development)
+## Install and update
 
 The new [managed installer](docs/installation.md) bundles pinned CPython, the
 matching core/adapter, dependency wheels and CA certificates. It needs no existing
@@ -22,7 +22,7 @@ Python, pip, Rust or Node installation. `ngn update --check` checks for a newer
 stable harness; `ngn update` verifies/stages it and atomically switches versions
 without changing credentials or conversations. Existing unrelated `ngn` commands
 are never overwritten. Initial installer support is Linux x86_64/glibc 2.39+.
-These bundled assets are not yet published; 0.100.1 is unchanged.
+Bundled installer assets are published from v0.100.2 onward.
 
 ## Run without Python
 

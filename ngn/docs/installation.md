@@ -1,8 +1,7 @@
 # Self-contained installation and updates
 
-**0.100.2 development; not yet published.** These commands apply to the new bundled
-release after its publication gates pass. Published 0.100.1 remains unchanged and
-does not contain this installer or an embedded Python runtime.
+**Available from 0.100.2.** Earlier releases (0.100.0/0.100.1) do not contain this
+installer or an embedded Python runtime; install 0.100.2 or newer to use it.
 
 ## Recommended installation
 
@@ -17,7 +16,7 @@ Ubuntu 24.04 native build (glibc 2.39 or newer). The embedded Python's lower gli
 baseline does not lower the Rust binary's requirement. macOS, Windows, ARM and
 musl-only Linux are not yet validated installer targets.
 
-After the bundled release is published:
+Install the latest bundled release:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL \
