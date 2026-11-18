@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from email.parser import BytesParser
 from pathlib import Path
 from typing import IO, BinaryIO
+from urllib.error import URLError
 from urllib.parse import unquote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zipfile import ZipFile, ZipInfo
@@ -464,18 +465,28 @@ def _install_wheel(path: Path, site: Path, name: str, version: str, limits: Limi
                 writer.writerow((relative, f"sha256={checksum}", target.stat().st_size))
 
 
-def _published_core(wheel: Path, version: str, limits: Limits = LIMITS) -> dict[str, object]:
-    """Bind official core bytes to fixed public PyPI version metadata, not an index override."""
+def _public_core_metadata(version: str, limits: Limits) -> dict[str, object]:
     url = f"https://pypi.org/pypi/nagents/{version}/json"
     stream = io.BytesIO()
-    _download(url, stream, limits.manifest)
+    try:
+        _download(url, stream, limits.manifest)
+    except URLError as error:
+        raise ValueError(
+            f"Public PyPI metadata for nagents {version} is unavailable; finish PyPI publication first, "
+            "then retry the failed native job without rebuilding or relabelling core distributions"
+        ) from error
     metadata = _json(stream.getvalue(), limits)
     info = _object(metadata["info"])
     if info["name"] != "nagents" or info["version"] != version:
         raise ValueError("Public PyPI core metadata mismatch")
+    return metadata
+
+
+def _public_core_asset(metadata: dict[str, object], filename: str, kind: str) -> Artifact:
+    matches: list[Artifact] = []
     for value in _items(metadata["urls"]):
         item = _object(value)
-        if item.get("filename") == wheel.name and item.get("packagetype") == "bdist_wheel" and not item.get("yanked"):
+        if item.get("filename") == filename and item.get("packagetype") == kind and not item.get("yanked"):
             artifact = Artifact.parse(
                 {
                     "filename": item["filename"],
@@ -484,10 +495,213 @@ def _published_core(wheel: Path, version: str, limits: Limits = LIMITS) -> dict[
                     "sha256": _object(item["digests"])["sha256"],
                 }
             )
-            if artifact.size != wheel.stat().st_size or artifact.sha256 != digest(wheel):
-                raise ValueError("Official core must be the exact published PyPI wheel, not a source rebuild")
-            return {"metadata_url": url, "url": artifact.url, "sha256": artifact.sha256, "filename": wheel.name}
-    raise ValueError("Core wheel is not an unyanked public PyPI wheel for the fixed version")
+            if urlsplit(artifact.url).hostname != "files.pythonhosted.org":
+                raise ValueError("Public core distributions must use files.pythonhosted.org")
+            matches.append(artifact)
+    if len(matches) != 1:
+        raise ValueError("Expected exactly one unyanked public PyPI core distribution for the fixed version")
+    return matches[0]
+
+
+def _published_core(wheel: Path, version: str, limits: Limits = LIMITS) -> dict[str, object]:
+    """Bind official core bytes to fixed public PyPI version metadata, not an index override."""
+    metadata = _public_core_metadata(version, limits)
+    artifact = _public_core_asset(metadata, wheel.name, "bdist_wheel")
+    if artifact.size != wheel.stat().st_size or artifact.sha256 != digest(wheel):
+        raise ValueError("Official core must be the exact published PyPI wheel, not a source rebuild")
+    return {
+        "metadata_url": f"https://pypi.org/pypi/nagents/{version}/json",
+        "url": artifact.url,
+        "sha256": artifact.sha256,
+        "filename": wheel.name,
+    }
+
+
+@dataclass(frozen=True)
+class CoreArtifacts:
+    """The two core distributions attached to the single coordinated release."""
+
+    wheel: Path
+    sdist: Path
+
+
+def download_published_core(destination: Path, *, version: str, source_commit: str) -> CoreArtifacts:
+    """Fetch exact public wheel/sdist bytes without pip or executing sdist hooks."""
+    destination = prepare_output(destination)
+    metadata = _public_core_metadata(version, LIMITS)
+    artifacts = (
+        _public_core_asset(metadata, f"nagents-{version}-py3-none-any.whl", "bdist_wheel"),
+        _public_core_asset(metadata, f"nagents-{version}.tar.gz", "sdist"),
+    )
+    with tempfile.TemporaryDirectory(prefix="public-core-", dir=destination.parent) as temporary:
+        for artifact in artifacts:
+            verified = _fetch(artifact, Path(temporary))
+            with _regular(verified) as source, (destination / artifact.filename).open("xb") as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+    result = CoreArtifacts(destination / artifacts[0].filename, destination / artifacts[1].filename)
+    verify_core_artifacts(result, version=version, source_commit=source_commit)
+    return result
+
+
+def verify_core_artifacts(
+    artifacts: CoreArtifacts, *, version: str, source_commit: str, published: bool = False
+) -> dict[str, object]:
+    """Verify metadata, bounded archive paths, and exact source before any build/import."""
+    expected_names = (f"nagents-{version}-py3-none-any.whl", f"nagents-{version}.tar.gz")
+    if (artifacts.wheel.name, artifacts.sdist.name) != expected_names:
+        raise ValueError("Core wheel/source distribution filename mismatch")
+    if published:
+        metadata = _public_core_metadata(version, LIMITS)
+        for path, kind in ((artifacts.wheel, "bdist_wheel"), (artifacts.sdist, "sdist")):
+            artifact = _public_core_asset(metadata, path.name, kind)
+            if artifact.size != path.stat().st_size or artifact.sha256 != digest(path):
+                raise ValueError(f"Core distribution is not the exact public PyPI bytes: {path.name}")
+    _wheel_metadata(artifacts.wheel, "nagents", version)
+    binding = _core_source(artifacts.wheel, source_commit)
+    _core_sdist(artifacts.sdist, version=version, source_commit=source_commit)
+    return {**binding, "wheel_sha256": digest(artifacts.wheel), "sdist_sha256": digest(artifacts.sdist)}
+
+
+def _core_sdist(path: Path, *, version: str, source_commit: str, limits: Limits = LIMITS) -> None:
+    if path.stat().st_size > limits.compressed:
+        raise ValueError("Core source distribution exceeds compressed byte limit")
+    expected = _core_python_sources(source_commit)
+    project = _git_files(source_commit, ("pyproject.toml",))["pyproject.toml"]
+    sources: dict[str, bytes] = {}
+    seen: set[tuple[str, ...]] = set()
+    regular: set[tuple[str, ...]] = set()
+    metadata_found = project_found = False
+    prefix = f"nagents-{version}"
+    for archive, member in _tar_members(path, limits):
+        parts = _parts(member.name)
+        if parts[0] != prefix:
+            raise ValueError("Foreign core source distribution root")
+        if parts in seen:
+            raise ValueError("Duplicate core source distribution member")
+        seen.add(parts)
+        if not (member.isfile() or member.isdir()) or member.issparse() or member.mode & 0o6000:
+            raise ValueError("Core source distribution permits only regular files/directories")
+        if len(parts) == 1 and not member.isdir():
+            raise ValueError("Core source distribution root must be a directory")
+        if member.isfile():
+            regular.add(parts)
+        relative = "/".join(parts[1:])
+        module = relative.removeprefix("src/")
+        wanted = relative in {"PKG-INFO", "pyproject.toml"} or (
+            relative.startswith("src/nagents/")
+            and relative.endswith((".py", "/py.typed"))
+            and not module.startswith(("nagents/web-ui/", "nagents/web/static/"))
+        )
+        if not wanted:
+            continue
+        if not member.isfile() or member.size > limits.manifest:
+            raise ValueError("Invalid or oversized core source distribution metadata/source")
+        stream = archive.extractfile(member)
+        if stream is None:
+            raise ValueError("Missing core source distribution bytes")
+        with stream:
+            contents = stream.read(limits.manifest + 1)
+        if relative == "PKG-INFO":
+            metadata = BytesParser().parsebytes(contents)
+            if metadata["Name"] != "nagents" or metadata["Version"] != version:
+                raise ValueError("Core source distribution package name/version mismatch")
+            metadata_found = True
+        elif relative == "pyproject.toml":
+            parsed = tomllib.loads(contents.decode())
+            if (
+                _object(parsed["project"]).get("name") != "nagents"
+                or _object(parsed["project"]).get("version") != version
+            ):
+                raise ValueError("Core source distribution project name/version mismatch")
+            if contents != project:
+                raise ValueError("Core source distribution project differs from exact source_commit")
+            project_found = True
+        else:
+            sources[module] = contents
+    if any(parts[:length] in regular for parts in seen for length in range(1, len(parts))):
+        raise ValueError("Core source distribution member has a regular-file ancestor")
+    if not metadata_found or not project_found or sources != expected:
+        raise ValueError("Core source distribution does not contain the exact checked-in Python source")
+
+
+def verify_bundle_core(archive: Path, wheel: Path, *, version: str, source_commit: str, official: bool) -> None:
+    """Bind the attached wheel to provenance AND every installed core payload byte."""
+    if archive.stat().st_size > LIMITS.compressed:
+        raise ValueError("Bundle exceeds compressed byte limit")
+    distribution = _wheel_metadata(wheel, "nagents", version)
+    site = "runtime/lib/python3.13/site-packages/"
+    expected: dict[str, str] = {}
+    with ZipFile(wheel) as packaged:
+        for wheel_member in _wheel_entries(packaged, LIMITS):
+            if wheel_member.is_dir() or wheel_member.filename == f"{distribution}/RECORD":
+                continue
+            parts = _parts(wheel_member.filename)
+            if parts[0].endswith(".data"):
+                if len(parts) < 3 or parts[1] not in {"purelib", "platlib"}:
+                    raise ValueError("Unreviewed core wheel data scheme")
+                parts = parts[2:]
+            checksum = hashlib.sha256()
+            with packaged.open(wheel_member) as stream:
+                while block := stream.read(1024 * 1024):
+                    checksum.update(block)
+            expected[site + "/".join(parts)] = checksum.hexdigest()
+    found: dict[str, str] = {}
+    documents: dict[str, dict[str, object]] = {}
+    document_hashes: dict[str, str] = {}
+    seen: set[tuple[str, ...]] = set()
+    for source, member in _tar_members(archive, LIMITS):
+        parts = _parts(member.name)
+        if parts[0] != "ngn" or parts in seen:
+            raise ValueError("Foreign or duplicate bundle member")
+        seen.add(parts)
+        relative = "/".join(parts[1:])
+        core_path = relative.startswith((site + "nagents/", site + distribution + "/"))
+        if (
+            core_path
+            and relative not in expected
+            and relative not in {site + distribution + "/RECORD", site + distribution + "/INSTALLER"}
+            and not member.isdir()
+        ):
+            raise ValueError("Bundled core contains files absent from the attached wheel")
+        if relative not in expected and relative not in {"bundle.json", "notices/provenance.json"}:
+            continue
+        if not member.isfile() or member.issparse():
+            raise ValueError("Bundled core/provenance must be regular files")
+        data = source.extractfile(member)
+        if data is None:
+            raise ValueError("Missing bundled core bytes")
+        with data:
+            if relative in expected:
+                checksum = hashlib.sha256()
+                while block := data.read(1024 * 1024):
+                    checksum.update(block)
+                found[relative] = checksum.hexdigest()
+            else:
+                if member.size > LIMITS.manifest:
+                    raise ValueError("Oversized bundle provenance")
+                contents = data.read(LIMITS.manifest + 1)
+                documents[relative] = _json(contents)
+                document_hashes[relative] = hashlib.sha256(contents).hexdigest()
+    if found != expected or set(documents) != {"bundle.json", "notices/provenance.json"}:
+        raise ValueError("Bundled core bytes differ from the attached wheel")
+    metadata = documents["bundle.json"]
+    provenance = documents["notices/provenance.json"]
+    core = _object(provenance["core"])
+    if core.get("sha256") != digest(wheel) or core.get("filename") != wheel.name:
+        raise ValueError("Attached core wheel differs from the exact embedded wheel provenance")
+    if (
+        metadata.get("source_commit") != source_commit
+        or provenance.get("source_commit") != source_commit
+        or metadata.get("nagents_version") != version
+    ):
+        raise ValueError("Bundled core commit/version provenance mismatch")
+    if official and (metadata.get("official") is not True or core.get("kind") != "public-pypi-wheel"):
+        raise ValueError("Official bundle requires published core provenance")
+    files = _object(metadata["files"])
+    if files.get("notices/provenance.json") != document_hashes["notices/provenance.json"]:
+        raise ValueError("Bundled core provenance is not bound to the inventory")
+    if any(files.get(name) != checksum for name, checksum in expected.items()):
+        raise ValueError("Bundled core inventory differs from attached wheel bytes")
 
 
 def _notices(lock: dict[str, object]) -> dict[str, bytes]:
@@ -624,14 +838,19 @@ def _git_files(commit: str, paths: tuple[str, ...], *, suffixes: tuple[str, ...]
     return files
 
 
-def _core_source(wheel: Path, commit: str) -> dict[str, object]:
-    """Official published code must also be the exact checked-in Python code."""
+def _core_python_sources(commit: str) -> dict[str, bytes]:
     excluded = ("nagents/web-ui/", "nagents/web/static/")
-    expected = {
+    return {
         name.removeprefix("src/"): contents
         for name, contents in _git_files(commit, ("src/nagents",), suffixes=(".py", "/py.typed")).items()
         if not name.removeprefix("src/").startswith(excluded)
     }
+
+
+def _core_source(wheel: Path, commit: str) -> dict[str, object]:
+    """Official published code must also be the exact checked-in Python code."""
+    excluded = ("nagents/web-ui/", "nagents/web/static/")
+    expected = _core_python_sources(commit)
     with ZipFile(wheel) as archive:
         actual = {
             member.filename: archive.read(member)
@@ -939,7 +1158,7 @@ def build_bundle(
     adapter_version = _text(
         _object(tomllib.loads((ROOT / "ngn/integrations/nagents/pyproject.toml").read_text())["project"])["version"]
     )
-    if version != adapter_version or _object(lock["core"])["version"] != core_version:
+    if version != adapter_version or version != core_version or _object(lock["core"])["version"] != core_version:
         raise ValueError("Runtime lock/current source core/adapter version mismatch")
     cache = _private_directory(cache)
     output = _private_directory(output, private=False)

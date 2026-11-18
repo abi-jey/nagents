@@ -4,6 +4,24 @@
 release after its publication gates pass. Published 0.100.1 remains unchanged and
 does not contain this installer or an embedded Python runtime.
 
+## Where is the installer?
+
+- Repository bootstrap: [`ngn/install.sh`](../install.sh), invoked from the
+  repository root as `sh ngn/install.sh`. It downloads the version-bound release;
+  it does **not** compile a local checkout or make unpublished assets available.
+- Native implementation: `ngn/crates/ngn/src/install.rs`, exposed by `ngn install`
+  and `ngn update`; the release's standalone installer is that same native binary.
+- The single **`v0.100.2`** GitHub release will attach `install.sh`,
+  `ngn-installer-linux-x86_64`, `ngn-v0.100.2-linux-x86_64-bundle.tar.gz`,
+  `release-manifest.json` and `SHA256SUMS`, plus the small native/source/adapter
+  artifacts and exact public `nagents-0.100.2-py3-none-any.whl` /
+  `nagents-0.100.2.tar.gz`. Core PyPI publication runs first in that same tag pipeline.
+
+**Until that release is published, its download URLs may return 404.** Use the
+[explicit trusted local archive preview](#localoffline-acceptance-and-source-development)
+below, or build current source with `./ngn/dev`; do not substitute old development
+bundles or assume that the published 0.100.1 contains this installer.
+
 ## Recommended installation
 
 Use the managed, per-user bundle rather than a global pip installation. It includes
@@ -32,6 +50,15 @@ it; Python, pip and tar are never invoked. Alternatively, download the native
 download/hash/extraction helpers:
 
 ```sh
+# After v0.100.2 is published; use a new private download directory.
+set -eu
+download=$(mktemp -d)
+cd "$download"
+base=https://github.com/abi-jey/nagents/releases/download/v0.100.2
+curl --proto '=https' --tlsv1.2 -fsSL "$base/ngn-installer-linux-x86_64" -o ngn-installer-linux-x86_64
+curl --proto '=https' --tlsv1.2 -fsSL "$base/SHA256SUMS" -o SHA256SUMS
+awk '$2 == "ngn-installer-linux-x86_64" { print; found++ } END { if (found != 1) exit 1 }' SHA256SUMS > installer.sha256
+sha256sum -c installer.sha256
 chmod +x ./ngn-installer-linux-x86_64
 ./ngn-installer-linux-x86_64 install --version 0.100.2
 ```
@@ -46,8 +73,8 @@ overwritten. Select a separate bin directory instead:
 ./ngn-installer-linux-x86_64 install --version 0.100.2 \
   --bin-dir "$HOME/.local/ngn-bin"
 export PATH="$HOME/.local/ngn-bin:$PATH"
-ngn doctor
-ngn --demo
+"$HOME/.local/ngn-bin/ngn" doctor
+"$HOME/.local/ngn-bin/ngn" --demo
 ```
 
 `--prefix DIRECTORY` chooses a separate managed installation. Existing unsafe
@@ -72,12 +99,12 @@ No Python packages need to be installed separately.
 ```sh
 ngn update --check
 ngn update
-# Optional: select a particular newer stable harness release.
+# Optional, only once this example newer shared release is actually published.
 ngn update --version 0.100.3
 ```
 
-Discovery selects stable **Rust `v0.100.x`** releases from this repository, not a
-newer Python-library tag. It never follows an arbitrary configured update feed.
+Discovery selects stable coordinated **`v0.100.x`** releases from this repository,
+not historical Python-only tags. It never follows an arbitrary configured update feed.
 `--check` does not activate a version. Running a source, pip/package-manager or
 unmanaged binary does not authorize self-overwriting it: use the managed installer.
 Downgrades and replacing a version with different content are refused.
@@ -112,7 +139,8 @@ An explicitly trusted local bundle can be installed without network access:
 Use a checksum obtained through your trusted delivery channel. Local development
 bundles are marked unofficial; network installation and official publication must
 use a bundle made with the matching **published** core. The adapter minimum is
-`nagents>=0.28.6,<0.29`; publish/test that core before the harness release. Published
+`nagents>=0.100.2,<0.101`; the shared tag publishes/tests that core before the
+single native/core GitHub release. Published
 0.28.5 lacks its public device-authentication API. Publication guards are not
 bypassed by source-only development success.
 
@@ -121,3 +149,7 @@ and launch current working source, including uncommitted edits; `./ngn/dev --tes
 checks its installed release-shaped candidate. That is separate from the
 dependency-free end-user installation above. Full legacy UI/remote hosting parity
 remains [unfinished](migration.md).
+
+From the repository root, `./ngn/dev` with no configuration builds/extracts the
+current source and starts the offline native demo. Initial dependency downloads
+may be needed for that build; no provider credentials or paid requests are required.

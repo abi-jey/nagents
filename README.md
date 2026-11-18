@@ -13,12 +13,14 @@ A lightweight LLM agent framework with direct HTTP-based provider integration.
 
 This repository also contains **[ngn, the Rust harness, TUI and web host](ngn/README.md)**
 under `ngn/`. The Python `nagents` library remains under `src/nagents/`, with its
-own package version and existing interfaces. The two communicate through a private,
+existing interfaces and independently usable APIs. The two communicate through a private,
 versioned runtime protocol; Python does not own Rust tool execution or approvals.
 
-Rust `v0.100.x` releases use a separate [release pipeline](.github/workflows/ngn-release.yml)
-and publish installable Linux binaries and the optional adapter wheel on this
-repository's [Releases page](https://github.com/abi-jey/nagents/releases).
+Starting with **0.100.2**, the library, native application and adapter share one
+version and tag. [CI](.github/workflows/ci.yml) publishes the tested core to PyPI
+first, then calls the [native release workflow](.github/workflows/ngn-release.yml).
+One GitHub release, titled only `v0.100.2`, carries the native assets and the exact
+published core wheel/source distribution; no separate Python GitHub release is created.
 The Rust client is **not yet a feature-complete replacement** for the Python client
 described below; see the [migration checklist](ngn/docs/migration.md).
 Use an extracted Rust binary by its explicit path so it cannot be confused with

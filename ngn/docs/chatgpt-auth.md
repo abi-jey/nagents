@@ -1,7 +1,7 @@
 # ChatGPT device authentication · development only
 
 **Official subscription release requires the matching published Python core.**
-The adapter now requires `nagents>=0.28.6,<0.29`; that core must be published and
+The adapter now requires `nagents>=0.100.2,<0.101`; that core must be published and
 pass the fresh installed release gate first. Published `nagents==0.28.5` does
 **not** contain the public `nagents.provider.device_auth` API. No compatibility
 with that older core is implied for this adapter; the previous 0.100.1 API-key

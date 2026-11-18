@@ -1,11 +1,10 @@
 # Release candidate integrity
 
-Stable releases use the CI workflow's `version_bump` input on `main`, after the
-candidate's checks pass. The bump starts from the triggering SHA, requires that
-SHA still be current main, and uses a non-force push. If main advances, rerun the
-workflow on the new candidate rather than rebasing untested changes into it.
-The only post-test source change is the version bump; build and frontend checks
-run on its exact resulting commit.
+Starting with 0.100.2, `nagents`, the native `ngn` application and its adapter use
+one version and one stable tag, `v0.100.2`. Update their version metadata together
+in reviewed source, then run CI on that exact candidate. The Python-only automatic
+bump is refused for this coordinated series. Historical published versions/tags
+and their files are not changed.
 
 The build job exports its full commit SHA and package version and creates a
 separate `release-manifest` artifact. This records SHA-256 hashes of exactly one
@@ -17,9 +16,14 @@ a moving branch tip. This manifest binds artifacts within the trusted workflow;
 it is not an independent signature or a claim of reproducible dependency builds.
 
 Stable tag names must equal `v<package version>`. An existing stable tag must
-resolve to the exact candidate commit. GitHub releases target that commit
-explicitly, rather than the repository's default branch. Previous stable release
-notes use the latest merged stable tag excluding the candidate version.
+resolve to the exact candidate commit. Core publication is PyPI-only (including
+alpha/dev). After stable PyPI publication succeeds for a shared `v0.100.x` tag,
+CI calls the reusable native release workflow. It fetches the exact public core
+wheel and source distribution, verifies hashes and checked-in Python source, and
+binds the attached wheel to installed runtime bytes. All native/install/browser
+gates precede the sole GitHub release, whose title is exactly the tag. Its manifest
+and SHA256SUMS cover both core files and every native payload. The release starts
+as a draft and existing releases are never overwritten.
 
 Choose only one publication mode per dispatch. Feature alpha versions use the
 existing alpha stamping script. Dev versions are stamped in the build job using

@@ -24,7 +24,19 @@ without changing credentials or conversations. Existing unrelated `ngn` commands
 are never overwritten. Initial installer support is Linux x86_64/glibc 2.39+.
 These bundled assets are not yet published; 0.100.1 is unchanged.
 
-## Run without Python
+**After `v0.100.2` is published**, the version-bound bootstrap is:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/abi-jey/nagents/releases/download/v0.100.2/install.sh | sh
+```
+
+That URL is not an available installer until publication. See
+[where the installer lives, direct binary checksum verification, and local/offline
+installation](docs/installation.md). If a Python `ngn` already owns your command
+path, use a separate bin directory and invoke the installed binary explicitly.
+
+## Source-only offline demo (development tools required)
 
 Requires Rust 1.93+ and a C compiler for bundled SQLite. No Node build is needed.
 
@@ -47,17 +59,21 @@ The web client is at `http://127.0.0.1:8765`. Web serving is **loopback-only**;
 use the exact printed address. It is a trusted local operator application, not a
 multi-user service or sandbox.
 
-## Use nagents as the agent runtime
+## Source/small-native integration only
 
-Install the integration into a **separate environment**, not over an existing
-Python ngn installation:
+The managed bundle already contains its runtime: **skip this Python setup** for
+that installation. For a source build or an older small native archive, install
+the integration into a **new environment**, never over an existing Python ngn:
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e integrations/nagents
-# To use the Python core from this same repository:
-# python -m pip install -e .. -e integrations/nagents
+# From the repository's ngn/ directory; choose another fresh name if it exists.
+if test -e .venv-ngn-runtime || test -L .venv-ngn-runtime; then
+  echo 'Choose a new environment path; do not overwrite an existing venv.' >&2
+  exit 1
+fi
+python3 -m venv .venv-ngn-runtime
+. .venv-ngn-runtime/bin/activate
+python -m pip install -e .. -e integrations/nagents
 
 cp config.example.json config.local.json
 # Edit its provider/model and environment-variable reference for your own account.
@@ -69,7 +85,7 @@ cargo run -p ngn -- --config config.local.json serve
 The managed bundle automatically uses its embedded runtime when `runner` is
 omitted, as in the examples. For a source/small-native installation, `runner` is
 an argv array. Use an absolute environment interpreter path if the
-host will run without activation, e.g. `['/path/to/.venv/bin/python', '-m',
+host will run without activation, e.g. `['/path/to/.venv-ngn-runtime/bin/python', '-I', '-B', '-m',
 'ngn_nagents']` (use JSON double quotes in configuration). No key value belongs in
 the file, browser, URL or command line. `.env` is not loaded automatically.
 
@@ -80,7 +96,7 @@ changes preserve the existing harness import paths rather than embedding that ha
 
 Development-only [ChatGPT device login](docs/chatgpt-auth.md) is an explicit
 `kind: "openai", auth: "chatgpt"` connection with native `auth login|status|logout`
-commands. It requires `nagents>=0.28.6,<0.29`; the official release is blocked until
+commands. It requires `nagents>=0.100.2,<0.101`; the official release is blocked until
 that matching public core is published. The API is **not available in nagents
 0.28.5**. Existing API-key connection semantics are unchanged.
 

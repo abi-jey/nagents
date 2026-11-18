@@ -10,9 +10,11 @@
   foreign executables/unsafe prefixes, and never modify application state/auth.
 - Bundled default runners use a version-specific isolated Python with bytecode
   writes disabled; explicit trusted custom runners are still honored.
-- Coordinate the reusable public-auth core as 0.28.6 and require it in the adapter.
-  Official bundle publication verifies the matching published core, rather than
-  passing source-only APIs off as published compatibility.
+- Share version 0.100.2 across the reusable core, native application and adapter.
+  One tagged CI pipeline publishes the tested core to PyPI before creating the
+  sole GitHub release, titled `v0.100.2`, with both exact public core distributions.
+  Official bundles bind those published bytes to source and runtime content;
+  source-only API availability is not published compatibility.
 - Preserve and reconcile the original local Python work without reverting later
   provider, cancellation, streaming and UI fixes already integrated on main.
 - `./ngn/dev` builds the optimized binary and installed wheels from current working
