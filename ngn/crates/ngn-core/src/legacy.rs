@@ -148,7 +148,7 @@ fn login_file_may_exist(path: &Path) -> bool {
 }
 
 /// Python's workspace overlay identifier: the resolved path's SHA-256, 32 hex digits.
-fn workspace_id(workspace: &Path) -> String {
+pub(crate) fn workspace_id(workspace: &Path) -> String {
     let digest = format!(
         "{:x}",
         Sha256::digest(workspace.to_string_lossy().as_bytes())

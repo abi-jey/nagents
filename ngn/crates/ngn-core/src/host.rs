@@ -142,6 +142,7 @@ impl Host {
             "request_id must be a UUID; reuse it only when retrying the same submission",
         )?;
         self.store.session(session).await?;
+        self.store.ensure_not_archive(session).await?;
         ensure!(
             !self.store.is_child_session(session).await?,
             "Subagent sessions are inspect-only; they cannot be resumed as unrestricted root agents"
@@ -393,6 +394,7 @@ impl Host {
             "request_id must be a UUID; reuse it only when retrying the same submission",
         )?;
         self.root_session(session).await?;
+        self.store.ensure_not_archive(session).await?;
         let mut active = self.active.lock().await;
         ensure!(
             !self.closed.load(Ordering::Acquire),
@@ -434,6 +436,7 @@ impl Host {
         action: QueueAction,
     ) -> Result<QueueState> {
         self.root_session(session).await?;
+        self.store.ensure_not_archive(session).await?;
         let mut active = self.active.lock().await;
         ensure!(
             !self.closed.load(Ordering::Acquire),

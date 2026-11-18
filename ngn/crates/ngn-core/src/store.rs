@@ -355,9 +355,42 @@ impl Store {
 
     pub async fn sessions(&self) -> Result<Vec<Session>> {
         self.with(|db| {
-            let mut statement = db.prepare("SELECT id, title, updated_at_ms FROM sessions WHERE NOT EXISTS (SELECT 1 FROM subagents t WHERE t.child_session_id = sessions.id) ORDER BY updated_at_ms DESC, rowid DESC LIMIT 200")?;
+            let mut statement = db.prepare("SELECT id, title, updated_at_ms FROM sessions
+                WHERE NOT EXISTS (SELECT 1 FROM subagents t WHERE t.child_session_id = sessions.id)
+                ORDER BY EXISTS (SELECT 1 FROM archived_sessions a WHERE a.session_id = sessions.id),
+                    updated_at_ms DESC, rowid DESC LIMIT 200")?;
             Ok(statement.query_map([], |row| Ok(Session { id: row.get(0)?, title: row.get(1)?, updated_at_ms: row.get(2)? }))?.collect::<Result<_, _>>()?)
         }).await
+    }
+
+    pub async fn latest_native_session(&self) -> Result<Option<String>> {
+        self.with(|db| {
+            Ok(db.query_row(
+                "SELECT id FROM sessions
+                 WHERE NOT EXISTS (SELECT 1 FROM subagents t WHERE t.child_session_id = sessions.id)
+                   AND NOT EXISTS (SELECT 1 FROM archived_sessions a WHERE a.session_id = sessions.id)
+                 ORDER BY updated_at_ms DESC, rowid DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            ).optional()?)
+        }).await
+    }
+
+    pub(crate) async fn ensure_not_archive(&self, session: &str) -> Result<()> {
+        let session = session.to_owned();
+        self.with(move |db| {
+            let archived: bool = db.query_row(
+                "SELECT EXISTS (SELECT 1 FROM archived_sessions WHERE session_id = ?)",
+                [&session],
+                |row| row.get(0),
+            )?;
+            ensure!(
+                !archived,
+                "Python archives are read-only; start a new session"
+            );
+            Ok(())
+        })
+        .await
     }
 
     pub async fn session(&self, id: &str) -> Result<Session> {

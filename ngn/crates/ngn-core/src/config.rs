@@ -66,7 +66,7 @@ impl Default for Config {
         Self {
             config_version: 1,
             workspace: PathBuf::from("."),
-            // Deliberately isolated from the Python ngn state until explicit migration.
+            // Native state is always separate from the Python ngn database.
             data_dir: base.join("ngn-rust"),
             backend: Backend::Nagents,
             runner: vec!["python".into(), "-m".into(), "ngn_nagents".into()],

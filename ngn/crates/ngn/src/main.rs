@@ -143,8 +143,8 @@ async fn session(host: &Host, resume: Option<&str>, continue_session: bool) -> R
     if let Some(resume) = resume {
         return Ok(host.store.session(resume).await?.id);
     }
-    if continue_session && let Some(session) = host.store.sessions().await?.into_iter().next() {
-        return Ok(session.id);
+    if continue_session && let Some(id) = host.store.latest_native_session().await? {
+        return Ok(id);
     }
     Ok(host.store.create_session().await?.id)
 }
@@ -385,8 +385,34 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
         }
         return Ok(0);
     }
+    if cli.command.is_none() {
+        ensure!(
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            "The TUI needs a terminal; use ngn run --json PROMPT for scripts"
+        );
+    }
     let wire_log = wire_log_enabled(wire_log_override)?;
+    let history = ngn_core::upgrade::PythonHistory::discover(&config.workspace);
+    if let Ok(Some(history)) = &history {
+        history.ensure_separate(&config)?;
+    }
     let host = Host::open_with_wire_log(config, wire_log)?;
+    let imported = match history {
+        Ok(Some(history)) => history.append(&host).await,
+        Ok(None) => Ok(0),
+        Err(error) => Err(error),
+    };
+    match imported {
+        Ok(0) => (),
+        Ok(count) => {
+            eprintln!("ngn: copied {count} read-only Python archives into this workspace.")
+        }
+        Err(error) => eprintln!(
+            "ngn: Python history was not copied: {}. Startup is continuing. \
+             Close Python ngn and retry, or use `ngn upgrade --from BACKUP --data-dir FRESH_DIR` with a standalone backup.",
+            view::plain(&format!("{error:#}"))
+        ),
+    }
     if cli.command.is_some() && host.runtime_log_path().is_none() {
         eprintln!("ngn: runtime log unavailable; continuing without it");
     }
@@ -426,10 +452,6 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
                 | Commands::Upgrade { .. },
             ) => unreachable!(),
             None => {
-                ensure!(
-                    std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-                    "The TUI needs a terminal; use ngn run --json PROMPT for scripts"
-                );
                 let id = session(&host, cli.resume.as_deref(), cli.continue_session).await?;
                 tui::run(host.clone(), id).await?;
                 Ok(0)

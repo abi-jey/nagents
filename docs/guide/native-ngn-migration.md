@@ -11,9 +11,12 @@ Their similar command names do not imply matching configuration or HTTP APIs.
   `~/.local/share/ngn-harness`; the command defaults to `~/.local/bin/ngn`.
 - Native host state: `$XDG_DATA_HOME/ngn-rust/workspaces/<workspace-hash>/`, or
   `~/.local/share/ngn-rust/...`; runtime conversation storage is separately owned.
-- Existing Python client state/config remains under `ngn`, not `ngn-rust`.
-  Native startup never implicitly imports its config, databases, credentials,
-  plugins or agent definitions.
+- Existing Python client state/config remains separate. Normal native startup
+  on Linux and macOS can make a one-time copy of supported Python transcripts
+  as read-only archives in the selected native workspace. It never opens the
+  original as the native store or imports credentials, tool state, plugins or
+  agent definitions. See [Python session history](https://github.com/abi-jey/nagents/blob/main/ngn/README.md#python-session-history)
+  for supported paths and the manual backup fallback.
 - Select a distinct `--bin-dir` if a Python/foreign `ngn` is already installed,
   and use the explicit binary path. Installation never overwrites that command
   or repairs unsafe existing paths with chmod.
@@ -24,9 +27,8 @@ to the [Python client](ngn.md), not the native installer guide.
 
 ## Stop and back up before opening important state
 
-The 0.100.2 native host uses **SQLite schema 4**, transactionally upgraded from
-schema 3 for steering receipts while preserving queue/event state. Before
-starting a newer host on important data:
+The native host uses **SQLite schema 5** for read-only archives in addition to
+schema 4's steering receipts. Before starting a newer host on important data:
 
 1. Stop the existing host and its owned runners cleanly.
 2. Back up the complete selected native workspace state and runtime-owned
@@ -35,7 +37,7 @@ starting a newer host on important data:
 3. Review the release's schema instructions, then start the intended native
    binary with the intended workspace/state paths.
 
-Schema-3 binaries refuse schema 4. Downgrade only using a separate compatible
+Older binaries refuse newer schemas. Downgrade only using a separate compatible
 state directory or a consistent pre-upgrade backup; **never edit SQLite
 `user_version`** to force it. The updater retaining an older generation does not
 make an upgraded database backward-compatible. Updates do not migrate a legacy
