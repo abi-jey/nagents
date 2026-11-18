@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use crossterm::{
     event::{
         DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
-        KeyEventKind, KeyModifiers,
+        KeyEvent, KeyEventKind, KeyModifiers,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -20,7 +20,7 @@ use ngn_core::{
     host::Approval,
     queues::{QueueAction, QueueState},
     steering::{SteeringState, SteeringStatus},
-    store::{Run, Session},
+    store::Run,
 };
 use ngn_protocol::{EventRecord, TaskInfo};
 use ratatui::{
@@ -37,9 +37,10 @@ use uuid::Uuid;
 use crate::view;
 
 mod footer;
+mod picker;
 
 const HELP: &str = "\
-F2  Conversations (/sessions, /resume ID)
+F2  Conversations (/sessions, /resume; /resume ID opens directly)
 F3  New conversation (/new)
 F4  Toggle tool details
 F5  Subagents (/tasks)
@@ -70,7 +71,6 @@ struct SteeringSubmission {
 #[derive(Default)]
 struct App {
     session: String,
-    sessions: Vec<Session>,
     records: Vec<EventRecord>,
     after: i64,
     input: String,
@@ -83,8 +83,7 @@ struct App {
     scroll: u16,
     preview_scroll: u16,
     details: bool,
-    picker: bool,
-    picker_index: usize,
+    picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
     task_picker: bool,
     task_index: usize,
@@ -261,7 +260,29 @@ impl App {
     }
 
     fn shows_overlay(&self) -> bool {
-        self.help || self.picker || self.task_picker || self.queue_picker || self.steering_picker
+        self.help
+            || self.picker.is_some()
+            || self.task_picker
+            || self.queue_picker
+            || self.steering_picker
+    }
+
+    async fn open_picker(&mut self, host: &Host) -> Result<()> {
+        self.picker = Some(picker::Picker::new(host.store.sessions().await?));
+        Ok(())
+    }
+
+    async fn picker_key(&mut self, host: &Host, key: KeyEvent) -> Result<()> {
+        match self.picker.as_mut().and_then(|picker| picker.key(key)) {
+            Some(picker::Choice::Close) => self.picker = None,
+            Some(picker::Choice::New) => {
+                self.switch(host, host.store.create_session().await?.id)
+                    .await?;
+            }
+            Some(picker::Choice::Existing(id)) => self.switch(host, id).await?,
+            None => (),
+        }
+        Ok(())
     }
 
     async fn switch(&mut self, host: &Host, id: String) -> Result<()> {
@@ -270,7 +291,7 @@ impl App {
         self.after = 0;
         self.records.clear();
         self.scroll = 0;
-        self.picker = false;
+        self.picker = None;
         self.task_picker = false;
         self.task_detail = false;
         self.queue_picker = false;
@@ -389,35 +410,6 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
         rows[2],
     );
     app.activity.draw(frame, footer, app, &host.config, now);
-    if app.picker {
-        let area = center(frame.area(), 90, 22);
-        frame.render_widget(Clear, area);
-        let items = app.sessions.iter().enumerate().map(|(index, session)| {
-            ListItem::new(format!(
-                "{}{}  {}",
-                if index == app.picker_index {
-                    "› "
-                } else {
-                    "  "
-                },
-                view::plain(&session.title),
-                session.id
-            ))
-            .style(if index == app.picker_index {
-                Style::new().fg(accent)
-            } else {
-                Style::default()
-            })
-        });
-        let mut selection = ListState::default().with_selected(Some(app.picker_index));
-        frame.render_stateful_widget(
-            List::new(items).block(
-                Block::bordered().title(" Conversations · ↑/↓ select · Enter open · Esc close "),
-            ),
-            area,
-            &mut selection,
-        );
-    }
     if app.task_picker {
         let area = center(frame.area(), 110, 30);
         frame.render_widget(Clear, area);
@@ -544,6 +536,9 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 ),
             area,
         );
+    }
+    if let Some(picker) = &app.picker {
+        picker.draw(frame, accent, muted);
     }
 }
 
@@ -732,10 +727,8 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     if input == "/new" {
         app.switch(host, host.store.create_session().await?.id)
             .await?;
-    } else if input == "/sessions" {
-        app.sessions = host.store.sessions().await?;
-        app.picker_index = 0;
-        app.picker = true;
+    } else if matches!(input.as_str(), "/sessions" | "/resume") {
+        app.open_picker(host).await?;
     } else if let Some(id) = input.strip_prefix("/resume ") {
         app.switch(host, id.trim().to_owned()).await?;
     } else if input == "/help" {
@@ -805,7 +798,6 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let mut app = App {
         session,
-        sessions: Vec::new(),
         records: Vec::new(),
         after: 0,
         input: String::new(),
@@ -819,8 +811,6 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         scroll: 0,
         preview_scroll: 0,
         details: false,
-        picker: false,
-        picker_index: 0,
         tasks: Vec::new(),
         task_picker: false,
         task_index: 0,
@@ -884,6 +874,10 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if control && key.code == KeyCode::Char('q') { break; }
                         if control && key.code == KeyCode::Char('c') { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } else { break; } continue; }
+                        if app.picker.is_some() {
+                            app.picker_key(&host, key).await?;
+                            continue;
+                        }
                         if key.code == KeyCode::F(7) { app.steering_picker = !app.steering_picker; app.steering_scroll = 0; app.steering_dirty = true; app.state(&host).await; continue; }
                         if app.steering_picker {
                             match key.code {
@@ -943,20 +937,10 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             }
                             app.state(&host).await; continue;
                         }
-                        if app.picker {
-                            match key.code {
-                                KeyCode::Esc => app.picker = false,
-                                KeyCode::Up => app.picker_index = app.picker_index.saturating_sub(1),
-                                KeyCode::Down => app.picker_index = (app.picker_index + 1).min(app.sessions.len().saturating_sub(1)),
-                                KeyCode::Enter => { if let Some(session) = app.sessions.get(app.picker_index) { let id = session.id.clone(); app.switch(&host, id).await?; } },
-                                _ => (),
-                            }
-                            continue;
-                        }
                         match key.code {
                             KeyCode::Esc => { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } },
                             KeyCode::F(1) => { app.help = true; app.help_scroll = 0; },
-                            KeyCode::F(2) => { app.sessions = host.store.sessions().await?; app.picker = true; app.picker_index = 0; },
+                            KeyCode::F(2) => app.open_picker(&host).await?,
                             KeyCode::F(3) => { app.switch(&host, host.store.create_session().await?.id).await?; },
                             KeyCode::F(4) => app.details = !app.details,
                             KeyCode::F(5) => { app.task_picker = true; app.task_detail = false; app.task_index = 0; app.state(&host).await; },
@@ -970,7 +954,14 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             _ => (),
                         }
                     }
-                    TerminalEvent::Paste(text) if !app.shows_overlay() => { let text = view::plain(&text); if app.input.len() + text.len() <= 32_000 { app.input.push_str(&text); } else { app.status = "Paste exceeds 32000 UTF-8 bytes".into(); } },
+                    TerminalEvent::Paste(text) => {
+                        if let Some(picker) = &mut app.picker {
+                            picker.paste(&text);
+                        } else if !app.shows_overlay() {
+                            let text = view::plain(&text);
+                            if app.input.len() + text.len() <= 32_000 { app.input.push_str(&text); } else { app.status = "Paste exceeds 32000 UTF-8 bytes".into(); }
+                        }
+                    }
                     _ => (),
                 }
             }
@@ -1275,30 +1266,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let mut app = App {
+        let app = App {
             session: "ngn-test".into(),
-            sessions: Vec::new(),
-            records: Vec::new(),
-            after: 0,
             input: "hello".into(),
             status: "Ready".into(),
-            active: None,
-            approval: None,
-            scroll: 0,
-            preview_scroll: 0,
-            details: false,
-            picker: false,
-            picker_index: 0,
-            tasks: Vec::new(),
-            task_picker: false,
-            task_index: 0,
-            task_detail: false,
-            task_records: Vec::new(),
-            task_after: 0,
-            queue: QueueState::default(),
-            queue_picker: false,
-            queue_index: 0,
-            submission: None,
             ..App::default()
         };
         for (width, height) in [(1, 1), (20, 6), (40, 12), (120, 40)] {
@@ -1308,30 +1279,82 @@ mod tests {
                 .draw(|frame| draw(frame, &app, &host, Instant::now()))
                 .unwrap();
         }
-        app.picker = true;
-        app.picker_index = 29;
-        app.sessions = (0..30)
-            .map(|index| Session {
-                id: format!("session-{index}"),
-                title: format!("Conversation{index}"),
-                updated_at_ms: 0,
-            })
-            .collect();
-        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
-        terminal
-            .draw(|frame| draw(frame, &app, &host, Instant::now()))
+    }
+
+    #[tokio::test]
+    async fn session_picker_preserves_draft_and_active_work_and_opens_exact_id() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let first = host.store.create_session().await.unwrap();
+        let second = host.store.create_session().await.unwrap();
+        assert_eq!(first.title, second.title);
+        let run = host
+            .start(
+                &first.id,
+                "demo hold",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Interactive,
+            )
+            .await
             .unwrap();
-        let contents: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(
-            contents.contains("Conversation29"),
-            "Selected conversation must scroll into view"
-        );
+        let mut app = App {
+            session: first.id.clone(),
+            input: "unsent draft".into(),
+            scroll: 13,
+            ..App::default()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.state(&host).await;
+        app.open_picker(&host).await.unwrap(); // F2
+        app.picker_key(&host, key(KeyCode::Char('x')))
+            .await
+            .unwrap();
+        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap(); // no match
+        assert!(app.picker.is_some());
+        assert_eq!(app.session, first.id);
+        app.picker_key(&host, key(KeyCode::Esc)).await.unwrap();
+        assert!(app.picker.is_none());
+        assert_eq!(app.input, "unsent draft");
+        assert_eq!(app.scroll, 13);
+        assert!(host.active().await.iter().any(|active| active.id == run.id));
+
+        app.input = "/sessions".into();
+        assert!(!submit(&mut app, &host).await.unwrap());
+        app.picker
+            .as_mut()
+            .unwrap()
+            .paste(&second.id.to_uppercase());
+        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap();
+        assert_eq!(app.session, second.id);
+        assert!(app.picker.is_none());
+        assert_eq!(host.store.sessions().await.unwrap().len(), 2);
+        assert!(host.active().await.iter().any(|active| active.id == run.id));
+
+        app.input = format!("/resume {}", &first.id[..12]);
+        assert!(submit(&mut app, &host).await.is_err());
+        assert_eq!(app.session, second.id);
+        app.input = format!("/resume {}", first.id);
+        assert!(!submit(&mut app, &host).await.unwrap());
+        assert_eq!(app.session, first.id);
+        assert!(app.picker.is_none());
+
+        app.input = "/resume".into();
+        assert!(!submit(&mut app, &host).await.unwrap());
+        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap(); // explicit New row
+        assert_ne!(app.session, first.id);
+        assert_ne!(app.session, second.id);
+        assert_eq!(host.store.sessions().await.unwrap().len(), 3);
+        host.shutdown().await;
     }
 
     #[tokio::test]
@@ -1375,7 +1398,6 @@ mod tests {
         .unwrap();
         let mut app = App {
             session: session.id.clone(),
-            sessions: Vec::new(),
             records: Vec::new(),
             after: 0,
             input: String::new(),
@@ -1385,8 +1407,6 @@ mod tests {
             scroll: 0,
             preview_scroll: 0,
             details: false,
-            picker: false,
-            picker_index: 0,
             tasks: Vec::new(),
             task_picker: true,
             task_index: 0,
