@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ngn_protocol::{Event, EventRecord, ToolCall};
+use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
 
 /// Compact, bounded units; the wire continues to carry integer milliseconds.
 pub fn duration(milliseconds: u64) -> String {
@@ -85,11 +85,215 @@ pub fn plain(text: &str) -> String {
         .collect()
 }
 
-pub fn transcript(records: &[EventRecord], details: bool) -> String {
+enum ToolState<'a> {
+    Running {
+        since_ms: u64,
+    },
+    Waiting {
+        resume_ms: Option<u64>,
+    },
+    Denied,
+    Completed {
+        result: &'a ToolResult,
+        elapsed_ms: u64,
+        denied: bool,
+    },
+}
+
+struct ToolRow<'a> {
+    index: usize,
+    call: Option<&'a ToolCall>,
+    state: ToolState<'a>,
+    active_ms: u64,
+}
+
+impl<'a> ToolRow<'a> {
+    fn new(index: usize, call: Option<&'a ToolCall>, since_ms: u64) -> Self {
+        Self {
+            index,
+            call,
+            state: ToolState::Running { since_ms },
+            active_ms: 0,
+        }
+    }
+
+    fn render(&self, output: &mut String, details: bool, now_ms: u64, finished: Option<RunStatus>) {
+        use std::fmt::Write as _;
+
+        let (status, result) = match self.state {
+            ToolState::Completed {
+                result,
+                elapsed_ms,
+                denied,
+            } => (
+                format!(
+                    "{} · {}",
+                    if denied {
+                        "denied"
+                    } else if result.error.is_empty() {
+                        "complete"
+                    } else {
+                        "failed"
+                    },
+                    duration(elapsed_ms)
+                ),
+                Some(result),
+            ),
+            ToolState::Denied => (format!("denied · {}", duration(self.active_ms)), None),
+            _ if finished.is_some() => (
+                match finished {
+                    Some(RunStatus::Cancelled) => "cancelled",
+                    Some(RunStatus::Failed) => "failed",
+                    _ => "interrupted",
+                }
+                .into(),
+                None,
+            ),
+            ToolState::Waiting { .. } => (
+                format!("Approval waiting · active {}", duration(self.active_ms)),
+                None,
+            ),
+            ToolState::Running { since_ms } => (
+                format!(
+                    "running · {}",
+                    duration(
+                        self.active_ms
+                            .saturating_add(now_ms.saturating_sub(since_ms))
+                    )
+                ),
+                None,
+            ),
+        };
+        let (name, hint) = self.call.map_or_else(
+            || {
+                (
+                    result.map_or("", |result| result.name.as_str()),
+                    String::new(),
+                )
+            },
+            |call| (call.name.as_str(), target(call)),
+        );
+        let _ = write!(output, "\n  ◇ {name}{hint} · {status}");
+        if let Some(result) = result.filter(|result| !result.error.is_empty()) {
+            let _ = write!(output, ": {}", result.error);
+        }
+        output.push('\n');
+        if details {
+            if let Some(call) = self.call {
+                output.push_str(&ngn_core::tools::bounded(&call.arguments.to_string(), 4096));
+                output.push('\n');
+            }
+            if let Some(result) = result.filter(|result| !result.result.is_null()) {
+                output.push_str(&ngn_core::tools::bounded(&result.result.to_string(), 4096));
+                output.push('\n');
+            }
+        }
+    }
+}
+
+/// Project each tool into the position of its first retained event, not a new
+/// transcript row at every transition. The durable event history is unchanged.
+fn tool_rows(records: &[EventRecord]) -> HashMap<usize, (ToolRow<'_>, Option<RunStatus>)> {
+    let mut calls = HashMap::new();
+    let mut approvals = HashMap::new();
+    let mut finished = HashMap::new();
+    for (index, record) in records.iter().enumerate() {
+        let run = record.run_id.as_str();
+        let timestamp = record.timestamp_ms;
+        match &record.event {
+            Event::ToolStarted { call } => {
+                calls
+                    .entry((run, call.call_id.as_str()))
+                    .or_insert_with(|| ToolRow::new(index, Some(call), timestamp));
+            }
+            Event::ApprovalRequested {
+                approval_id, call, ..
+            } => {
+                let key = (run, call.call_id.as_str());
+                approvals.insert((run, approval_id.as_str()), key);
+                let row = calls
+                    .entry(key)
+                    .or_insert_with(|| ToolRow::new(index, Some(call), timestamp));
+                if let ToolState::Running { since_ms } = row.state {
+                    row.active_ms = row
+                        .active_ms
+                        .saturating_add(timestamp.saturating_sub(since_ms));
+                    row.state = ToolState::Waiting { resume_ms: None };
+                }
+            }
+            Event::ToolApprovalTiming {
+                call_id,
+                elapsed_ms,
+                waiting,
+            } => {
+                if let Some(row) = calls.get_mut(&(run, call_id.as_str()))
+                    && matches!(
+                        row.state,
+                        ToolState::Running { .. } | ToolState::Waiting { .. }
+                    )
+                {
+                    row.active_ms = *elapsed_ms;
+                    // Resume timing is emitted even on denial. Let the exact
+                    // approval decision, not this clock sample, release the row.
+                    if *waiting {
+                        row.state = ToolState::Waiting { resume_ms: None };
+                    } else if let ToolState::Waiting { resume_ms } = &mut row.state {
+                        *resume_ms = Some(timestamp);
+                    }
+                }
+            }
+            Event::ApprovalResolved {
+                approval_id,
+                allowed,
+            } => {
+                if let Some(key) = approvals.remove(&(run, approval_id.as_str()))
+                    && let Some(row) = calls.get_mut(&key)
+                    && let ToolState::Waiting { resume_ms } = row.state
+                {
+                    row.state = if *allowed {
+                        ToolState::Running {
+                            since_ms: resume_ms.unwrap_or(timestamp),
+                        }
+                    } else {
+                        ToolState::Denied
+                    };
+                }
+            }
+            Event::ToolCompleted {
+                result,
+                duration_ms,
+            } => {
+                let row = calls
+                    .entry((run, result.call_id.as_str()))
+                    .or_insert_with(|| ToolRow::new(index, None, timestamp));
+                if !matches!(row.state, ToolState::Completed { .. }) {
+                    row.state = ToolState::Completed {
+                        result,
+                        elapsed_ms: *duration_ms,
+                        denied: matches!(row.state, ToolState::Denied),
+                    };
+                }
+            }
+            Event::RunFinished { status, .. } => {
+                finished.insert(run, *status);
+            }
+            _ => (),
+        }
+    }
+    calls
+        .into_iter()
+        .map(|((run, _), row)| (row.index, (row, finished.get(run).copied())))
+        .collect()
+}
+
+pub fn transcript(records: &[EventRecord], details: bool, now_ms: u64) -> String {
     let mut output = String::new();
     let mut streamed = false;
-    let mut calls = HashMap::new();
-    for record in records {
+    let rows = tool_rows(records);
+    for (index, record) in records.iter().enumerate() {
+        if let Some((row, finished)) = rows.get(&index) {
+            row.render(&mut output, details, now_ms, *finished);
+        }
         match &record.event {
             Event::QueueUpdated { paused } => output.push_str(if *paused {
                 "\n[Input queue paused · resume explicitly]\n"
@@ -111,53 +315,7 @@ pub fn transcript(records: &[EventRecord], details: bool) -> String {
                 output.push('\n');
                 streamed = false;
             }
-            Event::ToolStarted { call } => {
-                let hint = target(call);
-                calls.insert((&record.run_id, &call.call_id), hint.clone());
-                output.push_str(&format!("\n  ◇ {}{hint}\n", call.name));
-                if details {
-                    output.push_str(&ngn_core::tools::bounded(&call.arguments.to_string(), 4096));
-                    output.push('\n');
-                }
-                streamed = false;
-            }
-            Event::ToolCompleted {
-                result,
-                duration_ms,
-            } => {
-                let hint = calls
-                    .get(&(&record.run_id, &result.call_id))
-                    .cloned()
-                    .unwrap_or_default();
-                if !result.error.is_empty() {
-                    output.push_str(&format!(
-                        "  ! {}{hint} · {}: {}\n",
-                        result.name,
-                        duration(*duration_ms),
-                        result.error
-                    ));
-                } else {
-                    output.push_str(&format!(
-                        "  ✓ {}{hint} · {}\n",
-                        result.name,
-                        duration(*duration_ms)
-                    ));
-                }
-                if details && !result.result.is_null() {
-                    output.push_str(&ngn_core::tools::bounded(&result.result.to_string(), 4096));
-                    output.push('\n');
-                }
-            }
-            Event::ToolApprovalTiming {
-                elapsed_ms,
-                waiting: true,
-                ..
-            } => {
-                output.push_str(&format!(
-                    "  [Approval waiting · active {}]\n",
-                    duration(*elapsed_ms)
-                ));
-            }
+            Event::ToolStarted { .. } => streamed = false,
             Event::Notice { text } => output.push_str(&format!("\n{text}\n")),
             Event::TaskStarted { task } => output.push_str(&format!(
                 "\n  ↳ Agent {} [{}] started · depth {}{}\n",
@@ -200,6 +358,187 @@ pub fn transcript(records: &[EventRecord], details: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event(run: &str, timestamp_ms: u64, event: Event) -> EventRecord {
+        EventRecord {
+            schema_version: 1,
+            sequence: timestamp_ms as i64,
+            run_id: run.into(),
+            session_id: "ngn-test".into(),
+            timestamp_ms,
+            event,
+        }
+    }
+
+    fn call(id: &str, command: &str) -> ToolCall {
+        ToolCall {
+            call_id: id.into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"command": command}),
+        }
+    }
+
+    fn timing(call_id: &str, elapsed_ms: u64, waiting: bool) -> Event {
+        Event::ToolApprovalTiming {
+            call_id: call_id.into(),
+            elapsed_ms,
+            waiting,
+        }
+    }
+
+    fn request(call: &ToolCall, approval_id: &str) -> Event {
+        Event::ApprovalRequested {
+            approval_id: approval_id.into(),
+            call: call.clone(),
+            preview: "shell preview".into(),
+        }
+    }
+
+    fn decision(approval_id: &str, allowed: bool) -> Event {
+        Event::ApprovalResolved {
+            approval_id: approval_id.into(),
+            allowed,
+        }
+    }
+
+    fn complete(call: &ToolCall, duration_ms: u64, error: &str) -> Event {
+        Event::ToolCompleted {
+            result: ToolResult {
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                result: if error.is_empty() {
+                    serde_json::json!({"stdout": "tool output"})
+                } else {
+                    serde_json::Value::Null
+                },
+                error: error.into(),
+            },
+            duration_ms,
+        }
+    }
+
+    #[test]
+    fn approval_freezes_only_its_call_and_running_reuses_the_same_row() {
+        let first = call("shared", "first");
+        let other = call("other", "other");
+        let second_run = call("shared", "second-run");
+        let mut records = vec![
+            event(
+                "r1",
+                1000,
+                Event::ToolStarted {
+                    call: first.clone(),
+                },
+            ),
+            event("r1", 1001, request(&first, "approval")),
+            event("r1", 1002, timing("shared", 8, true)),
+            event("r1", 1003, Event::ToolStarted { call: other }),
+            // Even a reused approval ID must not switch the other run.
+            event("r2", 1004, request(&second_run, "approval")),
+            event("r2", 1005, timing("shared", 12, true)),
+        ];
+        let waiting = transcript(&records, false, 9100);
+        assert_eq!(
+            waiting,
+            "\n  ◇ shell · first · Approval waiting · active 8ms\n\
+             \n  ◇ shell · other · running · 8.1s\n\
+             \n  ◇ shell · second-run · Approval waiting · active 12ms\n"
+        );
+        records.push(event("r1", 9100, timing("shared", 8, false)));
+        assert_eq!(transcript(&records, false, 9100), waiting);
+        records.push(event("r1", 9101, decision("approval", true)));
+        let running = transcript(&records, false, 9300);
+        assert!(running.starts_with("\n  ◇ shell · first · running · 208ms\n"));
+        assert!(running.ends_with("second-run · Approval waiting · active 12ms\n"));
+        assert!(transcript(&records, false, 10342).contains("first · running · 1.25s"));
+        records.push(event("r1", 14112, complete(&first, 5012, "")));
+        let terminal = transcript(&records, false, 17000);
+        assert!(terminal.starts_with("\n  ◇ shell · first · complete · 5.01s\n"));
+        assert_eq!(terminal.matches("◇ shell · first").count(), 1);
+        assert_eq!(terminal.lines().count(), running.lines().count());
+        assert!(!terminal.contains("tool output"));
+        assert!(transcript(&records, true, 17000).starts_with(
+            "\n  ◇ shell · first · complete · 5.01s\n{\"command\":\"first\"}\n{\"stdout\":\"tool output\"}\n"
+        ));
+    }
+
+    #[test]
+    fn denial_does_not_run_even_between_clock_resume_and_completion() {
+        let call = call("call", "denial");
+        let mut records = vec![
+            event("r1", 0, request(&call, "approval")),
+            event("r1", 8, timing("call", 8, true)),
+            event("r1", 5000, timing("call", 8, false)),
+        ];
+        assert!(transcript(&records, false, 5001).contains("Approval waiting · active 8ms"));
+        records.push(event("r1", 5001, decision("approval", false)));
+        assert_eq!(
+            transcript(&records, false, 6000),
+            "\n  ◇ shell · denial · denied · 8ms\n"
+        );
+        records.push(event(
+            "r1",
+            5002,
+            complete(&call, 10, "Tool approval denied"),
+        ));
+        let denied = "\n  ◇ shell · denial · denied · 10ms: Tool approval denied\n";
+        assert_eq!(transcript(&records, false, 6000), denied);
+        assert_eq!(transcript(&records, false, 60000), denied);
+    }
+
+    #[test]
+    fn unfinished_tools_stop_at_their_run_boundary() {
+        let running = call("a", "running");
+        let waiting = call("b", "waiting");
+        for (status, label) in [
+            (RunStatus::Cancelled, "cancelled"),
+            (RunStatus::Failed, "failed"),
+            (RunStatus::Interrupted, "interrupted"),
+            (RunStatus::Completed, "interrupted"),
+        ] {
+            let records = [
+                event(
+                    "r1",
+                    1,
+                    Event::ToolStarted {
+                        call: running.clone(),
+                    },
+                ),
+                event("r1", 2, request(&waiting, "approval")),
+                event(
+                    "r2",
+                    3,
+                    Event::ToolStarted {
+                        call: call("a", "survivor"),
+                    },
+                ),
+                event(
+                    "r1",
+                    4,
+                    Event::RunFinished {
+                        status,
+                        error: String::new(),
+                    },
+                ),
+            ];
+            let output = transcript(&records, false, 10000);
+            assert!(output.contains(&format!("shell · running · {label}\n")));
+            assert!(output.contains(&format!("shell · waiting · {label}\n")));
+            assert!(output.contains("shell · survivor · running · 10s\n"));
+            assert!(!output.contains("Approval waiting"));
+        }
+    }
+
+    #[test]
+    fn failed_completion_is_rendered_even_without_a_retained_start() {
+        let call = call("a", "lost");
+        let records = [event("r1", 1, complete(&call, 1220, "execution failed"))];
+        assert_eq!(
+            transcript(&records, false, 10000),
+            "\n  ◇ shell · failed · 1.22s: execution failed\n"
+        );
+    }
+
     #[test]
     fn control_sequences_are_removed() {
         assert_eq!(plain("hello\x1b[2J\x00\u{9f}\nworld"), "hello[2J\nworld");
@@ -265,7 +604,7 @@ mod tests {
                 text: format!("{}LATEST", "🦀".repeat(150_000)),
             },
         };
-        let output = transcript(&[record], false);
+        let output = transcript(&[record], false, 0);
         assert!(output.ends_with("LATEST\n"));
         assert!(output.len() <= 512_000);
     }
