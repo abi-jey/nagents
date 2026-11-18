@@ -431,9 +431,9 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
         assert manifest.get("bundle") == f"ngn-v{version}-{platform_name}-bundle.tar.gz", "Invalid bundled archive name"
     # A merged release also carries other platforms: their own manifest and assets only.
     others = {
-        name: name.removeprefix("release-manifest-").removesuffix(".json")
-        for name in (manifest_name(other) for other in bundle.PLATFORMS if other != platform_name)
-        if (output / name).is_file()
+        manifest_name(other): other
+        for other in bundle.PLATFORMS
+        if other != platform_name and (output / manifest_name(other)).is_file()
     }
     foreign = {name for other in others.values() for name in platform_assets(version, other)} | set(others)
     assert set(manifest["artifacts"]) == expected, "Missing or unexpected release assets"
