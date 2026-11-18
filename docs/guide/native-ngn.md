@@ -25,9 +25,7 @@ ngn --demo serve    # same, in the browser at the printed loopback URL
 
 Options: `sh -s -- --prefix DIR --bin-dir DIR`. The installer never overwrites an
 existing unrelated `ngn` (such as the Python client); pick another `--bin-dir` instead.
-It refuses world-writable or foreign-owned parent directories. Group-writable
-directories are accepted only when the group is your private group (the
-Debian/Ubuntu `umask 0002` default).
+It refuses world-writable or foreign-owned parent directories.
 
 ### Manual install
 
