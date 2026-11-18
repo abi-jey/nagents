@@ -122,6 +122,7 @@ pub(crate) async fn stdio(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    host.config.runner_environment(&mut command);
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().context("Cannot start agent runner; install integrations/nagents into the runner's Python environment")?;
@@ -296,7 +297,7 @@ fn validate_capabilities(capabilities: &[String], auth: ProviderAuth) -> Result<
             || capabilities
                 .iter()
                 .any(|capability| capability == "chatgpt_auth"),
-        "Runtime lacks chatgpt_auth. ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5; install a source-built core containing that API and this adapter. Official subscription release is blocked until a new core version is published."
+        "Runtime lacks chatgpt_auth. ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5. Install nagents>=0.28.6 and the matching adapter, or source-built equivalents containing that API."
     );
     Ok(())
 }

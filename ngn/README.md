@@ -14,6 +14,16 @@ parity**. See [migration status](docs/migration.md) and [release notes](docs/rel
 `0.100.1` adds durable Rust-owned FIFO input queues with matching TUI/web controls.
 See the [patch notes](docs/releases/0.100.1.md) before upgrading important state.
 
+## Install and update (0.100.2 development)
+
+The new [managed installer](docs/installation.md) bundles pinned CPython, the
+matching core/adapter, dependency wheels and CA certificates. It needs no existing
+Python, pip, Rust or Node installation. `ngn update --check` checks for a newer
+stable harness; `ngn update` verifies/stages it and atomically switches versions
+without changing credentials or conversations. Existing unrelated `ngn` commands
+are never overwritten. Initial installer support is Linux x86_64/glibc 2.39+.
+These bundled assets are not yet published; 0.100.1 is unchanged.
+
 ## Run without Python
 
 Requires Rust 1.93+ and a C compiler for bundled SQLite. No Node build is needed.
@@ -56,7 +66,9 @@ cargo run -p ngn -- --config config.local.json
 cargo run -p ngn -- --config config.local.json serve
 ```
 
-`runner` is an argv array. Use an absolute environment interpreter path if the
+The managed bundle automatically uses its embedded runtime when `runner` is
+omitted, as in the examples. For a source/small-native installation, `runner` is
+an argv array. Use an absolute environment interpreter path if the
 host will run without activation, e.g. `['/path/to/.venv/bin/python', '-m',
 'ngn_nagents']` (use JSON double quotes in configuration). No key value belongs in
 the file, browser, URL or command line. `.env` is not loaded automatically.
@@ -68,8 +80,9 @@ changes preserve the existing harness import paths rather than embedding that ha
 
 Development-only [ChatGPT device login](docs/chatgpt-auth.md) is an explicit
 `kind: "openai", auth: "chatgpt"` connection with native `auth login|status|logout`
-commands. Its official release is blocked until the new public core auth API is
-published; it is **not available in nagents 0.28.5**. API-key connections are unchanged.
+commands. It requires `nagents>=0.28.6,<0.29`; the official release is blocked until
+that matching public core is published. The API is **not available in nagents
+0.28.5**. Existing API-key connection semantics are unchanged.
 
 ## Controls
 

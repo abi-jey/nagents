@@ -14,7 +14,7 @@ case "${1:-all}" in
     case "$1" in
       python-lint) python -m ruff check integrations/nagents scripts ;;
       python-format) python -m ruff format --check integrations/nagents scripts ;;
-      python-types) python -m mypy --strict integrations/nagents/src integrations/nagents/tests ;;
+      python-types) python -m mypy --strict integrations/nagents/src integrations/nagents/tests scripts/bundle.py scripts/dev.py scripts/release.py scripts/install_smoke.py ;;
       python-tests)
         python -m unittest discover -s integrations/nagents/tests -v
         python -m unittest discover -s scripts -p 'test_*.py' -v ;;

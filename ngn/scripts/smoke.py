@@ -444,6 +444,9 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=ROOT / "target/debug/ngn")
     parser.add_argument("--skip-tui", action="store_true")
+    parser.add_argument(
+        "--bundled-runtime", action="store_true", help="Omit runner so the installed harness selects its own Python"
+    )
     arguments = parser.parse_args()
     binary = arguments.binary.resolve()
     require(binary.exists(), "Build the binary first: cargo build -p ngn")
@@ -462,24 +465,22 @@ async def main() -> None:
             workspace.mkdir()
             (workspace / "hello.txt").write_text("hello from a Rust tool\n")
             config = root / "config.json"
-            config.write_text(
-                json.dumps(
-                    {
-                        "data_dir": str(root / "data"),
-                        "runner": [sys.executable, "-m", "ngn_nagents"],
-                        "provider": "fixture",
-                        "providers": {
-                            "fixture": {
-                                "kind": "openai_compatible",
-                                "model": "fixture-model",
-                                "api": "chat_completions",
-                                "base_url": f"http://127.0.0.1:{port}/v1",
-                                "api_key_env": "NGN_FIXTURE_KEY",
-                            }
-                        },
+            settings: dict[str, object] = {
+                "data_dir": str(root / "data"),
+                "provider": "fixture",
+                "providers": {
+                    "fixture": {
+                        "kind": "openai_compatible",
+                        "model": "fixture-model",
+                        "api": "chat_completions",
+                        "base_url": f"http://127.0.0.1:{port}/v1",
+                        "api_key_env": "NGN_FIXTURE_KEY",
                     }
-                )
-            )
+                },
+            }
+            if not arguments.bundled_runtime:
+                settings["runner"] = [sys.executable, "-m", "ngn_nagents"]
+            config.write_text(json.dumps(settings))
             records = await cli(binary, config, workspace, "run", "--json", "read hello.txt")
             require(
                 any(

@@ -2,6 +2,17 @@
 
 ## 0.100.2 — development, not yet released
 
+- Self-contained Linux x86_64 installer with pinned relocatable CPython 3.13.18,
+  hashed binary dependency wheels, CA certificates and upstream redistribution
+  notices. No Python/pip/Rust/Node setup is needed on the target system.
+- Native managed `ngn update --check`/`ngn update`, version pinning, verified
+  staging and an atomic current-version switch. Keep prior runtimes, refuse
+  foreign executables/unsafe prefixes, and never modify application state/auth.
+- Bundled default runners use a version-specific isolated Python with bytecode
+  writes disabled; explicit trusted custom runners are still honored.
+- Coordinate the reusable public-auth core as 0.28.6 and require it in the adapter.
+  Official bundle publication verifies the matching published core, rather than
+  passing source-only APIs off as published compatibility.
 - Preserve and reconcile the original local Python work without reverting later
   provider, cancellation, streaming and UI fixes already integrated on main.
 - `./ngn/dev` builds the optimized binary and installed wheels from current working
@@ -40,7 +51,7 @@
 This development candidate is not a rewritten `v0.100.0` or a claim of full legacy
 parity. Production deployment and paid-provider/Codex validation are separate gates.
 
-## 0.100.1 — durable input queues (separately gated)
+## Official 0.100.1 — durable input queues
 
 - Rust-owned per-session FIFO, stable idempotent request IDs, 32 pending inputs per
   session/256 per host, admission within existing root/run limits and no backlog bypass.

@@ -37,8 +37,7 @@ MAX_AUTH_FRAME = 2048
 VERIFICATION_URL = "https://auth.openai.com/codex/device"
 MISSING_CORE = (
     "ChatGPT requires the public nagents.provider.device_auth API, absent from published nagents 0.28.5. "
-    "Install a source-built core containing that API and this adapter. "
-    "Official subscription release is blocked until a new core version is published."
+    "Install nagents>=0.28.6 and the matching adapter, or their source-built equivalents."
 )
 
 
