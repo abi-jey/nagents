@@ -107,7 +107,8 @@ matching published core. The API is **not available in nagents
   (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
   Send and Stop preserve composer focus and Stop retains an unsent draft.
 - **Esc** cancels active work and pauses pending inputs. Completed actions are not rolled back.
-- **F2** lists sessions, **F3** creates one, **F4** toggles tool details.
+- **F1** or **`/help`** shows shortcuts and commands. **F2** lists sessions,
+  **F3** creates one, **F4** toggles tool details.
 - **F5** opens the agent catalog; **Enter** inspects a child conversation and
   **Ctrl+X** cancels that child and its descendants, not its parent or siblings.
 - **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
@@ -120,6 +121,11 @@ matching published core. The API is **not available in nagents
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
+
+The terminal footer shows the current activity and selected provider/model.
+It uses the legacy default terminal palette and respects `TEXTUAL_ANIMATIONS=none`.
+Saved Python theme and animation settings, startup/exit transitions, and token
+usage in the footer are not supported by the native client.
 
 The browser also shows agent status, independent child transcripts, child-only
 cancellation, and correctly attributed child approvals in the root workspace.
