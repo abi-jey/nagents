@@ -30,7 +30,8 @@ pub struct Tools {
     workspace: PathBuf,
     protected: PathBuf,
     read_only: bool,
-    demo: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    demo_preview: bool,
     shell_timeout: Duration,
 }
 
@@ -48,7 +49,6 @@ enum Action {
         content: Vec<u8>,
     },
     Shell(String),
-    DemoPreview,
 }
 
 fn one() -> usize {
@@ -171,21 +171,23 @@ fn denied_component(name: &str) -> bool {
 }
 
 impl Tools {
-    pub fn open(
-        workspace: &Path,
-        state: &Path,
-        read_only: bool,
-        demo: bool,
-        timeout: u64,
-    ) -> Result<Self> {
+    pub fn open(workspace: &Path, state: &Path, read_only: bool, timeout: u64) -> Result<Self> {
         Ok(Self {
             root: Arc::new(Dir::open_ambient_dir(workspace, ambient_authority())?),
             workspace: workspace.to_owned(),
             protected: state.to_owned(),
             read_only,
-            demo,
+            #[cfg(any(test, feature = "test-support"))]
+            demo_preview: false,
             shell_timeout: Duration::from_secs(timeout),
         })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn with_demo_preview(mut self) -> Self {
+        self.read_only = true;
+        self.demo_preview = true;
+        self
     }
 
     pub(crate) fn restricted(&self, read_only: bool) -> Self {
@@ -234,18 +236,22 @@ impl Tools {
                 json!({"command":string}),
                 vec!["command"],
             ),
+            #[cfg(any(test, feature = "test-support"))]
+            (
+                "demo_preview",
+                "Offline approval preview. Never writes a file.",
+                json!({}),
+                vec![],
+            ),
         ];
-        let mut result: Vec<ToolDefinition> = entries.into_iter()
-            .filter(|(name, ..)| !(self.read_only || self.demo) || !matches!(*name, "write" | "edit" | "shell"))
-            .map(|(name, description, properties, required)| ToolDefinition { name: name.into(), description: description.into(), parameters: json!({"type":"object", "properties":properties, "required":required, "additionalProperties":false}) }).collect();
-        if self.demo {
-            result.push(ToolDefinition {
-                name: "demo_preview".into(),
-                description: "Offline approval preview. Never writes a file.".into(),
-                parameters: json!({"type":"object", "properties":{}, "additionalProperties":false}),
-            });
-        }
-        result
+        entries.into_iter()
+            .filter(|(name, ..)| match *name {
+                #[cfg(any(test, feature = "test-support"))]
+                "demo_preview" => self.demo_preview,
+                "write" | "edit" | "shell" => !self.read_only,
+                _ => true,
+            })
+            .map(|(name, description, properties, required)| ToolDefinition { name: name.into(), description: description.into(), parameters: json!({"type":"object", "properties":properties, "required":required, "additionalProperties":false}) }).collect()
     }
 
     fn relative(&self, path: &str, directory: bool) -> Result<PathBuf> {
@@ -451,10 +457,7 @@ impl Tools {
                 Action::Result(json!({"matches":matches, "truncated":truncated}))
             }
             "write" | "edit" => {
-                ensure!(
-                    !self.demo && !self.read_only,
-                    "Workspace mutations are disabled"
-                );
+                ensure!(!self.read_only, "Workspace mutations are disabled");
                 let (path, content, expected) = if call.name == "write" {
                     let args: WriteFile = serde_json::from_value(call.arguments.clone())?;
                     (args.path, args.content, args.expected_sha256)
@@ -508,7 +511,7 @@ impl Tools {
                 }
             }
             "shell" => {
-                ensure!(!self.demo && !self.read_only, "Shell execution is disabled");
+                ensure!(!self.read_only, "Shell execution is disabled");
                 let args: Shell = serde_json::from_value(call.arguments.clone())?;
                 ensure!(
                     !args.command.trim().is_empty() && args.command.len() <= 16_384,
@@ -523,14 +526,15 @@ impl Tools {
                 prepared.needs_approval = true;
                 Action::Shell(args.command)
             }
+            #[cfg(any(test, feature = "test-support"))]
             "demo_preview" => {
                 ensure!(
-                    self.demo && call.arguments == json!({}),
+                    self.demo_preview && call.arguments == json!({}),
                     "Unavailable preview tool or invalid arguments"
                 );
                 prepared.preview = "OFFLINE PREVIEW ONLY\n--- demo.txt\n+++ demo.txt\n-Hello\n+Hello from Rust\n\nNo file will be written.".into();
                 prepared.needs_approval = true;
-                Action::DemoPreview
+                Action::Result(json!({"preview_only":true, "written":false}))
             }
             _ => bail!("Unknown or unavailable host tool"),
         };
@@ -541,7 +545,6 @@ impl Tools {
         ensure!(!cancel.is_cancelled(), "Run was cancelled");
         match prepared.action {
             Action::Result(value) => Ok(value),
-            Action::DemoPreview => Ok(json!({"preview_only":true, "written":false})),
             Action::Write {
                 path,
                 original,
@@ -701,7 +704,7 @@ mod tests {
     use super::*;
 
     fn tools(directory: &Path, read_only: bool) -> Tools {
-        Tools::open(directory, &directory.join("state"), read_only, false, 1).unwrap()
+        Tools::open(directory, &directory.join("state"), read_only, 1).unwrap()
     }
     fn call(name: &str, arguments: Value) -> ToolCall {
         ToolCall {

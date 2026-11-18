@@ -18,6 +18,7 @@ from typing import cast
 from zipfile import ZipFile
 
 import bundle
+import protocol_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 NGN = ROOT / "ngn"
@@ -409,6 +410,36 @@ def verify_bundled_install(output: Path, manifest: dict[str, object], *, require
     print("PASS: native installation and bundled default runner with no Python/pip/Rust/Node on PATH")
 
 
+def verify_extracted_binary(extracted: Path, version: str) -> None:
+    binary = extracted / "ngn"
+    environment = {"HOME": str(extracted), "PATH": str(extracted)}
+    config = extracted / "fixture-config.json"
+    protocol_fixture.write_config(config)
+    (extracted / "fixture.txt").write_text("local artifact fixture\n")
+    assert subprocess.check_output([str(binary), "--version"], env=environment, text=True).strip() == f"ngn {version}"
+    arguments = [
+        str(binary),
+        "--config",
+        str(config),
+        "--read-only",
+        "-C",
+        str(extracted),
+        "--data-dir",
+        str(extracted / "state"),
+    ]
+    doctor = subprocess.check_output([*arguments, "doctor"], env=environment, text=True, timeout=30)
+    assert f"Config: {config}" in doctor and "Provider: protocol-fixture" in doctor
+
+    # The bare archive has no runtime of its own. Its test-only runner uses an
+    # absolute interpreter, never a provider or Python installed on PATH.
+    output = subprocess.check_output(
+        [*arguments, "run", "--json", protocol_fixture.TOPOLOGY_PROMPT], env=environment, text=True, timeout=45
+    )
+    events = [json.loads(line) for line in output.splitlines()]
+    assert events[-1]["status"] == "completed"
+    assert sum(event["event"] == "task_finished" and event["task"]["status"] == "completed" for event in events) == 2
+
+
 def verify(output: Path, *, require_bundle: bool = False) -> None:
     version = version_check()
     platform_name = bundle.host_platform()
@@ -486,32 +517,10 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
             assert (extracted / name).read_bytes() == (NGN / name).read_bytes(), (
                 "Packaged configuration example is not the tested source"
             )
-        binary = extracted / "ngn"
-        assert subprocess.check_output([str(binary), "--version"], text=True).strip() == f"ngn {version}"
-        run = subprocess.run(
-            [
-                str(binary),
-                "--demo",
-                "-C",
-                str(extracted),
-                "--data-dir",
-                str(extracted / "state"),
-                "run",
-                "--json",
-                "demo subagents",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            env={"PATH": str(extracted)},
-        )
-        events = [json.loads(line) for line in run.stdout.splitlines()]
-        assert events[-1]["status"] == "completed"
-        assert (
-            sum(event["event"] == "task_finished" and event["task"]["status"] == "completed" for event in events) == 2
-        )
+        verify_extracted_binary(extracted, version)
     print(
-        f"PASS: ngn {version} artifacts bound to {manifest['commit']}; checksums and extracted Python-free install verified"
+        f"PASS: ngn {version} artifacts bound to {manifest['commit']}; checksums, native doctor and offline "
+        "fixture subagent execution verified with no Python on PATH"
     )
 
 

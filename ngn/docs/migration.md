@@ -37,7 +37,6 @@ initial browser client proves the new shared lifecycle and tool boundary.
 - [x] Independent Cargo workspace and binary, application version `0.100.0`.
 - [x] Strict versioned agent protocol, tool schema catalog and exact call binding.
 - [x] Public-library nagents adapter, with no Python UI/harness/server imports.
-- [x] Native offline Rust demo requiring neither Python nor model credentials.
 - [x] Native CLI/headless client and Ratatui terminal client.
 - [x] Native Axum web server, embedded browser client, authenticated same-origin API.
 - [x] Durable cursor-based events, session listing/resume and restart interruption.

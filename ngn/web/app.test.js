@@ -48,7 +48,7 @@ async function boot({ touch = false } = {}) {
   };
   globalThis.fetch = async (path, options) => {
     requests.push({ path, options });
-    if (path === "/api/bootstrap") return response({ token: "host-token", workspace: "/workspace", backend: "demo", read_only: false });
+    if (path === "/api/bootstrap") return response({ token: "host-token", workspace: "/workspace", backend: "nagents", read_only: false });
     if (path === "/api/sessions") {
       if (options.method === "POST") { const created = { id: `ngn-new-${catalog.length}`, title: "New conversation" }; catalog.unshift(created); return response({ session: created }); }
       return response({ sessions: catalog });

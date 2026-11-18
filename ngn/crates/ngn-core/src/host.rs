@@ -87,9 +87,14 @@ impl Host {
             &config.workspace,
             &protected,
             config.read_only,
-            config.backend == Backend::Demo,
             config.shell_timeout_seconds,
         )?;
+        #[cfg(any(test, feature = "test-support"))]
+        let tools = if config.backend == Backend::Demo {
+            tools.with_demo_preview()
+        } else {
+            tools
+        };
         let (events, _) = broadcast::channel(1024);
         Ok(Arc::new(Self {
             config,
@@ -514,6 +519,7 @@ impl Host {
             let mut output = {
                 let runtime = async {
                     match self.config.backend {
+                        #[cfg(any(test, feature = "test-support"))]
                         Backend::Demo => {
                             runner::demo(&self, &execution.run, &prompt, execution.cancel.clone())
                                 .await

@@ -10,6 +10,7 @@ use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
 };
+#[cfg(any(test, feature = "test-support"))]
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -374,6 +375,7 @@ impl SteeringHandshake {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn demo(
     host: &Arc<Host>,
     run: &Run,
@@ -406,7 +408,7 @@ pub(crate) async fn demo(
         })
         .unwrap_or_default();
     let mut text = format!(
-        "OFFLINE DEMO · ngn {}\n\nThe harness, tools, TUI and web server are running in Rust. No Python runtime, network or model request was used.\n\nWorkspace files:\n{listing}\n\nTry `demo approval` for a no-write approval preview or `demo subagents` for Rust-supervised background agents.\n",
+        "OFFLINE DEMO · ngn {}\n\nThe harness, tools, TUI and web server are running in Rust. No Python runtime, network or model request was used.\n\nWorkspace files:\n{listing}\n",
         env!("CARGO_PKG_VERSION")
     );
     if prompt.starts_with("demo subagents") {

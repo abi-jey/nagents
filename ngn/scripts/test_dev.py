@@ -20,6 +20,7 @@ from dev import (
     ensure_private_cache,
     invocation,
     isolated_environment,
+    main,
     offline_cache_probe,
     runtime_config,
     source_snapshot,
@@ -81,14 +82,27 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
     def test_installed_cache_probe_is_always_offline_read_only_and_stage_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary)
-            with patch(
-                "dev.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"status":"completed"}\n', "")
-            ) as execute:
+            state = stage / "offline-probe-state"
+            state.mkdir()
+            (state / "host.sqlite3").touch()
+            with patch("dev.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
                 offline_cache_probe(stage)
             argv = execute.call_args.args[0]
-            self.assertEqual(argv[:4], [str(stage / "app/ngn"), "--demo", "--read-only", "-C"])
-            self.assertEqual(argv[argv.index("--data-dir") + 1], str(stage / "offline-probe-state"))
-            self.assertNotIn("--config", argv)
+            self.assertEqual(
+                argv,
+                [
+                    str(stage / "app/ngn"),
+                    "--config",
+                    str(stage / "offline-probe-config.json"),
+                    "--read-only",
+                    "-C",
+                    str(stage / "offline-probe-workspace"),
+                    "--data-dir",
+                    str(state),
+                    "sessions",
+                ],
+            )
+            self.assertEqual(json.loads((stage / "offline-probe-config.json").read_text()), {})
             self.assertEqual(execute.call_args.kwargs["env"], {"PATH": str(stage / "app")})
             self.assertTrue((stage / "offline-probe-workspace").is_dir())
 
@@ -118,7 +132,7 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
             ["--config"],
             ["--config="],
             ["--data-dir"],
-            ["--config", "--demo"],
+            ["--config", "--read-only"],
             ["--config=a", "--config=b"],
             ["--data-dir=a", "--data-dir=b"],
         ):
@@ -257,9 +271,15 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
                 with self.assertRaises(ValueError):
                     runtime_config(path, Path("/fresh/runtime"))
 
-    def test_default_is_demo_and_explicit_config_is_live_without_legacy_binary(self) -> None:
-        args = Invocation("", "", ["serve", "--port", "18768"])
-        result = command(Path("/stage/app/ngn"), args, Path("/stage/config.json"), Path("/dev/state"), demo=True)
+    def test_default_uses_no_config_override(self) -> None:
+        result = command(
+            Path("/stage/app/ngn"), Invocation("", "", ["doctor"]), Path("/stage/config.json"), Path("/dev/state")
+        )
+        self.assertEqual(result, ["/stage/app/ngn", "--data-dir", "/dev/state", "doctor"])
+
+    def test_explicit_config_uses_staged_config_and_forwards_other_arguments(self) -> None:
+        args = Invocation("chosen.json", "", ["serve", "--port", "18768"])
+        result = command(Path("/stage/app/ngn"), args, Path("/stage/config.json"), Path("/dev/state"))
         self.assertEqual(
             result,
             [
@@ -268,18 +288,40 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
                 "/stage/config.json",
                 "--data-dir",
                 "/dev/state",
-                "--demo",
                 "serve",
                 "--port",
                 "18768",
             ],
         )
-        live = command(Path("/stage/app/ngn"), args, Path("/stage/config.json"), Path("/dev/state"), demo=False)
-        self.assertNotIn("--demo", live)
-        explicit = command(
-            Path("/stage/app/ngn"), Invocation("", "", ["--demo"]), Path("/config"), Path("/state"), demo=True
-        )
-        self.assertEqual(explicit.count("--demo"), 1)
+
+    def test_acceptance_uses_no_operator_configuration_or_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory) / "stage"
+            stage.mkdir()
+            runtime = stage / "runtime"
+            environment = {"PATH": str(runtime / "bin")}
+            operator_state = Path(directory) / "operator-state"
+            operator_config = Path(directory) / "operator-config.json"
+            operator_config.write_text("not a config")
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    ["dev", "--test", "--config", str(operator_config), "--data-dir", str(operator_state)],
+                ),
+                patch("dev.version_check"),
+                patch("dev.build", return_value=(stage, runtime, environment)),
+                patch("dev.offline_cache_probe") as probe,
+                patch("dev.run") as run,
+            ):
+                self.assertEqual(main(), 0)
+            probe.assert_called_once_with(stage)
+            self.assertEqual(run.call_args.args[0][0], str(runtime / "bin/python"))
+            self.assertEqual(run.call_args.args[0][-2:], ["--binary", str(stage / "app/ngn")])
+            self.assertEqual(run.call_args.kwargs, {"directory": stage, "environment": environment})
+            self.assertEqual(operator_config.read_text(), "not a config")
+            self.assertFalse(operator_state.exists())
+            self.assertFalse((stage / "config.json").exists())
 
     def test_source_identity_includes_uncommitted_and_untracked_code_not_ignored_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

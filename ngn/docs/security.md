@@ -8,7 +8,7 @@ Provider/model output and tool arguments are untrusted input, not authorization.
 
 - The model receives schema metadata, never native function pointers or Python code.
 - Rust validates tool identity, strict argument shape, bounds, mode and paths.
-- Unknown tools and modifying calls in read-only/demo mode fail closed, even if
+- Unknown tools and modifying calls in read-only mode fail closed, even if
   the runtime emits a call that was not advertised.
 - Shell and file mutations need one-time host/UI approval. Scripts cannot approve.
 - Approval IDs are host-generated, bound to a run and exact prepared operation;
