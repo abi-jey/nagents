@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.3
+
+- Fix: the installer accepts group-writable parents like ~/.local/bin under Debian/Ubuntu user-private groups (umask 0002), and release publishing restores the installer exec bit.
+
 ## 0.100.2 — self-contained installation (2026-11-18)
 
 - Self-contained Linux x86_64 installer with pinned relocatable CPython 3.13.18,

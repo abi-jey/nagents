@@ -1,4 +1,4 @@
-# ngn · 0.100.2
+# ngn
 
 A standalone **Rust harness, TUI and local web server**, with a versioned agent
 runtime protocol. The optional **nagents** adapter runs the Python agent/model
@@ -9,32 +9,20 @@ The Rust application lives under `ngn/` in the **same repository** as the Python
 `v0.100.0`, includes the tested local prototype and its subagent/tool-result fixes.
 The earlier standalone local tags/artifacts were never published and remain
 untouched in their original checkout. This is **not yet full legacy feature
-parity**. See [migration status](docs/migration.md) and [current release notes](docs/releases/0.100.2.md).
+parity**. See [migration status](docs/migration.md) and [release notes](docs/releases/).
 
 `0.100.1` adds durable Rust-owned FIFO input queues with matching TUI/web controls.
 See the [patch notes](docs/releases/0.100.1.md) before upgrading important state.
 
 ## Install and update
 
-The new [managed installer](docs/installation.md) bundles pinned CPython, the
-matching core/adapter, dependency wheels and CA certificates. It needs no existing
-Python, pip, Rust or Node installation. `ngn update --check` checks for a newer
-stable harness; `ngn update` verifies/stages it and atomically switches versions
-without changing credentials or conversations. Existing unrelated `ngn` commands
-are never overwritten. Initial installer support is Linux x86_64/glibc 2.39+.
-Bundled installer assets are published from v0.100.2 onward.
-
-**After `v0.100.2` is published**, the version-bound bootstrap is:
-
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/abi-jey/nagents/releases/download/v0.100.2/install.sh | sh
+curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh
+ngn update --check && ngn update
 ```
 
-That URL is not an available installer until publication. See
-[where the installer lives, direct binary checksum verification, and local/offline
-installation](docs/installation.md). If a Python `ngn` already owns your command
-path, use a separate bin directory and invoke the installed binary explicitly.
+Self-contained Linux x86_64 (glibc 2.39+) bundle; nothing else needs installing.
+See [installation](docs/installation.md).
 
 ## Source-only offline demo (development tools required)
 

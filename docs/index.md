@@ -16,12 +16,9 @@ an existing feature-rich Python client, and a separate native Rust harness.
 | Python APIs for providers, agents, tools and sessions | [Python library installation](getting-started/installation.md#install-the-python-library-from-pypi) and [quick start](getting-started/quickstart.md) |
 | The existing Textual/React client, voice, plugins and integrations | [Python ngn client installation](guide/ngn-installation.md) |
 
-!!! warning "Native installer release status"
-    The self-contained installer starts at **0.100.2**. The guide's version-bound
-    downloads require the official `v0.100.2` assets and fail before publication;
-    a source checkout alone does not establish availability. It also documents a source-development
-    route available now. Native bundles initially support Linux x86_64/glibc
-    2.39+; the Python client has its own support matrix.
+!!! tip "Install native ngn"
+    `curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh`
+    (Linux x86_64, glibc 2.39+). The Python client has its own support matrix.
 
 Both clients use the name `ngn`, but configuration, auth and feature sets differ.
 The native installer refuses to overwrite an existing Python/foreign command.

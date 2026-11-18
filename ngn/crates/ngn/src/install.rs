@@ -259,14 +259,32 @@ fn ancestry(path: &Path, create: bool) -> Result<()> {
         {
             use std::os::unix::fs::MetadataExt;
             let root_sticky = info.uid() == 0 && info.mode() & 0o1000 != 0 && current != path;
+            let euid = nix::unistd::geteuid().as_raw();
+            // Debian/Ubuntu user-private groups (umask 0002): group write by a
+            // group containing only this user grants nobody else access.
+            let private_group_write =
+                info.uid() == euid && info.mode() & 0o002 == 0 && user_private_group(info.gid());
             ensure!(
-                (info.uid() == 0 || info.uid() == nix::unistd::geteuid().as_raw())
-                    && (info.mode() & 0o022 == 0 || root_sticky),
+                (info.uid() == 0 || info.uid() == euid)
+                    && (info.mode() & 0o022 == 0 || root_sticky || private_group_write),
                 "Unsafe installation ancestry: use owner-controlled, non-writable parents; permissions are never repaired"
             );
         }
     }
     Ok(())
+}
+
+/// The current user's primary group with no other listed members.
+#[cfg(unix)]
+fn user_private_group(gid: u32) -> bool {
+    use nix::unistd::{Gid, Group, User};
+    let Ok(Some(user)) = User::from_uid(nix::unistd::geteuid()) else {
+        return false;
+    };
+    let Ok(Some(group)) = Group::from_gid(Gid::from_raw(gid)) else {
+        return false;
+    };
+    user.gid.as_raw() == gid && group.mem.iter().all(|member| *member == user.name)
 }
 
 fn private_directory(path: &Path) -> Result<()> {

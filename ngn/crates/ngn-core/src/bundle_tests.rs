@@ -86,7 +86,7 @@ fn metadata_rejects_mismatched_schema_platform_versions_and_provenance() {
         ("platform", serde_json::json!("linux-aarch64")),
         ("runtime_protocol", serde_json::json!(2)),
         ("ngn_version", serde_json::json!("0.28.5")),
-        ("adapter_version", serde_json::json!("0.100.3")),
+        ("adapter_version", serde_json::json!("0.100.999")),
         ("nagents_version", serde_json::json!("0.28.5rc1")),
         ("source_commit", serde_json::json!("A".repeat(40))),
         ("ca_file", serde_json::json!("../ca.pem")),
