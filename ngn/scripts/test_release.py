@@ -61,7 +61,7 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (root / 'new', r
                         sys.executable,
                         "-c",
                         code,
-                        temporary,
+                        str(Path(temporary).resolve()),
                         str(Path(__file__).resolve().parent),
                     ],
                     capture_output=True,

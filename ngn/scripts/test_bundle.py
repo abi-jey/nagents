@@ -80,7 +80,9 @@ class BundleTests(unittest.TestCase):
         notices = bundle._notices(lock)
         self.assertEqual(len(notices), 46)
         metadata = bundle._json(notices["PYTHON.json"])
-        self.assertEqual(len(bundle._license_paths(metadata)), 18)
+        # macOS CPython links fewer third-party libraries than the Linux build.
+        expected = {"linux-x86_64": 18, "macos-arm64": 14, "macos-x86_64": 14}[bundle.PLATFORM]
+        self.assertEqual(len(bundle._license_paths(metadata)), expected)
         self.assertNotEqual(notices["LICENSES/LICENSE.cpython.txt"], notices["PYTHON-RUNTIME/LICENSE.txt"])
 
     def test_notice_version_bump_requires_matching_new_notice_provenance(self) -> None:
