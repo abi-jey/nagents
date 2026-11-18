@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, io::stdout, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    io::stdout,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, ensure};
 use crossterm::{
@@ -21,6 +26,7 @@ use ngn_protocol::{EventRecord, TaskInfo};
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
+    buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -29,6 +35,21 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::view;
+
+mod footer;
+
+const HELP: &str = "\
+F2  Conversations (/sessions, /resume ID)
+F3  New conversation (/new)
+F4  Toggle tool details
+F5  Subagents (/tasks)
+F6  Input queue (/queue [pause|resume|clear])
+F7  Steering receipts (/steering)
+Enter  Send or queue · Shift+Enter  Newline
+/steer TEXT  Steer the active turn explicitly
+Ctrl+Y  Approve once · Ctrl+D  Deny
+Esc  Cancel active work (completed actions are not rolled back)
+PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)";
 
 struct Restore;
 impl Drop for Restore {
@@ -55,7 +76,8 @@ struct App {
     input: String,
     status: String,
     /// The last Enter submission failed; render its reason as an error, not a hint.
-    failed: bool,
+    failure: Option<String>,
+    activity: footer::Activity,
     active: Option<Run>,
     approval: Option<Approval>,
     scroll: u16,
@@ -79,6 +101,8 @@ struct App {
     steering_dirty: bool,
     steering_picker: bool,
     steering_scroll: u16,
+    help: bool,
+    help_scroll: u16,
 }
 
 impl App {
@@ -118,7 +142,11 @@ impl App {
             .await
             .into_iter()
             .find(|run| run.session_id == self.session);
-        if self.steering_dirty || previous != self.active.as_ref().map(|run| run.id.clone()) {
+        let changed = previous.as_deref() != self.active.as_ref().map(|run| run.id.as_str());
+        if changed && let Err(error) = self.catch_up(host).await {
+            self.status = format!("Cannot load conversation: {error}");
+        }
+        if self.steering_dirty || changed {
             let mut runs: Vec<String> = self
                 .steering_runs
                 .iter()
@@ -149,6 +177,7 @@ impl App {
             self.preview_scroll = 0;
         }
         self.approval = approval;
+        self.sync_activity();
         let selected = self
             .queue
             .entries
@@ -157,6 +186,9 @@ impl App {
         match host.queue(&self.session).await {
             Ok(queue) => {
                 self.queue = queue;
+                if self.queue.entries.is_empty() && self.status.starts_with("Input queued · ") {
+                    self.status.clear();
+                }
                 self.queue_index = selected
                     .and_then(|id| {
                         self.queue
@@ -210,6 +242,21 @@ impl App {
         }
     }
 
+    fn sync_activity(&mut self) {
+        self.activity.sync(
+            self.active.as_ref().map(|run| run.id.as_str()),
+            self.approval.is_some(),
+            self.failure.is_some(),
+            &self.records,
+            Instant::now(),
+            ngn_core::store::now_ms(),
+        );
+    }
+
+    fn shows_overlay(&self) -> bool {
+        self.help || self.picker || self.task_picker || self.queue_picker || self.steering_picker
+    }
+
     async fn switch(&mut self, host: &Host, id: String) -> Result<()> {
         host.store.session(&id).await?;
         self.session = id;
@@ -221,10 +268,14 @@ impl App {
         self.task_detail = false;
         self.queue_picker = false;
         self.steering_picker = false;
+        self.help = false;
+        self.status.clear();
+        self.failure = None;
         self.steering.clear();
         self.steering_runs.clear();
         self.steering_dirty = true;
         self.catch_up(host).await?;
+        self.activity.reset(self.after, Instant::now());
         self.state(host).await;
         Ok(())
     }
@@ -236,7 +287,7 @@ fn welcome(config: &ngn_core::Config) -> String {
         Err(error) => format!("Prompts cannot be sent yet. {error}"),
     };
     format!(
-        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\n{next}\n\nF2 conversations · F3 new · F4 tool detail · Ctrl+Q quit"
+        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\n{next}\n\nF1 or /help for commands and shortcuts."
     )
 }
 
@@ -251,29 +302,36 @@ fn center(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-fn draw(frame: &mut Frame, app: &App, host: &Host) {
+fn footer_area(area: Rect) -> Rect {
+    let height = 2.min(area.height);
+    Rect::new(area.x, area.bottom() - height, area.width, height)
+}
+
+fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
+    let area = frame.area();
+    let footer = footer_area(area);
+    let body = Rect::new(area.x, area.y, area.width, area.height - footer.height);
+    let composer = 5.min(if body.height >= 5 {
+        body.height - 2
+    } else {
+        body.height
+    });
+    let header_height = 3.min(body.height.saturating_sub(composer + 2));
     let rows = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(3),
-        Constraint::Length(2),
-        Constraint::Length(5),
-        Constraint::Length(1),
+        Constraint::Length(header_height),
+        Constraint::Min(0),
+        Constraint::Length(composer),
     ])
-    .split(frame.area());
-    let provider = host
-        .config
-        .selected_provider()
-        .map(|provider| format!("nagents · {}", provider.model))
-        .unwrap_or_else(|_| "provider not configured".into());
+    .split(body);
     let header = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
                 format!(" ngn {} ", env!("CARGO_PKG_VERSION")),
                 Style::new().fg(accent).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(view::plain(&provider)),
+            Span::styled("· F1 help", Style::new().fg(muted)),
         ]),
         Line::from(Span::styled(
             format!(
@@ -290,7 +348,13 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
     } else {
         view::transcript(&app.records, app.details)
     };
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false }).block(
+    let mut lines: Vec<Line<'_>> = text.lines().map(Line::raw).collect();
+    if let Some(reason) = &app.failure {
+        // Keep the complete rejection in the scrollable conversation as well
+        // as the one-line footer. It remains visible without submitting again.
+        lines.extend(footer::failure_lines(reason, rows[1].width));
+    }
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::TOP)
             .border_style(Style::new().fg(Color::DarkGray)),
@@ -300,26 +364,6 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
         .saturating_sub(rows[1].height.saturating_sub(1))
         .saturating_sub(app.scroll);
     frame.render_widget(paragraph.scroll((top, 0)), rows[1]);
-    let activity = if app.approval.is_some() {
-        "Waiting for approval · Ctrl+Y allows once · Ctrl+D denies\n"
-    } else if app.active.is_some() {
-        "Agent working · Esc cancels · completed actions are not rolled back\n"
-    } else {
-        ""
-    };
-    let style = if app.failed {
-        Style::new()
-            .fg(Color::LightRed)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::new().fg(muted)
-    };
-    frame.render_widget(
-        Paragraph::new(view::plain(&format!("{activity}{}", app.status)))
-            .style(style)
-            .wrap(Wrap { trim: true }),
-        rows[2],
-    );
     let input_lines = app.input.lines().count().max(1) as u16;
     frame.render_widget(
         Paragraph::new(view::plain(&app.input))
@@ -334,13 +378,9 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
                     ))
                     .border_style(Style::new().fg(accent)),
             ),
-        rows[3],
+        rows[2],
     );
-    frame.render_widget(
-        Paragraph::new(" F2 sessions · F3 new · F4 tools · F5 agents · F6 queue · F7 steering receipts · Ctrl+Q quit ")
-            .style(Style::new().fg(muted)),
-        rows[4],
-    );
+    app.activity.draw(frame, footer, app, &host.config, now);
     if app.picker {
         let area = center(frame.area(), 90, 22);
         frame.render_widget(Clear, area);
@@ -451,6 +491,17 @@ fn draw(frame: &mut Frame, app: &App, host: &Host) {
             " Input queue: {} · Ctrl+P pause/resume · Ctrl+X remove · Ctrl+K clear · Esc close ",
             if app.queue.paused { "PAUSED" } else { "RUNNING" }
         ))).highlight_style(Style::new().fg(accent)), area, &mut selection);
+    }
+    if app.help {
+        let area = center(frame.area(), 76, 16);
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(HELP)
+                .block(Block::bordered().title(" Help · F1/Esc close "))
+                .wrap(Wrap { trim: true })
+                .scroll((app.help_scroll, 0)),
+            area,
+        );
     }
     if let Some(approval) = &app.approval {
         let area = center(rows[1], 110, 32);
@@ -680,7 +731,8 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     } else if let Some(id) = input.strip_prefix("/resume ") {
         app.switch(host, id.trim().to_owned()).await?;
     } else if input == "/help" {
-        app.status = "/new · /sessions · /resume ID · /tasks · /queue [pause|resume|clear] · /steer TEXT · /steering (F7 receipts) · /quit. Enter queues while busy; approvals remain per-call.".into();
+        app.help = true;
+        app.help_scroll = 0;
     } else {
         ensure!(!input.starts_with('/'), "Unknown command; try /help");
         ensure!(
@@ -718,7 +770,7 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
         app.status = if accepted.status == ngn_protocol::RunStatus::Queued {
             "Input queued · F6 inspect · /queue resume if paused".into()
         } else {
-            "Input accepted".into()
+            String::new()
         };
         app.scroll = 0;
     }
@@ -730,12 +782,12 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
     if app.input.trim().is_empty() {
         return false;
     }
-    app.failed = false;
+    app.failure = None;
     match submit(app, host).await {
         Ok(quit) => quit,
         Err(error) => {
-            app.status = format!("Not sent: {error}");
-            app.failed = true;
+            app.failure = Some(format!("Not sent: {error}"));
+            app.scroll = 0;
             false
         }
     }
@@ -749,9 +801,11 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         records: Vec::new(),
         after: 0,
         input: String::new(),
-        status:
-            "Ready · F5 inspects Rust-supervised agents · voice and channels are not migrated yet"
-                .into(),
+        activity: footer::Activity::new(
+            Instant::now(),
+            !std::env::var("TEXTUAL_ANIMATIONS")
+                .is_ok_and(|value| value.eq_ignore_ascii_case("none")),
+        ),
         active: None,
         approval: None,
         scroll: 0,
@@ -772,6 +826,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         ..App::default()
     };
     app.catch_up(&host).await?;
+    app.activity.reset(app.after, Instant::now());
     app.state(&host).await;
     enable_raw_mode()?;
     let restore = Restore;
@@ -781,11 +836,35 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let signal = crate::shutdown_signal();
     tokio::pin!(signal);
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
+    let mut motion = tokio::time::interval(footer::FRAME);
+    motion.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut cached: Option<Buffer> = None;
+    let mut footer_only = false;
     loop {
-        terminal.draw(|frame| draw(frame, &app, &host))?;
+        let now = Instant::now();
+        let animate = app.activity.needs_frame(now) && !app.shows_overlay();
+        app.activity.advance(now);
+        terminal.draw(|frame| {
+            if footer_only
+                && let Some(previous) = &cached
+                && previous.area == frame.area()
+            {
+                // Ratatui clears the back buffer for each draw. Reuse the last
+                // full frame rather than reflow 5000 transcript events at 30fps.
+                let area = footer_area(frame.area());
+                frame.buffer_mut().clone_from(previous);
+                frame.render_widget(Clear, area);
+                app.activity.draw(frame, area, &app, &host.config, now);
+            } else {
+                draw(frame, &app, &host, now);
+                cached = animate.then(|| frame.buffer_mut().clone());
+            }
+        })?;
+        footer_only = false;
         tokio::select! {
             _ = &mut signal => break,
             _ = ticks.tick() => app.state(&host).await,
+            _ = motion.tick(), if animate => footer_only = true,
             received = receiver.recv() => {
                 match received { Ok(record) if record.session_id == app.session => app.catch_up(&host).await?, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => app.catch_up(&host).await?, _ => () }
                 app.state(&host).await;
@@ -816,6 +895,15 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                                 _ => false,
                             };
                             if handled { app.state(&host).await; continue; }
+                        }
+                        if app.help {
+                            match key.code {
+                                KeyCode::F(1) | KeyCode::Esc => app.help = false,
+                                KeyCode::PageUp => app.help_scroll = app.help_scroll.saturating_sub(5),
+                                KeyCode::PageDown => app.help_scroll = (app.help_scroll + 5).min(HELP.len() as u16),
+                                _ => (),
+                            }
+                            continue;
                         }
                         if app.queue_picker {
                             let action = match key.code {
@@ -859,6 +947,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                         }
                         match key.code {
                             KeyCode::Esc => { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } },
+                            KeyCode::F(1) => { app.help = true; app.help_scroll = 0; },
                             KeyCode::F(2) => { app.sessions = host.store.sessions().await?; app.picker = true; app.picker_index = 0; },
                             KeyCode::F(3) => { app.switch(&host, host.store.create_session().await?.id).await?; },
                             KeyCode::F(4) => app.details = !app.details,
@@ -873,7 +962,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             _ => (),
                         }
                     }
-                    TerminalEvent::Paste(text) if !app.steering_picker && !app.picker && !app.task_picker && !app.queue_picker => { let text = view::plain(&text); if app.input.len() + text.len() <= 32_000 { app.input.push_str(&text); } else { app.status = "Paste exceeds 32000 UTF-8 bytes".into(); } },
+                    TerminalEvent::Paste(text) if !app.shows_overlay() => { let text = view::plain(&text); if app.input.len() + text.len() <= 32_000 { app.input.push_str(&text); } else { app.status = "Paste exceeds 32000 UTF-8 bytes".into(); } },
                     _ => (),
                 }
             }
@@ -926,11 +1015,52 @@ mod tests {
             ..App::default()
         };
         assert!(!submit_from_enter(&mut app, &host).await);
-        assert!(app.failed);
-        assert!(app.status.starts_with("Not sent: No provider selected"));
-        assert!(app.status.contains("providers.json"));
+        let reason = app.failure.as_deref().unwrap();
+        assert!(reason.starts_with("Not sent: No provider selected"));
+        assert!(reason.contains("providers.json"));
         assert_eq!(app.input, "keep this draft");
         assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+        app.sync_activity();
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(28, 32)).unwrap();
+        let now = Instant::now();
+        terminal
+            .draw(|frame| draw(frame, &app, &host, now))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| -> String {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        };
+        assert!(row(30).trim_start().starts_with("No provider selected"));
+        assert!(row(30).contains('…'));
+        assert_eq!(buffer[(2, 30)].fg, Color::Red);
+        assert!(row(31).contains("Provider not configured"));
+        let transcript: String = (0..25).map(|y| row(y).trim_end().to_owned()).collect();
+        assert!(transcript.contains("providers.json"), "{transcript}");
+        assert!((0..30).any(|y| row(y).contains("keep this draft")));
+        app.input = "/help".into();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.failure.is_none() && app.help);
+        // Shortcuts are in the help overlay, not the two status rows.
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 32)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &app, &host, now))
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for expected in [
+            "F2  Conversations",
+            "F7  Steering receipts",
+            "Ctrl+Y  Approve once",
+        ] {
+            assert!(screen.contains(expected));
+        }
     }
 
     #[tokio::test]
@@ -1104,7 +1234,9 @@ mod tests {
         assert!(app.queue_picker);
         assert_eq!(app.queue.entries.len(), 2);
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(130, 35)).unwrap();
-        terminal.draw(|frame| draw(frame, &app, &host)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &app, &host, Instant::now()))
+            .unwrap();
         let contents: String = terminal
             .backend()
             .buffer()
@@ -1164,7 +1296,9 @@ mod tests {
         for (width, height) in [(1, 1), (20, 6), (40, 12), (120, 40)] {
             let mut terminal =
                 Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
-            terminal.draw(|frame| draw(frame, &app, &host)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &app, &host, Instant::now()))
+                .unwrap();
         }
         app.picker = true;
         app.picker_index = 29;
@@ -1176,7 +1310,9 @@ mod tests {
             })
             .collect();
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
-        terminal.draw(|frame| draw(frame, &app, &host)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &app, &host, Instant::now()))
+            .unwrap();
         let contents: String = terminal
             .backend()
             .buffer()
@@ -1294,7 +1430,9 @@ mod tests {
                 .any(|record| matches!(record.event, ngn_protocol::Event::TextDelta { .. }))
         );
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
-        terminal.draw(|frame| draw(frame, &app, &host)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &app, &host, Instant::now()))
+            .unwrap();
         let contents: String = terminal
             .backend()
             .buffer()
