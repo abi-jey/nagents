@@ -240,7 +240,15 @@ fn destination_collision_reports_the_path_and_safe_side_by_side_retry() {
             error.contains(&format!("unmanaged entry at {entry:?}")),
             "{error}"
         );
-        assert!(error.contains("install.sh | sh -s --"), "{error}");
+        assert!(
+            error.contains(concat!(
+                "https://github.com/abi-jey/nagents/releases/download/v",
+                env!("CARGO_PKG_VERSION"),
+                "/install.sh | sh -s --"
+            )),
+            "{error}"
+        );
+        assert!(!error.contains("/releases/latest/"), "{error}");
         assert!(
             error.contains(
                 "--prefix \"$HOME/.local/share/ngn-native\" --bin-dir \"$HOME/.local/ngn-native-bin\""

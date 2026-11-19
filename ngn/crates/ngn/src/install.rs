@@ -445,11 +445,13 @@ fn foreign_binary(link: &Path) -> anyhow::Error {
         concat!(
             "Refusing to replace the existing unmanaged entry at {:?}. It was left unchanged.\n",
             "To install alongside it, choose an unused bin directory and a separate unused prefix, for example:\n",
-            "  curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh -s -- \\\n",
+            "  curl -fsSL {}/v{}/install.sh | sh -s -- \\\n",
             "    --prefix \"$HOME/.local/share/ngn-native\" --bin-dir \"$HOME/.local/ngn-native-bin\"\n",
             "Then run the new binary directly: \"$HOME/.local/ngn-native-bin/ngn\""
         ),
-        link
+        link,
+        DOWNLOAD,
+        env!("CARGO_PKG_VERSION")
     )
 }
 

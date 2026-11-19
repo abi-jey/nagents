@@ -37,8 +37,9 @@ curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.s
 ```
 
 Use the full path to run or update this installation without changing which
-`ngn` your shell finds first. The installer refuses world-writable or foreign-owned
-parent directories.
+`ngn` your shell finds first. If you started with a version-pinned installer, use
+its printed retry command to keep that same version instead of fetching `latest`.
+The installer refuses world-writable or foreign-owned parent directories.
 
 ### Manual install
 
