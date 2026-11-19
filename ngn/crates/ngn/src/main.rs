@@ -58,6 +58,9 @@ struct Cli {
     resume: Option<String>,
     #[arg(short = 'c', long = "continue", global = true)]
     continue_session: bool,
+    /// Disable TUI activity and caret animations for this invocation.
+    #[arg(long, global = true, overrides_with = "no_animations")]
+    no_animations: bool,
     /// Capture sensitive provider HTTP payloads in a private local log (off by default).
     #[arg(long, global = true, overrides_with_all = ["wire_log", "no_wire_log"])]
     wire_log: bool,
@@ -453,7 +456,7 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
             ) => unreachable!(),
             None => {
                 let id = session(&host, cli.resume.as_deref(), cli.continue_session).await?;
-                tui::run(host.clone(), id).await?;
+                tui::run(host.clone(), id, cli.no_animations).await?;
                 Ok(0)
             }
         }
@@ -490,4 +493,27 @@ async fn main() -> std::process::ExitCode {
         }
     };
     std::process::ExitCode::from(code as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_animations_is_an_opt_in_cli_flag() {
+        assert!(!Cli::try_parse_from(["ngn"]).unwrap().no_animations);
+        assert!(
+            Cli::try_parse_from(["ngn", "--no-animations"])
+                .unwrap()
+                .no_animations
+        );
+        assert!(
+            Cli::try_parse_from(["ngn", "--no-animations", "--no-animations"])
+                .unwrap()
+                .no_animations
+        );
+        let cli = Cli::try_parse_from(["ngn", "run", "--no-animations", "hello"]).unwrap();
+        assert!(cli.no_animations);
+        assert!(matches!(cli.command, Some(Commands::Run { prompt, .. }) if prompt == ["hello"]));
+    }
 }

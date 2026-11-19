@@ -143,7 +143,9 @@ The terminal footer shows the current activity and selected provider/model and
 uses the legacy default terminal palette. When run without `--config`, the
 native TUI honors `"animations": false` in the personal Python ngn
 `config.json`: footer motion stops and the composer caret stays steady.
-`TEXTUAL_ANIMATIONS=none` disables both regardless of the saved setting.
+Use `--no-animations` to disable both for one invocation without changing the
+saved setting. `TEXTUAL_ANIMATIONS=none` also disables both regardless of the
+saved setting. Elapsed timers and input still work.
 Saved Python themes, startup/exit transitions, and token usage in the footer
 are not supported by the native client.
 The Agents sidebar shows native run status, the displayed child approval, and
