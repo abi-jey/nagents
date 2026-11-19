@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import sqlite3
 import uuid
@@ -22,6 +23,7 @@ from fastapi import HTTPException
 from nagents._async import finish_on_cancel
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
+from nagents.channels.store import is_sqlite_busy
 
 from ..channels.upload_store import bind as bind_uploads
 
@@ -62,6 +64,7 @@ _RECOVERED = (
 )
 _MIGRATED = "Session routing permissions changed. Use /sessions to view sessions available to this chat."
 _UNKNOWN = "Unknown session command. Use /sessions, /session [ID|main|default|new], /new [title], or /compact."
+logger = logging.getLogger(__name__)
 
 
 class RoutingStore(InboxStore):
@@ -602,6 +605,21 @@ class RoutingStore(InboxStore):
             predicate += f" AND session_id NOT IN ({slots})"
             parameters += excluded_sessions
 
+        if session_id:
+            # A negative probe is only a hint for this boundary. A concurrent
+            # submit wakes the active run or dispatcher; a positive probe never
+            # carries a row identity across the transaction boundary.
+            try:
+                if not await self._has_candidate(predicate, parameters):
+                    return None
+            except sqlite3.OperationalError as error:
+                if not is_sqlite_busy(error):
+                    raise
+                owner = asyncio.current_task()
+                if owner is not None and owner.cancelling():
+                    raise asyncio.CancelledError from None
+                return self._defer_followup(error)
+
         def claim(db: sqlite3.Connection) -> Work | None:
             self._quarantine_work(db)
             row = db.execute(
@@ -634,21 +652,31 @@ class RoutingStore(InboxStore):
                 voice_display=row[13],
             )
 
+        if session_id:
+            return await self._transaction(claim, on_busy=self._defer_followup)
         return await self._transaction(claim)
+
+    @staticmethod
+    def _defer_followup(error: sqlite3.OperationalError) -> None:
+        # No Work escaped. The next model boundary or the inbox dispatcher can
+        # claim the queued row normally; no input or external action is replayed.
+        logger.warning("Follow-up claim deferred for SQLite contention: sqlite_code=%d", error.sqlite_errorcode)
+
+    async def _has_candidate(self, predicate: str, parameters: tuple[str | bool, ...]) -> bool:
+        def probe() -> bool:
+            with (
+                closing(sqlite3.connect(self.db_path, timeout=5)) as db,
+                closing(db.execute(f"SELECT 1 FROM ngn_web_inbox WHERE {predicate} LIMIT 1", parameters)) as cursor,
+            ):
+                return cursor.fetchone() is not None
+
+        return await finish_on_cancel(asyncio.to_thread(probe))
 
     async def has_pending(self, *, web_only: bool = False, available_channels: tuple[str, ...] | None = None) -> bool:
         predicate, parameters = self.eligible(web_only, available_channels)
-
-        def probe() -> bool:
-            # An idle poll must not compete with reply/history writes. Quarantine
-            # still runs in the existing atomic transaction when candidates exist.
-            with closing(sqlite3.connect(self.db_path, timeout=5)) as db:
-                return (
-                    db.execute(f"SELECT 1 FROM ngn_web_inbox WHERE {predicate} LIMIT 1", parameters).fetchone()
-                    is not None
-                )
-
-        if not await finish_on_cancel(asyncio.to_thread(probe)):
+        # An idle poll must not compete with reply/history writes. Quarantine
+        # still runs in the existing atomic transaction when candidates exist.
+        if not await self._has_candidate(predicate, parameters):
             return False
 
         def pending(db: sqlite3.Connection) -> bool:
