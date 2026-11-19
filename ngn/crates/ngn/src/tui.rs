@@ -998,17 +998,24 @@ pub async fn run(
         app.state(&host).await;
         Ok(())
     };
-    let Some(draft) = startup::prepare(animate, initialize, signal.as_mut()).await? else {
+    let Some(mut startup_input) = startup::prepare(animate, initialize, signal.as_mut()).await?
+    else {
         return Ok(());
     };
+    enable_raw_mode()?;
+    // Crossterm restores the startup mode; drop this guard before restoring
+    // the original tty attributes held by startup_input.
+    let restore = Restore;
+    execute!(stdout(), EnterAlternateScreen, Hide)?;
+    let Some(draft) = startup_input.finish()? else {
+        return Ok(());
+    };
+    execute!(stdout(), EnableBracketedPaste)?;
     if !draft.is_empty() {
         app.input = draft;
         app.completion.edited(&app.input);
         app.caret.restart(Instant::now());
     }
-    enable_raw_mode()?;
-    let restore = Restore;
-    execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut input = EventStream::new();
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
@@ -1176,6 +1183,7 @@ pub async fn run(
     }
     drop(terminal);
     drop(restore);
+    drop(startup_input);
     host.shutdown().await;
     println!(
         "ngn {} · Session {}\nResume with: ngn -C {} --resume {}",
