@@ -979,6 +979,9 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             KeyCode::F(6) => { app.queue_picker = true; app.queue_index = 0; app.state(&host).await; },
                             KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
                             KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
+                            // Approval and overlay shortcuts above retain their routing.
+                            // Draft edits and submission require the same focus as the caret.
+                            _ if !app.composer_available() => (),
                             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); app.completion.edited(&app.input); } },
                             KeyCode::Enter => { if submit_from_enter(&mut app, &host).await { break; } app.state(&host).await; },
                             KeyCode::Backspace => { if app.input.pop().is_some() { app.completion.edited(&app.input); } },
@@ -989,7 +992,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                     TerminalEvent::Paste(text) => {
                         if let Some(picker) = &mut app.picker {
                             picker.paste(&text);
-                        } else if !app.shows_overlay() {
+                        } else if app.composer_available() {
                             let text = view::plain(&text);
                             if app.input.len() + text.len() > 32_000 {
                                 app.status = "Paste exceeds 32000 UTF-8 bytes".into();
