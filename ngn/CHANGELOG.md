@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.23
+
+- Managed ngn updates now report what they are doing on stderr, with a spinner during longer waits on interactive terminals. Redirected output stays plain, and the final result on stdout is unchanged.
+
 ## 0.100.22
 
 - Web chat and Live voice keep active runs going when SQLite is temporarily busy during a follow-up inbox check. Queued follow-ups are retried in order even while the root waits for child agents.
