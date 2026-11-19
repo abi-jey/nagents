@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.25
+
+- Managed updates use buffered reads to parse official release metadata, reducing file reads without changing validation or progress output.
+
 ## 0.100.24
 
 - The mouse wheel now scrolls the native ngn conversation without moving focus. Scrolling up keeps your place as output streams; scrolling back to the bottom resumes following new output.
