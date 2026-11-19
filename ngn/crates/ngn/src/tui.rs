@@ -501,6 +501,10 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         .borders(Borders::TOP)
         .border_style(Style::new().fg(Color::DarkGray));
     let transcript_area = block.inner(conversation);
+    let approval_dialog = app
+        .approval
+        .as_ref()
+        .map(|approval| (approval, center(rows[1], 110, 32)));
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
@@ -514,9 +518,10 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         interactive,
         sweep,
     );
-    if app.approval.is_some() || app.shows_overlay() {
-        // A cached motion frame must not recolor cells drawn over the transcript.
+    if app.shows_overlay() {
         transcript.hide_wipes();
+    } else if let Some((_, area)) = approval_dialog {
+        transcript.mask_wipes(area);
     }
     let welcome_text;
     if app.records.is_empty() {
@@ -646,8 +651,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             area,
         );
     }
-    if let Some(approval) = &app.approval {
-        let area = center(rows[1], 110, 32);
+    if let Some((approval, area)) = approval_dialog {
         frame.render_widget(Clear, area);
         frame.render_widget(
             Paragraph::new(view::plain(&approval.preview))

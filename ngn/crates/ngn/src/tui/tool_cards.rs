@@ -49,9 +49,9 @@ struct Completion {
 
 struct HeaderCells {
     count: usize,
-    // (terminal column, character index). A wide or combining grapheme is
+    // (terminal column, character index, width). A wide or combining grapheme is
     // painted once, but the wave follows legacy character indices.
-    cells: Vec<(u16, usize)>,
+    cells: Vec<(u16, usize, u16)>,
 }
 
 impl HeaderCells {
@@ -62,12 +62,23 @@ impl HeaderCells {
         for grapheme in Span::raw(title).styled_graphemes(Style::default()) {
             let width = Span::raw(grapheme.symbol).width() as u16;
             if width != 0 {
-                cells.push((column, count));
+                cells.push((column, count, width));
                 column += width;
             }
             count += grapheme.symbol.chars().count();
         }
         Self { count, cells }
+    }
+
+    fn mask(&mut self, origin: Position, area: Rect) {
+        if !area.is_empty() && (area.top()..area.bottom()).contains(&origin.y) {
+            // Don't repaint a wide glyph straddling the dialog border. Keep
+            // the original character indices and count for the remaining ink.
+            self.cells.retain(|&(column, _, width)| {
+                let left = origin.x + column;
+                left >= area.right() || left + width <= area.left()
+            });
+        }
     }
 }
 
@@ -305,8 +316,12 @@ impl Cards {
         self.wipes = layout
             .wipes
             .into_iter()
-            .filter_map(|(row, cells, completion)| {
-                origin(row, DISCLOSURE_WIDTH as u16).map(|origin| (origin, cells, completion))
+            .filter_map(|(row, mut cells, completion)| {
+                let origin = origin(row, DISCLOSURE_WIDTH as u16)?;
+                if let Some(area) = layout.wipe_mask {
+                    cells.mask(origin, area);
+                }
+                (!cells.cells.is_empty()).then_some((origin, cells, completion))
             })
             .collect();
         self.paint_motion(frame.buffer_mut(), now);
@@ -322,7 +337,7 @@ impl Cards {
         if let Some((origin, _, header, age, observed_at)) = &self.sweep {
             let age = age.saturating_add(now.saturating_duration_since(*observed_at));
             let sweep = Sweep::new(header.count, age);
-            for &(column, index) in &header.cells {
+            for &(column, index, _) in &header.cells {
                 buffer[(origin.x + column, origin.y)].fg = sweep.color(index);
             }
             self.sweep_painted_at = Some(now);
@@ -332,7 +347,7 @@ impl Cards {
                 header.count,
                 now.saturating_duration_since(completion.started),
             );
-            for &(column, index) in &header.cells {
+            for &(column, index, _) in &header.cells {
                 let prior_index = index + DISCLOSURE_WIDTH;
                 let source = completion
                     .source
@@ -425,6 +440,7 @@ pub(super) struct Layout<'a> {
     headers: Vec<(Key, usize)>,
     sweep: Option<(usize, Key, HeaderCells, Duration)>,
     wipes: Vec<(usize, HeaderCells, Completion)>,
+    wipe_mask: Option<Rect>,
     fences: Vec<code_fences::Fence>,
     interactive: bool,
 }
@@ -451,6 +467,7 @@ impl<'a> Layout<'a> {
             fences: Vec::new(),
             interactive,
             wipes: Vec::new(),
+            wipe_mask: None,
         };
         for part in parts {
             match part {
@@ -532,6 +549,12 @@ impl<'a> Layout<'a> {
 
     pub(super) fn hide_wipes(&mut self) {
         self.wipes.clear();
+    }
+
+    pub(super) fn mask_wipes(&mut self, area: Rect) {
+        // Cached motion frames reuse the already composited dialog. Never
+        // repaint its cells, but keep the same clock on the exposed label.
+        self.wipe_mask = Some(area);
     }
 
     fn detail(&mut self, text: &str) {
@@ -744,6 +767,16 @@ mod tests {
         active: Option<ToolKey<'_>>,
         now: Instant,
     ) {
+        render_masked(app, terminal, active, now, None);
+    }
+
+    fn render_masked<'a>(
+        app: &mut App,
+        terminal: &'a mut Terminal<TestBackend>,
+        active: Option<ToolKey<'_>>,
+        now: Instant,
+        dialog: Option<Rect>,
+    ) -> &'a Buffer {
         terminal
             .draw(|frame| {
                 let area = frame.area();
@@ -759,12 +792,27 @@ mod tests {
                     app.tools_available(),
                     active,
                 );
-                if app.approval.is_some() || app.shows_overlay() {
+                if app.shows_overlay() {
                     layout.hide_wipes();
+                } else if let Some(area) = dialog {
+                    layout.mask_wipes(area);
                 }
                 app.tools.draw(frame, area, layout, &mut app.scroll, now);
+                if let Some(area) = dialog {
+                    frame.render_widget(ratatui::widgets::Clear, area);
+                    frame.render_widget(
+                        Paragraph::new("Approval").style(
+                            Style::new()
+                                .fg(Color::Yellow)
+                                .bg(Color::Red)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        area,
+                    );
+                }
             })
-            .unwrap();
+            .unwrap()
+            .buffer
     }
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) -> Vec<String> {
@@ -784,6 +832,75 @@ mod tests {
             sequence: app.after,
             ..record
         });
+    }
+
+    #[test]
+    fn approval_masks_only_covered_glyphs_without_retiming_the_wipe() {
+        let start = Instant::now();
+        let middle = start + Duration::from_millis(625);
+        let end = start + COMPLETION_DURATION;
+        let mut app = App {
+            tools: Cards::new(true),
+            ..App::default()
+        };
+        for (id, label) in [
+            ("above", "above the dialog"),
+            ("across", "工作 across the dialog"),
+        ] {
+            push(&mut app, started(id, "shared", label));
+            push(&mut app, finished(id, "shared", json!("ok"), ""));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        render(&mut app, &mut terminal, None, start);
+        let above = app.tools.headers[0].1 as u16;
+        let across = app.tools.headers[1].1 as u16;
+        let full = terminal.backend().buffer().area;
+        assert_eq!(terminal.backend().buffer()[(10, across)].symbol(), "工");
+
+        // Start the dialog on the continuation column of a two-column glyph.
+        let dialog = Rect::new(11, across, 12, 2);
+        let initial = render_masked(&mut app, &mut terminal, None, start, Some(dialog)).clone();
+        assert_eq!(initial[(11, across)].symbol(), "A");
+        assert_eq!(initial[(11, across)].fg, Color::Yellow);
+        assert_eq!(initial[(11, across)].bg, Color::Red);
+        assert!(initial[(11, across)].modifier.contains(Modifier::BOLD));
+        assert!(app.tools.needs_frame(middle));
+        let mut cached = initial.clone();
+        app.tools.paint_motion(&mut cached, middle);
+        assert_ne!(cached[(2, above)].fg, initial[(2, above)].fg);
+        assert_ne!(cached[(2, across)].fg, initial[(2, across)].fg);
+        assert_ne!(cached[(23, across)].fg, initial[(23, across)].fg);
+
+        // A completely covered transcript must not schedule motion of its own.
+        let fully_covered =
+            render_masked(&mut app, &mut terminal, None, middle, Some(full)).clone();
+        assert!(!app.tools.needs_frame(middle));
+        let mut covered_tick = fully_covered.clone();
+        app.tools.paint_motion(&mut covered_tick, middle);
+        assert_eq!(covered_tick, fully_covered);
+
+        // Dismissal at the same timestamp produces exactly the unmasked phase.
+        render(&mut app, &mut terminal, None, middle);
+        let unmasked = terminal.backend().buffer();
+        let mut expected = initial.clone();
+        for pos in full.positions() {
+            if !dialog.contains(pos) && pos != Position::new(10, across) {
+                expected[pos].fg = unmasked[pos].fg;
+            }
+        }
+        assert_eq!(cached, expected);
+        assert_eq!(app.tools.completions.len(), 2);
+        assert!(
+            app.tools
+                .completions
+                .values()
+                .all(|wipe| wipe.started == start)
+        );
+        render_masked(&mut app, &mut terminal, None, end, Some(dialog));
+        render(&mut app, &mut terminal, None, end);
+        assert!(app.tools.completions.is_empty());
+        assert_eq!(terminal.backend().buffer()[(2, above)].fg, COMPLETE);
+        assert_eq!(terminal.backend().buffer()[(2, across)].fg, COMPLETE);
     }
 
     #[test]
