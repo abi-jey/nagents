@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{IsTerminal, Read, Seek, Write},
+    io::{BufReader, IsTerminal, Read, Seek, Write},
     path::{Component, Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -165,7 +165,7 @@ async fn json<T: Transport, D: serde::de::DeserializeOwned>(transport: &T, url: 
         "Release manifest exceeds 8 MiB"
     );
     file.rewind()?;
-    serde_json::from_reader(file).context("Invalid official release metadata")
+    serde_json::from_reader(BufReader::new(file)).context("Invalid official release metadata")
 }
 
 async fn discover<T: Transport>(

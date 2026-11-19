@@ -433,6 +433,66 @@ async fn local_install_check_noop_pin_upgrade_and_downgrade_are_failure_atomic()
 }
 
 #[tokio::test]
+async fn release_metadata_keeps_full_document_and_size_checks() {
+    struct Metadata(Vec<u8>);
+
+    impl Transport for Metadata {
+        async fn fetch(&self, _: &str, output: &mut File, _: u64) -> Result<()> {
+            // Deliberately bypass the transport's cap to exercise json's own check.
+            output.write_all(&self.0)?;
+            Ok(())
+        }
+    }
+
+    let mut bytes = br#"{"tag_name":"v0.100.21","draft":false,"prerelease":false}"#.to_vec();
+    bytes.resize(MAX_MANIFEST as usize, b' ');
+    let mut body = Metadata(bytes);
+    let release: GitHubRelease = json(&body, API).await.unwrap();
+    assert_eq!(release.tag_name, "v0.100.21");
+
+    body.0.push(b' ');
+    let oversized = json::<_, serde_json::Value>(&body, API).await;
+    assert!(oversized.unwrap_err().to_string().contains("exceeds 8 MiB"));
+
+    for bytes in [b"{".as_slice(), b"{} {}", b"{} trailing"] {
+        let invalid = json::<_, serde_json::Value>(&Metadata(bytes.to_vec()), API).await;
+        assert_eq!(
+            invalid.unwrap_err().to_string(),
+            "Invalid official release metadata"
+        );
+    }
+}
+
+#[tokio::test]
+async fn unpinned_discovery_uses_numeric_maximum_across_pages() {
+    let bundle = metadata("0.100.10", true);
+    let mut transport = network(&bundle);
+    let mut page = vec![json!({"tag_name":"v0.100.9", "draft":false, "prerelease":false}); 100];
+    transport.bodies.insert(
+        format!("{API}?per_page=100&page=1"),
+        serde_json::to_vec(&page).unwrap(),
+    );
+    page.truncate(1);
+    page[0]["tag_name"] = json!("v0.100.10");
+    transport.bodies.insert(
+        format!("{API}?per_page=100&page=2"),
+        serde_json::to_vec(&page).unwrap(),
+    );
+    assert_eq!(
+        discover(&transport, None).await.unwrap().ngn_version,
+        "0.100.10"
+    );
+    assert_eq!(
+        *transport.calls.lock().unwrap(),
+        [
+            format!("{API}?per_page=100&page=1"),
+            format!("{API}?per_page=100&page=2"),
+            format!("{DOWNLOAD}/v0.100.10/{}", release_manifest_name()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn official_discovery_is_rust_only_and_check_never_fetches_or_executes_payload() {
     let directory = crate::test_support::private_tempdir().unwrap();
     let install = installation(directory.path());
