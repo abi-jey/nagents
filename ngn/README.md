@@ -193,8 +193,37 @@ Host schema 3 added durable queues and session-scoped events; the development
 steering boundary now upgrades host state to schema **4** for durable receipts.
 Stop the host and back up its workspace state before upgrading important data.
 Older schema-3 binaries cannot open schema 4; downgrade only using a separate
-state directory or that backup, never by changing `user_version`. No legacy
-Python ngn data or runtime-owned database is migrated.
+state directory or that backup, never by changing `user_version`. Runtime-owned
+conversation data is not migrated. Native schema 5 adds read-only Python archives.
+
+### Python session history
+
+On Linux and macOS, normal native startup (`ngn`, `run`, `serve`, or `sessions`)
+tries to copy supported Python transcripts for the selected workspace once into
+its Rust store. It uses the existing Python data path: `$XDG_DATA_HOME/ngn` or
+`~/.local/share/ngn`, overridden by `NGN_DATA_DIR` and then by `data_dir` in the
+personal Python `config.json`. Relative paths use the invocation directory for
+the environment variable and the personal config directory for the file.
+Project or explicitly selected Python config files are not used for discovery.
+Native `--data-dir` selects the destination, which must be separate from the
+Python data root and its workspace database directory.
+
+Archives are labeled in the picker and contain plain user/assistant text only.
+They cannot run prompts, resume model context, replay actions, or grant approvals.
+Existing native sessions and archives are not replaced; the picker lists native
+sessions first, within its existing 200-item limit. Later Python edits are not
+synced. `--continue` selects a native session, never an archive.
+
+The live Python database is read only at the filesystem level, with a nonblocking
+lock; SQLite only opens the private copy. The source must be a user-owned regular
+file of at most 128 MiB, with no sidecars, and its resolved path must not be
+writable by other users. A missing database is ignored. A busy, unsafe,
+unsupported, or WAL database is skipped without stopping native startup.
+Close Python ngn and retry. If needed, make a standalone rollback-journal backup
+(for example with SQLite `VACUUM INTO`) and run
+`ngn -C WORKSPACE upgrade --from BACKUP --data-dir FRESH_DIR` to inspect it in
+separate fresh native state. Diagnostics, help, auth, install and update do not
+attempt the automatic copy.
 
 ## Boundaries
 
@@ -204,7 +233,7 @@ Python ngn data or runtime-owned database is migrated.
 - Private stdin/stdout carry [Agent Runtime Protocol v1](docs/agent-runtime-protocol.md).
   This interface can also be implemented by a native Rust or another-language runtime.
 - Rust state defaults to `$XDG_DATA_HOME/ngn-rust/workspaces/<workspace-hash>/`,
-  or `~/.local/share/ngn-rust/...`. It never implicitly opens legacy Python ngn data.
+  or `~/.local/share/ngn-rust/...`. It never opens Python ngn's database as a live store.
 - Host and runtime databases are separate; no shared SQLite schema or Python objects.
 - A per-workspace lock prevents a second host from recovering another live host's runs.
 

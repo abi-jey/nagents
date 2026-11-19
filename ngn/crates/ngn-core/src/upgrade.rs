@@ -1,8 +1,46 @@
-//! Explicit, offline import of display-only Python history.
+//! One-way import of display-only Python history via private snapshots.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+
+/// A candidate for the one-time startup copy, not an open SQLite connection.
+pub struct PythonHistory {
+    source: PathBuf,
+}
+
+impl PythonHistory {
+    pub fn discover(workspace: &Path) -> Result<Option<Self>> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        return offline::discover(workspace);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = workspace;
+            Ok(None)
+        }
+    }
+
+    /// Reject an explicitly overlapping native destination before the host opens it.
+    pub fn ensure_separate(&self, config: &crate::Config) -> Result<()> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        return offline::ensure_separate(&self.source, config);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (&self.source, config);
+            Ok(())
+        }
+    }
+
+    pub async fn append(self, host: &crate::Host) -> Result<usize> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        return offline::append(self.source, host).await;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (self, host);
+            Ok(0)
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct UpgradeReport {
@@ -45,7 +83,7 @@ mod offline {
         env,
         fs::{self, DirBuilder, File, Metadata, OpenOptions},
         io::{self, Read, Seek},
-        os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+        os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
         path::Component,
         time::{Duration, Instant},
     };
@@ -53,12 +91,14 @@ mod offline {
     use anyhow::{Context, anyhow, ensure};
     use ngn_protocol::Event;
     use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
-    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::fs::{CWD, FlockOperation, RenameFlags, fcntl_lock, renameat_with};
+    use serde::{Deserialize, Deserializer};
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use crate::{Config, paths, store::Store};
+    use crate::{Config, Host, legacy, paths, store::Store};
 
+    const MAX_CONFIG: u64 = 256 * 1024;
     const MAX_FILE: u64 = 128 * 1024 * 1024;
     const MAX_SESSIONS: usize = 200; // Fits the native picker.
     const MAX_ROWS: usize = 50_000;
@@ -81,6 +121,178 @@ mod offline {
         title: String,
         updated: u64,
         messages: Vec<Message>,
+    }
+
+    #[derive(Deserialize)]
+    struct PythonSettings {
+        #[serde(default, deserialize_with = "data_override")]
+        data_dir: Option<String>,
+    }
+
+    fn data_override<'de, D: Deserializer<'de>>(
+        value: D,
+    ) -> std::result::Result<Option<String>, D::Error> {
+        String::deserialize(value).map(Some)
+    }
+
+    fn expand_home(path: PathBuf) -> Result<PathBuf> {
+        if let Ok(relative) = path.strip_prefix("~") {
+            return Ok(env::home_dir()
+                .context("Set HOME for Python's data_dir")?
+                .join(relative));
+        }
+        ensure!(
+            !path.as_os_str().as_encoded_bytes().starts_with(b"~"),
+            "Python data_dir with ~user is not supported by automatic import"
+        );
+        Ok(path)
+    }
+
+    fn personal_data_override() -> Result<Option<PathBuf>> {
+        let base = env::var_os("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| env::home_dir().map(|home| home.join(".config")));
+        let Some(base) = base else {
+            return Ok(None);
+        };
+        let directory = std::path::absolute(expand_home(base.join("ngn"))?)?;
+        let path = match directory.join("config.json").canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).context("Cannot resolve Python's personal config.json");
+            }
+        };
+        check_ancestry(
+            path.parent().context("Missing Python config parent")?,
+            &[],
+            false,
+        )?;
+        let file = open_read_only(&path).context("Cannot read Python's personal config.json")?;
+        let info = file.metadata()?;
+        ensure!(
+            trusted_file(&info) && info.len() <= MAX_CONFIG,
+            "Python's personal config.json must be user-owned, non-writable by others, and at most 256 KiB"
+        );
+        // Read only the data_dir field; ignore other configuration, and never
+        // visit project/explicit Python config or paths referenced by the file.
+        let settings: PythonSettings = serde_json::from_reader(file.take(MAX_CONFIG + 1))
+            .map_err(|_| anyhow!("Invalid Python personal config.json or data_dir"))?;
+        settings
+            .data_dir
+            .map(|value| Ok(directory.join(expand_home(PathBuf::from(value))?)))
+            .transpose()
+    }
+
+    pub(super) fn discover(workspace: &Path) -> Result<Option<PythonHistory>> {
+        ensure!(
+            workspace.to_str().is_some(),
+            "Python history discovery requires a UTF-8 workspace path"
+        );
+        // Python applies NGN_DATA_DIR first, then the existing personal JSON
+        // file. Relative env paths use the invocation directory, not -C.
+        let root = if let Some(path) = personal_data_override()? {
+            path
+        } else if let Some(path) = env::var_os("NGN_DATA_DIR") {
+            expand_home(PathBuf::from(path))?
+        } else if let Some(path) = legacy::python_data_directory() {
+            expand_home(path)?
+        } else {
+            return Ok(None);
+        };
+        let root = if root.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            root
+        };
+        let root = match root.canonicalize() {
+            Ok(root) => root,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("Cannot resolve Python data_dir"),
+        };
+        let scope = root.join(legacy::workspace_id(workspace));
+        let source = scope.join(LIVE_FILENAME);
+        match source.symlink_metadata() {
+            Ok(_) => Ok(Some(PythonHistory { source })),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).context("Cannot inspect scoped Python sessions.db"),
+        }
+    }
+
+    pub(super) fn ensure_separate(source: &Path, config: &Config) -> Result<()> {
+        // Resolve aliases in the existing part of a path even when the final
+        // native workspace hasn't been created yet.
+        fn resolve(path: &Path) -> io::Result<PathBuf> {
+            match path.canonicalize() {
+                Ok(path) => Ok(path),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    match (path.parent(), path.file_name()) {
+                        (Some(parent), Some(name)) => Ok(resolve(parent)?.join(name)),
+                        _ => Err(error),
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        }
+        let scope = source.parent().unwrap();
+        let root = scope.parent().unwrap();
+        let physical_scope = scope.canonicalize().ok();
+        let native_data = resolve(&config.data_dir)?;
+        let native_state = resolve(&config.state_dir())?;
+        ensure!(
+            native_data != root
+                && ![Some(scope), physical_scope.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|scope| native_data.starts_with(scope) || native_state.starts_with(scope)),
+            "Choose a separate Rust --data-dir outside Python ngn's data root and workspace database directory"
+        );
+        Ok(())
+    }
+
+    pub(super) async fn append(source: PathBuf, host: &Host) -> Result<usize> {
+        let directory = host.config.state_dir();
+        host.store
+            .with(move |db| {
+                const MARKER: &str = "python_history_startup_import";
+                let done: bool = db.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?)",
+                    [MARKER],
+                    |row| row.get(0),
+                )?;
+                if done {
+                    return Ok(0);
+                }
+                check_ancestry(source.parent().unwrap(), &[], false)?;
+                let stage = tempfile::Builder::new()
+                    .prefix(".ngn-history-")
+                    .permissions(fs::Permissions::from_mode(0o700))
+                    .tempdir_in(directory)?;
+                let snapshot = stage.path().join("snapshot.db");
+                snapshot_file(&source, &snapshot, true)?;
+                let (mut archives, _, _) = read_archive(&snapshot, Duration::from_millis(750))?;
+                stage.close()?;
+                sort_archives(&mut archives);
+                let transaction = db.transaction()?;
+                let added = write_archive(&transaction, &archives)?;
+                transaction.execute_batch(&format!(
+                    "CREATE TABLE {MARKER} (completed_at INTEGER NOT NULL);
+                INSERT INTO {MARKER} VALUES (unixepoch());"
+                ))?;
+                transaction.commit()?;
+                Ok(added)
+            })
+            .await
+    }
+
+    fn sort_archives(archives: &mut [Archive]) {
+        // Rowid is the secondary sort key in the native picker.
+        archives.sort_by(|left, right| {
+            left.updated
+                .cmp(&right.updated)
+                .then(left.python_id.cmp(&right.python_id))
+        });
     }
 
     pub(super) fn import(backup: &Path, mut config: Config) -> Result<UpgradeReport> {
@@ -113,27 +325,26 @@ mod offline {
         let parent = destination
             .parent()
             .context("Missing Rust workspace state parent")?;
-        prepare_parent(parent, &legacy_paths)?;
+        check_ancestry(parent, &legacy_paths, true)?;
         absent(
             &destination,
             "Rust workspace state already exists; use a fresh --data-dir",
         )?;
         let stage = tempfile::Builder::new()
             .prefix(".ngn-upgrade-")
+            .permissions(fs::Permissions::from_mode(0o700))
             .tempdir_in(parent)?;
         let snapshot = stage.path().join("snapshot.db");
         snapshot_backup(backup, &snapshot, &legacy_paths)?;
-        let (mut archives, messages, skipped_messages) = read_archive(&snapshot)?;
+        let (mut archives, messages, skipped_messages) =
+            read_archive(&snapshot, Duration::from_secs(30))?;
         fs::remove_file(snapshot)?;
         let staged_state = stage.path().join("state");
         DirBuilder::new().mode(0o700).create(&staged_state)?;
-        // Rowid is the secondary sort key in the native picker.
-        archives.sort_by(|left, right| {
-            left.updated
-                .cmp(&right.updated)
-                .then(left.python_id.cmp(&right.python_id))
-        });
-        Store::stage_archive(&staged_state, |dest| write_archive(dest, &archives))?;
+        sort_archives(&mut archives);
+        Store::stage_archive(&staged_state, |dest| {
+            write_archive(dest, &archives).map(|_| ())
+        })?;
         File::open(staged_state.join("host.sqlite3"))?.sync_all()?;
         File::open(&staged_state)?.sync_all()?;
         let parent_handle = File::open(parent)?;
@@ -189,7 +400,7 @@ mod offline {
         }
     }
 
-    fn prepare_parent(path: &Path, legacy_paths: &[PathBuf]) -> Result<()> {
+    fn check_ancestry(path: &Path, legacy_paths: &[PathBuf], create: bool) -> Result<()> {
         let mut current = PathBuf::new();
         let user = nix::unistd::geteuid().as_raw();
         let legacy_ids: Vec<_> = legacy_paths
@@ -200,7 +411,7 @@ mod offline {
             current.push(part);
             let metadata = match current.symlink_metadata() {
                 Ok(metadata) => metadata,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Err(error) if create && error.kind() == io::ErrorKind::NotFound => {
                     match DirBuilder::new().mode(0o700).create(&current) {
                         Ok(()) => (),
                         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
@@ -208,7 +419,7 @@ mod offline {
                     }
                     current.symlink_metadata()?
                 }
-                Err(error) => return Err(error).context("Cannot inspect Rust state parent"),
+                Err(error) => return Err(error).context("Cannot inspect directory ancestry"),
             };
             let sticky_system_parent =
                 metadata.uid() == 0 && metadata.mode() & 0o1000 != 0 && current != path;
@@ -216,7 +427,7 @@ mod offline {
                 metadata.is_dir()
                     && (metadata.uid() == user || metadata.uid() == 0)
                     && (metadata.mode() & 0o022 == 0 || sticky_system_parent),
-                "Rust state requires non-symlink ancestors not writable by other users: {}",
+                "Path requires non-symlink ancestors not writable by other users: {}",
                 current.display()
             );
             ensure!(
@@ -233,7 +444,7 @@ mod offline {
             path.push(suffix);
             absent(
                 Path::new(&path),
-                "Backup has SQLite sidecars; use a standalone offline backup",
+                "SQLite source has sidecars; use a standalone offline backup",
             )?;
         }
         Ok(())
@@ -272,17 +483,50 @@ mod offline {
             !legacy_paths.iter().any(|root| source.starts_with(root)),
             "Place the offline backup outside Python ngn state and settings"
         );
-        no_sidecars(&source)?;
-        let mut input = OpenOptions::new()
+        snapshot_file(&source, snapshot, false)
+    }
+
+    fn open_read_only(path: &Path) -> io::Result<File> {
+        OpenOptions::new()
             .read(true)
             .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-            .open(&source)
-            .context("Cannot open the backup as a non-symlink file")?;
+            .open(path)
+    }
+
+    fn trusted_file(info: &Metadata) -> bool {
+        info.is_file() && info.uid() == nix::unistd::geteuid().as_raw() && info.mode() & 0o022 == 0
+    }
+
+    fn snapshot_file(source: &Path, snapshot: &Path, live: bool) -> Result<()> {
+        no_sidecars(source)?;
+        let mut options = OpenOptions::new();
+        let flags = nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK;
+        #[cfg(target_os = "linux")]
+        let flags = flags | if live { nix::libc::O_NOATIME } else { 0 };
+        let mut input = options
+            .read(true)
+            .custom_flags(flags)
+            .open(source)
+            .context("Cannot open the SQLite source as a non-symlink file")?;
         let before = input.metadata()?;
         ensure!(
             before.is_file() && before.nlink() == 1 && (100..=MAX_FILE).contains(&before.len()),
             "Backup must be a singly linked regular SQLite file of at most 128 MiB"
         );
+        if live {
+            ensure!(
+                trusted_file(&before),
+                "Python sessions.db must be owned by this user and not writable by others"
+            );
+            // SQLite's Unix rollback VFS uses POSIX byte-range locks on the
+            // main file (including a reserved writer byte). A whole-file read
+            // lock conflicts with all of them. Do not ask SQLite to open the
+            // source: it might need recovery or create/write a WAL index.
+            fcntl_lock(&input, FlockOperation::NonBlockingLockShared).context(
+                "Python sessions.db is busy or cannot be safely locked; close Python ngn and retry",
+            )?;
+            no_sidecars(source)?;
+        }
         let mut header = [0; 100];
         input.read_exact(&mut header)?;
         ensure!(
@@ -308,7 +552,7 @@ mod offline {
             .mode(0o600)
             .open(snapshot)?;
         let copied = io::copy(&mut input.by_ref().take(MAX_FILE + 1), &mut output)?;
-        no_sidecars(&source)?;
+        no_sidecars(source)?;
         ensure!(
             copied == before.len()
                 && fingerprint(&before) == fingerprint(&input.metadata()?)
@@ -414,12 +658,12 @@ mod offline {
         Ok(())
     }
 
-    fn read_archive(snapshot: &Path) -> Result<(Vec<Archive>, usize, usize)> {
+    fn read_archive(snapshot: &Path, timeout: Duration) -> Result<(Vec<Archive>, usize, usize)> {
         let db = Connection::open_with_flags(snapshot, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         db.execute_batch(
             "PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;",
         )?;
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + timeout;
         db.progress_handler(10_000, Some(move || Instant::now() >= deadline));
         table(
             &db,
@@ -599,12 +843,17 @@ mod offline {
         Ok((archives, total, count - total))
     }
 
-    fn write_archive(dest: &Transaction<'_>, archives: &[Archive]) -> Result<()> {
+    fn write_archive(dest: &Transaction<'_>, archives: &[Archive]) -> Result<usize> {
         let mut event = dest.prepare(
             "INSERT INTO events(run_id, session_id, timestamp_ms, payload)
             VALUES (NULL, ?, ?, ?)",
         )?;
+        let mut existing = dest.prepare("SELECT 1 FROM archived_sessions WHERE python_id = ?")?;
+        let mut added = 0;
         for archive in archives {
+            if existing.exists([&archive.python_id])? {
+                continue;
+            }
             let digest = Sha256::digest(archive.python_id.as_bytes());
             let id = format!("python-archive-{digest:x}");
             let title = if archive.title.is_empty() {
@@ -638,8 +887,9 @@ mod offline {
                     serde_json::to_string(&notice)?
                 ])?;
             }
+            added += 1;
         }
-        Ok(())
+        Ok(added)
     }
 
     #[cfg(test)]

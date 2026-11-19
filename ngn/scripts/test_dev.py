@@ -103,7 +103,15 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
                 ],
             )
             self.assertEqual(json.loads((stage / "offline-probe-config.json").read_text()), {})
-            self.assertEqual(execute.call_args.kwargs["env"], {"PATH": str(stage / "app")})
+            self.assertEqual(
+                execute.call_args.kwargs["env"],
+                {
+                    "PATH": str(stage / "app"),
+                    "HOME": str(stage / "offline-probe-workspace"),
+                    "XDG_DATA_HOME": str(stage / "offline-probe-workspace/data"),
+                    "XDG_CONFIG_HOME": str(stage / "offline-probe-workspace/config"),
+                },
+            )
             self.assertTrue((stage / "offline-probe-workspace").is_dir())
 
     def test_installed_cache_probe_fails_closed_on_permission_rejection_or_missing_completion(self) -> None:

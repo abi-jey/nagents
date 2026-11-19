@@ -7,9 +7,10 @@ runtime connected over the versioned Agent Runtime Protocol, never a UI dependen
 - Execute tools only in the Rust host after validation and approval. The Python
   adapter must not install local filesystem tools or load arbitrary plugins.
 - Never replay tools or automatically retry interrupted runs.
-- Never write to or open a Python ngn database as a live Rust store. An explicit
-  upgrader may read a consistent backup and copy supported history into separate
-  Rust-owned databases; startup must never implicitly import or replay it.
+- Normal state-opening startup and the explicit upgrader may copy supported
+  display history one way from a consistent private snapshot into a separate
+  Rust-owned store. Never open the original as a writable or live Rust store,
+  modify it or its sidecars, import credentials or tool state, or replay history.
 - Without `--config`, read (never write) the existing Python ngn provider files
   from their existing paths (`ngn-core/src/legacy.rs`). Do not introduce a new
   automatic config path.

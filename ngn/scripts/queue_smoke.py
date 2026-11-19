@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import select
 import signal
 import sqlite3
+import subprocess
 import time
 import uuid
 from collections.abc import Callable
@@ -307,12 +309,33 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, c
                     await process.wait()
 
 
+def _wait_for_tui_exit(
+    process: subprocess.Popen[bytes], master: int, output: bytes, phase: str, *, timeout: float = 15
+) -> None:
+    # A final redraw or terminal cleanup can block on a full PTY. Keep reading
+    # while waiting, then collect any buffered tail before reusing the PTY.
+    # The caller keeps the slave open for the termios check, so don't wait for EOF.
+    captured = bytearray(output)
+    deadline = time.monotonic() + timeout
+    while (remaining := deadline - time.monotonic()) > 0:
+        code = process.poll()
+        if select.select([master], [], [], min(0.03, remaining) if code is None else 0)[0]:
+            captured.extend(os.read(master, 65536))
+        elif code is not None:
+            if code == 0:
+                return
+            failure = f"exited with status {code} after Ctrl+Q"
+            break
+    else:
+        failure = f"did not finish shutdown within {timeout:g}s of Ctrl+Q (exit={process.poll()})"
+    pane = terminal_text(bytes(captured))[-2500:].decode(errors="replace") or "<empty>"
+    raise AssertionError(f"{phase} queue TUI {failure}\nFinal pane: {pane}\nPTY tail: {bytes(captured[-3000:])!r}")
+
+
 def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
     import fcntl
     import pty
-    import select
     import struct
-    import subprocess
     import termios
 
     master, slave = pty.openpty()
@@ -407,8 +430,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
         with sqlite3.connect(database) as connection:
             session = connection.execute("SELECT id FROM sessions").fetchone()[0]
         os.write(master, b"\x11")
-        process.wait(timeout=15)
-        require(process.returncode == 0, "First queue TUI exit failed")
+        _wait_for_tui_exit(process, master, output, "First")
         mask = termios.ECHO | termios.ICANON | termios.ISIG
         require(
             termios.tcgetattr(slave)[3] & mask == before[3] & mask,
@@ -438,8 +460,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
             "Recovered TUI input did not complete on explicit resume",
         )
         os.write(master, b"\x11")
-        process.wait(timeout=15)
-        require(process.returncode == 0, "Resumed queue TUI exit failed")
+        _wait_for_tui_exit(process, master, output, "Resumed")
         require(
             termios.tcgetattr(slave)[3] & mask == before[3] & mask,
             "Resumed queue TUI did not restore terminal mode",

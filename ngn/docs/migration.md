@@ -69,14 +69,15 @@ initial browser client proves the new shared lifecycle and tool boundary.
 - [x] Separate browser Steer active turn and TUI `/steer TEXT`/F7 receipt controls,
   exact-run retry bindings and terminal receipt snapshots. Enter/Send remains FIFO.
 
-Host storage now uses **schema 4**, upgraded transactionally from schema 3 while
-preserving FIFO state and event cursors. Stop the host and back up important state
-before upgrading. Schema-3 binaries refuse schema 4: downgrade with a separate
-state directory or restore the backup, never edit `user_version`. The runtime
-database remains opaque during normal operation. Without `--config`, the host
-reads Python ngn provider settings without modifying them. History is never
-imported at startup; an explicit `ngn upgrade` copies supported history into
-separate Rust-owned databases without modifying the Python database.
+Host storage uses **schema 5** for read-only archives in addition to schema 4's
+steering receipts. Stop the host and back up important state before upgrading.
+Older binaries refuse newer schemas: downgrade with a separate state directory
+or restore the backup, never edit `user_version`. The runtime database remains
+opaque. Without `--config`, the host reads Python ngn provider settings without
+modifying them. Normal workspace startup can make a one-time copy of supported
+Python display history into native state; the Python source is not modified.
+See [Python session history](../README.md#python-session-history) for path
+selection, safety limits and the explicit backup fallback.
 
 ## Explicitly not migrated yet
 
@@ -124,7 +125,7 @@ Local fixture coverage is not paid-provider validation.
 5. Port MCP/skills/extensions using explicit capability contracts, not Python imports
    inside the Rust host. Expose trusted Python behavior only as an optional runtime.
 6. Migrate authenticated integrations, channels, A2A and voice as separately tested
-   services/transports. Add explicit opt-in legacy data migration last.
+    services/transports. Keep any legacy migration beyond display history separate.
 
 Do not remove the existing Python ngn entry point, change published nagents extras,
 overwrite its databases, or switch installed defaults until the relevant parity

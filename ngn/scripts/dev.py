@@ -154,8 +154,14 @@ def offline_cache_probe(stage: Path) -> None:
             str(state),
             "sessions",
         ],
-        # `sessions` opens the real host state without starting an agent runner.
-        env={"PATH": str(stage / "app")},
+        # `sessions` opens real native state. Pin absent Python paths so neither
+        # HOME fallback nor an inherited override can find operator history.
+        env={
+            "PATH": str(stage / "app"),
+            "HOME": str(workspace),
+            "XDG_DATA_HOME": str(workspace / "data"),
+            "XDG_CONFIG_HOME": str(workspace / "config"),
+        },
         capture_output=True,
         text=True,
         check=False,
