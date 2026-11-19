@@ -139,10 +139,13 @@ matching published core. The API is **not available in nagents
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
 
-The terminal footer shows the current activity and selected provider/model.
-It uses the legacy default terminal palette and respects `TEXTUAL_ANIMATIONS=none`.
-Saved Python theme and animation settings, startup/exit transitions, and token
-usage in the footer are not supported by the native client.
+The terminal footer shows the current activity and selected provider/model and
+uses the legacy default terminal palette. When run without `--config`, the
+native TUI honors `"animations": false` in the personal Python ngn
+`config.json`: footer motion stops and the composer caret stays steady.
+`TEXTUAL_ANIMATIONS=none` disables both regardless of the saved setting.
+Saved Python themes, startup/exit transitions, and token usage in the footer
+are not supported by the native client.
 The Agents sidebar shows native run status, the displayed child approval, and
 read-only permissions, not Python model activity phases. Its context panel shows
 workspace, session, provider/model and configured authentication mode, not Python

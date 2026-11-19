@@ -3,8 +3,9 @@
 //! Without `--config`, `ngn` reads Python ngn's provider and model settings:
 //! `providers.json` (global) overlaid by `workspaces/<id>/providers.json`,
 //! and the model binding from `assistant.md` (workspace, then global), falling
-//! back to `config.json`'s `model`. Nothing is written, and credential values
-//! are never read here: only environment-variable names and login locations.
+//! back to `config.json`'s `model`. It also reads the personal `animations`
+//! preference. Nothing is written, and credential values are never read here:
+//! only environment-variable names and login locations.
 
 use std::{
     collections::BTreeMap,
@@ -64,6 +65,8 @@ pub struct Selection {
     pub sources: Vec<PathBuf>,
     /// An inherited permission ceiling; never authorizes native mutations.
     pub read_only: bool,
+    /// A saved personal TUI preference, when set to a JSON boolean.
+    pub animations: Option<bool>,
 }
 
 /// Implicit Python settings and login locations, injectable in tests.
@@ -256,6 +259,11 @@ struct UserSettings {
     providers: serde_json::Value,
 }
 
+#[derive(Default, Deserialize)]
+struct PersonalPreferences {
+    animations: Option<bool>,
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ConfigModel {
@@ -263,7 +271,7 @@ enum ConfigModel {
     Binding { provider: String, id: String },
 }
 
-fn user_settings(path: &Path) -> Result<UserSettings> {
+fn user_settings(path: &Path) -> Result<(UserSettings, PersonalPreferences)> {
     let Some(bytes) = read_bounded(path)? else {
         return Ok(Default::default());
     };
@@ -278,7 +286,10 @@ fn user_settings(path: &Path) -> Result<UserSettings> {
         "Python ngn settings in {} reference a custom provider registry. Pass an explicit Rust --config FILE for the intended account",
         path.display()
     );
-    Ok(settings)
+    // Read only the cosmetic field in a separate projection so malformed or
+    // duplicate animation values do not change provider or permission loading.
+    let preferences = serde_json::from_slice(&bytes).unwrap_or_default();
+    Ok((settings, preferences))
 }
 
 fn default_key(kind: &str) -> &'static str {
@@ -360,9 +371,10 @@ pub(crate) fn select(
     workspace: &Path,
     environment: &Environment,
 ) -> Result<Selection> {
-    let settings = user_settings(&directory.join("config.json"))?;
+    let (settings, preferences) = user_settings(&directory.join("config.json"))?;
     let mut selection = Selection {
         read_only: settings.read_only || environment.read_only,
+        animations: preferences.animations,
         ..Selection::default()
     };
     let local_directory = directory.join("workspaces").join(workspace_id(workspace));
@@ -464,6 +476,39 @@ mod tests {
         assert!(select(root.path(), root.path(), &env).unwrap().read_only);
         write(&root.path().join("config.json"), r#"{"read_only":"true"}"#);
         assert!(select(root.path(), root.path(), &env).is_err());
+    }
+
+    #[test]
+    fn personal_animations_is_optional_and_does_not_require_a_registry() {
+        let root = tempfile::tempdir().unwrap();
+        let env = environment(root.path());
+        let path = root.path().join("config.json");
+        assert_eq!(
+            select(root.path(), root.path(), &env).unwrap().animations,
+            None
+        );
+        for (value, expected) in [
+            ("false", Some(false)),
+            ("true", Some(true)),
+            ("null", None),
+            (r#""false""#, None),
+            ("0", None),
+        ] {
+            write(
+                &path,
+                &format!(r#"{{"animations":{value},"read_only":true}}"#),
+            );
+            let selected = select(root.path(), root.path(), &env).unwrap();
+            assert_eq!(selected.animations, expected);
+            assert!(selected.read_only && selected.providers.is_empty());
+        }
+        write(
+            &path,
+            r#"{"animations":true,"animations":false,"read_only":true}"#,
+        );
+        let selected = select(root.path(), root.path(), &env).unwrap();
+        assert_eq!(selected.animations, None);
+        assert!(selected.read_only);
     }
 
     #[test]

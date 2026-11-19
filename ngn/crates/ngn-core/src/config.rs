@@ -51,6 +51,9 @@ pub struct Config {
     /// Legacy files that supplied the provider selection.
     #[serde(skip)]
     pub legacy_sources: Vec<PathBuf>,
+    /// Saved motion preference from the personal Python ngn config, if used.
+    #[serde(skip)]
+    pub legacy_animations: Option<bool>,
     /// Legacy connections the Rust host cannot run yet, with the reason.
     #[serde(skip)]
     pub unavailable: BTreeMap<String, String>,
@@ -81,6 +84,7 @@ impl Default for Config {
             source: None,
             legacy_directory: None,
             legacy_sources: Vec::new(),
+            legacy_animations: None,
             unavailable: BTreeMap::new(),
         }
     }
@@ -178,6 +182,7 @@ impl Config {
             let environment = crate::legacy::Environment::discover()?;
             let selection = crate::legacy::select(directory, &self.workspace, &environment)?;
             self.read_only |= selection.read_only;
+            self.legacy_animations = selection.animations;
             if self.provider.is_empty() {
                 self.provider = selection.provider;
             }
