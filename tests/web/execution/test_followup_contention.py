@@ -12,6 +12,9 @@ from typing import cast
 
 import pytest
 
+from nagents.harness.runtime import followups as runtime_inputs
+from nagents.harness.runtime.followups import RunInputRead
+from nagents.harness.types import TaskMessage
 from nagents.web.execution.service import Run
 from nagents.web.execution.service import WebState
 from tests.support.hang_guard import HANG_GUARD
@@ -23,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from nagents.harness.agents.subagents import TaskInfo
     from nagents.web.http.routing import Work
 
 
@@ -91,7 +95,7 @@ async def test_busy_followup_retries_on_next_boundary_in_fifo_order(
             else:
                 blocker.execute("BEGIN IMMEDIATE")
             with short_sqlite_wait():
-                assert await inputs.pull(run) is None
+                assert await inputs.pull(run) is (None if lock == "empty" else RunInputRead.DEFERRED)
             assert not inputs.claimed and not admitted
             assert statuses(blocker) == ([] if lock == "empty" else [("first", "queued"), ("second", "queued")])
             assert ("Follow-up claim deferred" in caplog.text) == (lock != "empty")
@@ -101,12 +105,110 @@ async def test_busy_followup_retries_on_next_boundary_in_fifo_order(
                 return
             for identifier in ("first", "second"):
                 result = await inputs.pull(run)
-                assert result is not None and result.message_id == identifier
+                assert result is not None and result is not RunInputRead.DEFERRED and result.message_id == identifier
             assert await inputs.pull(run) is None
             assert admitted == ["first", "second"]
             assert statuses(blocker) == [("first", "running"), ("second", "running")]
             await inputs.finish(run)
             assert statuses(blocker) == [("first", "completed"), ("second", "completed")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["busy", "busy-with-wakes", "cancel", "empty", "barrier"])
+async def test_active_child_wait_retries_only_deferred_followup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    async with active_run(tmp_path) as (state, run):
+        harness = state.harness
+        followups, tasks, inputs = harness.followups, harness.tasks, state.queued_inputs
+        child_started, waiting = asyncio.Event(), asyncio.Event()
+        original_wait = tasks._changed.wait
+        attempts = 0
+
+        async def hold_child(info: TaskInfo, prompt: str) -> None:
+            child_started.set()
+            await asyncio.Event().wait()
+
+        async def observe_wait() -> bool:
+            waiting.set()
+            return await original_wait()
+
+        async def read() -> runtime_inputs.RunInput | RunInputRead | None:
+            nonlocal attempts
+            attempts += 1
+            return await inputs.pull(run)
+
+        monkeypatch.setattr(tasks, "_run_child", hold_child)
+        monkeypatch.setattr(tasks._changed, "wait", observe_wait)
+        if case in {"cancel", "busy-with-wakes"}:
+            monkeypatch.setattr(runtime_inputs, "_INPUT_RETRY_DELAY", HANG_GUARD)
+        tasks.begin(run.session_id)
+        followups.begin(run.session_id)
+        try:
+            async with asyncio.timeout(HANG_GUARD):
+                child = await tasks.start_task("hold until cleanup")
+                await child_started.wait()
+                run.task = tasks._workers[child.session_id]
+                if case != "empty":
+                    assert (
+                        await inputs.submit(
+                            run.session_id, "first", "first", delivery="queue" if case == "barrier" else "steer"
+                        )
+                    )[1]
+                    assert (await inputs.submit(run.session_id, "second", "second", delivery="steer"))[1]
+                with (
+                    followups.source(read),
+                    closing(_connect(state.channels.store.db_path)) as blocker,
+                    short_sqlite_wait(),
+                ):
+                    if case in {"busy", "busy-with-wakes", "cancel"}:
+                        blocker.execute("BEGIN IMMEDIATE")
+                    waiter = asyncio.create_task(followups.next(tasks))
+                    try:
+                        await waiting.wait()
+                        assert attempts == 1 and tasks._running()
+                        assert not inputs.claimed
+                        if case in {"cancel", "empty", "barrier"}:
+                            assert (followups.retry_at is not None) == (case == "cancel")
+                            waiter.cancel()
+                            with pytest.raises(asyncio.CancelledError):
+                                await waiter
+                            assert attempts == 1
+                            assert statuses(blocker) == (
+                                [] if case == "empty" else [("first", "queued"), ("second", "queued")]
+                            )
+                            return
+
+                        assert statuses(blocker) == [("first", "queued"), ("second", "queued")]
+                        blocker.rollback()
+                        expected = ["first", "second"]
+                        if case == "busy-with-wakes":
+                            tasks._publish(child, TaskMessage(child.session_id, child.title, "child update"))
+                            assert (await inputs.submit(run.session_id, "third", "third", delivery="steer"))[1]
+                            note = await waiter
+                            assert note is not None and note.kind == "notification" and "child update" in note.prompt
+                            assert attempts == 1  # Neither wake bypassed the backoff.
+                            followups.retry_at = asyncio.get_running_loop().time()
+                            first = await followups.next(tasks)
+                            expected.append("third")
+                        else:
+                            # No submit, child completion, or manual wake after
+                            # rollback. Only the bounded retry can resume Main.
+                            first = await waiter
+                        assert first is not None and first.message_id == expected[0]
+                        for identifier in expected[1:]:
+                            result = await followups.next(tasks)
+                            assert result is not None and result.message_id == identifier
+                        assert attempts == len(expected) + 1 and not run.task.done()
+                        assert [work.message_id for work in inputs.claimed[run.id]] == expected
+                        await inputs.finish(run)
+                        assert statuses(blocker) == [(identifier, "completed") for identifier in expected]
+                    finally:
+                        waiter.cancel()
+                        await asyncio.gather(waiter, return_exceptions=True)
+        finally:
+            followups.end()
+            await tasks.end()
 
 
 @pytest.mark.asyncio

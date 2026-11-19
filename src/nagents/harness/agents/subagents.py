@@ -15,6 +15,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import aclosing
+from contextlib import suppress
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
@@ -1727,8 +1728,18 @@ class SubagentManager:
                 break
             if not self._running():
                 return None
+            retry_at = self.harness.followups.retry_at
+            if retry_at is not None and asyncio.get_running_loop().time() >= retry_at:
+                return None  # Still running; give the stalled input reader another boundary.
             self._changed.clear()
-            await self._changed.wait()
+            # Only the event wait gets a deadline, never a notification write.
+            # Recheck readiness on timeout in case a child completed at the same time.
+            if retry_at is None:
+                await self._changed.wait()
+            else:
+                with suppress(TimeoutError):
+                    async with asyncio.timeout_at(retry_at):
+                        await self._changed.wait()
         batch = format_batch(tuple(self._ready))
         candidates = tuple(self._ready)[: batch.count]
         prepared: dict[str, ImageContent] = {}

@@ -17,6 +17,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Literal
+from typing import Never
 
 from fastapi import HTTPException
 
@@ -49,6 +50,10 @@ class Work:
     voice_session_id: str = ""
     voice_delegation_id: str = ""
     voice_display: str = ""
+
+
+class FollowupClaimDeferred(Exception):
+    """A session-scoped claim hit BUSY before it could return any work."""
 
 
 @dataclass(frozen=True)
@@ -618,7 +623,7 @@ class RoutingStore(InboxStore):
                 owner = asyncio.current_task()
                 if owner is not None and owner.cancelling():
                     raise asyncio.CancelledError from None
-                return self._defer_followup(error)
+                self._defer_followup(error)
 
         def claim(db: sqlite3.Connection) -> Work | None:
             self._quarantine_work(db)
@@ -657,10 +662,11 @@ class RoutingStore(InboxStore):
         return await self._transaction(claim)
 
     @staticmethod
-    def _defer_followup(error: sqlite3.OperationalError) -> None:
-        # No Work escaped. The next model boundary or the inbox dispatcher can
-        # claim the queued row normally; no input or external action is replayed.
+    def _defer_followup(error: sqlite3.OperationalError) -> Never:
+        # Nothing escaped the probe or rolled-back transaction. Only this
+        # signal, not errors after a claim, is safe for the active run to retry.
         logger.warning("Follow-up claim deferred for SQLite contention: sqlite_code=%d", error.sqlite_errorcode)
+        raise FollowupClaimDeferred from error
 
     async def _has_candidate(self, predicate: str, parameters: tuple[str | bool, ...]) -> bool:
         def probe() -> bool:
