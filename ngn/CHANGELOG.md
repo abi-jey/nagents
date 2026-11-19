@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.16
+
+- The native TUI renders assistant Markdown fences with a solid left code border and terminal-default panel colors. Authoritative final text replaces its own streamed response without duplicating it; empty finals keep the streamed text, and user and tool output stay plain.
+
 ## 0.100.15
 
 - The native Message composer and caret honor saved painted Python themes. Terminal-default colors and NO_COLOR still work without terminal color queries.

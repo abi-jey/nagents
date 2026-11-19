@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, iter::Peekable, ops::Range};
 
 use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
 
@@ -77,12 +77,14 @@ pub fn target(call: &ToolCall) -> String {
 
 /// Never let remote/provider/tool data emit terminal control sequences.
 pub fn plain(text: &str) -> String {
-    text.chars()
-        .filter(|character| {
-            matches!(character, '\n' | '\t')
-                || (!character.is_control() && !matches!(*character as u32, 0x7f..=0x9f))
-        })
-        .collect()
+    plain_chars(text).collect()
+}
+
+fn plain_chars(text: &str) -> impl Iterator<Item = char> {
+    text.chars().filter(|character| {
+        matches!(character, '\n' | '\t')
+            || (!character.is_control() && !matches!(*character as u32, 0x7f..=0x9f))
+    })
 }
 
 enum ToolState<'a> {
@@ -332,19 +334,277 @@ fn tool_rows(records: &[EventRecord]) -> HashMap<usize, ProjectedTool<'_>> {
 
 pub enum TranscriptPart<'a> {
     Text(String),
+    Code(String),
     Card(ToolCard<'a>),
+}
+
+/// Recognize only top-level fence lines, before sanitization so that removing
+/// a control character cannot turn a non-delimiter into a delimiter.
+fn fence_line(line: &str) -> Option<(usize, u8, usize, &str)> {
+    let trimmed = line.trim_start_matches(' ');
+    let indent = line.len() - trimmed.len();
+    if indent > 3 {
+        return None;
+    }
+    let marker = *trimmed.as_bytes().first()?;
+    if !matches!(marker, b'`' | b'~') {
+        return None;
+    }
+    let length = trimmed.bytes().take_while(|byte| *byte == marker).count();
+    (length >= 3).then(|| (indent, marker, length, &trimmed[length..]))
+}
+
+struct Fence {
+    source: Range<usize>,
+    body: Range<usize>,
+    indent: usize,
+}
+
+/// Return each raw Markdown line and the byte length of its ending. Keep
+/// offsets into the original text; normalize carriage returns only in code.
+fn fence_lines(text: &str) -> impl Iterator<Item = (&str, usize)> {
+    let mut lines = text.split_inclusive(['\r', '\n']).peekable();
+    std::iter::from_fn(move || {
+        let raw = lines.next()?;
+        Some(if let Some(line) = raw.strip_suffix('\r') {
+            (line, 1 + usize::from(lines.next_if_eq(&"\n").is_some()))
+        } else if let Some(line) = raw.strip_suffix('\n') {
+            (line, 1)
+        } else {
+            (raw, 0)
+        })
+    })
+}
+
+fn fences(text: &str) -> impl Iterator<Item = Fence> {
+    let mut offset = 0;
+    let mut lines = fence_lines(text);
+    std::iter::from_fn(move || {
+        let mut open = None;
+        for (line, ending) in lines.by_ref() {
+            let start = offset;
+            offset += line.len() + ending;
+            if let Some((indent, marker, length, rest)) = fence_line(line) {
+                if let Some((fence_start, body_start, indent, delimiter, minimum)) = open {
+                    if marker == delimiter
+                        && length >= minimum
+                        && rest.trim_matches([' ', '\t']).is_empty()
+                    {
+                        return Some(Fence {
+                            source: fence_start..offset,
+                            body: body_start..start,
+                            indent,
+                        });
+                    }
+                } else if marker == b'~' || !rest.contains('`') {
+                    open = Some((start, offset, indent, marker, length));
+                }
+            }
+        }
+        open.map(|(start, body, indent, _, _)| Fence {
+            source: start..offset,
+            body: body..offset,
+            indent,
+        })
+    })
+}
+
+fn fence_code(raw: &str, indent: usize, partial_first_line: bool) -> String {
+    let mut code = String::with_capacity(raw.len());
+    for (index, (mut line, ending)) in fence_lines(raw).enumerate() {
+        if !partial_first_line || index != 0 {
+            let spaces = line
+                .bytes()
+                .take(indent)
+                .take_while(|byte| *byte == b' ')
+                .count();
+            line = &line[spaces..];
+            if spaces < indent
+                && let Some(rest) = line.strip_prefix('\t')
+            {
+                // Markdown's indentation tab stops are four columns wide.
+                code.push_str(&"    "[..4 - indent]);
+                line = rest;
+            }
+        }
+        code.extend(plain_chars(line));
+        if ending != 0 {
+            code.push('\n');
+        }
+    }
+    code
+}
+
+fn text_parts(
+    output: &str,
+    mut start: usize,
+    end: usize,
+    assistant: &mut Peekable<impl Iterator<Item = Range<usize>>>,
+    parts: &mut Vec<TranscriptPart<'_>>,
+) {
+    while let Some(message) = assistant.next_if(|range| range.start < end) {
+        if message.end <= start {
+            continue;
+        }
+        // Scan from the start of an overlapping message, not the display
+        // cutoff: it may have dropped the opener but retained the code.
+        for fence in fences(&output[message.clone()]) {
+            let fence_start = message.start + fence.source.start;
+            let fence_end = message.start + fence.source.end;
+            if fence_end <= start {
+                continue;
+            }
+            if start < fence_start {
+                parts.push(TranscriptPart::Text(plain(&output[start..fence_start])));
+            }
+            let body_end = message.start + fence.body.end;
+            if start < body_end || start <= fence_start {
+                let mut body_start = (message.start + fence.body.start).max(start);
+                if body_start < body_end
+                    && output[..body_start].ends_with('\r')
+                    && output.as_bytes().get(body_start) == Some(&b'\n')
+                {
+                    // The byte cutoff fell between the two halves of CRLF.
+                    body_start += 1;
+                }
+                let partial = body_start > message.start + fence.body.start
+                    && !output[..body_start].ends_with(['\r', '\n']);
+                parts.push(TranscriptPart::Code(fence_code(
+                    &output[body_start..body_end],
+                    fence.indent,
+                    partial,
+                )));
+            }
+            start = fence_end;
+            if start < end
+                && !output[..start].ends_with(['\r', '\n'])
+                && output.as_bytes()[start] == b'\n'
+            {
+                // A separator supplied by the next event terminates the
+                // last fence line; it isn't an extra empty transcript row.
+                start += 1;
+            }
+        }
+    }
+    if start < end {
+        parts.push(TranscriptPart::Text(plain(&output[start..end])));
+    }
+}
+
+fn assistant_boundary(record: &EventRecord, new_card: bool) -> bool {
+    new_card
+        || matches!(
+            record.event,
+            Event::RunStarted { .. } | Event::ToolStarted { .. } | Event::RunFinished { .. }
+        )
+}
+
+/// A final snapshot belongs to the open response in this run, never to a
+/// previous tool round or to another run. Apply it before assigning byte
+/// offsets so cards and any interleaved events keep their positions.
+fn assistant_edits<'a>(
+    records: &'a [EventRecord],
+    tools: &HashMap<usize, ProjectedTool<'_>>,
+) -> Vec<Option<(&'a str, bool)>> {
+    let mut edits = vec![None; records.len()];
+    let mut pending = HashMap::<_, Vec<usize>>::new();
+    for (index, record) in records.iter().enumerate() {
+        let run = (record.session_id.as_str(), record.run_id.as_str());
+        if assistant_boundary(record, tools.contains_key(&index)) {
+            pending.remove(&run);
+        }
+        match &record.event {
+            Event::TextDelta { text } if !text.is_empty() => {
+                pending.entry(run).or_default().push(index);
+            }
+            Event::TextCompleted { text } => {
+                let Some(deltas) = pending.remove(&run) else {
+                    continue;
+                };
+                edits[index] = Some(("", false));
+                let mut rest = text.as_str();
+                let mut last_visible = None;
+                for (position, &delta) in deltas.iter().enumerate() {
+                    let Event::TextDelta { text: original } = &records[delta].event else {
+                        unreachable!("only text delta indices are recorded");
+                    };
+                    let replacement = if text.is_empty() {
+                        // As in Python, an empty final does not erase the stream.
+                        original
+                    } else {
+                        // Preserve the earlier visual fragments' character
+                        // lengths if a notice or another run split the stream.
+                        // The last delta takes any remaining snapshot text.
+                        let split = if rest.is_empty() || position + 1 == deltas.len() {
+                            rest.len()
+                        } else if rest.starts_with(original.as_str()) {
+                            original.len()
+                        } else {
+                            rest.char_indices()
+                                .nth(original.chars().count())
+                                .map_or(rest.len(), |(offset, _)| offset)
+                        };
+                        let (fragment, tail) = rest.split_at(split);
+                        rest = tail;
+                        fragment
+                    };
+                    edits[delta] = Some((replacement, false));
+                    if !replacement.is_empty() {
+                        last_visible = Some((delta, replacement));
+                    }
+                }
+                if let Some((delta, replacement)) = last_visible {
+                    edits[delta] = Some((replacement, true));
+                }
+            }
+            _ => {}
+        }
+    }
+    edits
 }
 
 pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_>> {
     let mut output = String::new();
     let mut cards = Vec::new();
-    let mut streamed = false;
+    let mut assistant: Vec<Range<usize>> = Vec::new();
+    let mut continuing = None;
     let rows = tool_rows(records);
+    let edits = assistant_edits(records, &rows);
     for (index, record) in records.iter().enumerate() {
-        if let Some(tool) = rows.get(&index) {
+        let run = (record.session_id.as_str(), record.run_id.as_str());
+        let tool = rows.get(&index);
+        if continuing == Some(run) && assistant_boundary(record, tool.is_some()) {
+            continuing = None;
+        }
+        let before_card = output.len();
+        if let Some(tool) = tool {
             output.push('\n');
             cards.push((output.len(), tool));
             output.push('\n'); // One logical line, replaced by the card below.
+        }
+        let start = output.len();
+        let assistant_text = edits[index].or(match &record.event {
+            Event::TextDelta { text } => Some((text.as_str(), false)),
+            Event::TextCompleted { text } => Some((text.as_str(), true)),
+            _ => None,
+        });
+        if let Some((text, complete)) = assistant_text
+            && !text.is_empty()
+        {
+            output.push_str(text);
+            if complete {
+                output.push('\n');
+            }
+            if before_card == start
+                && continuing == Some(run)
+                && let Some(message) = assistant.last_mut()
+            {
+                message.end = output.len();
+            } else {
+                assistant.push(start..output.len());
+            }
+            continuing = (!complete).then_some(run);
+            continue;
         }
         match &record.event {
             Event::QueueUpdated { paused } => output.push_str(if *paused {
@@ -354,20 +614,7 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
             }),
             Event::RunStarted { prompt } => {
                 output.push_str(&format!("\nYOU\n{prompt}\n\nNGN\n"));
-                streamed = false;
             }
-            Event::TextDelta { text } => {
-                output.push_str(text);
-                streamed = true;
-            }
-            Event::TextCompleted { text } => {
-                if !streamed {
-                    output.push_str(text);
-                }
-                output.push('\n');
-                streamed = false;
-            }
-            Event::ToolStarted { .. } => streamed = false,
             Event::Notice { text } => output.push_str(&format!("\n{text}\n")),
             Event::TaskStarted { task } => output.push_str(&format!(
                 "\n  ↳ Agent {} [{}] started · depth {}{}\n",
@@ -397,6 +644,9 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
             )),
             _ => (),
         }
+        if before_card < output.len() {
+            continuing = None;
+        }
     }
     // Keep the most recent activity visible in long conversations, not their
     // first half-megabyte. Durable history remains available in the event store.
@@ -405,13 +655,12 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
         start += 1;
     }
     let mut parts = Vec::new();
+    let mut assistant = assistant.into_iter().peekable();
     for (offset, tool) in cards {
         if offset < start {
             continue;
         }
-        if start < offset {
-            parts.push(TranscriptPart::Text(plain(&output[start..offset])));
-        }
+        text_parts(&output, start, offset, &mut assistant, &mut parts);
         parts.push(TranscriptPart::Card(tool.row.card(
             tool.key,
             now_ms,
@@ -419,9 +668,7 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
         )));
         start = offset + 1;
     }
-    if start < output.len() {
-        parts.push(TranscriptPart::Text(plain(&output[start..])));
-    }
+    text_parts(&output, start, output.len(), &mut assistant, &mut parts);
     parts
 }
 
@@ -435,7 +682,7 @@ mod tests {
         let mut output = String::new();
         for part in project(records, now_ms) {
             match part {
-                TranscriptPart::Text(text) => output.push_str(&text),
+                TranscriptPart::Text(text) | TranscriptPart::Code(text) => output.push_str(&text),
                 TranscriptPart::Card(card) => {
                     let _ = write!(output, "> {} · {}", card.label, card.status);
                     if let Some(elapsed) = card.elapsed {
@@ -514,6 +761,257 @@ mod tests {
             },
             duration_ms,
         }
+    }
+
+    #[test]
+    fn fences_are_assistant_only_and_survive_split_deltas() {
+        let records = [
+            event(
+                "r",
+                1,
+                Event::RunStarted {
+                    prompt: "```user\nplain\n```".into(),
+                },
+            ),
+            event(
+                "r",
+                2,
+                Event::TextDelta {
+                    text: "# literal heading\n``".into(),
+                },
+            ),
+            event(
+                "r",
+                3,
+                Event::TextDelta {
+                    text: "``rust\r\n  **literal**\x1b[31m\r\n```\r\n".into(),
+                },
+            ),
+            event(
+                "r",
+                4,
+                Event::TextDelta {
+                    text: "`````\t\r\n[plain](https://example.test)".into(),
+                },
+            ),
+            event(
+                "r",
+                5,
+                Event::TextCompleted {
+                    text: concat!(
+                        "# literal heading\n````rust\r\n",
+                        "  **literal**\x1b[31m\r\n```\r\n",
+                        "`````\t\r\n[plain](https://example.test)"
+                    )
+                    .into(),
+                },
+            ),
+            event(
+                "r",
+                6,
+                Event::ToolStarted {
+                    call: call("c", "~~~tool"),
+                },
+            ),
+            event("r", 7, complete(&call("c", ""), 1, "~~~\ntool error\n~~~")),
+        ];
+        let pending = project(&records[..3], 10);
+        assert!(matches!(&pending[..], [
+            TranscriptPart::Text(prose),
+            TranscriptPart::Code(code),
+        ] if prose == "\nYOU\n```user\nplain\n```\n\nNGN\n# literal heading\n"
+            && code == "  **literal**[31m\n```\n"));
+
+        let parts = project(&records, 10);
+        assert!(matches!(&parts[..], [
+            TranscriptPart::Text(_),
+            TranscriptPart::Code(code),
+            TranscriptPart::Text(prose),
+            TranscriptPart::Card(card),
+        ] if code == "  **literal**[31m\n```\n"
+            && prose == "[plain](https://example.test)\n\n"
+            && card.error_detail().as_deref() == Some("  Error: ~~~\ntool error\n~~~")));
+    }
+
+    #[test]
+    fn fence_grammar_and_event_boundaries_leave_other_text_plain() {
+        let records = [
+            event("r", 1, Event::TextCompleted {
+                text: "inline ```not a block\n    ```indented\n```bad`info\n\x1b```\n   ~~~lang`info\n  keep indent\n```\n~~~not-a-close\n   ~~~~ \t\noutside".into(),
+            }),
+            event("r", 2, Event::TextDelta { text: "```\nunfinished".into() }),
+            event("r", 3, Event::Notice { text: "~~~notice\nnot code".into() }),
+            event("r", 4, Event::TextCompleted { text: String::new() }),
+            event("r", 5, Event::TextCompleted { text: "new assistant text".into() }),
+            event("next", 6, Event::RunStarted { prompt: "~~~user".into() }),
+        ];
+        let parts = project(&records, 10);
+        assert!(matches!(&parts[..], [
+            TranscriptPart::Text(before),
+            TranscriptPart::Code(tilde),
+            TranscriptPart::Text(between),
+            TranscriptPart::Code(unfinished),
+            TranscriptPart::Text(after),
+        ] if before == "inline ```not a block\n    ```indented\n```bad`info\n```\n"
+            && tilde == "keep indent\n```\n~~~not-a-close\n"
+            && between == "outside\n"
+            && unfinished == "unfinished\n"
+            && after == "\n~~~notice\nnot code\nnew assistant text\n\nYOU\n~~~user\n\nNGN\n"));
+    }
+
+    #[test]
+    fn final_snapshot_edits_and_closes_the_exact_tilde_stream() {
+        let delta =
+            |sequence, text: &str| event("r", sequence, Event::TextDelta { text: text.into() });
+        let records = [
+            delta(1, "PROSE-TILDE\n~~"),
+            delta(2, "~~\nOPEN-WAIT 界界\n~~~\n```\n"),
+            delta(3, "STREAM-OLD 界\n"),
+            delta(4, "~~"),
+            delta(5, ""),
+            event("r", 6, Event::TextCompleted {
+                text: "PROSE-TILDE\n~~~~\nOPEN-WAIT 界界\n~~~\n```\nFINAL-NEW 界\n~~~~~\nPOST-CLOSE".into(),
+            }),
+            event("r", 7, Event::RunFinished { status: RunStatus::Completed, error: String::new() }),
+        ];
+        assert!(
+            matches!(&project(&records[..1], 0)[..], [TranscriptPart::Text(text)]
+            if text == "PROSE-TILDE\n~~")
+        );
+        assert!(
+            matches!(&project(&records[..2], 0)[..], [TranscriptPart::Text(_), TranscriptPart::Code(text)]
+            if text == "OPEN-WAIT 界界\n~~~\n```\n")
+        );
+        assert!(
+            matches!(&project(&records[..5], 0)[..], [TranscriptPart::Text(_), TranscriptPart::Code(text)]
+            if text.ends_with("STREAM-OLD 界\n~~"))
+        );
+        assert!(matches!(&project(&records, 0)[..], [
+            TranscriptPart::Text(prose), TranscriptPart::Code(code), TranscriptPart::Text(after),
+        ] if prose == "PROSE-TILDE\n" && code == "OPEN-WAIT 界界\n~~~\n```\nFINAL-NEW 界\n"
+            && after == "POST-CLOSE\n\n— Completed\n"));
+    }
+
+    #[test]
+    fn completions_keep_tool_rounds_other_runs_and_empty_finals_separate() {
+        let delta = |run, sequence, text: &str| {
+            event(run, sequence, Event::TextDelta { text: text.into() })
+        };
+        let done = |run, sequence, text: &str| {
+            event(run, sequence, Event::TextCompleted { text: text.into() })
+        };
+        let first = call("first", "one");
+        let second = call("second", "two");
+        let records = [
+            delta("r", 1, "draft before tool"),
+            done("r", 2, "final before tool"),
+            event(
+                "r",
+                3,
+                Event::ToolStarted {
+                    call: first.clone(),
+                },
+            ),
+            delta("r", 4, "no final before next tool"),
+            event(
+                "r",
+                5,
+                Event::ToolStarted {
+                    call: second.clone(),
+                },
+            ),
+            event("r", 6, complete(&first, 1000, "")),
+            delta("r", 7, "前 old\n"),
+            event(
+                "other",
+                8,
+                Event::Notice {
+                    text: "interleaved notice".into(),
+                },
+            ),
+            delta("r", 9, "old end"),
+            delta("other", 10, "other stream"),
+            done("r", 11, "界 new\nnew end"),
+            done("other", 12, ""),
+            event("r", 13, complete(&second, 1000, "")),
+            done("r", 14, ""),
+            done("r", 15, "standalone"),
+        ];
+        assert_eq!(
+            transcript(&records, false, 0),
+            "final before tool\n\n> shell · one · complete · 1s\n\
+             no final before next tool\n> shell · two · complete · 1s\n\
+             界 new\n\ninterleaved notice\nnew end\nother stream\nstandalone\n"
+        );
+    }
+
+    #[test]
+    fn code_dedents_by_the_opener_and_normalizes_cr_without_changing_plain_text() {
+        let records = [
+            event("r", 1, Event::RunStarted { prompt: "user\rliteral".into() }),
+            event("r", 2, Event::TextCompleted {
+                text: "plain\rprose\n   ~~~~\r   SAME\r    EXTRA\r\n  FEWER\n\tTAB\n   \tFULL-TAB\n   \x1b[999~\r   ~~~~~ \t\rPOST\rPLAIN".into(),
+            }),
+        ];
+        assert!(matches!(&project(&records, 0)[..], [
+            TranscriptPart::Text(before), TranscriptPart::Code(code), TranscriptPart::Text(after),
+        ] if before == "\nYOU\nuserliteral\n\nNGN\nplainprose\n"
+            && code == "SAME\n EXTRA\nFEWER\n TAB\n\tFULL-TAB\n[999~\n"
+            && after == "POSTPLAIN\n"));
+    }
+
+    #[test]
+    fn snapshot_replacement_applies_before_the_retained_tail_cutoff() {
+        let records = [
+            event(
+                "r",
+                1,
+                Event::TextCompleted {
+                    text: "earlier reply".into(),
+                },
+            ),
+            event(
+                "r",
+                2,
+                Event::TextDelta {
+                    text: format!("~~~\r{}", "界".repeat(180_000)),
+                },
+            ),
+            event(
+                "r",
+                3,
+                Event::TextCompleted {
+                    text: "~~~\rfinal code\r~~~\rplain".into(),
+                },
+            ),
+        ];
+        assert!(
+            matches!(&project(&records[..2], 0)[..], [TranscriptPart::Code(code)]
+            if code.starts_with('界') && code.len() <= 512_000)
+        );
+        assert!(matches!(&project(&records, 0)[..], [
+            TranscriptPart::Text(before), TranscriptPart::Code(code), TranscriptPart::Text(after),
+        ] if before == "earlier reply\n" && code == "final code\n" && after == "plain\n"));
+    }
+
+    #[test]
+    fn retained_tail_keeps_code_when_the_opener_is_outside_the_byte_limit() {
+        let records = [event(
+            "r",
+            1,
+            Event::TextDelta {
+                text: format!(
+                    "~~~\n{}\nlast code line\n~~~\nplain tail",
+                    "界".repeat(180_000)
+                ),
+            },
+        )];
+        let parts = project(&records, 10);
+        assert!(
+            matches!(&parts[..], [TranscriptPart::Code(code), TranscriptPart::Text(tail)]
+            if code.starts_with('界') && code.ends_with("\nlast code line\n")
+                && tail == "plain tail" && code.len() + tail.len() <= 512_000)
+        );
     }
 
     #[test]

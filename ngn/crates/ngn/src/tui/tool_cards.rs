@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashSet,
     time::{Duration, Instant},
 };
@@ -306,9 +307,14 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
 pub(super) struct Layout<'a> {
     width: u16,
     rows: usize,
-    lines: Vec<(usize, Line<'a>)>,
+    lines: Vec<(usize, Row<'a>)>,
     headers: Vec<(Key, usize)>,
     sweep: Option<(usize, HeaderSweep)>,
+}
+
+enum Row<'a> {
+    Plain(Line<'a>),
+    Code(Cow<'a, str>),
 }
 
 impl<'a> Layout<'a> {
@@ -329,6 +335,7 @@ impl<'a> Layout<'a> {
         for part in parts {
             match part {
                 TranscriptPart::Text(text) => layout.text(text),
+                TranscriptPart::Code(text) => layout.code(text),
                 TranscriptPart::Card(card) => {
                     let key = (card.key.0.to_owned(), card.key.1.to_owned());
                     let expanded = cards.is_some_and(|cards| cards.expanded.contains(&key));
@@ -405,6 +412,41 @@ impl<'a> Layout<'a> {
         }
     }
 
+    fn code(&mut self, text: &'a str) {
+        if self.width == 0 {
+            return;
+        }
+        let available = usize::from(self.width - 1);
+        let mut push = |text| {
+            self.lines.push((self.rows, Row::Code(text)));
+            self.rows += 1;
+        };
+        for line in text
+            .split_terminator('\n')
+            .chain(text.is_empty().then_some(""))
+        {
+            if available == 0 {
+                push(Cow::Borrowed(""));
+            } else if line.contains('\t') {
+                let mut column = 0;
+                let mut expanded = String::new();
+                for grapheme in Span::raw(line).styled_graphemes(Style::default()) {
+                    if grapheme.symbol == "\t" {
+                        let spaces = 4 - column % 4;
+                        expanded.push_str(&"    "[..spaces]);
+                        column += spaces;
+                    } else {
+                        expanded.push_str(grapheme.symbol);
+                        column += Span::raw(grapheme.symbol).width();
+                    }
+                }
+                wrap_code(&expanded, available, |row| push(Cow::Owned(row.to_owned())));
+            } else {
+                wrap_code(line, available, |row| push(Cow::Borrowed(row)));
+            }
+        }
+    }
+
     pub(super) fn push(&mut self, line: Line<'a>) {
         if self.width == 0 {
             return;
@@ -414,7 +456,7 @@ impl<'a> Layout<'a> {
         } else {
             paragraph(line.clone()).line_count(self.width)
         };
-        self.lines.push((self.rows, line));
+        self.lines.push((self.rows, Row::Plain(line)));
         self.rows += height;
     }
 
@@ -438,17 +480,85 @@ impl<'a> Layout<'a> {
         let end = self
             .lines
             .partition_point(|(row, _)| *row < top + usize::from(area.height));
-        let (first_row, _) = &self.lines[start];
-        let skip = (top - first_row) as u16;
-        let visible = self.lines[start..end]
-            .iter()
-            .map(|(_, line)| line.clone())
-            .collect::<Vec<_>>();
-        let area = Rect {
-            height: area.height.min(u16::MAX - skip),
-            ..area
-        };
-        frame.render_widget(paragraph(visible).scroll((skip, 0)), area);
+        let bottom = top + usize::from(area.height);
+        let mut first = start;
+        // Keep native word wrapping for the plain runs; fenced rows have
+        // already been wrapped without discarding any whitespace.
+        for group in self.lines[start..end]
+            .chunk_by(|(_, a), (_, b)| matches!(a, Row::Plain(_)) == matches!(b, Row::Plain(_)))
+        {
+            match &group[0].1 {
+                Row::Plain(_) => {
+                    let first_row = group[0].0;
+                    let visible_start = first_row.max(top);
+                    let skip = (visible_start - first_row) as u16;
+                    let last = first + group.len();
+                    let visible_end = self
+                        .lines
+                        .get(last)
+                        .map_or(self.rows, |line| line.0)
+                        .min(bottom);
+                    let height = ((visible_end - visible_start) as u16).min(u16::MAX - skip);
+                    let lines = group
+                        .iter()
+                        .filter_map(|(_, row)| match row {
+                            Row::Plain(line) => Some(line.clone()),
+                            Row::Code(_) => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let y = area.y + (visible_start - top) as u16;
+                    frame.render_widget(
+                        paragraph(lines).scroll((skip, 0)),
+                        Rect::new(area.x, y, area.width, height),
+                    );
+                }
+                Row::Code(_) => {
+                    for (index, row) in group {
+                        if let Row::Code(text) = row {
+                            draw_code_row(frame.buffer_mut(), area, (*index - top) as u16, text);
+                        }
+                    }
+                }
+            }
+            first += group.len();
+        }
+    }
+}
+
+fn wrap_code<'a>(text: &'a str, available: usize, mut push: impl FnMut(&'a str)) {
+    let mut start = 0;
+    let mut end = 0;
+    let mut used = 0;
+    for grapheme in Span::raw(text).styled_graphemes(Style::default()) {
+        let width = Span::raw(grapheme.symbol).width();
+        if used + width > available && start < end {
+            push(&text[start..end]);
+            start = end;
+            used = 0;
+        }
+        end += grapheme.symbol.len();
+        if width > available {
+            // Never split a wide grapheme or overwrite the border.
+            push("…");
+            start = end;
+        } else {
+            used += width;
+        }
+    }
+    if start < end || text.is_empty() {
+        push(&text[start..end]);
+    }
+}
+
+fn draw_code_row(buffer: &mut Buffer, area: Rect, row: u16, text: &str) {
+    let y = area.y + row;
+    // Python's terminal palette uses ANSI defaults for panel/text and ANSI
+    // green for the code role. Don't assume a dark or light terminal.
+    let panel = Style::new().bg(Color::Reset).fg(Color::Reset);
+    buffer.set_style(Rect::new(area.x, y, area.width, 1), panel);
+    buffer.set_string(area.x, y, "│", panel.fg(Color::Green));
+    if area.width > 1 {
+        buffer.set_stringn(area.x + 1, y, text, usize::from(area.width - 1), panel);
     }
 }
 
@@ -549,6 +659,106 @@ mod tests {
             .chunks(terminal.size().unwrap().width as usize)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect()
+    }
+
+    #[test]
+    fn fenced_rows_use_default_panel_and_green_border_with_literal_wrapping() {
+        let mut app = App {
+            records: vec![event(
+                "r",
+                Event::TextCompleted {
+                    text: "before\n```example\n\t界e\u{301} *\n\n  [x]\n```\nafter".into(),
+                },
+            )],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(7, 8)).unwrap();
+        let rows = draw(&mut app, &mut terminal);
+        assert_eq!(
+            &rows[..6],
+            &[
+                "before ",
+                "│    界 ",
+                "│e\u{301} *   ",
+                "│      ",
+                "│  [x] ",
+                "after  "
+            ]
+        );
+        let buffer = terminal.backend().buffer();
+        for row in 1..5 {
+            assert_eq!(buffer[(0, row)].fg, Color::Green);
+            for x in 0..7 {
+                assert_eq!(buffer[(x, row)].bg, Color::Reset);
+                if x > 0 {
+                    assert_eq!(buffer[(x, row)].fg, Color::Reset);
+                }
+            }
+        }
+        assert_eq!(buffer[(0, 0)].bg, Color::Blue);
+        assert_eq!(buffer[(0, 5)].bg, Color::Blue);
+    }
+
+    #[test]
+    fn code_tail_scrolls_past_u16_rows_and_tiny_widths_are_safe() {
+        let mut app = App {
+            records: vec![event(
+                "r",
+                Event::TextDelta {
+                    text: format!("~~~\n{}\n界Z", "a".repeat(140_000)),
+                },
+            )],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(3, 3)).unwrap();
+        assert_eq!(draw(&mut app, &mut terminal), ["│aa", "│界 ", "│Z "]);
+        assert!(app.tools.rendered_top > usize::from(u16::MAX));
+        let mut terminal = Terminal::new(TestBackend::new(2, 3)).unwrap();
+        assert_eq!(draw(&mut app, &mut terminal), ["│a", "│…", "│Z"]);
+        let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
+        assert_eq!(draw(&mut app, &mut terminal), ["│", "│", " "]);
+    }
+
+    #[test]
+    fn streaming_fence_keeps_the_reading_anchor_and_expanded_tool() {
+        let delta = |text: String| event("r", Event::TextDelta { text });
+        let mut app = App {
+            records: vec![
+                started("r", "c", "plain arguments"),
+                finished("r", "c", json!({}), "~~~\nplain tool error\n~~~"),
+            ],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        draw(&mut app, &mut terminal);
+        assert!(key(&mut app, KeyCode::F(4)));
+        assert!(key(&mut app, KeyCode::Enter));
+        let before = draw(&mut app, &mut terminal);
+        assert!(before[1].starts_with("v shell"));
+        assert!(before.iter().any(|row| row.starts_with("plain tool error")));
+        assert!(before.iter().all(|row| !row.starts_with('│')));
+        assert!(key(&mut app, KeyCode::Esc));
+
+        app.records
+            .push(delta(format!("~~~\n{}", "streaming 界\n".repeat(30))));
+        assert_eq!(draw(&mut app, &mut terminal), before);
+        app.tools.page(&mut app.scroll, false);
+        let anchor = draw(&mut app, &mut terminal);
+        let top = app.scroll;
+        assert!(anchor.iter().all(|row| row.starts_with('│')));
+        app.records.push(delta("last code\n~~".into()));
+        assert_eq!(draw(&mut app, &mut terminal), anchor);
+        app.records.push(delta("~\nafter".into()));
+        assert_eq!(draw(&mut app, &mut terminal), anchor);
+        assert_eq!(app.scroll, top);
+        assert!(app.tools.expanded.contains(&("r".into(), "c".into())));
+        while app.scroll.is_some() {
+            app.tools.page(&mut app.scroll, false);
+            draw(&mut app, &mut terminal);
+        }
+        let tail = draw(&mut app, &mut terminal);
+        assert!(tail[6].starts_with("│last code"));
+        assert!(tail[7].starts_with("after"));
     }
 
     #[test]
