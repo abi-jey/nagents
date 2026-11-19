@@ -917,10 +917,16 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
     }
 }
 
+fn animations_enabled(saved: Option<bool>, textual: Option<&str>) -> bool {
+    saved.unwrap_or(true) && !textual.is_some_and(|value| value.eq_ignore_ascii_case("none"))
+}
+
 pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut receiver = host.events.subscribe();
-    let animate =
-        !std::env::var("TEXTUAL_ANIMATIONS").is_ok_and(|value| value.eq_ignore_ascii_case("none"));
+    let animate = animations_enabled(
+        host.config.legacy_animations,
+        std::env::var("TEXTUAL_ANIMATIONS").ok().as_deref(),
+    );
     let mut app = App {
         session,
         records: Vec::new(),
@@ -1134,6 +1140,31 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
 mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
+
+    #[test]
+    fn saved_motion_and_textual_override_control_footer_and_caret() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(600);
+        for (saved, textual, expected) in [
+            (None, None, true),
+            (Some(true), None, true),
+            (Some(false), None, false),
+            (Some(false), Some("full"), false),
+            (None, Some("none"), false),
+            (Some(true), Some("NoNe"), false),
+        ] {
+            let animate = animations_enabled(saved, textual);
+            let mut activity = footer::Activity::new(now, animate);
+            activity.sync(Some("root"), false, false, &[], now, 0);
+            assert_eq!(activity.needs_frame(later), expected);
+
+            let mut caret = composer::Caret::new(animate);
+            caret.focus(true, now);
+            assert!(caret.visible(now));
+            assert_eq!(caret.visible(later), !expected);
+            assert!(caret.visible(now + Duration::from_secs(1)));
+        }
+    }
 
     #[tokio::test]
     async fn enter_without_provider_explains_rejection_and_keeps_draft() {

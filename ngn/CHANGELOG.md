@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.13
+
+- The native TUI now honors the saved Python ngn animation preference, keeping tool-card shimmer, footer motion, and caret blinking off with animations disabled while elapsed timers continue to update.
+
 ## 0.100.12
 
 - Animate the active native terminal tool card with a foreground-only teal/lavender sweep that respects reduced motion and stops for approval or completion.
