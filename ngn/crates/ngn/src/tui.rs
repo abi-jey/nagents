@@ -87,6 +87,8 @@ struct App {
     after: i64,
     input: String,
     caret: composer::Caret,
+    composer_palette: composer::Palette,
+    no_color: bool,
     completion: completion::Completion,
     status: String,
     /// The last Enter submission failed; render its reason as an error, not a hint.
@@ -547,6 +549,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         input_area,
         &app.input,
         app.caret_visible(now),
+        app.composer_palette,
     );
     app.activity.draw(frame, footer, app, &host.config, now);
     if app.task_picker {
@@ -670,6 +673,17 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     }
     if let Some(picker) = &app.picker {
         picker.draw(frame, accent, muted);
+    }
+    if app.no_color {
+        // Crossterm otherwise emits empty SGR color transitions under NO_COLOR.
+        // Those reset attributes too, including the composer's reverse caret.
+        frame.buffer_mut().set_style(
+            area,
+            Style::new()
+                .fg(Color::Reset)
+                .bg(Color::Reset)
+                .underline_color(Color::Reset),
+        );
     }
 }
 
@@ -930,12 +944,15 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
         host.config.legacy_animations,
         std::env::var("TEXTUAL_ANIMATIONS").ok().as_deref(),
     );
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     let mut app = App {
         session,
         records: Vec::new(),
         after: 0,
         input: String::new(),
         caret: composer::Caret::new(animate),
+        composer_palette: composer::Palette::new(host.config.legacy_composer_theme, no_color),
+        no_color,
         activity: footer::Activity::new(Instant::now(), animate),
         active: None,
         approval: None,

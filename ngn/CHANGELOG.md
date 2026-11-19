@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.15
+
+- The native Message composer and caret honor saved painted Python themes. Terminal-default colors and NO_COLOR still work without terminal color queries.
+
 ## 0.100.14
 
 - Restore the native --no-animations CLI flag, including unambiguous Python abbreviations. It disables activity motion, tool-card shimmer, and caret blinking for one invocation without changing saved preferences or stopping elapsed timers.
