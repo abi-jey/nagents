@@ -99,6 +99,7 @@ struct App {
     task_picker: bool,
     task_index: usize,
     task_detail: bool,
+    task_from_rail: bool,
     task_scroll: u16,
     task_records: Vec<EventRecord>,
     task_after: i64,
@@ -328,6 +329,7 @@ impl App {
         self.agents = agents::Rail::default();
         self.task_picker = false;
         self.task_index = 0;
+        self.task_from_rail = false;
         self.reset_task_detail(false);
         self.queue_picker = false;
         self.steering_picker = false;
@@ -370,35 +372,43 @@ fn footer_area(area: Rect) -> Rect {
     Rect::new(area.x, area.bottom() - height, area.width, height)
 }
 
+fn content_rows(area: Rect, menu_height: u16) -> [Rect; 4] {
+    let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(2));
+    // Make room for task rows on short, wide screens by using a one-line
+    // header and a one-line composer interior.
+    let compact = agents::is_wide(area.width) && (7..=11).contains(&body.height);
+    let composer = if compact { 3 } else { 5 }.min(if body.height >= 5 {
+        body.height - 2
+    } else {
+        body.height
+    });
+    let menu_height = menu_height.min(
+        body.height
+            .saturating_sub(composer + if compact { 4 } else { 3 }),
+    );
+    let header_height = if compact { 1 } else { 3 }
+        .min(body.height.saturating_sub(composer + 2))
+        .min(body.height.saturating_sub(composer + menu_height + 1));
+    Layout::vertical([
+        Constraint::Length(header_height),
+        Constraint::Min(0),
+        Constraint::Length(menu_height),
+        Constraint::Length(composer),
+    ])
+    .areas(body)
+}
+
 fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     let wall_ms = ngn_core::store::now_ms();
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
     let area = frame.area();
     let footer = footer_area(area);
-    let body = Rect::new(area.x, area.y, area.width, area.height - footer.height);
-    let composer = 5.min(if body.height >= 5 {
-        body.height - 2
-    } else {
-        body.height
-    });
     let menu = app
         .composer_available()
         .then(|| app.completion.menu(&app.input))
         .flatten();
-    let menu_height = menu.as_ref().map_or(0, |menu| {
-        menu.height().min(body.height.saturating_sub(composer + 3))
-    });
-    let header_height = 3
-        .min(body.height.saturating_sub(composer + 2))
-        .min(body.height.saturating_sub(composer + menu_height + 1));
-    let rows = Layout::vertical([
-        Constraint::Length(header_height),
-        Constraint::Min(0),
-        Constraint::Length(menu_height),
-        Constraint::Length(composer),
-    ])
-    .split(body);
+    let rows = content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
     let header = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
@@ -419,8 +429,16 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     frame.render_widget(header, rows[0]);
     let (conversation, rail) = agents::split(rows[1]);
     if let Some(rail) = rail {
-        app.agents
-            .draw(frame, rail, &app.tasks, app.rail_has_focus(), accent, muted);
+        app.agents.draw(
+            frame,
+            rail,
+            &app.tasks,
+            app.rail_has_focus(),
+            (accent, muted),
+            app.approval
+                .as_ref()
+                .map(|approval| approval.run_id.as_str()),
+        );
     }
     let text = if app.records.is_empty() {
         welcome(&host.config)
@@ -475,8 +493,9 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 Paragraph::new(text)
                     .wrap(Wrap { trim: false })
                     .block(Block::bordered().title(format!(
-                        " Agent: {} · Esc back · Ctrl+X cancel ",
-                        view::plain(title)
+                        " Agent: {} · Esc {} · Ctrl+X cancel ",
+                        view::plain(title),
+                        if app.task_from_rail { "close" } else { "back" }
                     )));
             let lines = paragraph.line_count(area.width) as u16;
             frame.render_widget(
@@ -888,7 +907,11 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         app.activity.advance(now);
         let width = terminal
             .draw(|frame| {
-                app.agents.resize(frame.area().width);
+                let area = frame.area();
+                // Rail navigation only owns keys when the completion menu
+                // is hidden, so its page size is the menu-free tree height.
+                app.agents
+                    .resize(area.width, content_rows(area, 0)[1].height);
                 app.caret.focus(app.composer_available(), now);
                 let caret_visible = app.caret_visible(now);
                 if footer_only

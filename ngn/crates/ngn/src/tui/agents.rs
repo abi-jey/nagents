@@ -10,7 +10,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType},
+    widgets::{Block, BorderType, Padding, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
 use super::App;
@@ -18,10 +18,15 @@ use crate::view;
 
 const BREAKPOINT: u16 = 110;
 const WIDTH: u16 = 31;
-const PAGE: usize = 10;
+// The terminal theme's panel role uses the terminal's default background.
+const PANEL: Color = Color::Reset;
+
+pub(super) fn is_wide(width: u16) -> bool {
+    width > BREAKPOINT
+}
 
 pub(super) fn split(body: Rect) -> (Rect, Option<Rect>) {
-    if body.width <= BREAKPOINT {
+    if !is_wide(body.width) {
         return (body, None);
     }
     let main = Rect::new(body.x, body.y, body.width - WIDTH, body.height);
@@ -86,6 +91,14 @@ pub(super) struct Rail {
     nodes: Vec<Node>,
     selected: Option<String>,
     collapsed: HashSet<String>,
+    viewport: usize,
+    offset: usize,
+}
+
+fn window_start(offset: usize, cursor: usize, length: usize, height: usize) -> usize {
+    offset
+        .min(length.saturating_sub(height))
+        .clamp(cursor.saturating_sub(height.saturating_sub(1)), cursor)
 }
 
 impl Rail {
@@ -110,8 +123,9 @@ impl Rail {
         }
     }
 
-    pub(super) fn resize(&mut self, width: u16) {
-        if width <= BREAKPOINT {
+    pub(super) fn resize(&mut self, width: u16, height: u16) {
+        self.viewport = usize::from(height.saturating_sub(3));
+        if !is_wide(width) {
             self.focused = false;
         }
     }
@@ -148,17 +162,21 @@ impl Rail {
         let visible = self.visible(tasks);
         let cursor = self.cursor(&visible, tasks);
         let last = visible.len().saturating_sub(1);
+        let page = self.viewport.max(1);
+        let start = window_start(self.offset, cursor, visible.len(), page);
         let next = match code {
             KeyCode::Up => cursor.saturating_sub(1),
             KeyCode::Down => (cursor + 1).min(last),
-            KeyCode::PageUp => cursor.saturating_sub(PAGE),
-            KeyCode::PageDown => (cursor + PAGE).min(last),
+            KeyCode::PageUp => cursor.saturating_sub(page),
+            KeyCode::PageDown => (cursor + page).min(last),
             KeyCode::Home => 0,
             KeyCode::End => last,
-            KeyCode::Left | KeyCode::Right => {
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
                 if let Some(node) = visible.get(cursor).filter(|node| node.has_children) {
                     let id = &tasks[node.task].run_id;
-                    if code == KeyCode::Left {
+                    if code == KeyCode::Left
+                        || (code == KeyCode::Char(' ') && !self.collapsed.contains(id))
+                    {
                         self.collapsed.insert(id.clone());
                     } else {
                         self.collapsed.remove(id);
@@ -172,6 +190,12 @@ impl Rail {
         self.selected = visible
             .get(next)
             .map(|node| tasks[node.task].run_id.clone());
+        let offset = match code {
+            KeyCode::PageUp => start.saturating_sub(page),
+            KeyCode::PageDown => start + page,
+            _ => start,
+        };
+        self.offset = window_start(offset, next, visible.len(), page);
         code == KeyCode::Enter && self.selected.is_some()
     }
 
@@ -181,30 +205,50 @@ impl Rail {
         area: Rect,
         tasks: &[TaskInfo],
         focused: bool,
-        accent: Color,
-        muted: Color,
+        (accent, muted): (Color, Color),
+        approval_run: Option<&str>,
     ) {
+        let heading = Style::new().fg(accent).add_modifier(Modifier::BOLD);
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
-            .title(format!(" Agents / {} · Ctrl+T ", tasks.len()))
+            .title(Line::styled(" Agents / Ctrl+T ", heading))
+            .padding(Padding::horizontal(1))
+            .style(Style::new().bg(PANEL))
             .border_style(Style::new().fg(if focused { accent } else { muted }));
         let inner = block.inner(area);
-        if inner.height == 0 {
-            frame.render_widget(block, area);
+        frame.render_widget(block, area);
+        if inner.is_empty() {
+            return;
+        }
+        frame.render_widget(
+            Line::styled(format!("Agents / {}", tasks.len()), heading),
+            Rect { height: 1, ..inner },
+        );
+        let rows = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+        if rows.is_empty() {
             return;
         }
         let visible = self.visible(tasks);
         let cursor = self.cursor(&visible, tasks);
-        let height = usize::from(inner.height);
-        let start = cursor
-            .saturating_sub(height / 2)
-            .min(visible.len().saturating_sub(height));
-        let block = if visible.len() > height {
-            block.title_bottom(format!(" {} / {} ", cursor + 1, visible.len()))
-        } else {
-            block
-        };
-        frame.render_widget(block, area);
+        let height = usize::from(rows.height);
+        let start = window_start(self.offset, cursor, visible.len(), height);
+        let overflow = visible.len().saturating_sub(height);
+        if overflow > 0 {
+            frame.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .thumb_symbol("█")
+                    .thumb_style(Style::new().fg(if focused { accent } else { muted }))
+                    .track_symbol(Some("│"))
+                    .track_style(Style::new().fg(muted)),
+                rows,
+                &mut ScrollbarState::new(overflow + 1)
+                    .position(start)
+                    .viewport_content_length(height),
+            );
+        }
+        let width = rows.width.saturating_sub(u16::from(overflow > 0));
         for (row, node) in visible.iter().skip(start).take(height).enumerate() {
             let task = &tasks[node.task];
             let selected = focused && start + row == cursor;
@@ -215,6 +259,9 @@ impl Rail {
             };
             let (status, color) = match task.status {
                 RunStatus::Queued => ("Queued", muted),
+                RunStatus::Running if approval_run == Some(task.run_id.as_str()) => {
+                    ("Approval", Color::Yellow)
+                }
                 RunStatus::Running => ("Running", accent),
                 RunStatus::Completed => ("Done", Color::Green),
                 RunStatus::Failed => ("Error", Color::Red),
@@ -233,8 +280,8 @@ impl Rail {
             let indent = match node.depth {
                 0 => "",
                 1 => "  ",
-                2 => "    ",
-                _ => "   … ",
+                2 => "   ",
+                _ => "  …",
             };
             let title = view::plain(&task.title).replace(['\n', '\t'], " ");
             let title = if title.trim().is_empty() {
@@ -246,10 +293,17 @@ impl Rail {
                 Span::raw(format!("{indent}{marker} ")),
                 Span::styled(status, Style::new().fg(color)),
                 Span::raw(" "),
-                Span::raw(title),
+                Span::styled(
+                    title,
+                    if task.status == RunStatus::Running {
+                        heading
+                    } else {
+                        Style::new()
+                    },
+                ),
             ])
             .style(style);
-            let area = Rect::new(inner.x, inner.y + row as u16, inner.width, 1);
+            let area = Rect::new(rows.x, rows.y + row as u16, width, 1);
             if task.read_only {
                 const LABEL: &str = " read-only";
                 let left = area.width.saturating_sub(LABEL.len() as u16);
@@ -281,7 +335,7 @@ impl App {
             return false;
         }
         if key.code == KeyCode::Char('t') && key.modifiers == KeyModifiers::CONTROL {
-            if width <= BREAKPOINT {
+            if !is_wide(width) {
                 self.open_tasks(false);
             } else {
                 self.agents.focused = !self.agents.focused;
@@ -291,7 +345,7 @@ impl App {
             }
             return true;
         }
-        if width <= BREAKPOINT || !self.rail_has_focus() || matches!(key.code, KeyCode::F(_)) {
+        if !is_wide(width) || !self.rail_has_focus() || matches!(key.code, KeyCode::F(_)) {
             return false;
         }
         if key.modifiers.is_empty() {
@@ -320,11 +374,18 @@ impl App {
             .and_then(|id| self.tasks.iter().position(|task| &task.run_id == id));
         self.task_picker = true;
         self.task_index = selected.unwrap_or(0);
-        self.reset_task_detail(detail && selected.is_some());
+        self.task_from_rail = detail && selected.is_some();
+        self.reset_task_detail(self.task_from_rail);
     }
 
     pub(super) async fn task_key(&mut self, host: &Host, key: KeyEvent) {
         match key.code {
+            KeyCode::Esc if self.task_from_rail => {
+                self.task_picker = false;
+                self.task_from_rail = false;
+                self.agents.focused = false;
+                self.reset_task_detail(false);
+            }
             KeyCode::Esc if self.task_detail => self.reset_task_detail(false),
             KeyCode::Esc => self.task_picker = false,
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -408,11 +469,47 @@ mod tests {
                 assert_eq!(buffer[(80, 3)].symbol(), "╭");
                 assert_eq!(buffer[(110, 3)].symbol(), "╮");
                 assert_eq!(buffer[(110, 12)].symbol(), "╯");
-                assert!(row(buffer, 3, 80..111).contains("Agents / 0"));
+                assert!(row(buffer, 3, 80..111).contains("Agents / Ctrl+T"));
+                assert!(row(buffer, 4, 82..109).starts_with("Agents / 0"));
             } else {
                 assert!(!row(buffer, 3, 0..110).contains("Agents /"));
             }
         }
+    }
+
+    #[test]
+    fn short_wide_layout_keeps_two_tasks_and_full_width_draft_visible() {
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let config = Config {
+            workspace: dir.path().into(),
+            data_dir: dir.path().join("state"),
+            ..Config::default()
+        }
+        .resolve()
+        .unwrap();
+        let host = Host::open(config).unwrap();
+        let mut app = App {
+            input: "draft".into(),
+            tasks: vec![
+                task("parent", "root", RunStatus::Running),
+                task("nested", "parent", RunStatus::Completed),
+                task("other", "root", RunStatus::Failed),
+            ],
+            ..App::default()
+        };
+        app.agents.refresh(&app.tasks);
+        let mut terminal = Terminal::new(TestBackend::new(111, 11)).unwrap();
+        terminal
+            .draw(|frame| super::super::draw(frame, &app, &host, Instant::now()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(80, 1)].symbol(), "╭");
+        assert!(row(buffer, 2, 82..109).starts_with("Agents / 3"));
+        assert!(row(buffer, 3, 82..108).starts_with("▾ Running parent"));
+        assert!(row(buffer, 4, 82..108).starts_with("  ─ Done nested"));
+        assert_eq!(buffer[(108, 3)].symbol(), "█");
+        assert_eq!(buffer[(110, 6)].symbol(), "┐");
+        assert!(row(buffer, 7, 0..80).contains("draft"));
     }
 
     #[test]
@@ -461,39 +558,57 @@ mod tests {
         tasks[0].read_only = true;
         let mut rail = Rail::default();
         rail.refresh(&tasks);
-        let mut terminal = Terminal::new(TestBackend::new(32, 6)).unwrap();
-        let paint = |terminal: &mut Terminal<TestBackend>, rail: &Rail| {
+        rail.resize(111, 7);
+        let mut terminal = Terminal::new(TestBackend::new(32, 7)).unwrap();
+        let paint = |terminal: &mut Terminal<TestBackend>, rail: &Rail, approval_run| {
             terminal
                 .draw(|frame| {
                     rail.draw(
                         frame,
-                        Rect::new(1, 0, WIDTH, 6),
+                        Rect::new(1, 0, WIDTH, 7),
                         &tasks,
                         true,
-                        Color::LightGreen,
-                        Color::Gray,
+                        (Color::LightGreen, Color::Gray),
+                        approval_run,
                     );
                 })
                 .unwrap();
         };
-        paint(&mut terminal, &rail);
+        paint(&mut terminal, &rail, None);
         let buffer = terminal.backend().buffer();
-        assert!(row(buffer, 1, 2..31).starts_with("▾ Running parent"));
-        let child = row(buffer, 2, 2..31);
+        assert!(row(buffer, 0, 1..32).contains("Agents / Ctrl+T"));
+        assert!(buffer[(3, 0)].modifier.contains(Modifier::BOLD));
+        assert!(row(buffer, 1, 3..30).starts_with("Agents / 6"));
+        assert!(row(buffer, 2, 3..29).starts_with("▾ Running parent"));
+        assert!(buffer[(13, 2)].modifier.contains(Modifier::BOLD));
+        let child = row(buffer, 3, 3..29);
         assert!(child.starts_with("  ─ Error 見"));
         assert!(!child.contains('\x1b'));
         assert!(child.ends_with(" read-only"));
-        assert_eq!(buffer[(6, 2)].fg, Color::Red);
-        assert_eq!(buffer[(31, 2)].symbol(), "│");
-        assert!(row(buffer, 3, 2..31).starts_with("─ Done complete"));
-        assert!(row(buffer, 4, 2..31).starts_with("─ Cancelled cancel"));
+        assert_eq!(buffer[(7, 3)].fg, Color::Red);
+        assert_eq!(row(buffer, 3, 1..3), "│ ");
+        assert_eq!(row(buffer, 3, 30..32), " │");
+        assert_eq!(buffer[(29, 2)].symbol(), "█");
+        assert_eq!(buffer[(29, 5)].symbol(), "│");
+        assert!(row(buffer, 4, 3..29).starts_with("─ Done complete"));
+        assert!(row(buffer, 5, 3..29).starts_with("─ Cancelled cancel"));
+        paint(&mut terminal, &rail, Some("parent"));
+        assert!(row(terminal.backend().buffer(), 2, 3..29).starts_with("▾ Approval parent"));
+        rail.key(KeyCode::Down, &tasks);
+        rail.key(KeyCode::Down, &tasks);
+        rail.key(KeyCode::Down, &tasks);
+        assert_eq!(rail.offset, 0); // Selection can move within the viewport.
+        rail.key(KeyCode::Home, &tasks);
         rail.key(KeyCode::PageDown, &tasks);
-        paint(&mut terminal, &rail);
+        assert_eq!(rail.selected.as_deref(), Some("interrupt"));
+        assert_eq!(rail.offset, 2);
+        paint(&mut terminal, &rail, None);
         let buffer = terminal.backend().buffer();
-        assert!(row(buffer, 3, 2..31).starts_with("─ Interrupted interrupt"));
-        assert!(row(buffer, 4, 2..31).starts_with("─ Queued queued"));
-        assert!(row(buffer, 5, 2..31).contains("6 / 6"));
-        assert!(buffer[(4, 4)].modifier.contains(Modifier::REVERSED));
+        assert!(row(buffer, 4, 3..29).starts_with("─ Interrupted interrupt"));
+        assert!(row(buffer, 5, 3..29).starts_with("─ Queued queued"));
+        assert_eq!(buffer[(29, 2)].symbol(), "│");
+        assert_eq!(buffer[(29, 5)].symbol(), "█");
+        assert!(buffer[(5, 4)].modifier.contains(Modifier::REVERSED));
     }
 
     #[tokio::test]
@@ -536,12 +651,12 @@ mod tests {
         ];
         app.tasks[2].title = app.tasks[0].title.clone(); // Duplicate labels.
         app.agents.refresh(&app.tasks);
-        assert!(app.agents_key(key(KeyCode::Left), 111)); // Collapse failed parent.
+        assert!(app.agents_key(key(KeyCode::Char(' ')), 111)); // Collapse failed parent.
         assert!(app.agents_key(key(KeyCode::Down), 111)); // Now on cancelled (not nested).
 
         app.tasks.insert(0, task("new", "root", RunStatus::Running));
         app.agents.refresh(&app.tasks);
-        app.agents.resize(110);
+        app.agents.resize(110, 20);
         assert!(!app.rail_has_focus());
         assert!(app.agents_key(focus, 110)); // Narrow Ctrl+T uses the F5 catalog.
         assert_eq!(app.tasks[app.task_index].run_id, "cancelled");
@@ -557,13 +672,18 @@ mod tests {
         assert_eq!(app.task_scroll, 10);
         assert_eq!(app.scroll, 7);
         app.task_key(&host, key(KeyCode::Esc)).await;
-        app.task_key(&host, key(KeyCode::Esc)).await;
+        assert!(!app.task_picker && app.composer_available());
+        assert!(app.agents_key(focus, 111));
         assert!(app.agents_key(key(KeyCode::Up), 111)); // Still skips folded child.
         assert!(app.agents_key(key(KeyCode::Enter), 111));
         assert_eq!(app.tasks[app.task_index].run_id, "failed");
         app.task_key(&host, key(KeyCode::Esc)).await;
+        assert!(!app.task_picker && app.composer_available());
+        app.open_tasks(false); // F5 retains the original two-step detail/catalog flow.
+        app.task_key(&host, key(KeyCode::Enter)).await;
         app.task_key(&host, key(KeyCode::Esc)).await;
-        assert!(app.agents_key(key(KeyCode::Esc), 111)); // Return focus, not cancel.
+        assert!(app.task_picker && !app.task_detail);
+        app.task_key(&host, key(KeyCode::Esc)).await;
         assert!(!app.rail_has_focus());
         assert_eq!(app.input, "/se");
         assert_eq!(app.scroll, 7);
