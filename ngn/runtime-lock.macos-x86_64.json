@@ -3,8 +3,8 @@
  "platform": "macos-x86_64",
  "core": {
   "name": "nagents",
-  "version": "0.100.18",
-  "official_metadata": "https://pypi.org/pypi/nagents/0.100.18/json"
+  "version": "0.100.19",
+  "official_metadata": "https://pypi.org/pypi/nagents/0.100.19/json"
  },
  "python": {
   "implementation": "cpython",

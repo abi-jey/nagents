@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.19
+
+- The native POSIX TUI shows a brief normal-screen startup prelude before opening the workspace. Enter or Space skips it; Escape, Ctrl+C, or Ctrl+Q exits. Printable input can carry into the draft without sending, and reduced motion skips the prelude.
+
 ## 0.100.18
 
 - Successful native tool cards now run one foreground-only completion wipe and settle green. Exposed parts keep animating beside an approval dialog, while reduced motion and restored history render the settled style immediately.
