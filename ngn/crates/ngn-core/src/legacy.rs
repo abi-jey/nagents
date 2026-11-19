@@ -3,8 +3,8 @@
 //! Without `--config`, `ngn` reads Python ngn's provider and model settings:
 //! `providers.json` (global) overlaid by `workspaces/<id>/providers.json`,
 //! and the model binding from `assistant.md` (workspace, then global), falling
-//! back to `config.json`'s `model`. It also reads the personal `animations`
-//! preference. Nothing is written, and credential values are never read here:
+//! back to `config.json`'s `model`. It also reads personal TUI preferences.
+//! Nothing is written, and credential values are never read here:
 //! only environment-variable names and login locations.
 
 use std::{
@@ -22,6 +22,15 @@ use sha2::{Digest, Sha256};
 const MAX_BYTES: u64 = 64 * 1024;
 /// Python's `DEFAULT_HARNESS_MODEL`, used when nothing selects a model.
 pub const DEFAULT_MODEL: &str = "gpt-6-astra";
+
+/// A saved Python preset that requests a painted composer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintedComposerTheme {
+    Terminal,
+    Graphite,
+    Ocean,
+    Ember,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +76,7 @@ pub struct Selection {
     pub read_only: bool,
     /// A saved personal TUI preference, when set to a JSON boolean.
     pub animations: Option<bool>,
+    pub composer_theme: Option<PaintedComposerTheme>,
 }
 
 /// Implicit Python settings and login locations, injectable in tests.
@@ -265,13 +275,44 @@ struct PersonalPreferences {
 }
 
 #[derive(Deserialize)]
+#[serde(default)]
+struct ThemePreferences {
+    theme: String,
+    theme_background: String,
+}
+
+impl Default for ThemePreferences {
+    fn default() -> Self {
+        Self {
+            theme: "terminal".into(),
+            theme_background: "auto".into(),
+        }
+    }
+}
+
+impl ThemePreferences {
+    fn painted_composer(&self) -> Option<PaintedComposerTheme> {
+        use PaintedComposerTheme::*;
+        match (self.theme.as_str(), self.theme_background.as_str()) {
+            ("terminal", "theme") => Some(Terminal),
+            ("graphite", "auto" | "theme") => Some(Graphite),
+            ("ocean", "auto" | "theme") => Some(Ocean),
+            ("ember", "auto" | "theme") => Some(Ember),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
 #[serde(untagged)]
 enum ConfigModel {
     Id(String),
     Binding { provider: String, id: String },
 }
 
-fn user_settings(path: &Path) -> Result<(UserSettings, PersonalPreferences)> {
+fn user_settings(
+    path: &Path,
+) -> Result<(UserSettings, Option<bool>, Option<PaintedComposerTheme>)> {
     let Some(bytes) = read_bounded(path)? else {
         return Ok(Default::default());
     };
@@ -286,10 +327,11 @@ fn user_settings(path: &Path) -> Result<(UserSettings, PersonalPreferences)> {
         "Python ngn settings in {} reference a custom provider registry. Pass an explicit Rust --config FILE for the intended account",
         path.display()
     );
-    // Read only the cosmetic field in a separate projection so malformed or
-    // duplicate animation values do not change provider or permission loading.
-    let preferences = serde_json::from_slice(&bytes).unwrap_or_default();
-    Ok((settings, preferences))
+    // Keep the cosmetic projections independent of provider and permission
+    // loading and of each other, including for malformed or duplicate fields.
+    let motion: PersonalPreferences = serde_json::from_slice(&bytes).unwrap_or_default();
+    let theme: ThemePreferences = serde_json::from_slice(&bytes).unwrap_or_default();
+    Ok((settings, motion.animations, theme.painted_composer()))
 }
 
 fn default_key(kind: &str) -> &'static str {
@@ -371,10 +413,11 @@ pub(crate) fn select(
     workspace: &Path,
     environment: &Environment,
 ) -> Result<Selection> {
-    let (settings, preferences) = user_settings(&directory.join("config.json"))?;
+    let (settings, animations, composer_theme) = user_settings(&directory.join("config.json"))?;
     let mut selection = Selection {
         read_only: settings.read_only || environment.read_only,
-        animations: preferences.animations,
+        animations,
+        composer_theme,
         ..Selection::default()
     };
     let local_directory = directory.join("workspaces").join(workspace_id(workspace));
@@ -509,6 +552,49 @@ mod tests {
         let selected = select(root.path(), root.path(), &env).unwrap();
         assert_eq!(selected.animations, None);
         assert!(selected.read_only);
+    }
+
+    #[test]
+    fn personal_composer_theme_only_selects_valid_painted_presets() {
+        use PaintedComposerTheme::*;
+        let root = tempfile::tempdir().unwrap();
+        let env = environment(root.path());
+        let path = root.path().join("config.json");
+        assert_eq!(
+            select(root.path(), root.path(), &env)
+                .unwrap()
+                .composer_theme,
+            None
+        );
+        for (fields, theme) in [
+            (r#""theme":"graphite""#, Some(Graphite)),
+            (r#""theme":"ocean","theme_background":"auto""#, Some(Ocean)),
+            (r#""theme":"ember","theme_background":"theme""#, Some(Ember)),
+            (
+                r#""theme":"terminal","theme_background":"theme""#,
+                Some(Terminal),
+            ),
+            (r#""theme_background":"theme""#, Some(Terminal)),
+            (r#""theme":"terminal""#, None),
+            (r#""theme":"graphite","theme_background":"terminal""#, None),
+            (r#""theme":"light","theme_background":"theme""#, None),
+            (r#""theme":"ember","theme_background":"unknown""#, None),
+            (r#""theme":"ember","theme_background":null"#, None),
+            (r#""theme":{},"theme_background":"theme""#, None),
+            (r#""theme":"ocean","theme":"ember""#, None),
+        ] {
+            let saved = format!(r#"{{{fields},"animations":false,"read_only":true}}"#);
+            write(&path, &saved);
+            let selected = select(root.path(), root.path(), &env).unwrap();
+            assert_eq!(selected.composer_theme, theme, "{fields}");
+            assert_eq!(selected.animations, Some(false));
+            assert!(selected.read_only && selected.providers.is_empty());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        }
+        write(&path, r#"{"theme":"ocean","animations":"malformed"}"#);
+        let selected = select(root.path(), root.path(), &env).unwrap();
+        assert_eq!(selected.composer_theme, Some(Ocean));
+        assert_eq!(selected.animations, None);
     }
 
     #[test]

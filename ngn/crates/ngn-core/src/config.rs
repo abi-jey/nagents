@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::bundle::BundledRuntime;
+use crate::legacy::PaintedComposerTheme;
 use crate::subagents::SubagentLimits;
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +55,9 @@ pub struct Config {
     /// Saved motion preference from the personal Python ngn config, if used.
     #[serde(skip)]
     pub legacy_animations: Option<bool>,
+    /// Saved painted composer preset from the personal Python ngn config, if used.
+    #[serde(skip)]
+    pub legacy_composer_theme: Option<PaintedComposerTheme>,
     /// Legacy connections the Rust host cannot run yet, with the reason.
     #[serde(skip)]
     pub unavailable: BTreeMap<String, String>,
@@ -85,6 +89,7 @@ impl Default for Config {
             legacy_directory: None,
             legacy_sources: Vec::new(),
             legacy_animations: None,
+            legacy_composer_theme: None,
             unavailable: BTreeMap::new(),
         }
     }
@@ -183,6 +188,7 @@ impl Config {
             let selection = crate::legacy::select(directory, &self.workspace, &environment)?;
             self.read_only |= selection.read_only;
             self.legacy_animations = selection.animations;
+            self.legacy_composer_theme = selection.composer_theme;
             if self.provider.is_empty() {
                 self.provider = selection.provider;
             }

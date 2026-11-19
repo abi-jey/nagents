@@ -83,7 +83,9 @@ selection, safety limits and the explicit backup fallback.
 
 These are **gaps**, not features hidden behind a compatibility fallback:
 
-- Original animated Textual design, themes, startup/exit motion, advanced editor,
+- Original animated Textual design, full-app themes and theme controls (only
+  [painted Message editor/caret colors](../README.md#controls) are inherited),
+  startup/exit motion, advanced editor,
   Markdown/link rendering, tool cards, diagnostics/performance dashboard.
 - Original React application, full settings navigator and provider/model editors.
 - Global/workspace/agent preference inheritance and optimistic configuration revisions.
