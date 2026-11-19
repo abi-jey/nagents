@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import aiohttp
+from pty_smoke import WorkspaceReady
 
 
 def require(condition: object, message: str) -> None:
@@ -346,9 +347,10 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
     os.close(slave)
     output = b""
     try:
+        ready = WorkspaceReady(master)
 
         def visible() -> bytes:
-            return terminal_text(output)
+            return terminal_text(output, ready.rows, ready.columns)
 
         def wait_for(predicate: Callable[[], bool], explanation: str) -> None:
             nonlocal output
@@ -366,7 +368,10 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
                         raise
             raise AssertionError(explanation)
 
-        wait_for(lambda: b"Welcome to ngn" in visible(), "Subagent TUI did not render")
+        wait_for(
+            lambda: ready.observe(output, b"Welcome to ngn" in visible()),
+            "Subagent TUI did not render and repaint at the resized PTY dimensions",
+        )
         os.write(master, b"delegate hold\r")
         database = next(data.rglob("host.sqlite3"))
 
