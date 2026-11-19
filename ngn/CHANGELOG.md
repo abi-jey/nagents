@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.20
+
+- The native POSIX TUI keeps startup input as a draft without echoing or submitting it while session setup is pending and through the first workspace frame. The native workspace still waits for setup (unlike Python). Handoff is based on the first frame flush and a kernel stdin poll, not a display acknowledgment; an incomplete UTF-8 character gets up to 50 ms to finish.
+
 ## 0.100.19
 
 - The native POSIX TUI shows a brief normal-screen startup prelude before opening the workspace. Enter or Space skips it; Escape, Ctrl+C, or Ctrl+Q exits. Printable input can carry into the draft without sending, and reduced motion skips the prelude.
