@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.26
+
+- The native workspace no longer shows the top version, path and session banner or its divider, leaving more room for the conversation. F1 still opens help.
+
 ## 0.100.25
 
 - Managed updates use buffered reads to parse official release metadata, reducing file reads without changing validation or progress output.
