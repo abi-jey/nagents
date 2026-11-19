@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.11
+
+- The wide native ngn Agents sidebar adds a collapsed Workspace & context panel for workspace, session, provider, model, and configured authentication mode. Press Tab from the tree to focus the panel and Enter or Space to open it.
+
 ## 0.100.10
 
 - The native ngn TUI now has individually expandable tool cards: press F4 to focus, use arrows to select, and press Enter or Space to toggle. The read-only Agents inspector shows tool failure and denial reasons inline.
