@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.17
+
+- Long assistant code fences in the native terminal clip instead of wrapping. Press F8 to focus an overflowing fence and use the left and right arrows to scroll it horizontally.
+
 ## 0.100.16
 
 - The native TUI renders assistant Markdown fences with a solid left code border and terminal-default panel colors. Authoritative final text replaces its own streamed response without duplicating it; empty finals keep the streamed text, and user and tool output stay plain.
