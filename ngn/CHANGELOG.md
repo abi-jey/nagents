@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.29
+
+- Remove the empty row between adjacent compact native tool cards while preserving prose and expanded detail spacing.
+
 ## 0.100.28
 
 - Remove the native YOU and NGN transcript headings without changing message content.
