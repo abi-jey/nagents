@@ -22,24 +22,44 @@ def require(condition: object, message: str) -> None:
 
 
 def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
-    """Reconstruct the small VT subset emitted by Ratatui, including partial redraws."""
+    """Replay the VT subset used by the native startup prelude and Ratatui."""
     screen = [[" " for _ in range(columns)] for _ in range(rows)]
     text = output.decode("utf-8", errors="replace")
     cursor = re.compile(r"\x1b\[([0-?]*)([ -/]*)([@-~])")
     row = column = index = 0
+    saved_cursor = (0, 0)
+    normal_screen: tuple[list[list[str]], int, int, tuple[int, int]] | None = None
     while index < len(text):
         if text[index] == "\x1b":
+            if text.startswith("\x1b7", index):
+                saved_cursor = (row, column)
+                index += 2
+                continue
+            if text.startswith("\x1b8", index):
+                row, column = saved_cursor
+                index += 2
+                continue
             match = cursor.match(text, index)
             if match is None:
                 break
             raw, _, operation = match.groups()
             parameters = [int(value or "0") for value in raw.split(";")] if not raw.startswith("?") else []
-            if operation in {"H", "f"}:
+            if raw == "?1049" and operation == "h" and normal_screen is None:
+                normal_screen = (screen, row, column, saved_cursor)
+                screen = [[" " for _ in range(columns)] for _ in range(rows)]
+                row = column = 0
+                saved_cursor = (0, 0)
+            elif raw == "?1049" and operation == "l" and normal_screen is not None:
+                screen, row, column, saved_cursor = normal_screen
+                normal_screen = None
+            elif operation in {"H", "f"}:
                 row = min(rows - 1, max(0, (parameters[0] if parameters else 1) - 1))
                 column = min(
                     columns - 1,
                     max(0, (parameters[1] if len(parameters) > 1 else 1) - 1),
                 )
+            elif operation == "A":
+                row = max(0, row - ((parameters[0] if parameters else 0) or 1))
             elif operation == "J" and parameters == [2]:
                 screen = [[" " for _ in range(columns)] for _ in range(rows)]
             elif operation == "K":
