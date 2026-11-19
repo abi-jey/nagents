@@ -489,9 +489,26 @@ impl<'a> Layout<'a> {
             wipes: Vec::new(),
             wipe_mask: None,
         };
-        for part in parts {
+        for (index, part) in parts.iter().enumerate() {
             match part {
-                TranscriptPart::Text(text) => layout.text(text),
+                TranscriptPart::Text(text) => {
+                    if text == "\n"
+                        && let Some(cards) = cards
+                        && let Some([TranscriptPart::Card(before), _, TranscriptPart::Card(after)]) =
+                            parts.get(index.saturating_sub(1)..=index + 1)
+                        && before.key.0 == after.key.0
+                        && [before, after].iter().all(|card| {
+                            !cards
+                                .expanded
+                                .contains(&(card.key.0.to_owned(), card.key.1.to_owned()))
+                        })
+                    {
+                        // The projection inserts one empty row between adjacent
+                        // calls. Keep other text and expanded-detail boundaries.
+                        continue;
+                    }
+                    layout.text(text);
+                }
                 TranscriptPart::Code(key, text) => layout.code(*key, text, cards.is_some()),
                 TranscriptPart::Card(card) => {
                     let key = (card.key.0.to_owned(), card.key.1.to_owned());
@@ -1600,6 +1617,67 @@ mod tests {
             assert_eq!(baseline[(0, 1)].fg, fg);
             assert!(draw(&mut app, &mut terminal)[1].contains(outcome));
         }
+    }
+
+    #[test]
+    fn adjacent_compact_calls_share_rows_without_losing_prose_or_detail_spacing() {
+        let mut app = App {
+            records: vec![
+                event(
+                    "r",
+                    Event::TextCompleted {
+                        text: "before\n\nprose".into(),
+                    },
+                ),
+                started("r", "a", "甲"),
+                finished("r", "a", json!("ok"), ""),
+                started("r", "b", "乙"),
+                finished("r", "b", json!("ok"), ""),
+                event(
+                    "r",
+                    Event::TextCompleted {
+                        text: "between".into(),
+                    },
+                ),
+                started("r", "c", "丙"),
+                finished("r", "c", json!("ok"), "detail\n\nstill here"),
+                started("r", "d", "丁"),
+                finished("r", "d", json!("ok"), ""),
+                started("other", "e", "戊"),
+                finished("other", "e", json!("ok"), ""),
+            ],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(42, 22)).unwrap();
+        let rows = |app: &mut App, terminal: &mut Terminal<_>| {
+            draw(app, terminal)
+                .iter()
+                .map(|row| row.trim_end().replace("  ·", " ·"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let compact = rows(&mut app, &mut terminal);
+        assert!(
+            compact.contains(concat!(
+                "before\n\nprose\n\n",
+                "> shell · 甲 · complete · 1.25s\n> shell · 乙 · complete · 1.25s\n",
+                "between\n\n> shell · 丙 · failed · 1.25s\n",
+                "> shell · 丁 · complete · 1.25s\n\n> shell · 戊 · complete · 1.25s",
+            )),
+            "{compact}"
+        );
+
+        app.tools.expanded.insert(("r".into(), "b".into()));
+        app.tools.expanded.insert(("r".into(), "c".into()));
+        let expanded = rows(&mut app, &mut terminal);
+        assert!(
+            expanded.contains("> shell · 甲 · complete · 1.25s\n\nv shell · 乙 · complete · 1.25s"),
+            "{expanded}"
+        );
+        assert!(
+            expanded.contains("Error: detail\n\nstill here\n\n> shell · 丁 · complete · 1.25s"),
+            "{expanded}"
+        );
     }
 
     #[test]
