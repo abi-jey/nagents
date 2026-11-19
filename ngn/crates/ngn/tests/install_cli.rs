@@ -213,27 +213,132 @@ fn managed_local_check_noop_and_doctor_need_no_python_config_or_host_state() {
 }
 
 #[test]
-fn foreign_python_entry_point_is_never_overwritten() {
+fn destination_collision_reports_the_path_and_safe_side_by_side_retry() {
+    let legacy = b"#!/old/venv/python\nlegacy ngn\n";
+    for dangling_symlink in [false, true] {
+        let root = test_support::private_tempdir().unwrap();
+        let home = root.path().canonicalize().unwrap();
+        let bin = home.join(".local/bin");
+        private(&bin);
+        let entry = bin.join("ngn");
+        let missing = home.join("missing-venv/bin/ngn");
+        if dangling_symlink {
+            symlink(&missing, &entry).unwrap();
+        } else {
+            write(&entry, legacy);
+            fs::set_permissions(&entry, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        // The destination is protected even when it isn't on PATH.
+        let output = command(&home, Path::new(env!("CARGO_BIN_EXE_ngn")))
+            .env_remove("XDG_DATA_HOME")
+            .arg("install")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains(&format!("unmanaged entry at {entry:?}")),
+            "{error}"
+        );
+        assert!(
+            error.contains(concat!(
+                "https://github.com/abi-jey/nagents/releases/download/v",
+                env!("CARGO_PKG_VERSION"),
+                "/install.sh | sh -s --"
+            )),
+            "{error}"
+        );
+        assert!(!error.contains("/releases/latest/"), "{error}");
+        assert!(
+            error.contains(
+                "--prefix \"$HOME/.local/share/ngn-native\" --bin-dir \"$HOME/.local/ngn-native-bin\""
+            ),
+            "{error}"
+        );
+        assert!(
+            error.contains("run the new binary directly: \"$HOME/.local/ngn-native-bin/ngn\""),
+            "{error}"
+        );
+        if dangling_symlink {
+            assert_eq!(fs::read_link(&entry).unwrap(), missing);
+            assert!(!missing.exists());
+        } else {
+            assert_eq!(fs::read(&entry).unwrap(), legacy);
+            assert_eq!(
+                entry.metadata().unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert!(!home.join(".local/share").exists());
+        assert!(!home.join(".local/ngn-native-bin").exists());
+        no_host_state(&home);
+    }
+}
+
+#[test]
+fn inaccessible_destination_is_reported_as_an_inspection_error() {
+    // Root bypasses directory search permissions.
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
     let root = test_support::private_tempdir().unwrap();
-    let bin = root.path().join(".local/bin");
+    let home = root.path().canonicalize().unwrap();
+    let bin = home.join(".local/bin");
     private(&bin);
-    write(&bin.join("ngn"), b"#!/old/venv/python\nlegacy ngn\n");
-    let output = command(root.path(), Path::new(env!("CARGO_BIN_EXE_ngn")))
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o000)).unwrap();
+    let result = command(&home, Path::new(env!("CARGO_BIN_EXE_ngn")))
+        .env_remove("XDG_DATA_HOME")
         .arg("install")
+        .output();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = result.unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains(&format!(
+            "Cannot inspect ngn destination {:?}",
+            bin.join("ngn")
+        )),
+        "{error}"
+    );
+    assert!(!error.contains("unmanaged entry"), "{error}");
+    assert!(!home.join(".local/share").exists());
+    assert!(!bin.join("ngn").exists());
+    no_host_state(&home);
+}
+
+#[test]
+fn unrelated_ngn_on_path_does_not_block_install() {
+    let root = test_support::private_tempdir().unwrap();
+    let path_bin = root.path().join("other-venv/bin");
+    private(&path_bin);
+    let legacy = b"#!/old/venv/python\nlegacy ngn\n";
+    let entry = path_bin.join("ngn");
+    write(&entry, legacy);
+    fs::set_permissions(&entry, fs::Permissions::from_mode(0o700)).unwrap();
+    // A corrupt local bundle keeps the test offline; installation must reach
+    // bundle handling, after recording the default destinations.
+    let bundle = root.path().join("corrupt.tar.gz");
+    write(&bundle, b"not gzip");
+    let hash = file_hash(&bundle).unwrap();
+    let output = command(root.path(), Path::new(env!("CARGO_BIN_EXE_ngn")))
+        .env_remove("XDG_DATA_HOME")
+        .env("PATH", &path_bin)
+        .args(["install", "--bundle"])
+        .arg(&bundle)
+        .args(["--sha256", &hash])
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--bin-dir"));
-    assert_eq!(
-        fs::read(bin.join("ngn")).unwrap(),
-        b"#!/old/venv/python\nlegacy ngn\n"
-    );
+    assert_eq!(fs::read(entry).unwrap(), legacy);
     assert!(
-        !root
-            .path()
-            .join(".local/share/ngn-harness/current")
-            .exists()
+        root.path()
+            .join(".local/share/ngn-harness/install.json")
+            .is_file(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    assert!(root.path().join(".local/bin").is_dir());
     no_host_state(root.path());
 }
 

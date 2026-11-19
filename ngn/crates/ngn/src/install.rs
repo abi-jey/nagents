@@ -440,14 +440,38 @@ fn write_identity(identity: &Identity) -> Result<()> {
     sync_directory(&identity.prefix)
 }
 
+fn foreign_binary(link: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        concat!(
+            "Refusing to replace the existing unmanaged entry at {:?}. It was left unchanged.\n",
+            "To install alongside it, choose an unused bin directory and a separate unused prefix, for example:\n",
+            "  curl -fsSL {}/v{}/install.sh | sh -s -- \\\n",
+            "    --prefix \"$HOME/.local/share/ngn-native\" --bin-dir \"$HOME/.local/ngn-native-bin\"\n",
+            "Then run the new binary directly: \"$HOME/.local/ngn-native-bin/ngn\""
+        ),
+        link,
+        DOWNLOAD,
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn require_unused_binary(bin_dir: &Path) -> Result<()> {
+    let link = bin_dir.join("ngn");
+    match link.symlink_metadata() {
+        Ok(_) => Err(foreign_binary(&link)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => bail!("Cannot inspect ngn destination {link:?}: {error}"),
+    }
+}
+
 fn binary_link(identity: &Identity, required: bool) -> Result<bool> {
     let link = identity.bin_dir.join("ngn");
     match link.symlink_metadata() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && !required => Ok(false),
         Ok(info) if info.file_type().is_symlink() => {
             ensure!(
-                fs::read_link(link)? == identity.prefix.join("current/ngn"),
-                "Refusing a foreign ngn symlink; choose --bin-dir NEW_BIN_DIR (and a separate --prefix)"
+                fs::read_link(&link)? == identity.prefix.join("current/ngn"),
+                foreign_binary(&link)
             );
             #[cfg(unix)]
             {
@@ -459,9 +483,8 @@ fn binary_link(identity: &Identity, required: bool) -> Result<bool> {
             }
             Ok(true)
         }
-        _ => bail!(
-            "Refusing to overwrite an existing or missing unmanaged ngn executable; choose --bin-dir NEW_BIN_DIR. Python/package-manager installations are never overwritten."
-        ),
+        Ok(_) => Err(foreign_binary(&link)),
+        Err(error) => bail!("Cannot inspect ngn destination {link:?}: {error}"),
     }
 }
 
@@ -536,13 +559,7 @@ impl Installation {
             }
         }
         if !has_identity {
-            ensure!(
-                bin_dir
-                    .join("ngn")
-                    .symlink_metadata()
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
-                "Refusing a foreign ngn executable/symlink (including Python ngn); choose --bin-dir NEW_BIN_DIR"
-            );
+            require_unused_binary(&bin_dir)?;
         }
         ancestry(&prefix, true)?;
         ancestry(&bin_dir, true)?;
@@ -558,13 +575,7 @@ impl Installation {
             identity
         } else {
             unmanaged_empty(&prefix)?;
-            ensure!(
-                bin_dir
-                    .join("ngn")
-                    .symlink_metadata()
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
-                "Refusing a foreign ngn executable/symlink (including Python ngn); choose --bin-dir NEW_BIN_DIR"
-            );
+            require_unused_binary(&bin_dir)?;
             let identity = Identity {
                 install_schema: 1,
                 installation_id: Uuid::new_v4().to_string(),

@@ -25,9 +25,21 @@ with `download/vX.Y.Z`.
 ngn doctor          # paths and bundled runtime; no network or model request
 ```
 
-Options: `sh -s -- --prefix DIR --bin-dir DIR`. The installer never overwrites an
-existing unrelated `ngn` (such as the Python client); pick another `--bin-dir` instead.
-It refuses world-writable or foreign-owned parent directories.
+The installer checks the destination `~/.local/bin/ngn` (or `DIR/ngn` with
+`--bin-dir DIR`), not the first `ngn` on `PATH`. It won't replace an unmanaged entry there,
+including the Python client or a symlink. To install alongside it, use an unused
+bin directory and a separate unused prefix, for example:
+
+```sh
+curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh -s -- \
+  --prefix "$HOME/.local/share/ngn-native" --bin-dir "$HOME/.local/ngn-native-bin"
+"$HOME/.local/ngn-native-bin/ngn" doctor
+```
+
+Use the full path to run or update this installation without changing which
+`ngn` your shell finds first. If you started with a version-pinned installer, use
+its printed retry command to keep that same version instead of fetching `latest`.
+The installer refuses world-writable or foreign-owned parent directories.
 
 ### Manual install
 
