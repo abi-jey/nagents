@@ -1583,6 +1583,26 @@ mod tests {
         assert_eq!(approval.run_id, child_id);
         assert_eq!(approval.agent_title, "Preview child");
         assert_eq!(approval.depth, 1);
+        let child_run = host
+            .active()
+            .await
+            .into_iter()
+            .find(|run| run.id == child_id)
+            .unwrap();
+        host.emit(
+            &child_run,
+            ngn_protocol::Event::ToolCompleted {
+                result: ngn_protocol::ToolResult {
+                    call_id: "child-failure".into(),
+                    name: "read_file".into(),
+                    result: serde_json::Value::Null,
+                    error: "child fixture failed: \x1b[2Jmissing file".into(),
+                },
+                duration_ms: 7,
+            },
+        )
+        .await
+        .unwrap();
         assert!(host.decide(&root.id, &approval.id, true).await.is_err());
         host.decide(child_id, &approval.id, false).await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1601,12 +1621,11 @@ mod tests {
         app.catch_up(&host).await.unwrap();
         app.state(&host).await;
         assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[app.task_index].run_id, child_id);
         assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Completed);
-        assert!(
-            app.task_records
-                .iter()
-                .all(|record| record.session_id == app.tasks[0].session_id)
-        );
+        assert!(app.task_records.iter().all(
+            |record| record.session_id == app.tasks[0].session_id && record.run_id == child_id
+        ));
         assert!(
             app.task_records
                 .iter()
@@ -1629,6 +1648,12 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(contents.contains("Agent: Preview child"));
+        assert!(contents.contains("read_file · failed · 7ms"));
+        assert!(contents.contains("Error: child fixture failed: [2Jmissing file"));
+        assert!(contents.contains("Error: Tool approval denied, expired or cancelled"));
+        assert!(!contents.contains('\x1b'));
+        assert!(!contents.contains("Arguments:"));
+        assert!(!contents.contains("Result:"));
         assert!(!directory.path().join("demo.txt").exists());
         host.shutdown().await;
     }

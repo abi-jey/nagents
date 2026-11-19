@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
@@ -284,22 +284,38 @@ impl<'a> Layout<'a> {
                     if cards.is_some() {
                         layout.headers.push((key, layout.rows));
                     }
-                    let mut line = Line::raw(summary(card, marker, width));
-                    if selected {
-                        line = line.style(Style::default().add_modifier(Modifier::REVERSED));
+                    let mut style = Style::default();
+                    if cards.is_some() {
+                        style = match card.status {
+                            "failed" | "denied" => style.fg(Color::Red),
+                            "cancelled" => style.fg(Color::Magenta),
+                            _ => style,
+                        };
+                        if selected {
+                            style = style.add_modifier(Modifier::UNDERLINED);
+                        }
                     }
-                    layout.push(line);
+                    layout.push(Line::raw(summary(card, marker, width)).style(style));
                     if expanded {
                         for detail in card.details() {
-                            for line in detail.lines() {
-                                layout.push(Line::raw(line.to_owned()));
-                            }
+                            layout.detail(&detail);
                         }
+                    } else if cards.is_none()
+                        && let Some(error) = card.error_detail()
+                    {
+                        // The read-only agent inspector cannot disclose this card.
+                        layout.detail(&error);
                     }
                 }
             }
         }
         layout
+    }
+
+    fn detail(&mut self, text: &str) {
+        for line in text.lines() {
+            self.push(Line::raw(line.to_owned()));
+        }
     }
 
     pub(super) fn text(&mut self, text: &'a str) {
@@ -470,6 +486,14 @@ mod tests {
         assert!(!app.tools.focused());
         assert!(!key(&mut app, KeyCode::Enter)); // Ordinary Enter still reaches the composer.
         assert!(key(&mut app, KeyCode::F(4)));
+        let collapsed = draw(&mut app, &mut terminal);
+        let row = collapsed
+            .iter()
+            .position(|row| row.starts_with("> shell · second"))
+            .unwrap();
+        let marker = &terminal.backend().buffer()[(0, row as u16)];
+        assert!(marker.modifier.contains(Modifier::UNDERLINED));
+        assert!(!marker.modifier.contains(Modifier::REVERSED));
         assert!(key(&mut app, KeyCode::Enter)); // This Enter cannot submit.
         let rows = draw(&mut app, &mut terminal).join("\n");
         assert!(rows.contains("> shell · first"));
@@ -484,7 +508,7 @@ mod tests {
             .iter()
             .find(|cell| cell.symbol() == "v")
             .unwrap();
-        assert!(selected.modifier.contains(Modifier::REVERSED));
+        assert!(selected.modifier.contains(Modifier::UNDERLINED));
 
         app.records.push(started("r3", "new", "latest"));
         draw(&mut app, &mut terminal);
@@ -511,7 +535,7 @@ mod tests {
                 .buffer()
                 .content
                 .iter()
-                .any(|cell| cell.modifier.contains(Modifier::REVERSED))
+                .any(|cell| cell.modifier.contains(Modifier::UNDERLINED))
         );
         assert_eq!(app.input, "/se unsent draft");
     }
@@ -568,6 +592,7 @@ mod tests {
         assert!(rows[1].contains("工"));
         assert!(rows[1].contains("failed · 1.25s"));
         assert!(rows[2].trim().is_empty()); // Header never wraps.
+        assert_eq!(terminal.backend().buffer()[(0, 1)].fg, Color::Red);
         assert!(key(&mut app, KeyCode::F(4)));
         assert!(key(&mut app, KeyCode::Enter));
         let rows = draw(&mut app, &mut terminal);

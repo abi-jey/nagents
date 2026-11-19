@@ -119,6 +119,15 @@ pub struct ToolCard<'a> {
 }
 
 impl ToolCard<'_> {
+    pub fn error_detail(&self) -> Option<String> {
+        self.result
+            .filter(|result| !result.error.is_empty())
+            .map(|result| {
+                let error = ngn_core::tools::bounded(&result.error, 4096);
+                format!("  Error: {}", plain(&error))
+            })
+    }
+
     pub fn details(&self) -> impl Iterator<Item = String> {
         use ngn_core::tools::bounded;
 
@@ -132,14 +141,11 @@ impl ToolCard<'_> {
             .result
             .filter(|result| !result.result.is_null())
             .map(|result| format!("  Result: {}", bounded(&result.result.to_string(), 4096)));
-        let error = self
-            .result
-            .filter(|result| !result.error.is_empty())
-            .map(|result| format!("  Error: {}", bounded(&result.error, 4096)));
-        [arguments, result, error]
+        [arguments, result]
             .into_iter()
             .flatten()
             .map(|text| plain(&text))
+            .chain(self.error_detail())
     }
 }
 
