@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.21
+
+- Fix #311: name the occupied ngn destination, distinguish permission errors, and show a version-pinned side-by-side retry using a separate bin directory and prefix without replacing the existing ngn.
+
 ## 0.100.20
 
 - The native POSIX TUI keeps startup input as a draft without echoing or submitting it while session setup is pending and through the first workspace frame. The native workspace still waits for setup (unlike Python). Handoff is based on the first frame flush and a kernel stdin poll, not a display acknowledgment; an incomplete UTF-8 character gets up to 50 ms to finish.
