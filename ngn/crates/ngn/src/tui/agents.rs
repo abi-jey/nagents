@@ -312,8 +312,8 @@ impl Rail {
 
     fn context_height(&self, inner_height: u16) -> u16 {
         let rows = inner_height.saturating_sub(1);
-        // Don't displace either of the compact sidebar's two task rows.
-        if rows <= self.nodes.len().min(2) as u16 {
+        // Reserve the compact sidebar's task rows before adding the disclosure.
+        if rows <= self.nodes.len().min(usize::from(TREE_MIN)) as u16 {
             0
         } else {
             self.context.height(inner_height, rows)
@@ -744,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn short_wide_layout_keeps_two_tasks_and_full_width_draft_visible() {
+    fn short_wide_layout_is_monotone_with_or_without_completion() {
         let dir = crate::test_support::private_tempdir().unwrap();
         let config = Config {
             workspace: dir.path().into(),
@@ -755,27 +755,50 @@ mod tests {
         .unwrap();
         let host = Host::open(config).unwrap();
         let mut app = App {
-            input: "draft".into(),
-            tasks: vec![
-                task("parent", "root", RunStatus::Running),
-                task("nested", "parent", RunStatus::Completed),
-                task("other", "root", RunStatus::Failed),
-            ],
+            tasks: (0..8)
+                .map(|index| task(&format!("Task-{index}"), "root", RunStatus::Running))
+                .collect(),
             ..App::default()
         };
         app.agents.refresh(&app.tasks);
-        let mut terminal = Terminal::new(TestBackend::new(111, 11)).unwrap();
-        terminal
-            .draw(|frame| super::super::draw(frame, &mut app, &host, Instant::now()))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(80, 1)].symbol(), "╭");
-        assert!(row(buffer, 2, 82..109).starts_with("Agents / 3"));
-        assert!(row(buffer, 3, 82..108).starts_with("▾ Running parent"));
-        assert!(row(buffer, 4, 82..108).starts_with("  ─ Done nested"));
-        assert_eq!(buffer[(108, 3)].symbol(), "█");
-        assert_eq!(buffer[(110, 6)].symbol(), "┐");
-        assert!(row(buffer, 7, 0..80).contains("draft"));
+        let now = Instant::now();
+        app.caret.focus(true, now);
+        for draft in ["plain draft", "/se"] {
+            app.input = draft.into();
+            app.completion.edited(&app.input);
+            for (height, expected) in [(11, 2), (13, 4), (14, 4), (15, 4)] {
+                let mut terminal = Terminal::new(TestBackend::new(111, height)).unwrap();
+                terminal
+                    .draw(|frame| super::super::draw(frame, &mut app, &host, now))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let rail_rows: Vec<_> = (0..height).map(|y| row(buffer, y, 82..109)).collect();
+                assert!(rail_rows.iter().any(|line| line.starts_with("Agents / 8")));
+                assert_eq!(
+                    rail_rows
+                        .iter()
+                        .filter(|line| line.contains("Task-"))
+                        .count(),
+                    expected,
+                    "111×{height} with {draft:?}"
+                );
+                assert!((0..height).any(|y| buffer[(108, y)].symbol() == "█"));
+                let composer = (0..height)
+                    .find(|&y| buffer[(110, y)].symbol() == "┐")
+                    .expect("full-width composer");
+                assert!(row(buffer, composer + 1, 1..80).starts_with(draft));
+                assert!(
+                    buffer[(1 + draft.len() as u16, composer + 1)]
+                        .modifier
+                        .contains(Modifier::REVERSED)
+                );
+                assert_eq!(
+                    (0..composer).any(|y| row(buffer, y, 0..80).contains("› /sessions")),
+                    draft == "/se"
+                );
+                assert!(row(buffer, height - 1, 0..111).contains("Provider not configured"));
+            }
+        }
     }
 
     #[test]

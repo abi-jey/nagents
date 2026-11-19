@@ -393,19 +393,31 @@ fn footer_area(area: Rect) -> Rect {
 
 fn content_rows(area: Rect, menu_height: u16) -> [Rect; 4] {
     let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(2));
-    // Make room for task rows on short, wide screens by using a one-line
-    // header and a one-line composer interior.
-    let compact = agents::is_wide(area.width) && (7..=11).contains(&body.height);
-    let composer = if compact { 3 } else { 5 }.min(if body.height >= 5 {
-        body.height - 2
+    let wide = agents::is_wide(area.width);
+    let (header, composer) = if wide {
+        // Preserve a compact header/composer and seven rows for the tree
+        // (border, heading, four tasks) before adding any optional chrome.
+        // Each extra screen row can buy at most one row of chrome.
+        let extra = body.height.saturating_sub(1 + 3 + 7);
+        (
+            1 + extra.saturating_sub(2).min(2),
+            body.height.min(3) + extra.min(2),
+        )
     } else {
-        body.height
-    });
+        (
+            3,
+            if body.height >= 5 {
+                5.min(body.height - 2)
+            } else {
+                body.height
+            },
+        )
+    };
     let menu_height = menu_height.min(
         body.height
-            .saturating_sub(composer + if compact { 4 } else { 3 }),
+            .saturating_sub(composer + if wide { header + 2 } else { 3 }),
     );
-    let header_height = if compact { 1 } else { 3 }
+    let header_height = header
         .min(body.height.saturating_sub(composer + 2))
         .min(body.height.saturating_sub(composer + menu_height + 1));
     Layout::vertical([
@@ -446,7 +458,13 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         )),
     ]);
     frame.render_widget(header, rows[0]);
-    let (conversation, rail) = agents::split(rows[1]);
+    // Suggestions occupy the bottom of the left column, not rows of the
+    // adjacent tree. The tree's height is independent of the draft/menu.
+    let (mut conversation, rail) = agents::split(Rect {
+        height: rows[1].height + rows[2].height,
+        ..rows[1]
+    });
+    conversation.height = rows[1].height;
     let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
     app.agents.observe_context(context);
     let block = Block::default()
@@ -473,7 +491,15 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         .draw(frame, transcript_area, transcript, &mut app.scroll);
     frame.render_widget(block.title(app.tools.title(interactive)), conversation);
     if let Some(menu) = menu {
-        menu.draw(frame, rows[2], accent, muted);
+        menu.draw(
+            frame,
+            Rect {
+                width: conversation.width,
+                ..rows[2]
+            },
+            accent,
+            muted,
+        );
     }
     let composer = Block::bordered()
         .title(format!(
@@ -908,8 +934,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         let width = terminal
             .draw(|frame| {
                 let area = frame.area();
-                // Rail navigation only owns keys when the completion menu
-                // is hidden, so its page size is the menu-free tree height.
+                // Suggestions never take vertical space from the tree.
                 app.agents
                     .resize(area.width, content_rows(area, 0)[1].height);
                 app.caret.focus(app.composer_available(), now);
