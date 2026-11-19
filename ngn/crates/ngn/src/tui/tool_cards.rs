@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::HashSet,
     time::{Duration, Instant},
 };
@@ -14,9 +13,9 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
-use crate::view::{ToolCard, ToolKey, TranscriptPart, duration};
+use crate::view::{FenceKey, ToolCard, ToolKey, TranscriptPart, duration};
 
-use super::shimmer::Sweep;
+use super::{code_fences, shimmer::Sweep};
 
 type Key = (String, String);
 
@@ -31,6 +30,7 @@ pub(super) struct Cards {
     bottom: usize,
     rendered_top: usize,
     sweep: Option<(Position, HeaderSweep, Instant)>,
+    code: code_fences::Pan,
 }
 
 struct HeaderSweep {
@@ -64,19 +64,26 @@ impl HeaderSweep {
 
 impl Cards {
     pub(super) fn focused(&self) -> bool {
-        self.focused
+        self.focused || self.code.focused()
     }
 
     pub(super) fn blur(&mut self) {
         self.focused = false;
         self.reveal = false;
+        self.code.blur();
     }
 
     pub(super) fn title(&self, interactive: bool) -> &'static str {
         if self.focused && interactive {
             " Tools · ↑/↓ select · Enter/Space toggle · Esc back "
+        } else if self.code.focused() && interactive {
+            " Code · ←/→ pan · ↑/↓ select · Esc back "
+        } else if interactive && !self.headers.is_empty() && self.code.can_pan() {
+            " Tools F4 · Code F8 "
         } else if interactive && !self.headers.is_empty() {
             " Tools · F4 focus "
+        } else if interactive && self.code.can_pan() {
+            " Code · F8 pan "
         } else {
             ""
         }
@@ -99,6 +106,7 @@ impl Cards {
             if self.focused {
                 self.blur();
             } else if !self.headers.is_empty() {
+                self.code.blur();
                 self.focused = true;
                 *scroll = Some(self.rendered_top);
                 if !self.headers.iter().any(|(key, row)| {
@@ -108,6 +116,16 @@ impl Cards {
                     self.selected = self.nearest().map(|index| self.headers[index].0.clone());
                 }
                 self.reveal = true;
+            }
+            return true;
+        }
+        if !self.focused
+            && self
+                .code
+                .key(key, self.rendered_top..self.rendered_top + self.height)
+        {
+            if self.code.focused() && key.code == KeyCode::F(8) {
+                *scroll = Some(self.rendered_top);
             }
             return true;
         }
@@ -165,7 +183,7 @@ impl Cards {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        layout: Layout<'_>,
+        mut layout: Layout<'_>,
         scroll: &mut Option<usize>,
         now: Instant,
     ) {
@@ -196,13 +214,14 @@ impl Cards {
             self.selected = None;
         }
         self.reveal &= height == 0;
-        top = top.min(self.bottom);
+        self.code.observe(std::mem::take(&mut layout.fences));
+        top = self.code.reveal(top, height).min(self.bottom);
         if scroll.is_some() {
             *scroll = Some(top);
         }
         self.rendered_top = top;
         self.height = height;
-        layout.render(frame, area, top);
+        layout.render(frame, area, top, Some(&self.code), layout.interactive);
         self.sweep = layout.sweep.and_then(|(row, sweep)| {
             ((top..top + height).contains(&row) && !area.is_empty()).then(|| {
                 (
@@ -310,11 +329,13 @@ pub(super) struct Layout<'a> {
     lines: Vec<(usize, Row<'a>)>,
     headers: Vec<(Key, usize)>,
     sweep: Option<(usize, HeaderSweep)>,
+    fences: Vec<code_fences::Fence>,
+    interactive: bool,
 }
 
 enum Row<'a> {
     Plain(Line<'a>),
-    Code(Cow<'a, str>),
+    Code(FenceKey, &'a str),
 }
 
 impl<'a> Layout<'a> {
@@ -331,11 +352,13 @@ impl<'a> Layout<'a> {
             lines: Vec::new(),
             headers: Vec::new(),
             sweep: None,
+            fences: Vec::new(),
+            interactive,
         };
         for part in parts {
             match part {
                 TranscriptPart::Text(text) => layout.text(text),
-                TranscriptPart::Code(text) => layout.code(text),
+                TranscriptPart::Code(key, text) => layout.code(*key, text, cards.is_some()),
                 TranscriptPart::Card(card) => {
                     let key = (card.key.0.to_owned(), card.key.1.to_owned());
                     let expanded = cards.is_some_and(|cards| cards.expanded.contains(&key));
@@ -412,38 +435,28 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn code(&mut self, text: &'a str) {
+    fn code(&mut self, key: FenceKey, text: &'a str, track: bool) {
         if self.width == 0 {
             return;
         }
-        let available = usize::from(self.width - 1);
-        let mut push = |text| {
-            self.lines.push((self.rows, Row::Code(text)));
-            self.rows += 1;
-        };
+        let start = self.rows;
+        let mut width = 0;
         for line in text
             .split_terminator('\n')
             .chain(text.is_empty().then_some(""))
         {
-            if available == 0 {
-                push(Cow::Borrowed(""));
-            } else if line.contains('\t') {
-                let mut column = 0;
-                let mut expanded = String::new();
-                for grapheme in Span::raw(line).styled_graphemes(Style::default()) {
-                    if grapheme.symbol == "\t" {
-                        let spaces = 4 - column % 4;
-                        expanded.push_str(&"    "[..spaces]);
-                        column += spaces;
-                    } else {
-                        expanded.push_str(grapheme.symbol);
-                        column += Span::raw(grapheme.symbol).width();
-                    }
-                }
-                wrap_code(&expanded, available, |row| push(Cow::Owned(row.to_owned())));
-            } else {
-                wrap_code(line, available, |row| push(Cow::Borrowed(row)));
+            self.lines.push((self.rows, Row::Code(key, line)));
+            self.rows += 1;
+            if track && self.width > 1 {
+                width = width.max(code_fences::width(line));
             }
+        }
+        if track {
+            self.fences.push(code_fences::Fence {
+                key,
+                rows: start..self.rows,
+                max_offset: width.saturating_sub(usize::from(self.width - 1)),
+            });
         }
     }
 
@@ -466,10 +479,19 @@ impl<'a> Layout<'a> {
             area,
             self.rows
                 .saturating_sub(usize::from(area.height) + usize::from(scroll)),
+            None,
+            false,
         );
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, top: usize) {
+    fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        top: usize,
+        pan: Option<&code_fences::Pan>,
+        interactive: bool,
+    ) {
         if area.is_empty() || self.lines.is_empty() {
             return;
         }
@@ -482,8 +504,7 @@ impl<'a> Layout<'a> {
             .partition_point(|(row, _)| *row < top + usize::from(area.height));
         let bottom = top + usize::from(area.height);
         let mut first = start;
-        // Keep native word wrapping for the plain runs; fenced rows have
-        // already been wrapped without discarding any whitespace.
+        // Keep native word wrapping for plain runs; code has one row per line.
         for group in self.lines[start..end]
             .chunk_by(|(_, a), (_, b)| matches!(a, Row::Plain(_)) == matches!(b, Row::Plain(_)))
         {
@@ -503,7 +524,7 @@ impl<'a> Layout<'a> {
                         .iter()
                         .filter_map(|(_, row)| match row {
                             Row::Plain(line) => Some(line.clone()),
-                            Row::Code(_) => None,
+                            Row::Code(..) => None,
                         })
                         .collect::<Vec<_>>();
                     let y = area.y + (visible_start - top) as u16;
@@ -512,53 +533,23 @@ impl<'a> Layout<'a> {
                         Rect::new(area.x, y, area.width, height),
                     );
                 }
-                Row::Code(_) => {
+                Row::Code(..) => {
                     for (index, row) in group {
-                        if let Row::Code(text) = row {
-                            draw_code_row(frame.buffer_mut(), area, (*index - top) as u16, text);
+                        if let Row::Code(key, text) = row {
+                            code_fences::draw(
+                                frame.buffer_mut(),
+                                area,
+                                (*index - top) as u16,
+                                text,
+                                pan.map_or(0, |pan| pan.offset(*key)),
+                                interactive && pan.is_some_and(|pan| pan.selected(*key)),
+                            );
                         }
                     }
                 }
             }
             first += group.len();
         }
-    }
-}
-
-fn wrap_code<'a>(text: &'a str, available: usize, mut push: impl FnMut(&'a str)) {
-    let mut start = 0;
-    let mut end = 0;
-    let mut used = 0;
-    for grapheme in Span::raw(text).styled_graphemes(Style::default()) {
-        let width = Span::raw(grapheme.symbol).width();
-        if used + width > available && start < end {
-            push(&text[start..end]);
-            start = end;
-            used = 0;
-        }
-        end += grapheme.symbol.len();
-        if width > available {
-            // Never split a wide grapheme or overwrite the border.
-            push("…");
-            start = end;
-        } else {
-            used += width;
-        }
-    }
-    if start < end || text.is_empty() {
-        push(&text[start..end]);
-    }
-}
-
-fn draw_code_row(buffer: &mut Buffer, area: Rect, row: u16, text: &str) {
-    let y = area.y + row;
-    // Python's terminal palette uses ANSI defaults for panel/text and ANSI
-    // green for the code role. Don't assume a dark or light terminal.
-    let panel = Style::new().bg(Color::Reset).fg(Color::Reset);
-    buffer.set_style(Rect::new(area.x, y, area.width, 1), panel);
-    buffer.set_string(area.x, y, "│", panel.fg(Color::Green));
-    if area.width > 1 {
-        buffer.set_stringn(area.x + 1, y, text, usize::from(area.width - 1), panel);
     }
 }
 
@@ -622,7 +613,7 @@ mod tests {
     }
 
     fn key(app: &mut App, code: KeyCode) -> bool {
-        app.tool_card_key(KeyEvent::new(code, KeyModifiers::NONE))
+        app.transcript_key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
     fn render(
@@ -662,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn fenced_rows_use_default_panel_and_green_border_with_literal_wrapping() {
+    fn fenced_rows_use_default_panel_and_green_border_without_wrapping() {
         let mut app = App {
             records: vec![event(
                 "r",
@@ -675,18 +666,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(7, 8)).unwrap();
         let rows = draw(&mut app, &mut terminal);
         assert_eq!(
-            &rows[..6],
-            &[
-                "before ",
-                "│    界 ",
-                "│e\u{301} *   ",
-                "│      ",
-                "│  [x] ",
-                "after  "
-            ]
+            &rows[..5],
+            &["before ", "│    界 ", "│      ", "│  [x] ", "after  "]
         );
         let buffer = terminal.backend().buffer();
-        for row in 1..5 {
+        for row in 1..4 {
             assert_eq!(buffer[(0, row)].fg, Color::Green);
             for x in 0..7 {
                 assert_eq!(buffer[(x, row)].bg, Color::Reset);
@@ -696,7 +680,10 @@ mod tests {
             }
         }
         assert_eq!(buffer[(0, 0)].bg, Color::Blue);
-        assert_eq!(buffer[(0, 5)].bg, Color::Blue);
+        assert_eq!(buffer[(0, 4)].bg, Color::Blue);
+        assert!(key(&mut app, KeyCode::F(8)));
+        assert!(key(&mut app, KeyCode::Right));
+        assert_eq!(draw(&mut app, &mut terminal)[1], "│ 界 e\u{301} *");
     }
 
     #[test]
@@ -705,18 +692,105 @@ mod tests {
             records: vec![event(
                 "r",
                 Event::TextDelta {
-                    text: format!("~~~\n{}\n界Z", "a".repeat(140_000)),
+                    text: format!("~~~\n{}{}\n界Z", "a\n".repeat(70_000), "b".repeat(140_000)),
                 },
             )],
             ..App::default()
         };
         let mut terminal = Terminal::new(TestBackend::new(3, 3)).unwrap();
-        assert_eq!(draw(&mut app, &mut terminal), ["│aa", "│界 ", "│Z "]);
+        assert_eq!(draw(&mut app, &mut terminal), ["│a ", "│bb", "│界 "]);
         assert!(app.tools.rendered_top > usize::from(u16::MAX));
         let mut terminal = Terminal::new(TestBackend::new(2, 3)).unwrap();
-        assert_eq!(draw(&mut app, &mut terminal), ["│a", "│…", "│Z"]);
+        assert_eq!(draw(&mut app, &mut terminal), ["│a", "│b", "│ "]);
+        assert!(key(&mut app, KeyCode::F(8)));
+        assert!(key(&mut app, KeyCode::End));
+        assert_eq!(draw(&mut app, &mut terminal), ["│ ", "│b", "│ "]);
         let mut terminal = Terminal::new(TestBackend::new(1, 3)).unwrap();
-        assert_eq!(draw(&mut app, &mut terminal), ["│", "│", " "]);
+        assert_eq!(draw(&mut app, &mut terminal), ["│", "│", "│"]);
+    }
+
+    #[test]
+    fn pan_is_per_fence_clamps_across_width_and_final_snapshot_and_preserves_focus_routing() {
+        let mut app = App {
+            input: "/unsent".into(),
+            records: vec![
+                started("r", "c", "argument"),
+                finished("r", "c", json!({}), ""),
+                EventRecord {
+                    sequence: 3,
+                    ..event(
+                        "r",
+                        Event::TextDelta {
+                            text: "```\n1234567890AB\n1234567890ab\n```\n~~~\nabcdefghijkl".into(),
+                        },
+                    )
+                },
+            ],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(9, 18)).unwrap();
+        draw(&mut app, &mut terminal);
+        assert!(app.tools.title(true).contains("Code F8"));
+        assert!(!key(&mut app, KeyCode::Tab));
+        assert!(!key(&mut app, KeyCode::Left));
+        assert!(key(&mut app, KeyCode::F(4)));
+        draw(&mut app, &mut terminal);
+        assert!(!key(&mut app, KeyCode::F(8)));
+        assert!(key(&mut app, KeyCode::Enter));
+        assert!(key(&mut app, KeyCode::Esc));
+        let before = draw(&mut app, &mut terminal);
+        assert!(before.iter().any(|row| row.starts_with("v ")));
+
+        assert!(key(&mut app, KeyCode::F(8)));
+        assert!(key(&mut app, KeyCode::End));
+        let rows = draw(&mut app, &mut terminal);
+        assert!(rows.contains(&"│efghijkl".into()));
+        assert!(rows.contains(&"│12345678".into()));
+        let top = app.scroll;
+        assert!(key(&mut app, KeyCode::Up));
+        assert!(key(&mut app, KeyCode::Right));
+        let rows = draw(&mut app, &mut terminal);
+        assert!(rows.contains(&"│567890AB".into()));
+        assert!(rows.contains(&"│567890ab".into()));
+        assert!(rows.contains(&"│efghijkl".into()));
+        assert_eq!(app.scroll, top);
+        assert!(key(&mut app, KeyCode::Enter));
+        assert!(key(&mut app, KeyCode::Char('x')));
+        assert!(!app.composer_available());
+        assert_eq!(app.input, "/unsent");
+
+        let mut wide = Terminal::new(TestBackend::new(11, 18)).unwrap();
+        let rows = draw(&mut app, &mut wide);
+        assert!(rows.contains(&"│34567890AB".into()));
+        assert!(rows.contains(&"│cdefghijkl".into()));
+        let rows = draw(&mut app, &mut terminal);
+        assert!(rows.contains(&"│34567890".into())); // no latent out-of-bounds offset
+        app.records.push(EventRecord {
+            sequence: 4,
+            ..event(
+                "r",
+                Event::TextDelta {
+                    text: "\n~~".into(),
+                },
+            )
+        });
+        assert!(draw(&mut app, &mut terminal).contains(&"│cdefghij".into()));
+        app.records.push(EventRecord {
+            sequence: 5,
+            ..event(
+                "r",
+                Event::TextCompleted {
+                    text: "```\n1234567890Z\n1234567890z\n```\n~~~\nnew-final\n~~~".into(),
+                },
+            )
+        });
+        let rows = draw(&mut app, &mut terminal);
+        assert!(rows.contains(&"│34567890".into()));
+        assert!(rows.contains(&"│ew-final".into()));
+        assert!(!rows.iter().any(|row| row.contains("cdefghij")));
+        assert!(key(&mut app, KeyCode::Esc));
+        assert!(app.composer_available());
+        assert!(app.tools.expanded.contains(&("r".into(), "c".into())));
     }
 
     #[test]
@@ -1035,6 +1109,49 @@ mod tests {
         app.approval = None;
         assert!(key(&mut app, KeyCode::Enter));
         assert_eq!(app.tools.expanded.len(), 1);
+    }
+
+    #[test]
+    fn approval_and_overlays_suspend_code_focus_without_losing_offset_or_draft() {
+        let mut app = App {
+            input: "unsent".into(),
+            records: vec![event(
+                "r",
+                Event::TextCompleted {
+                    text: "```\n12345678SUFFIX\n```".into(),
+                },
+            )],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(7, 8)).unwrap();
+        draw(&mut app, &mut terminal);
+        assert!(key(&mut app, KeyCode::F(8)));
+        assert!(key(&mut app, KeyCode::Right));
+        let panned = draw(&mut app, &mut terminal);
+        assert_eq!(panned[0], "│5678SU");
+
+        app.help = true;
+        assert!(key(&mut app, KeyCode::F(8)));
+        app.help = false;
+        app.approval = Some(Approval {
+            id: "approval".into(),
+            run_id: "r".into(),
+            session_id: "test".into(),
+            root_session_id: "test".into(),
+            agent_title: "Main".into(),
+            depth: 0,
+            call: call("c", "test"),
+            preview: String::new(),
+        });
+        assert!(key(&mut app, KeyCode::F(8)));
+        assert!(key(&mut app, KeyCode::End));
+        assert!(key(&mut app, KeyCode::Enter));
+        assert!(!app.composer_available());
+        app.approval = None;
+        assert_eq!(draw(&mut app, &mut terminal), panned);
+        assert!(key(&mut app, KeyCode::F(8)));
+        assert!(app.composer_available());
+        assert_eq!(app.input, "unsent");
     }
 
     #[test]

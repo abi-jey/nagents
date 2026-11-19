@@ -332,9 +332,13 @@ fn tool_rows(records: &[EventRecord]) -> HashMap<usize, ProjectedTool<'_>> {
         .collect()
 }
 
+// Session-scoped first fragment event sequence and fence ordinal. Neither
+// the global output byte position nor the rendered row survives projection.
+pub type FenceKey = (i64, usize);
+
 pub enum TranscriptPart<'a> {
     Text(String),
-    Code(String),
+    Code(FenceKey, String),
     Card(ToolCard<'a>),
 }
 
@@ -439,16 +443,16 @@ fn text_parts(
     output: &str,
     mut start: usize,
     end: usize,
-    assistant: &mut Peekable<impl Iterator<Item = Range<usize>>>,
+    assistant: &mut Peekable<impl Iterator<Item = (i64, Range<usize>)>>,
     parts: &mut Vec<TranscriptPart<'_>>,
 ) {
-    while let Some(message) = assistant.next_if(|range| range.start < end) {
+    while let Some((sequence, message)) = assistant.next_if(|(_, range)| range.start < end) {
         if message.end <= start {
             continue;
         }
         // Scan from the start of an overlapping message, not the display
         // cutoff: it may have dropped the opener but retained the code.
-        for fence in fences(&output[message.clone()]) {
+        for (ordinal, fence) in fences(&output[message.clone()]).enumerate() {
             let fence_start = message.start + fence.source.start;
             let fence_end = message.start + fence.source.end;
             if fence_end <= start {
@@ -469,11 +473,10 @@ fn text_parts(
                 }
                 let partial = body_start > message.start + fence.body.start
                     && !output[..body_start].ends_with(['\r', '\n']);
-                parts.push(TranscriptPart::Code(fence_code(
-                    &output[body_start..body_end],
-                    fence.indent,
-                    partial,
-                )));
+                parts.push(TranscriptPart::Code(
+                    (sequence, ordinal),
+                    fence_code(&output[body_start..body_end], fence.indent, partial),
+                ));
             }
             start = fence_end;
             if start < end
@@ -566,7 +569,7 @@ fn assistant_edits<'a>(
 pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_>> {
     let mut output = String::new();
     let mut cards = Vec::new();
-    let mut assistant: Vec<Range<usize>> = Vec::new();
+    let mut assistant: Vec<(i64, Range<usize>)> = Vec::new();
     let mut continuing = None;
     let rows = tool_rows(records);
     let edits = assistant_edits(records, &rows);
@@ -597,11 +600,11 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
             }
             if before_card == start
                 && continuing == Some(run)
-                && let Some(message) = assistant.last_mut()
+                && let Some((_, message)) = assistant.last_mut()
             {
                 message.end = output.len();
             } else {
-                assistant.push(start..output.len());
+                assistant.push((record.sequence, start..output.len()));
             }
             continuing = (!complete).then_some(run);
             continue;
@@ -682,7 +685,9 @@ mod tests {
         let mut output = String::new();
         for part in project(records, now_ms) {
             match part {
-                TranscriptPart::Text(text) | TranscriptPart::Code(text) => output.push_str(&text),
+                TranscriptPart::Text(text) | TranscriptPart::Code(_, text) => {
+                    output.push_str(&text)
+                }
                 TranscriptPart::Card(card) => {
                     let _ = write!(output, "> {} · {}", card.label, card.status);
                     if let Some(elapsed) = card.elapsed {
@@ -818,14 +823,14 @@ mod tests {
         let pending = project(&records[..3], 10);
         assert!(matches!(&pending[..], [
             TranscriptPart::Text(prose),
-            TranscriptPart::Code(code),
+            TranscriptPart::Code(_, code),
         ] if prose == "\nYOU\n```user\nplain\n```\n\nNGN\n# literal heading\n"
             && code == "  **literal**[31m\n```\n"));
 
         let parts = project(&records, 10);
         assert!(matches!(&parts[..], [
             TranscriptPart::Text(_),
-            TranscriptPart::Code(code),
+            TranscriptPart::Code(_, code),
             TranscriptPart::Text(prose),
             TranscriptPart::Card(card),
         ] if code == "  **literal**[31m\n```\n"
@@ -848,9 +853,9 @@ mod tests {
         let parts = project(&records, 10);
         assert!(matches!(&parts[..], [
             TranscriptPart::Text(before),
-            TranscriptPart::Code(tilde),
+            TranscriptPart::Code(_, tilde),
             TranscriptPart::Text(between),
-            TranscriptPart::Code(unfinished),
+            TranscriptPart::Code(_, unfinished),
             TranscriptPart::Text(after),
         ] if before == "inline ```not a block\n    ```indented\n```bad`info\n```\n"
             && tilde == "keep indent\n```\n~~~not-a-close\n"
@@ -879,15 +884,15 @@ mod tests {
             if text == "PROSE-TILDE\n~~")
         );
         assert!(
-            matches!(&project(&records[..2], 0)[..], [TranscriptPart::Text(_), TranscriptPart::Code(text)]
+            matches!(&project(&records[..2], 0)[..], [TranscriptPart::Text(_), TranscriptPart::Code(_, text)]
             if text == "OPEN-WAIT 界界\n~~~\n```\n")
         );
         assert!(
-            matches!(&project(&records[..5], 0)[..], [TranscriptPart::Text(_), TranscriptPart::Code(text)]
+            matches!(&project(&records[..5], 0)[..], [TranscriptPart::Text(_), TranscriptPart::Code(_, text)]
             if text.ends_with("STREAM-OLD 界\n~~"))
         );
         assert!(matches!(&project(&records, 0)[..], [
-            TranscriptPart::Text(prose), TranscriptPart::Code(code), TranscriptPart::Text(after),
+            TranscriptPart::Text(prose), TranscriptPart::Code(_, code), TranscriptPart::Text(after),
         ] if prose == "PROSE-TILDE\n" && code == "OPEN-WAIT 界界\n~~~\n```\nFINAL-NEW 界\n"
             && after == "POST-CLOSE\n\n— Completed\n"));
     }
@@ -954,7 +959,7 @@ mod tests {
             }),
         ];
         assert!(matches!(&project(&records, 0)[..], [
-            TranscriptPart::Text(before), TranscriptPart::Code(code), TranscriptPart::Text(after),
+            TranscriptPart::Text(before), TranscriptPart::Code(_, code), TranscriptPart::Text(after),
         ] if before == "\nYOU\nuserliteral\n\nNGN\nplainprose\n"
             && code == "SAME\n EXTRA\nFEWER\n TAB\n\tFULL-TAB\n[999~\n"
             && after == "POSTPLAIN\n"));
@@ -986,11 +991,11 @@ mod tests {
             ),
         ];
         assert!(
-            matches!(&project(&records[..2], 0)[..], [TranscriptPart::Code(code)]
+            matches!(&project(&records[..2], 0)[..], [TranscriptPart::Code(_, code)]
             if code.starts_with('界') && code.len() <= 512_000)
         );
         assert!(matches!(&project(&records, 0)[..], [
-            TranscriptPart::Text(before), TranscriptPart::Code(code), TranscriptPart::Text(after),
+            TranscriptPart::Text(before), TranscriptPart::Code(_, code), TranscriptPart::Text(after),
         ] if before == "earlier reply\n" && code == "final code\n" && after == "plain\n"));
     }
 
@@ -1008,7 +1013,7 @@ mod tests {
         )];
         let parts = project(&records, 10);
         assert!(
-            matches!(&parts[..], [TranscriptPart::Code(code), TranscriptPart::Text(tail)]
+            matches!(&parts[..], [TranscriptPart::Code(_, code), TranscriptPart::Text(tail)]
             if code.starts_with('界') && code.ends_with("\nlast code line\n")
                 && tail == "plain tail" && code.len() + tail.len() <= 512_000)
         );
