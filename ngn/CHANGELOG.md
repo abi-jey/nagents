@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.24
+
+- The mouse wheel now scrolls the native ngn conversation without moving focus. Scrolling up keeps your place as output streams; scrolling back to the bottom resumes following new output.
+
 ## 0.100.23
 
 - Managed ngn updates now report what they are doing on stderr, with a spinner during longer waits on interactive terminals. Redirected output stays plain, and the final result on stdout is unchanged.
