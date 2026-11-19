@@ -173,14 +173,18 @@ impl Cards {
         }
     }
 
+    pub(super) fn page(&self, scroll: &mut Option<usize>, up: bool) {
+        self.scroll_rows(scroll, up, 10);
+    }
+
     // None follows the tail. Otherwise keep the same top row as new rows arrive
     // rather than maintaining a fixed distance from the moving tail.
-    pub(super) fn page(&self, scroll: &mut Option<usize>, up: bool) {
+    pub(super) fn scroll_rows(&self, scroll: &mut Option<usize>, up: bool, rows: usize) {
         let current = scroll.unwrap_or(self.bottom);
         let top = if up {
-            current.saturating_sub(10)
+            current.saturating_sub(rows)
         } else {
-            current.saturating_add(10)
+            current.saturating_add(rows)
         };
         *scroll = (top < self.bottom).then_some(top);
     }

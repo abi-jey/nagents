@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    io::stdout,
+    io::{self, Write, stdout},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -10,7 +10,7 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{
         DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
-        KeyEvent, KeyEventKind, KeyModifiers,
+        KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -28,7 +28,7 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
@@ -68,9 +68,30 @@ Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)";
 
-struct Restore;
+#[derive(Default)]
+struct Restore {
+    mouse_reporting: bool,
+}
+
+impl Restore {
+    fn enable_wheel(&mut self) -> io::Result<()> {
+        // Normal button reporting includes wheel events. SGR gives us cell
+        // coordinates even in large windows; no motion/drag reporting is needed.
+        // Arm cleanup before the write in case enabling succeeds only in part.
+        self.mouse_reporting = true;
+        let mut output = stdout().lock();
+        output.write_all(b"\x1b[?1000h\x1b[?1006h")?;
+        output.flush()
+    }
+}
+
 impl Drop for Restore {
     fn drop(&mut self) {
+        if self.mouse_reporting {
+            let mut output = stdout().lock();
+            let _ = output.write_all(b"\x1b[?1006l\x1b[?1000l");
+            let _ = output.flush();
+        }
         let _ = disable_raw_mode();
         let _ = execute!(stdout(), DisableBracketedPaste, LeaveAlternateScreen, Show);
     }
@@ -101,6 +122,7 @@ struct App {
     active: Option<Run>,
     approval: Option<Approval>,
     scroll: Option<usize>,
+    transcript_area: Rect,
     preview_scroll: u16,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
@@ -321,6 +343,21 @@ impl App {
         }
     }
 
+    fn transcript_wheel(&mut self, mouse: MouseEvent) {
+        let up = match mouse.kind {
+            MouseEventKind::ScrollUp => true,
+            MouseEventKind::ScrollDown => false,
+            _ => return,
+        };
+        if self.tools_available()
+            // Textual interprets Shift/Ctrl+wheel as horizontal scrolling.
+            && !mouse.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
+            && self.transcript_area.contains(Position::new(mouse.column, mouse.row))
+        {
+            self.tools.scroll_rows(&mut self.scroll, up, 2);
+        }
+    }
+
     fn completion_key(&mut self, key: KeyEvent) -> bool {
         self.composer_available() && self.completion.key(&mut self.input, key)
     }
@@ -502,6 +539,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         .borders(Borders::TOP)
         .border_style(Style::new().fg(Color::DarkGray));
     let transcript_area = block.inner(conversation);
+    app.transcript_area = transcript_area;
     let approval_dialog = app
         .approval
         .as_ref()
@@ -999,7 +1037,7 @@ pub async fn run(
     enable_raw_mode()?;
     // Crossterm restores the startup mode; drop this guard before restoring
     // the original tty attributes held by startup_input.
-    let restore = Restore;
+    let mut restore = Restore::default();
     execute!(stdout(), EnterAlternateScreen, Hide)?;
     let Some(draft) = startup_input.draft_for_first_frame()? else {
         return Ok(());
@@ -1066,6 +1104,9 @@ pub async fn run(
             let Some(draft) = draft else {
                 return Ok(());
             };
+            // Don't request wheel reports while the draft-only startup reader
+            // still owns stdin. EventStream will decode them after handoff.
+            restore.enable_wheel()?;
             if draft != app.input {
                 app.input = draft;
                 app.completion.edited(&app.input);
@@ -1194,11 +1235,13 @@ pub async fn run(
                             }
                         }
                     }
+                    TerminalEvent::Mouse(mouse) => app.transcript_wheel(mouse),
                     _ => (),
                 }
             }
         }
     }
+    drop(input);
     drop(terminal);
     drop(restore);
     drop(startup_input);
@@ -1541,6 +1584,119 @@ mod tests {
                 .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn transcript_wheel_uses_rendered_bounds_and_preserves_scroll_anchor() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = App {
+            input: "/".into(), // Keep the suggestion menu visible below the transcript.
+            ..App::default()
+        };
+        app.completion.edited(&app.input);
+        let lines = |sequence, text| EventRecord {
+            schema_version: 1,
+            sequence,
+            session_id: "session".into(),
+            run_id: "run".into(),
+            timestamp_ms: 0,
+            event: ngn_protocol::Event::TextDelta { text },
+        };
+        app.records.push(lines(1, "history\n".repeat(80)));
+        let redraw = |app: &mut App, width, height| {
+            Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                .unwrap()
+                .draw(|frame| draw(frame, app, &host, Instant::now()))
+                .unwrap();
+        };
+        let wheel = |column, row, kind| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        redraw(&mut app, 120, 16);
+        let wide = app.transcript_area;
+        redraw(&mut app, 100, 32);
+        let tall = app.transcript_area;
+        assert!(tall.width > wide.width && tall.height > wide.height);
+        redraw(&mut app, 120, 16);
+        let up = wheel(wide.x, wide.y, MouseEventKind::ScrollUp);
+
+        for event in [
+            wheel(wide.right(), wide.y, MouseEventKind::ScrollUp), // Agents rail
+            wheel(wide.x, wide.bottom(), MouseEventKind::ScrollUp), // Command suggestions
+            wheel(0, 12, MouseEventKind::ScrollUp),                // Composer
+            wheel(0, 15, MouseEventKind::ScrollUp),                // Footer
+            wheel(wide.x, wide.y, MouseEventKind::ScrollLeft),
+            wheel(
+                wide.x,
+                wide.y,
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            ),
+            MouseEvent {
+                modifiers: KeyModifiers::SHIFT,
+                ..up
+            },
+        ] {
+            app.transcript_wheel(event);
+            assert_eq!(app.scroll, None, "unexpected scroll for {event:?}");
+        }
+        app.agents.focused = true;
+        app.transcript_wheel(up);
+        assert!(app.agents.focused && app.scroll.is_none());
+        app.agents.focused = false;
+        app.queue_picker = true;
+        app.transcript_wheel(up);
+        assert!(app.queue_picker && app.scroll.is_none());
+        app.queue_picker = false;
+
+        app.approval = Some(Approval {
+            id: "approval".into(),
+            run_id: "run".into(),
+            session_id: "session".into(),
+            root_session_id: "session".into(),
+            agent_title: "Assistant".into(),
+            depth: 0,
+            call: ngn_protocol::ToolCall {
+                call_id: "call".into(),
+                name: "write".into(),
+                arguments: serde_json::json!({}),
+            },
+            preview: "Proposed write".into(),
+        });
+        app.transcript_wheel(up);
+        assert!(app.approval.is_some() && app.scroll.is_none() && app.preview_scroll == 0);
+        app.approval = None;
+
+        app.transcript_wheel(up);
+        let anchored = app.scroll.expect("wheel moved up from the tail");
+        assert!(app.composer_available());
+        assert_eq!(app.input, "/");
+        app.records.push(lines(2, "streamed\n".repeat(40)));
+        redraw(&mut app, 100, 32);
+        assert_eq!(app.scroll, Some(anchored));
+        let down = wheel(tall.x, tall.y, MouseEventKind::ScrollDown);
+        for _ in 0..100 {
+            app.transcript_wheel(down);
+        }
+        assert_eq!(app.scroll, None);
+        let up = wheel(tall.x, tall.y, MouseEventKind::ScrollUp);
+        for _ in 0..100 {
+            app.transcript_wheel(up);
+        }
+        assert_eq!(app.scroll, Some(0));
     }
 
     #[tokio::test]

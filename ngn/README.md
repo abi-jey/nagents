@@ -139,6 +139,11 @@ matching published core. The API is **not available in nagents
 - **`/steer TEXT`** targets the capable active root at its next persisted safe point;
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
+- The mouse wheel scrolls the main conversation when the pointer is over it,
+  without moving focus. Modal dialogs and focused Agents controls take
+  precedence; use their keyboard shortcuts. Mouse reporting can intercept
+  terminal text selection. Hold your terminal's selection override (often
+  **Shift** while dragging, where supported) to select text in the terminal.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+Q** quits and joins runners before restoring the terminal.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
