@@ -359,6 +359,8 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
     import subprocess
     import termios
 
+    from subagent_smoke import terminal_text
+
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
     original_mode = termios.tcgetattr(slave)
@@ -400,17 +402,27 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
         os.write(master, b"\x19")  # Ctrl+Y: explicit one-time approval.
         database = next(data.rglob("host.sqlite3"))
         completed = False
+        settled = False
+        pane = ""
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if select.select([master], [], [], 0.05)[0]:
-                os.read(master, 65536)
+                output += os.read(master, 65536)
             with sqlite3.connect(database) as connection:
                 completed = (
                     connection.execute("SELECT COUNT(*) FROM runs WHERE status = 'completed'").fetchone()[0] == 1
                 )
             if completed:
-                break
+                pane = terminal_text(output, ready.rows, ready.columns).decode()
+                settled = "The tool result was returned through the Rust host boundary." in pane and bool(
+                    re.search(r"\bassistant(?: · [0-9:]+)? fixture · fixture-model\b", pane)
+                )
+                if settled:
+                    break
         require(completed, "TUI fixture run did not complete after approving")
+        require(settled, "TUI did not paint the final reply and settled footer")
+        require("— Completed" not in pane, "TUI showed a redundant successful turn marker")
+        require("changed.txt · complete" in pane, "TUI lost the completed tool badge")
         require(
             destination.read_text() == "written by an approved Rust host tool\n",
             "TUI did not execute its approved native Rust tool",

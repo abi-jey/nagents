@@ -1865,7 +1865,11 @@ mod tests {
         assert!(rows[1].starts_with("v shell"));
         assert!(rows[2].contains("Arguments:"));
         assert_eq!(app.tools.rendered_top, 0);
-        let parts = crate::view::transcript(&app.records, 0);
+        let parts = crate::view::transcript(
+            &app.records,
+            0,
+            crate::view::TranscriptScope::AgentInspector,
+        );
         let TranscriptPart::Card(card) = &parts[1] else {
             panic!("expected card")
         };

@@ -454,7 +454,7 @@ fn main_transcript<'a>(
     approval: Option<&Approval>,
     wall_ms: u64,
 ) -> Vec<view::TranscriptPart<'a>> {
-    let mut parts = view::transcript(records, wall_ms);
+    let mut parts = view::transcript(records, wall_ms, view::TranscriptScope::Main);
     if let Some(approval) = approval {
         for part in &mut parts {
             if let view::TranscriptPart::Card(card) = part
@@ -578,7 +578,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
                 if app.task_from_rail { "close" } else { "back" }
             ));
             let inner = block.inner(area);
-            let parts = view::transcript(&app.task_records, wall_ms);
+            let parts = view::transcript(
+                &app.task_records,
+                wall_ms,
+                view::TranscriptScope::AgentInspector,
+            );
             let transcript = tool_cards::Layout::new(&parts, inner.width, None, false, None);
             frame.render_widget(block, area);
             transcript.draw_from_bottom(frame, inner, app.task_scroll);

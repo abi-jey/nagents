@@ -597,7 +597,16 @@ fn assistant_edits<'a>(
     edits
 }
 
-pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_>> {
+pub enum TranscriptScope {
+    Main,
+    AgentInspector,
+}
+
+pub fn transcript(
+    records: &[EventRecord],
+    now_ms: u64,
+    scope: TranscriptScope,
+) -> Vec<TranscriptPart<'_>> {
     let mut output = String::new();
     let mut cards = Vec::new();
     let mut assistant: Vec<(i64, Range<usize>)> = Vec::new();
@@ -668,6 +677,15 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
                     format!(": {error}")
                 }
             )),
+            Event::RunFinished {
+                status: RunStatus::Completed,
+                error,
+            } if matches!(scope, TranscriptScope::Main) && error.is_empty() => {
+                // End any unfinalized prose line without adding a status row.
+                if !output.is_empty() && !output.ends_with('\n') {
+                    output.push('\n');
+                }
+            }
             Event::RunFinished { status, error } => output.push_str(&format!(
                 "\n— {status:?}{}\n",
                 if error.is_empty() {
@@ -708,7 +726,11 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
 
 #[cfg(test)]
 mod tests {
-    use super::{transcript as project, *};
+    use super::*;
+
+    fn project(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_>> {
+        super::transcript(records, now_ms, TranscriptScope::Main)
+    }
 
     fn transcript(records: &[EventRecord], details: bool, now_ms: u64) -> String {
         use std::fmt::Write as _;
@@ -896,6 +918,53 @@ mod tests {
     }
 
     #[test]
+    fn only_the_main_transcript_omits_successful_turn_markers() {
+        let finished = |run, at, status, error: &str| {
+            event(
+                run,
+                at,
+                Event::RunFinished {
+                    status,
+                    error: error.into(),
+                },
+            )
+        };
+        let records = [
+            event(
+                "first",
+                1,
+                Event::TextDelta {
+                    text: "Answer without a closing snapshot".into(),
+                },
+            ),
+            finished("first", 2, RunStatus::Completed, ""),
+            event(
+                "second",
+                3,
+                Event::RunStarted {
+                    prompt: "Next prompt".into(),
+                },
+            ),
+            finished("second", 4, RunStatus::Failed, "try a different input"),
+            finished("third", 5, RunStatus::Interrupted, ""),
+            finished("fourth", 6, RunStatus::Cancelled, ""),
+        ];
+
+        assert_eq!(
+            transcript(&records, false, 0),
+            concat!(
+                "Answer without a closing snapshot\n\nNext prompt\n\n",
+                "\n— Failed: try a different input\n",
+                "\n— Interrupted\n\n— Cancelled\n",
+            ),
+        );
+        assert!(
+            matches!(&super::transcript(&records[..2], 0, TranscriptScope::AgentInspector)[..],
+                [TranscriptPart::Text(text)] if text.ends_with("\n— Completed\n"))
+        );
+    }
+
+    #[test]
     fn final_snapshot_edits_and_closes_the_exact_tilde_stream() {
         let delta =
             |sequence, text: &str| event("r", sequence, Event::TextDelta { text: text.into() });
@@ -925,7 +994,7 @@ mod tests {
         assert!(matches!(&project(&records, 0)[..], [
             TranscriptPart::Text(prose), TranscriptPart::Code(_, code), TranscriptPart::Text(after),
         ] if prose == "PROSE-TILDE\n" && code == "OPEN-WAIT 界界\n~~~\n```\nFINAL-NEW 界\n"
-            && after == "POST-CLOSE\n\n— Completed\n"));
+            && after == "POST-CLOSE\n"));
     }
 
     #[test]
