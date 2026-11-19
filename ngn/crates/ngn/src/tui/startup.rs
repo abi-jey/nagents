@@ -31,64 +31,122 @@ pub(super) fn shutdown_signal() -> io::Result<impl Future<Output = ()>> {
     })
 }
 
+#[derive(Default)]
+pub(super) struct Input(#[cfg(unix)] Option<posix::Input>);
+
+impl Input {
+    async fn wait_for_cancel(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        if let Some(input) = &mut self.0 {
+            return input.wait_for_cancel().await;
+        }
+        std::future::pending().await
+    }
+
+    fn drain(&mut self) -> io::Result<bool> {
+        #[cfg(unix)]
+        if let Some(input) = &mut self.0 {
+            return input.drain();
+        }
+        Ok(true)
+    }
+
+    /// Snapshot the draft for the first frame without consuming decoder state.
+    pub(super) fn draft_for_first_frame(&mut self) -> io::Result<Option<&str>> {
+        if !self.drain()? {
+            return Ok(None);
+        }
+        #[cfg(unix)]
+        if let Some(input) = &self.0 {
+            return Ok(Some(input.draft()));
+        }
+        Ok(Some(""))
+    }
+
+    /// Only release stdin after the first frame's output has been flushed.
+    pub(super) async fn finish(&mut self) -> io::Result<Option<String>> {
+        #[cfg(unix)]
+        if let Some(input) = &mut self.0 {
+            return input.finish().await;
+        }
+        Ok(Some(String::new()))
+    }
+}
+
 pub(super) async fn prepare(
     animate: bool,
     initialize: impl Future<Output = Result<()>>,
     signal: Pin<&mut impl Future<Output = ()>>,
-) -> Result<Option<String>> {
+) -> Result<Option<Input>> {
     #[cfg(unix)]
     let opening = posix::run(animate);
     #[cfg(not(unix))]
     let opening = async {
         let _ = animate;
-        Ok::<_, io::Error>(Some(String::new()))
+        Ok::<_, io::Error>(Some(Input::default()))
     };
-    handoff(opening, initialize, signal).await
+    let Some(mut input) = handoff(opening, initialize, signal).await? else {
+        return Ok(None);
+    };
+    // Honor input already queued at readiness without flashing the workspace
+    // on cancellation. Stdin remains ours through the first workspace frame.
+    Ok(input.drain()?.then_some(input))
 }
 
 /// Drive initialization once, alongside the animation. Store work may already
 /// be running on a blocking worker when cancelled; finish setup before the host
-/// shuts down, but drop the prelude immediately to restore the terminal.
+/// shuts down, but restore the terminal immediately on cancellation.
 async fn handoff(
-    opening: impl Future<Output = io::Result<Option<String>>>,
+    opening: impl Future<Output = io::Result<Option<Input>>>,
     initialize: impl Future<Output = Result<()>>,
     mut signal: Pin<&mut impl Future<Output = ()>>,
-) -> Result<Option<String>> {
+) -> Result<Option<Input>> {
     let started = Cell::new(false);
     let init = async {
         started.set(true);
         initialize.await
     };
     tokio::pin!(init);
-    let draft = {
+    let opened = {
         tokio::pin!(opening);
         tokio::select! {
             biased;
             _ = &mut signal => Ok(None),
-            draft = &mut opening => draft,
+            opened = &mut opening => opened,
             result = &mut init => {
                 result?;
                 return Ok(tokio::select! {
                     biased;
                     _ = &mut signal => None,
-                    draft = &mut opening => draft?,
+                    opened = &mut opening => opened?,
                 });
             }
         }
-    }; // cbreak/cursor guard has dropped, even if we must wait for the store.
-    if matches!(draft, Ok(Some(_))) {
-        tokio::select! {
-            biased;
-            _ = &mut signal => {
-                if started.get() { let _ = init.await; }
-                return Ok(None);
+    }; // Drop the animation future before waiting for pending setup.
+    let mut input = match opened {
+        Ok(Some(input)) => input,
+        other => {
+            if started.get() {
+                let _ = init.await;
             }
-            result = &mut init => result?,
+            return Ok(other?);
         }
-    } else if started.get() {
+    };
+    let cancelled = tokio::select! {
+        biased;
+        _ = &mut signal => Ok(()),
+        result = &mut init => {
+            result?;
+            return Ok(Some(input));
+        }
+        cancelled = input.wait_for_cancel() => cancelled,
+    };
+    drop(input);
+    if started.get() {
         let _ = init.await;
     }
-    Ok(draft?)
+    cancelled?;
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -122,7 +180,12 @@ mod tests {
             finished.set(true);
             Ok(())
         };
-        assert_eq!(handoff(opening, initialize, signal).await.unwrap(), None);
+        assert!(
+            handoff(opening, initialize, signal)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(finished.get());
     }
 
@@ -131,16 +194,16 @@ mod tests {
         let calls = Cell::new(0);
         let opening = async {
             tokio::task::yield_now().await;
-            Ok(Some("draft".to_owned()))
+            Ok(Some(Input::default()))
         };
         let initialize = async {
             calls.set(calls.get() + 1);
             Ok(())
         };
-        let draft = handoff(opening, initialize, std::pin::pin!(pending()))
+        let input = handoff(opening, initialize, std::pin::pin!(pending()))
             .await
             .unwrap();
-        assert_eq!(draft.as_deref(), Some("draft"));
+        assert!(input.is_some());
         assert_eq!(calls.get(), 1);
     }
 }
@@ -149,22 +212,25 @@ mod tests {
 mod posix {
     use std::{
         io::{self, IsTerminal, Write},
-        os::fd::AsRawFd,
+        os::fd::{AsFd, AsRawFd},
         time::Duration,
     };
 
     use crossterm::terminal::size;
     use nix::{
         errno::Errno,
+        poll::{PollFd, PollFlags, poll},
         sys::termios::{
-            InputFlags, LocalFlags, OutputFlags, SetArg, SpecialCharacterIndices, Termios,
-            tcgetattr, tcsetattr,
+            FlushArg, InputFlags, LocalFlags, OutputFlags, SetArg, SpecialCharacterIndices,
+            Termios, tcflush, tcgetattr, tcsetattr,
         },
         unistd::read,
     };
     use tokio::time::{Instant, sleep_until};
 
     const POLL: Duration = Duration::from_millis(10);
+    const DRAFT_CAP: usize = 4096;
+    const UTF8_HANDOFF_GRACE: Duration = Duration::from_millis(50);
     const HIDE: &str = "\x1b[?25l";
     const SHOW: &str = "\x1b[?25h";
     const SAVE: &str = "\x1b7";
@@ -200,13 +266,16 @@ mod posix {
         (width >= 16 && rows >= 7).then_some(usize::from(width))
     }
 
-    struct TerminalMode(Termios);
+    struct TerminalMode {
+        original: Termios,
+        handed_off: bool,
+    }
 
     impl TerminalMode {
         fn cbreak() -> io::Result<Self> {
             let stdin = io::stdin();
-            let mode = Self(tcgetattr(&stdin)?);
-            let mut cbreak = mode.0.clone();
+            let original = tcgetattr(&stdin)?;
+            let mut cbreak = original.clone();
             cbreak.input_flags.remove(InputFlags::IXON);
             cbreak.local_flags.remove(
                 LocalFlags::ECHO | LocalFlags::ECHONL | LocalFlags::ICANON | LocalFlags::ISIG,
@@ -215,13 +284,21 @@ mod posix {
             cbreak.control_chars[SpecialCharacterIndices::VMIN as usize] = 0;
             cbreak.control_chars[SpecialCharacterIndices::VTIME as usize] = 0;
             tcsetattr(&stdin, SetArg::TCSANOW, &cbreak)?;
-            Ok(mode)
+            Ok(Self {
+                original,
+                handed_off: false,
+            })
         }
     }
 
     impl Drop for TerminalMode {
         fn drop(&mut self) {
-            let _ = tcsetattr(io::stdin(), SetArg::TCSANOW, &self.0);
+            let stdin = io::stdin();
+            if !self.handed_off {
+                // Do not hand unread startup keys back to the shell on abort.
+                let _ = tcflush(&stdin, FlushArg::TCIFLUSH);
+            }
+            let _ = tcsetattr(&stdin, SetArg::TCSANOW, &self.original);
         }
     }
 
@@ -296,13 +373,14 @@ mod posix {
         first: Option<char>,
         draft: String,
         pending: Vec<u8>,
+        cancelled: bool,
     }
 
     impl Keys {
-        fn push(&mut self, bytes: &[u8]) {
+        fn push(&mut self, bytes: &[u8], prelude: bool) {
             self.pending.extend_from_slice(bytes);
             // An incomplete code point may span reads, even within a paste
-            // or type-ahead burst. Only the first decoded key controls startup.
+            // or type-ahead burst. Only the first decoded key skips the box.
             let mut complete = 0;
             loop {
                 match std::str::from_utf8(&self.pending[complete..]) {
@@ -322,12 +400,16 @@ mod posix {
             for key in String::from_utf8_lossy(&self.pending[..complete]).chars() {
                 let first = self.first.is_none();
                 self.first.get_or_insert(key);
+                if (first || !prelude) && matches!(key, '\x1b' | '\x03' | '\x11') {
+                    self.cancelled = true;
+                }
                 if !key.is_control()
                     && (if key == ' ' {
-                        !first
+                        !prelude || !first
                     } else {
                         !key.is_whitespace()
                     })
+                    && self.draft.len() + key.len_utf8() <= DRAFT_CAP
                 {
                     self.draft.push(key);
                 }
@@ -335,18 +417,23 @@ mod posix {
             self.pending.drain(..complete);
         }
 
-        fn cancelled(&self) -> bool {
-            matches!(self.first, Some('\x1b' | '\x03' | '\x11'))
+        fn read(&mut self, prelude: bool) -> nix::Result<usize> {
+            let mut bytes = [0; 4096];
+            match read(io::stdin().as_raw_fd(), &mut bytes) {
+                Ok(count) => {
+                    self.push(&bytes[..count], prelude);
+                    Ok(count)
+                }
+                Err(Errno::EAGAIN) => Ok(0),
+                Err(error) => Err(error),
+            }
         }
     }
 
     async fn wait_until(deadline: Instant, keys: &mut Keys) -> io::Result<()> {
-        let mut bytes = [0; 4096];
-        let fd = io::stdin().as_raw_fd();
         loop {
-            match read(fd, &mut bytes) {
-                Ok(count) => keys.push(&bytes[..count]),
-                Err(Errno::EINTR | Errno::EAGAIN) => (),
+            match keys.read(true) {
+                Ok(_) | Err(Errno::EINTR) => (),
                 Err(error) => return Err(error.into()),
             }
             let now = Instant::now();
@@ -357,19 +444,94 @@ mod posix {
         }
     }
 
-    pub(super) async fn run(animate: bool) -> io::Result<Option<String>> {
-        if !animate || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            return Ok(Some(String::new()));
+    pub(super) struct Input {
+        mode: TerminalMode,
+        keys: Keys,
+    }
+
+    impl Input {
+        pub(super) async fn wait_for_cancel(&mut self) -> io::Result<()> {
+            while !self.keys.cancelled {
+                match self.keys.read(false) {
+                    Ok(_) | Err(Errno::EINTR) => (),
+                    Err(error) => return Err(error.into()),
+                }
+                if !self.keys.cancelled {
+                    tokio::time::sleep(POLL).await;
+                }
+            }
+            Ok(())
         }
+
+        pub(super) fn drain(&mut self) -> io::Result<bool> {
+            // The final drain may run in raw mode (VMIN=1), so poll before
+            // reading. Bound the work even if input arrives continuously.
+            let stdin = io::stdin();
+            let mut fd = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
+            for _ in 0..4 {
+                match poll(&mut fd, 0u8) {
+                    Ok(_) if !fd[0].any().unwrap_or(false) => return Ok(!self.keys.cancelled),
+                    Ok(_) => match self.keys.read(false) {
+                        Ok(0) => return Ok(!self.keys.cancelled),
+                        Ok(_) if self.keys.cancelled => break,
+                        Ok(_) | Err(Errno::EINTR) => (),
+                        Err(error) => return Err(error.into()),
+                    },
+                    Err(Errno::EINTR) => (),
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            // Overflow must not spill into the workspace as live key events.
+            tcflush(&stdin, FlushArg::TCIFLUSH)?;
+            Ok(!self.keys.cancelled)
+        }
+
+        pub(super) fn draft(&self) -> &str {
+            &self.keys.draft
+        }
+
+        pub(super) async fn finish(&mut self) -> io::Result<Option<String>> {
+            let deadline = Instant::now() + UTF8_HANDOFF_GRACE;
+            loop {
+                if !self.drain()? {
+                    return Ok(None);
+                }
+                // Keep the same decoder through the frame. If the last read
+                // ended mid-character, allow a bounded time for its suffix.
+                let now = Instant::now();
+                if self.keys.pending.is_empty() || now >= deadline {
+                    break;
+                }
+                sleep_until((now + POLL).min(deadline)).await;
+            }
+            self.mode.handed_off = true;
+            self.keys.pending.clear();
+            Ok(Some(std::mem::take(&mut self.keys.draft)))
+        }
+    }
+
+    pub(super) async fn run(animate: bool) -> io::Result<Option<super::Input>> {
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return Ok(Some(super::Input::default()));
+        }
+        let mut input = Input {
+            mode: TerminalMode::cbreak()?,
+            keys: Keys::default(),
+        };
+        let opened = !animate || animate_box(&mut input).await?;
+        Ok(opened.then_some(super::Input(Some(input))))
+    }
+
+    async fn animate_box(input: &mut Input) -> io::Result<bool> {
         let Ok(dimensions @ (columns, rows)) = size() else {
-            return Ok(Some(String::new()));
+            return Ok(true);
         };
         let Some(width) = frame_width(columns, rows) else {
-            return Ok(Some(String::new()));
+            return Ok(true);
         };
-        let mode = TerminalMode::cbreak()?;
-        let newline = if mode
-            .0
+        let newline = if input
+            .mode
+            .original
             .output_flags
             .contains(OutputFlags::OPOST | OutputFlags::ONLCR)
         {
@@ -384,10 +546,10 @@ mod posix {
             saved: false,
         };
         let start = Instant::now();
-        let mut keys = Keys::default();
+        let keys = &mut input.keys;
         for (millis, frame) in FRAMES {
             if millis != 0 {
-                wait_until(start + Duration::from_millis(millis), &mut keys).await?;
+                wait_until(start + Duration::from_millis(millis), keys).await?;
             }
             // Do not rewind into the shell if the terminal reflowed our rows.
             if size().ok() != Some(dimensions) {
@@ -400,15 +562,15 @@ mod posix {
                 }
                 // Give the suffix of an already-read UTF-8 chunk one poll
                 // to arrive, without holding up an ordinary skip or cancel.
-                if !keys.cancelled() && !keys.pending.is_empty() {
+                if !keys.cancelled && !keys.pending.is_empty() {
                     sleep_until(Instant::now() + POLL).await;
-                    wait_until(Instant::now(), &mut keys).await?;
+                    wait_until(Instant::now(), keys).await?;
                 }
                 break;
             }
             screen.paint(frame)?;
         }
-        Ok((!keys.cancelled()).then_some(keys.draft))
+        Ok(!keys.cancelled)
     }
 
     #[cfg(test)]
@@ -482,17 +644,17 @@ mod posix {
                 (b"\x7fother", "other"),
             ] {
                 let mut keys = Keys::default();
-                keys.push(input);
-                assert!(!keys.cancelled());
+                keys.push(input, true);
+                assert!(!keys.cancelled);
                 assert_eq!(keys.draft, draft);
             }
             let mut keys = Keys::default();
-            keys.push(&[0xc3]);
+            keys.push(&[0xc3], true);
             assert_eq!(keys.first, None);
-            keys.push(&[0xa9, b' ', 0xf0, 0x9f]);
+            keys.push(&[0xa9, b' ', 0xf0, 0x9f], true);
             assert_eq!(keys.first, Some('é'));
             assert_eq!(keys.draft, "é ");
-            keys.push(&[0x8c, 0xb1, 0xff, b'z']);
+            keys.push(&[0x8c, 0xb1, 0xff, b'z'], true);
             assert_eq!(keys.draft, "é 🌱�z");
         }
 
@@ -500,9 +662,23 @@ mod posix {
         fn escape_and_control_keys_cancel_in_any_frame() {
             for key in [0x1b, 0x03, 0x11] {
                 let mut keys = Keys::default();
-                keys.push(&[key, b'x']);
-                assert!(keys.cancelled());
+                keys.push(&[key, b'x'], true);
+                assert!(keys.cancelled);
             }
+        }
+
+        #[test]
+        fn pending_setup_appends_a_bounded_draft_but_still_accepts_cancel() {
+            let mut keys = Keys::default();
+            keys.push(b"before \xf0\x9f", true);
+            keys.push(b"\x8c\xb1 after\r\n\t", false);
+            assert_eq!(keys.draft, "before 🌱 after");
+            for _ in 0..10 {
+                keys.push(&[b'x'; 4096], false);
+            }
+            assert_eq!(keys.draft.len(), DRAFT_CAP);
+            keys.push(b"\r\x11", false);
+            assert!(keys.cancelled);
         }
     }
 }

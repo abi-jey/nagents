@@ -29,7 +29,7 @@ tokio-util.workspace = true
 uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", features = ["user", "signal", "process", "term"] }
+nix = { version = "0.29", features = ["user", "signal", "process", "term", "poll"] }
 
 [dev-dependencies]
 ngn-core = { workspace = true, features = ["test-support"] }
