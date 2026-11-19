@@ -6,8 +6,51 @@ fn smootherstep(x: f64) -> f64 {
     x.powi(3) * (x * (x * 6. - 15.) + 10.)
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct Sweep {
     head: f64,
+}
+
+pub(super) const COMPLETION_DURATION: Duration = Duration::from_millis(1250);
+pub(super) const COMPLETE: Color = Color::Rgb(143, 174, 152);
+
+pub(super) struct Wipe {
+    progress: f64,
+    head: f64,
+}
+
+impl Wipe {
+    pub(super) fn new(count: usize, age: Duration) -> Self {
+        let progress = (age.as_secs_f64() / COMPLETION_DURATION.as_secs_f64()).min(1.);
+        Self {
+            progress,
+            head: -5. + smootherstep(progress) * (count as f64 + 10.),
+        }
+    }
+
+    pub(super) fn color(&self, index: usize, source: Color) -> Color {
+        if self.progress >= 1. {
+            return COMPLETE;
+        }
+        // widgets.py:_paint_completion, default/unknown surface.
+        let (r, g, b) = match source {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (136, 136, 136),
+        };
+        let distance = self.head - index as f64;
+        let settled = smootherstep(((distance + 3.) / 6.).clamp(0., 1.));
+        let gleam = smootherstep((1. - distance.abs() / 5.).max(0.))
+            * (1. - smootherstep(((self.progress - 0.85) / 0.15).clamp(0., 1.)))
+            * 0.8;
+        let [r, g, b] = [(r, 143., 182.), (g, 174., 216.), (b, 152., 187.)].map(
+            |(source, final_ink, gleam_ink)| {
+                let source = f64::from(source);
+                let ink = source + (final_ink - source) * settled;
+                (ink + (gleam_ink - ink) * gleam).round_ties_even() as u8
+            },
+        );
+        Color::Rgb(r, g, b)
+    }
 }
 
 impl Sweep {
@@ -52,5 +95,25 @@ mod tests {
         let quarter = Sweep::new(40, Duration::from_millis(450));
         assert_ne!(quarter.color(1), Color::Rgb(136, 136, 136));
         assert_eq!(quarter.color(9), Color::Rgb(136, 136, 136));
+    }
+
+    #[test]
+    fn completion_matches_python_smootherstep_gleam_and_settled_palette() {
+        let source = Color::Rgb(129, 199, 190);
+        let gray = Color::Rgb(136, 136, 136);
+        let initial = Wipe::new(40, Duration::ZERO);
+        assert_eq!(initial.color(0, source), source);
+        assert_eq!(initial.color(39, Color::Reset), gray);
+        let quarter = Wipe::new(40, Duration::from_micros(312_500));
+        assert_eq!(quarter.color(0, gray), Color::Rgb(174, 204, 179));
+        assert_eq!(quarter.color(20, gray), gray);
+        let middle = Wipe::new(40, Duration::from_millis(625));
+        assert_eq!(middle.color(0, gray), COMPLETE);
+        assert_eq!(middle.color(20, gray), Color::Rgb(174, 204, 178));
+        assert_eq!(middle.color(39, gray), gray);
+        for age in [COMPLETION_DURATION, COMPLETION_DURATION * 2] {
+            let end = Wipe::new(40, age);
+            assert!((0..40).all(|index| end.color(index, source) == COMPLETE));
+        }
     }
 }

@@ -348,7 +348,7 @@ impl App {
         self.after = 0;
         self.records.clear();
         self.scroll = None;
-        self.tools = tool_cards::Cards::default();
+        self.tools.reset();
         self.picker = None;
         self.tasks.clear();
         self.agents = agents::Rail::default();
@@ -365,6 +365,7 @@ impl App {
         self.steering_runs.clear();
         self.steering_dirty = true;
         self.catch_up(host).await?;
+        self.tools.skip_completions(self.after);
         self.activity.reset(self.after, Instant::now());
         self.state(host).await;
         Ok(())
@@ -501,6 +502,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         .border_style(Style::new().fg(Color::DarkGray));
     let transcript_area = block.inner(conversation);
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
+    app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
     let sweep = (!app.shows_overlay())
         .then(|| app.activity.shimmering_tool())
@@ -512,6 +514,10 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         interactive,
         sweep,
     );
+    if app.approval.is_some() || app.shows_overlay() {
+        // A cached motion frame must not recolor cells drawn over the transcript.
+        transcript.hide_wipes();
+    }
     let welcome_text;
     if app.records.is_empty() {
         welcome_text = welcome(&host.config);
@@ -957,6 +963,7 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
         composer_palette: composer::Palette::new(host.config.legacy_composer_theme, no_color),
         no_color,
         activity: footer::Activity::new(Instant::now(), animate),
+        tools: tool_cards::Cards::new(animate),
         active: None,
         approval: None,
         preview_scroll: 0,
@@ -973,6 +980,7 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
         ..App::default()
     };
     app.catch_up(&host).await?;
+    app.tools.skip_completions(app.after);
     app.activity.reset(app.after, Instant::now());
     app.state(&host).await;
     enable_raw_mode()?;
@@ -990,7 +998,7 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
     let mut cached_caret_visible = false;
     loop {
         let now = Instant::now();
-        let animate = app.activity.needs_frame(now) && !app.shows_overlay();
+        let activity_motion = app.activity.needs_frame(now);
         app.activity.advance(now);
         let width = terminal
             .draw(|frame| {
@@ -1009,11 +1017,13 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
                     // full frame rather than reflow 5000 transcript events at 30fps.
                     let area = footer_area(frame.area());
                     frame.buffer_mut().clone_from(previous);
-                    app.tools.paint_sweep(frame.buffer_mut(), now);
+                    app.tools.paint_motion(frame.buffer_mut(), now);
                     frame.render_widget(Clear, area);
                     app.activity.draw(frame, area, &app, &host.config, now);
                 } else {
                     draw(frame, &mut app, &host, now);
+                    let animate =
+                        (activity_motion || app.tools.needs_frame(now)) && !app.shows_overlay();
                     cached = animate.then(|| frame.buffer_mut().clone());
                     cached_caret_visible = caret_visible;
                 }
@@ -1021,12 +1031,20 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
             .area
             .width;
         motion_only = false;
+        let animate = (activity_motion || app.tools.needs_frame(now)) && !app.shows_overlay();
         tokio::select! {
             _ = &mut signal => break,
             _ = ticks.tick() => app.state(&host).await,
             _ = motion.tick(), if animate => motion_only = true,
             received = receiver.recv() => {
-                match received { Ok(record) if record.session_id == app.session => app.catch_up(&host).await?, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => app.catch_up(&host).await?, _ => () }
+                match received {
+                    Ok(record) if record.session_id == app.session => app.catch_up(&host).await?,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        app.catch_up(&host).await?;
+                        app.tools.skip_completions(app.after);
+                    }
+                    _ => ()
+                }
                 app.state(&host).await;
             }
             event = input.next() => {

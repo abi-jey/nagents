@@ -99,6 +99,7 @@ enum ToolState<'a> {
         result: &'a ToolResult,
         elapsed_ms: u64,
         denied: bool,
+        transition: Option<i64>,
     },
 }
 
@@ -116,6 +117,8 @@ pub struct ToolCard<'a> {
     pub label: String,
     pub status: &'static str,
     pub elapsed: Option<u64>,
+    pub success: bool,
+    pub success_transition: Option<i64>,
     call: Option<&'a ToolCall>,
     result: Option<&'a ToolResult>,
 }
@@ -167,6 +170,7 @@ impl<'a> ToolRow<'a> {
                 result,
                 elapsed_ms,
                 denied,
+                ..
             } => (
                 if denied {
                     "denied"
@@ -208,6 +212,21 @@ impl<'a> ToolRow<'a> {
             |call| (call.name.as_str(), target(call)),
         );
         let name = plain(name);
+        // A native shell can finish normally with a nonzero exit status.
+        // Keep the existing transcript text, but don't give it success ink.
+        let success = status == "complete"
+            && result.is_some_and(|result| {
+                result.name != "shell"
+                    || (result.result["success"].as_bool() != Some(false)
+                        && result.result["timed_out"].as_bool() != Some(true)
+                        && result.result["exit_code"]
+                            .as_i64()
+                            .is_none_or(|code| code == 0))
+            });
+        let success_transition = match self.state {
+            ToolState::Completed { transition, .. } if success => transition,
+            _ => None,
+        };
         ToolCard {
             key,
             label: format!(
@@ -216,6 +235,8 @@ impl<'a> ToolRow<'a> {
             ),
             status,
             elapsed,
+            success,
+            success_transition,
             call: self.call,
             result,
         }
@@ -300,14 +321,24 @@ fn tool_rows(records: &[EventRecord]) -> HashMap<usize, ProjectedTool<'_>> {
                 result,
                 duration_ms,
             } => {
+                let key = (run, result.call_id.as_str());
+                // An orphaned result can still render its settled style, but
+                // only the first result of a started call can trigger motion.
+                let transition = (!finished.contains_key(run)
+                    && calls.get(&key).is_some_and(|row| {
+                        matches!(records[row.index].event, Event::ToolStarted { .. })
+                            && matches!(row.state, ToolState::Running { .. })
+                    }))
+                .then_some(record.sequence);
                 let row = calls
-                    .entry((run, result.call_id.as_str()))
+                    .entry(key)
                     .or_insert_with(|| ToolRow::new(index, None, timestamp));
                 if !matches!(row.state, ToolState::Completed { .. }) {
                     row.state = ToolState::Completed {
                         result,
                         elapsed_ms: *duration_ms,
                         denied: matches!(row.state, ToolState::Denied),
+                        transition,
                     };
                 }
             }
