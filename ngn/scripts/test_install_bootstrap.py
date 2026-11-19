@@ -70,9 +70,10 @@ cp "$DOWNLOADS/${url##*/}" "$output"
 
     def invoke(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["/bin/sh", str(INSTALLER), *arguments],
+            ["/bin/sh", "-s", "--", *arguments],
             env=self.environment,
             cwd=self.root,
+            input=INSTALLER.read_text(),
             capture_output=True,
             text=True,
             timeout=10,
