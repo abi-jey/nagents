@@ -37,6 +37,7 @@ use uuid::Uuid;
 
 use crate::view;
 
+mod agents;
 mod completion;
 mod composer;
 mod footer;
@@ -49,6 +50,7 @@ F2  Conversations (/sessions, /resume; /resume ID opens directly)
 F3  New conversation (/new)
 F4  Toggle tool details
 F5  Subagents (/tasks)
+Ctrl+T  Focus Agents rail at wide widths; otherwise open inspector
 F6  Input queue (/queue [pause|resume|clear])
 F7  Steering receipts (/steering)
 Enter  Send or queue · Shift+Enter  Newline
@@ -93,9 +95,12 @@ struct App {
     details: bool,
     picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
+    agents: agents::Rail,
     task_picker: bool,
     task_index: usize,
     task_detail: bool,
+    task_from_rail: bool,
+    task_scroll: u16,
     task_records: Vec<EventRecord>,
     task_after: i64,
     queue: QueueState,
@@ -121,6 +126,14 @@ impl App {
                 self.after = last.sequence;
             }
             for record in &records {
+                if matches!(
+                    record.event,
+                    ngn_protocol::Event::TaskStarted { .. }
+                        | ngn_protocol::Event::TaskUpdated { .. }
+                        | ngn_protocol::Event::TaskFinished { .. }
+                ) {
+                    self.agents.invalidate();
+                }
                 if matches!(
                     record.event,
                     ngn_protocol::Event::RunStarted { .. }
@@ -214,7 +227,7 @@ impl App {
             }
             Err(error) => self.status = format!("Cannot load input queue: {error}"),
         }
-        if self.task_picker {
+        if !self.agents.catalog_current() {
             let selected = self
                 .tasks
                 .get(self.task_index)
@@ -222,6 +235,7 @@ impl App {
             match host.store.tasks(&self.session).await {
                 Ok(tasks) => {
                     self.tasks = tasks;
+                    self.agents.refresh(&self.tasks);
                     if let Some(selected) = selected {
                         if let Some(index) =
                             self.tasks.iter().position(|task| task.run_id == selected)
@@ -229,29 +243,28 @@ impl App {
                             self.task_index = index;
                         } else {
                             self.task_index = 0;
-                            self.task_detail = false;
-                            self.task_records.clear();
-                            self.task_after = 0;
+                            self.reset_task_detail(false);
                         }
                     }
                 }
                 Err(error) => self.status = format!("Cannot load subagents: {error}"),
             }
-            if self.task_detail
-                && let Some(task) = self.tasks.get(self.task_index)
-            {
-                match host.store.events(&task.session_id, self.task_after).await {
-                    Ok(records) => {
-                        if let Some(record) = records.last() {
-                            self.task_after = record.sequence;
-                        }
-                        self.task_records.extend(records);
-                        if self.task_records.len() > 5000 {
-                            self.task_records.drain(..self.task_records.len() - 5000);
-                        }
+        }
+        if self.task_picker
+            && self.task_detail
+            && let Some(task) = self.tasks.get(self.task_index)
+        {
+            match host.store.events(&task.session_id, self.task_after).await {
+                Ok(records) => {
+                    if let Some(record) = records.last() {
+                        self.task_after = record.sequence;
                     }
-                    Err(error) => self.status = format!("Cannot inspect subagent: {error}"),
+                    self.task_records.extend(records);
+                    if self.task_records.len() > 5000 {
+                        self.task_records.drain(..self.task_records.len() - 5000);
+                    }
                 }
+                Err(error) => self.status = format!("Cannot inspect subagent: {error}"),
             }
         }
     }
@@ -276,7 +289,7 @@ impl App {
     }
 
     fn composer_available(&self) -> bool {
-        !self.shows_overlay() && self.approval.is_none()
+        !self.shows_overlay() && self.approval.is_none() && !self.agents.focused
     }
 
     fn caret_visible(&self, now: Instant) -> bool {
@@ -312,8 +325,12 @@ impl App {
         self.records.clear();
         self.scroll = 0;
         self.picker = None;
+        self.tasks.clear();
+        self.agents = agents::Rail::default();
         self.task_picker = false;
-        self.task_detail = false;
+        self.task_index = 0;
+        self.task_from_rail = false;
+        self.reset_task_detail(false);
         self.queue_picker = false;
         self.steering_picker = false;
         self.help = false;
@@ -355,35 +372,55 @@ fn footer_area(area: Rect) -> Rect {
     Rect::new(area.x, area.bottom() - height, area.width, height)
 }
 
+fn content_rows(area: Rect, menu_height: u16) -> [Rect; 4] {
+    let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(2));
+    let wide = agents::is_wide(area.width);
+    let (header, composer) = if wide {
+        // Preserve a compact header/composer and seven rows for the tree
+        // (border, heading, four tasks) before adding any optional chrome.
+        // Each extra screen row can buy at most one row of chrome.
+        let extra = body.height.saturating_sub(1 + 3 + 7);
+        (
+            1 + extra.saturating_sub(2).min(2),
+            body.height.min(3) + extra.min(2),
+        )
+    } else {
+        (
+            3,
+            if body.height >= 5 {
+                5.min(body.height - 2)
+            } else {
+                body.height
+            },
+        )
+    };
+    let menu_height = menu_height.min(
+        body.height
+            .saturating_sub(composer + if wide { header + 2 } else { 3 }),
+    );
+    let header_height = header
+        .min(body.height.saturating_sub(composer + 2))
+        .min(body.height.saturating_sub(composer + menu_height + 1));
+    Layout::vertical([
+        Constraint::Length(header_height),
+        Constraint::Min(0),
+        Constraint::Length(menu_height),
+        Constraint::Length(composer),
+    ])
+    .areas(body)
+}
+
 fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     let wall_ms = ngn_core::store::now_ms();
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
     let area = frame.area();
     let footer = footer_area(area);
-    let body = Rect::new(area.x, area.y, area.width, area.height - footer.height);
-    let composer = 5.min(if body.height >= 5 {
-        body.height - 2
-    } else {
-        body.height
-    });
     let menu = app
         .composer_available()
         .then(|| app.completion.menu(&app.input))
         .flatten();
-    let menu_height = menu.as_ref().map_or(0, |menu| {
-        menu.height().min(body.height.saturating_sub(composer + 3))
-    });
-    let header_height = 3
-        .min(body.height.saturating_sub(composer + 2))
-        .min(body.height.saturating_sub(composer + menu_height + 1));
-    let rows = Layout::vertical([
-        Constraint::Length(header_height),
-        Constraint::Min(0),
-        Constraint::Length(menu_height),
-        Constraint::Length(composer),
-    ])
-    .split(body);
+    let rows = content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
     let header = Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
@@ -402,6 +439,25 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
         )),
     ]);
     frame.render_widget(header, rows[0]);
+    // Suggestions occupy the bottom of the left column, not rows of the
+    // adjacent tree. The tree's height is independent of the draft/menu.
+    let (mut conversation, rail) = agents::split(Rect {
+        height: rows[1].height + rows[2].height,
+        ..rows[1]
+    });
+    conversation.height = rows[1].height;
+    if let Some(rail) = rail {
+        app.agents.draw(
+            frame,
+            rail,
+            &app.tasks,
+            app.rail_has_focus(),
+            (accent, muted),
+            app.approval
+                .as_ref()
+                .map(|approval| approval.run_id.as_str()),
+        );
+    }
     let text = if app.records.is_empty() {
         welcome(&host.config)
     } else {
@@ -411,20 +467,28 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     if let Some(reason) = &app.failure {
         // Keep the complete rejection in the scrollable conversation as well
         // as the one-line footer. It remains visible without submitting again.
-        lines.extend(footer::failure_lines(reason, rows[1].width));
+        lines.extend(footer::failure_lines(reason, conversation.width));
     }
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::TOP)
             .border_style(Style::new().fg(Color::DarkGray)),
     );
-    let total = paragraph.line_count(rows[1].width) as u16;
+    let total = paragraph.line_count(conversation.width) as u16;
     let top = total
-        .saturating_sub(rows[1].height.saturating_sub(1))
+        .saturating_sub(conversation.height.saturating_sub(1))
         .saturating_sub(app.scroll);
-    frame.render_widget(paragraph.scroll((top, 0)), rows[1]);
+    frame.render_widget(paragraph.scroll((top, 0)), conversation);
     if let Some(menu) = menu {
-        menu.draw(frame, rows[2], accent, muted);
+        menu.draw(
+            frame,
+            Rect {
+                width: conversation.width,
+                ..rows[2]
+            },
+            accent,
+            muted,
+        );
     }
     let composer = Block::bordered()
         .title(format!(
@@ -455,15 +519,16 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 Paragraph::new(text)
                     .wrap(Wrap { trim: false })
                     .block(Block::bordered().title(format!(
-                        " Agent: {} · Esc back · Ctrl+X cancel ",
-                        view::plain(title)
+                        " Agent: {} · Esc {} · Ctrl+X cancel ",
+                        view::plain(title),
+                        if app.task_from_rail { "close" } else { "back" }
                     )));
             let lines = paragraph.line_count(area.width) as u16;
             frame.render_widget(
                 paragraph.scroll((
                     lines
                         .saturating_sub(area.height.saturating_sub(2))
-                        .saturating_sub(app.scroll),
+                        .saturating_sub(app.task_scroll),
                     0,
                 )),
                 area,
@@ -725,9 +790,7 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
             steer(app, host, args.unwrap_or_default().trim_start()).await?;
         }
         (Some(Command::Tasks), None) => {
-            app.task_picker = true;
-            app.task_detail = false;
-            app.task_index = 0;
+            app.open_tasks(false);
             app.state(host).await;
         }
         (Some(Command::Queue), None) => {
@@ -866,28 +929,35 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut cached_caret_visible = false;
     loop {
         let now = Instant::now();
-        app.caret.focus(app.composer_available(), now);
-        let caret_visible = app.caret_visible(now);
         let animate = app.activity.needs_frame(now) && !app.shows_overlay();
         app.activity.advance(now);
-        terminal.draw(|frame| {
-            if footer_only
-                && cached_caret_visible == caret_visible
-                && let Some(previous) = &cached
-                && previous.area == frame.area()
-            {
-                // Ratatui clears the back buffer for each draw. Reuse the last
-                // full frame rather than reflow 5000 transcript events at 30fps.
-                let area = footer_area(frame.area());
-                frame.buffer_mut().clone_from(previous);
-                frame.render_widget(Clear, area);
-                app.activity.draw(frame, area, &app, &host.config, now);
-            } else {
-                draw(frame, &app, &host, now);
-                cached = animate.then(|| frame.buffer_mut().clone());
-                cached_caret_visible = caret_visible;
-            }
-        })?;
+        let width = terminal
+            .draw(|frame| {
+                let area = frame.area();
+                // Suggestions never take vertical space from the tree.
+                app.agents
+                    .resize(area.width, content_rows(area, 0)[1].height);
+                app.caret.focus(app.composer_available(), now);
+                let caret_visible = app.caret_visible(now);
+                if footer_only
+                    && cached_caret_visible == caret_visible
+                    && let Some(previous) = &cached
+                    && previous.area == frame.area()
+                {
+                    // Ratatui clears the back buffer for each draw. Reuse the last
+                    // full frame rather than reflow 5000 transcript events at 30fps.
+                    let area = footer_area(frame.area());
+                    frame.buffer_mut().clone_from(previous);
+                    frame.render_widget(Clear, area);
+                    app.activity.draw(frame, area, &app, &host.config, now);
+                } else {
+                    draw(frame, &app, &host, now);
+                    cached = animate.then(|| frame.buffer_mut().clone());
+                    cached_caret_visible = caret_visible;
+                }
+            })?
+            .area
+            .width;
         footer_only = false;
         tokio::select! {
             _ = &mut signal => break,
@@ -956,17 +1026,12 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             continue;
                         }
                         if app.task_picker {
-                            match key.code {
-                                KeyCode::Esc => { if app.task_detail { app.task_detail = false; } else { app.task_picker = false; } app.scroll = 0; },
-                                KeyCode::Char('x') if control => { if let Some(task) = app.tasks.get(app.task_index) && let Err(error) = host.cancel(&task.run_id).await { app.status = error.to_string(); } },
-                                KeyCode::Up if !app.task_detail => app.task_index = app.task_index.saturating_sub(1),
-                                KeyCode::Down if !app.task_detail => app.task_index = (app.task_index + 1).min(app.tasks.len().saturating_sub(1)),
-                                KeyCode::Enter if !app.tasks.is_empty() => { app.task_detail = true; app.task_records.clear(); app.task_after = 0; app.scroll = 0; },
-                                KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
-                                KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
-                                _ => (),
-                            }
+                            app.task_key(&host, key).await;
                             app.state(&host).await; continue;
+                        }
+                        if app.agents_key(key, width) {
+                            if app.task_picker { app.state(&host).await; }
+                            continue;
                         }
                         if app.completion_key(key) { continue; }
                         match key.code {
@@ -975,7 +1040,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             KeyCode::F(2) => app.open_picker(&host).await?,
                             KeyCode::F(3) => { app.switch(&host, host.store.create_session().await?.id).await?; },
                             KeyCode::F(4) => app.details = !app.details,
-                            KeyCode::F(5) => { app.task_picker = true; app.task_detail = false; app.task_index = 0; app.state(&host).await; },
+                            KeyCode::F(5) => { app.open_tasks(false); app.state(&host).await; },
                             KeyCode::F(6) => { app.queue_picker = true; app.queue_index = 0; app.state(&host).await; },
                             KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
                             KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
@@ -1501,7 +1566,7 @@ mod tests {
             preview_scroll: 0,
             details: false,
             tasks: Vec::new(),
-            task_picker: true,
+            task_picker: false,
             task_index: 0,
             task_detail: false,
             task_records: Vec::new(),
@@ -1516,6 +1581,13 @@ mod tests {
         let now = Instant::now();
         app.caret.focus(true, now);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(app.tasks[0].run_id, child_id);
+        assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Running);
+        assert!(!app.agents_key(
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+            120
+        ));
+        app.open_tasks(false);
         for code in [KeyCode::Tab, KeyCode::Esc] {
             assert!(!app.completion_key(key(code)));
         }
@@ -1544,10 +1616,11 @@ mod tests {
         })
         .await
         .unwrap();
-        app.task_detail = true;
-        app.state(&host).await;
+        app.task_key(&host, key(KeyCode::Enter)).await;
         app.catch_up(&host).await.unwrap();
+        app.state(&host).await;
         assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Completed);
         assert!(
             app.task_records
                 .iter()

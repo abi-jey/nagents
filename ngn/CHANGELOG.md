@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.9
+
+- The native ngn TUI now shows a persistent Agents sidebar above 110 columns, with a collapsible task tree, native status and read-only labels, and exact-run inspection.
+
 ## 0.100.8
 
 - The native ngn Message composer now shows a blinking caret at the end of the draft, including after wraps, pastes, and newlines. Set `TEXTUAL_ANIMATIONS=none` for a steady caret.

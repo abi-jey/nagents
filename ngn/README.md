@@ -120,6 +120,11 @@ matching published core. The API is **not available in nagents
   **F4** toggles tool details.
 - **F5** opens the agent catalog; **Enter** inspects a child conversation and
   **Ctrl+X** cancels that child and its descendants, not its parent or siblings.
+- Above 110 columns, the Agents sidebar stays beside the conversation.
+  **Ctrl+T** focuses it (or opens the catalog at narrower widths). Use **↑/↓**
+  or **PageUp/PageDown** to move, **Space** or **←/→** to fold/unfold a branch,
+  and **Enter** to inspect the selected run. **Esc** returns to the draft from
+  the sidebar or an inspection opened from it.
 - **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
   selected input, **Ctrl+K** clears pending inputs and pauses. These do not cancel active work.
 - **`/steer TEXT`** targets the capable active root at its next persisted safe point;
@@ -135,6 +140,9 @@ The terminal footer shows the current activity and selected provider/model.
 It uses the legacy default terminal palette and respects `TEXTUAL_ANIMATIONS=none`.
 Saved Python theme and animation settings, startup/exit transitions, and token
 usage in the footer are not supported by the native client.
+The Agents sidebar shows native run status, the displayed child approval, and
+read-only permissions, not Python model activity phases or the Workspace &
+context panel.
 
 The browser also shows agent status, independent child transcripts, child-only
 cancellation, and correctly attributed child approvals in the root workspace.
