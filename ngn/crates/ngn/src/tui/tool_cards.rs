@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -15,7 +15,10 @@ use ratatui::{
 
 use crate::view::{FenceKey, ToolCard, ToolKey, TranscriptPart, duration};
 
-use super::{code_fences, shimmer::Sweep};
+use super::{
+    code_fences,
+    shimmer::{COMPLETE, COMPLETION_DURATION, Sweep, Wipe},
+};
 
 type Key = (String, String);
 
@@ -29,40 +32,121 @@ pub(super) struct Cards {
     height: usize,
     bottom: usize,
     rendered_top: usize,
-    sweep: Option<(Position, HeaderSweep, Instant)>,
     code: code_fences::Pan,
+    sweep: Option<(Position, Key, HeaderCells, Duration, Instant)>,
+    sweep_painted_at: Option<Instant>,
+    animated: bool,
+    seen: i64,
+    completions: HashMap<Key, Completion>,
+    wipes: Vec<(Position, HeaderCells, Completion)>,
 }
 
-struct HeaderSweep {
-    age: Duration,
+#[derive(Clone, Copy)]
+struct Completion {
+    started: Instant,
+    source: Option<(Sweep, usize)>,
+}
+
+struct HeaderCells {
     count: usize,
-    // (terminal column, character index). A wide or combining grapheme is
+    // (terminal column, character index, width). A wide or combining grapheme is
     // painted once, but the wave follows legacy character indices.
-    cells: Vec<(u16, usize)>,
+    cells: Vec<(u16, usize, u16)>,
 }
 
-impl HeaderSweep {
-    fn new(title: &Span<'_>, elapsed: u64) -> Self {
+impl HeaderCells {
+    fn new(title: &str) -> Self {
         let mut column = 0;
         let mut count = 0;
         let mut cells = Vec::new();
-        for grapheme in title.styled_graphemes(Style::default()) {
+        for grapheme in Span::raw(title).styled_graphemes(Style::default()) {
             let width = Span::raw(grapheme.symbol).width() as u16;
             if width != 0 {
-                cells.push((column, count));
+                cells.push((column, count, width));
                 column += width;
             }
             count += grapheme.symbol.chars().count();
         }
-        Self {
-            age: Duration::from_millis(elapsed),
-            count,
-            cells,
+        Self { count, cells }
+    }
+
+    fn mask(&mut self, origin: Position, area: Rect) {
+        if !area.is_empty() && (area.top()..area.bottom()).contains(&origin.y) {
+            // Don't repaint a wide glyph straddling the dialog border. Keep
+            // the original character indices and count for the remaining ink.
+            self.cells.retain(|&(column, _, width)| {
+                let left = origin.x + column;
+                left >= area.right() || left + width <= area.left()
+            });
         }
     }
 }
 
 impl Cards {
+    pub(super) fn new(animated: bool) -> Self {
+        Self {
+            animated,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn reset(&mut self) {
+        *self = Self::new(self.animated);
+    }
+
+    pub(super) fn skip_completions(&mut self, after: i64) {
+        self.seen = after;
+    }
+
+    pub(super) fn observe_completions(
+        &mut self,
+        parts: &[TranscriptPart<'_>],
+        after: i64,
+        now: Instant,
+    ) {
+        if !self.animated {
+            return;
+        }
+        self.completions
+            .retain(|_, completion| now < completion.started + COMPLETION_DURATION);
+        if after <= self.seen {
+            return;
+        }
+        for part in parts {
+            if let TranscriptPart::Card(card) = part
+                && card.success_transition.is_some_and(|seq| seq > self.seen)
+            {
+                let key = (card.key.0.to_owned(), card.key.1.to_owned());
+                let source = self.sweep.as_ref().and_then(|(_, active, cells, age, at)| {
+                    let painted_at = self.sweep_painted_at?;
+                    (active == &key).then(|| {
+                        (
+                            Sweep::new(
+                                cells.count,
+                                *age + painted_at.saturating_duration_since(*at),
+                            ),
+                            cells.count,
+                        )
+                    })
+                });
+                self.completions.insert(
+                    key,
+                    Completion {
+                        started: now,
+                        source,
+                    },
+                );
+            }
+        }
+        self.seen = after;
+    }
+
+    pub(super) fn needs_frame(&self, now: Instant) -> bool {
+        self.wipes
+            .iter()
+            .any(|(_, _, completion)| now < completion.started + COMPLETION_DURATION)
+    }
+
     pub(super) fn focused(&self) -> bool {
         self.focused || self.code.focused()
     }
@@ -222,16 +306,25 @@ impl Cards {
         self.rendered_top = top;
         self.height = height;
         layout.render(frame, area, top, Some(&self.code), layout.interactive);
-        self.sweep = layout.sweep.and_then(|(row, sweep)| {
-            ((top..top + height).contains(&row) && !area.is_empty()).then(|| {
-                (
-                    Position::new(area.x, area.y + (row - top) as u16),
-                    sweep,
-                    now,
-                )
-            })
+        let origin = |row, column| {
+            ((top..top + height).contains(&row) && !area.is_empty())
+                .then(|| Position::new(area.x + column, area.y + (row - top) as u16))
+        };
+        self.sweep = layout.sweep.and_then(|(row, key, cells, age)| {
+            origin(row, 0).map(|origin| (origin, key, cells, age, now))
         });
-        self.paint_sweep(frame.buffer_mut(), now);
+        self.wipes = layout
+            .wipes
+            .into_iter()
+            .filter_map(|(row, mut cells, completion)| {
+                let origin = origin(row, DISCLOSURE_WIDTH as u16)?;
+                if let Some(area) = layout.wipe_mask {
+                    cells.mask(origin, area);
+                }
+                (!cells.cells.is_empty()).then_some((origin, cells, completion))
+            })
+            .collect();
+        self.paint_motion(frame.buffer_mut(), now);
         if !self.expanded.is_empty() {
             let retained: HashSet<_> = layout.headers.iter().map(|(key, _)| key).collect();
             self.expanded.retain(|key| retained.contains(key));
@@ -239,14 +332,28 @@ impl Cards {
         self.headers = layout.headers;
     }
 
-    pub(super) fn paint_sweep(&self, buffer: &mut Buffer, now: Instant) {
-        if let Some((origin, header, observed_at)) = &self.sweep {
-            let age = header
-                .age
-                .saturating_add(now.saturating_duration_since(*observed_at));
+    pub(super) fn paint_motion(&mut self, buffer: &mut Buffer, now: Instant) {
+        self.sweep_painted_at = None;
+        if let Some((origin, _, header, age, observed_at)) = &self.sweep {
+            let age = age.saturating_add(now.saturating_duration_since(*observed_at));
             let sweep = Sweep::new(header.count, age);
-            for &(column, index) in &header.cells {
+            for &(column, index, _) in &header.cells {
                 buffer[(origin.x + column, origin.y)].fg = sweep.color(index);
+            }
+            self.sweep_painted_at = Some(now);
+        }
+        for (origin, header, completion) in &self.wipes {
+            let wipe = Wipe::new(
+                header.count,
+                now.saturating_duration_since(completion.started),
+            );
+            for &(column, index, _) in &header.cells {
+                let prior_index = index + DISCLOSURE_WIDTH;
+                let source = completion
+                    .source
+                    .filter(|(_, count)| prior_index < *count)
+                    .map_or(Color::Reset, |(sweep, _)| sweep.color(prior_index));
+                buffer[(origin.x + column, origin.y)].fg = wipe.color(index, source);
             }
         }
     }
@@ -323,12 +430,17 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     prefix
 }
 
+// The disclosure glyph and its following space are not part of the Python label.
+const DISCLOSURE_WIDTH: usize = 2;
+
 pub(super) struct Layout<'a> {
     width: u16,
     rows: usize,
     lines: Vec<(usize, Row<'a>)>,
     headers: Vec<(Key, usize)>,
-    sweep: Option<(usize, HeaderSweep)>,
+    sweep: Option<(usize, Key, HeaderCells, Duration)>,
+    wipes: Vec<(usize, HeaderCells, Completion)>,
+    wipe_mask: Option<Rect>,
     fences: Vec<code_fences::Fence>,
     interactive: bool,
 }
@@ -354,6 +466,8 @@ impl<'a> Layout<'a> {
             sweep: None,
             fences: Vec::new(),
             interactive,
+            wipes: Vec::new(),
+            wipe_mask: None,
         };
         for part in parts {
             match part {
@@ -373,9 +487,6 @@ impl<'a> Layout<'a> {
                     } else {
                         ">"
                     };
-                    if cards.is_some() {
-                        layout.headers.push((key, layout.rows));
-                    }
                     let mut style = Style::default();
                     if cards.is_some() {
                         style = match card.status {
@@ -387,15 +498,39 @@ impl<'a> Layout<'a> {
                             style = style.add_modifier(Modifier::UNDERLINED);
                         }
                     }
-                    let title = Span::raw(summary(card, marker, width));
+                    let title = summary(card, marker, width);
                     if cards.is_some()
                         && Some(card.key) == active
                         && card.status == "running"
                         && let Some(elapsed) = card.elapsed
                     {
-                        layout.sweep = Some((layout.rows, HeaderSweep::new(&title, elapsed)));
+                        layout.sweep = Some((
+                            layout.rows,
+                            key.clone(),
+                            HeaderCells::new(&title),
+                            Duration::from_millis(elapsed),
+                        ));
                     }
-                    layout.push(Line::from(title).style(style));
+                    let line = if let Some(cards) = cards
+                        && card.success
+                        && let Some(label) = title.get(DISCLOSURE_WIDTH..).filter(|s| !s.is_empty())
+                    {
+                        if let Some(completion) = cards.completions.get(&key) {
+                            layout
+                                .wipes
+                                .push((layout.rows, HeaderCells::new(label), *completion));
+                        }
+                        Line::from(vec![
+                            Span::raw(title[..DISCLOSURE_WIDTH].to_owned()),
+                            Span::styled(label.to_owned(), Style::new().fg(COMPLETE)),
+                        ])
+                    } else {
+                        Line::raw(title)
+                    };
+                    if cards.is_some() {
+                        layout.headers.push((key, layout.rows));
+                    }
+                    layout.push(line.style(style));
                     if expanded {
                         for detail in card.details() {
                             layout.detail(&detail);
@@ -410,6 +545,16 @@ impl<'a> Layout<'a> {
             }
         }
         layout
+    }
+
+    pub(super) fn hide_wipes(&mut self) {
+        self.wipes.clear();
+    }
+
+    pub(super) fn mask_wipes(&mut self, area: Rect) {
+        // Cached motion frames reuse the already composited dialog. Never
+        // repaint its cells, but keep the same clock on the exposed label.
+        self.wipe_mask = Some(area);
     }
 
     fn detail(&mut self, text: &str) {
@@ -622,6 +767,16 @@ mod tests {
         active: Option<ToolKey<'_>>,
         now: Instant,
     ) {
+        render_masked(app, terminal, active, now, None);
+    }
+
+    fn render_masked<'a>(
+        app: &mut App,
+        terminal: &'a mut Terminal<TestBackend>,
+        active: Option<ToolKey<'_>>,
+        now: Instant,
+        dialog: Option<Rect>,
+    ) -> &'a Buffer {
         terminal
             .draw(|frame| {
                 let area = frame.area();
@@ -629,16 +784,35 @@ mod tests {
                     .buffer_mut()
                     .set_style(area, Style::new().bg(Color::Blue));
                 let parts = main_transcript(&app.records, app.approval.as_ref(), 1500);
-                let layout = Layout::new(
+                app.tools.observe_completions(&parts, app.after, now);
+                let mut layout = Layout::new(
                     &parts,
                     area.width,
                     Some(&app.tools),
                     app.tools_available(),
                     active,
                 );
+                if app.shows_overlay() {
+                    layout.hide_wipes();
+                } else if let Some(area) = dialog {
+                    layout.mask_wipes(area);
+                }
                 app.tools.draw(frame, area, layout, &mut app.scroll, now);
+                if let Some(area) = dialog {
+                    frame.render_widget(ratatui::widgets::Clear, area);
+                    frame.render_widget(
+                        Paragraph::new("Approval").style(
+                            Style::new()
+                                .fg(Color::Yellow)
+                                .bg(Color::Red)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        area,
+                    );
+                }
             })
-            .unwrap();
+            .unwrap()
+            .buffer
     }
 
     fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) -> Vec<String> {
@@ -650,6 +824,271 @@ mod tests {
             .chunks(terminal.size().unwrap().width as usize)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect()
+    }
+
+    fn push(app: &mut App, record: EventRecord) {
+        app.after += 1;
+        app.records.push(EventRecord {
+            sequence: app.after,
+            ..record
+        });
+    }
+
+    #[test]
+    fn approval_masks_only_covered_glyphs_without_retiming_the_wipe() {
+        let start = Instant::now();
+        let middle = start + Duration::from_millis(625);
+        let end = start + COMPLETION_DURATION;
+        let mut app = App {
+            tools: Cards::new(true),
+            ..App::default()
+        };
+        for (id, label) in [
+            ("above", "above the dialog"),
+            ("across", "工作 across the dialog"),
+        ] {
+            push(&mut app, started(id, "shared", label));
+            push(&mut app, finished(id, "shared", json!("ok"), ""));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        render(&mut app, &mut terminal, None, start);
+        let above = app.tools.headers[0].1 as u16;
+        let across = app.tools.headers[1].1 as u16;
+        let full = terminal.backend().buffer().area;
+        assert_eq!(terminal.backend().buffer()[(10, across)].symbol(), "工");
+
+        // Start the dialog on the continuation column of a two-column glyph.
+        let dialog = Rect::new(11, across, 12, 2);
+        let initial = render_masked(&mut app, &mut terminal, None, start, Some(dialog)).clone();
+        assert_eq!(initial[(11, across)].symbol(), "A");
+        assert_eq!(initial[(11, across)].fg, Color::Yellow);
+        assert_eq!(initial[(11, across)].bg, Color::Red);
+        assert!(initial[(11, across)].modifier.contains(Modifier::BOLD));
+        assert!(app.tools.needs_frame(middle));
+        let mut cached = initial.clone();
+        app.tools.paint_motion(&mut cached, middle);
+        assert_ne!(cached[(2, above)].fg, initial[(2, above)].fg);
+        assert_ne!(cached[(2, across)].fg, initial[(2, across)].fg);
+        assert_ne!(cached[(23, across)].fg, initial[(23, across)].fg);
+
+        // A completely covered transcript must not schedule motion of its own.
+        let fully_covered =
+            render_masked(&mut app, &mut terminal, None, middle, Some(full)).clone();
+        assert!(!app.tools.needs_frame(middle));
+        let mut covered_tick = fully_covered.clone();
+        app.tools.paint_motion(&mut covered_tick, middle);
+        assert_eq!(covered_tick, fully_covered);
+
+        // Dismissal at the same timestamp produces exactly the unmasked phase.
+        render(&mut app, &mut terminal, None, middle);
+        let unmasked = terminal.backend().buffer();
+        let mut expected = initial.clone();
+        for pos in full.positions() {
+            if !dialog.contains(pos) && pos != Position::new(10, across) {
+                expected[pos].fg = unmasked[pos].fg;
+            }
+        }
+        assert_eq!(cached, expected);
+        assert_eq!(app.tools.completions.len(), 2);
+        assert!(
+            app.tools
+                .completions
+                .values()
+                .all(|wipe| wipe.started == start)
+        );
+        render_masked(&mut app, &mut terminal, None, end, Some(dialog));
+        render(&mut app, &mut terminal, None, end);
+        assert!(app.tools.completions.is_empty());
+        assert_eq!(terminal.backend().buffer()[(2, above)].fg, COMPLETE);
+        assert_eq!(terminal.backend().buffer()[(2, across)].fg, COMPLETE);
+    }
+
+    #[test]
+    fn completion_uses_exact_focused_call_source_and_only_changes_foreground() {
+        let now = Instant::now();
+        let mut app = App {
+            tools: Cards::new(true),
+            input: "keep the draft".into(),
+            ..App::default()
+        };
+        push(&mut app, started("old", "shared", "archive"));
+        push(&mut app, finished("old", "shared", json!("ok"), ""));
+        app.tools.skip_completions(app.after);
+        push(&mut app, started("live", "shared", "工作 e\u{301}"));
+        let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+        render(&mut app, &mut term, Some(("live", "shared")), now);
+        assert!(key(&mut app, KeyCode::F(4)));
+        assert!(key(&mut app, KeyCode::Enter));
+        render(&mut app, &mut term, Some(("live", "shared")), now);
+        let start = now + Duration::from_millis(100);
+        let row = app.tools.headers[1].1 as u16;
+        let old_row = app.tools.headers[0].1 as u16;
+        let running = term.backend().buffer().clone();
+        assert_eq!(running[(2, old_row)].fg, COMPLETE);
+        assert!(running[(2, row)].modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(running[(2, row)].bg, Color::Blue);
+        assert_eq!(running[(0, row)].symbol(), "v");
+        push(&mut app, finished("live", "shared", json!("ok"), ""));
+        render(&mut app, &mut term, None, start);
+        assert!(app.tools.needs_frame(start));
+        let first = term.backend().buffer().clone();
+        assert_eq!(first[(2, row)].fg, running[(2, row)].fg);
+        assert_eq!(first[(0, row)].fg, Color::Reset);
+
+        let mut middle = first.clone();
+        app.tools
+            .paint_motion(&mut middle, start + Duration::from_millis(625));
+        let mut final_frame = first.clone();
+        app.tools
+            .paint_motion(&mut final_frame, start + COMPLETION_DURATION);
+        assert!(!app.tools.needs_frame(start + COMPLETION_DURATION));
+        assert_ne!(first, middle);
+        assert_ne!(middle, final_frame);
+        assert_eq!(final_frame[(2, row)].fg, COMPLETE);
+        let lines = |buffer: &Buffer| {
+            (0..60)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect::<String>()
+        };
+        assert!(lines(&final_frame).contains("complete · 1.25s"));
+        for mut frame in [first, middle] {
+            for column in 2..60 {
+                frame[(column, row)].fg = final_frame[(column, row)].fg;
+            }
+            assert_eq!(frame, final_frame);
+        }
+        app.help = true;
+        let covered = start + Duration::from_millis(650);
+        render(&mut app, &mut term, None, covered);
+        assert!(!app.tools.needs_frame(covered));
+        let overlay = term.backend().buffer().clone();
+        let mut cached_overlay = overlay.clone();
+        app.tools.paint_motion(&mut cached_overlay, covered);
+        assert_eq!(overlay, cached_overlay);
+        app.help = false;
+        // Even a new durable record for the same call cannot restart the wipe.
+        push(&mut app, finished("live", "shared", json!("duplicate"), ""));
+        render(&mut app, &mut term, None, start + COMPLETION_DURATION);
+        assert!(!app.tools.needs_frame(start + COMPLETION_DURATION));
+        assert_eq!(term.backend().buffer(), &final_frame);
+        assert!(key(&mut app, KeyCode::Char('x')));
+        assert_eq!(app.input, "keep the draft");
+        assert!(key(&mut app, KeyCode::Esc));
+        assert!(!key(&mut app, KeyCode::Char('x')));
+    }
+
+    #[test]
+    fn completion_does_not_replay_history_or_animate_unsuccessful_calls() {
+        let now = Instant::now();
+        let mut app = App {
+            tools: Cards::new(true),
+            ..App::default()
+        };
+        push(&mut app, started("old", "shared", "old"));
+        push(&mut app, finished("old", "shared", json!("ok"), ""));
+        app.tools.skip_completions(app.after);
+        push(&mut app, finished("orphan", "shared", json!("ok"), ""));
+        push(&mut app, started("failed", "shared", "failed"));
+        push(
+            &mut app,
+            finished("failed", "shared", json!(null), "failed"),
+        );
+        push(&mut app, started("nonzero", "shared", "nonzero"));
+        push(
+            &mut app,
+            finished("nonzero", "shared", json!({"exit_code": 7}), ""),
+        );
+        push(&mut app, started("cancelled", "shared", "cancelled"));
+        push(
+            &mut app,
+            event(
+                "cancelled",
+                Event::RunFinished {
+                    status: RunStatus::Cancelled,
+                    error: String::new(),
+                },
+            ),
+        );
+        push(&mut app, started("denied", "shared", "denied"));
+        push(
+            &mut app,
+            event(
+                "denied",
+                Event::ApprovalRequested {
+                    approval_id: "approval".into(),
+                    call: call("shared", "denied"),
+                    preview: String::new(),
+                },
+            ),
+        );
+        push(
+            &mut app,
+            event(
+                "denied",
+                Event::ApprovalResolved {
+                    approval_id: "approval".into(),
+                    allowed: false,
+                },
+            ),
+        );
+        push(
+            &mut app,
+            finished("denied", "shared", json!(null), "denied"),
+        );
+        let mut term = Terminal::new(TestBackend::new(60, 30)).unwrap();
+        render(&mut app, &mut term, None, now);
+        assert!(!app.tools.needs_frame(now));
+        let colors: Vec<_> = app
+            .tools
+            .headers
+            .iter()
+            .map(|(_, row)| term.backend().buffer()[(2, *row as u16)].fg)
+            .collect();
+        assert_eq!(
+            colors,
+            [
+                COMPLETE,
+                COMPLETE,
+                Color::Red,
+                Color::Reset,
+                Color::Magenta,
+                Color::Red
+            ]
+        );
+        app.tools.reset();
+        app.tools.skip_completions(app.after);
+        render(&mut app, &mut term, None, now);
+        assert!(!app.tools.needs_frame(now));
+    }
+
+    #[test]
+    fn same_batch_successes_animate_independently_or_snap_with_reduced_motion() {
+        let now = Instant::now();
+        for animated in [false, true] {
+            let mut app = App {
+                tools: Cards::new(animated),
+                ..App::default()
+            };
+            for id in ["a", "b"] {
+                push(&mut app, started("live", id, id));
+                push(&mut app, finished("live", id, json!("ok"), ""));
+            }
+            let mut term = Terminal::new(TestBackend::new(35, 10)).unwrap();
+            render(&mut app, &mut term, None, now);
+            assert_eq!(app.tools.needs_frame(now), animated);
+            assert_eq!(app.tools.wipes.len(), if animated { 2 } else { 0 });
+            let start = term.backend().buffer();
+            for (_, row) in &app.tools.headers {
+                assert_eq!(
+                    start[(2, *row as u16)].fg,
+                    if animated {
+                        Color::Rgb(136, 136, 136)
+                    } else {
+                        COMPLETE
+                    }
+                );
+            }
+        }
     }
 
     #[test]
@@ -860,7 +1299,7 @@ mod tests {
             let painted = terminal.backend().buffer().clone();
             let mut later = painted.clone(); // The motion tick starts from the cached frame.
             app.tools
-                .paint_sweep(&mut later, now + Duration::from_millis(700));
+                .paint_motion(&mut later, now + Duration::from_millis(700));
             assert_ne!(painted, later);
             assert_ne!(painted, baseline);
             for mut frame in [painted, later] {
@@ -924,8 +1363,8 @@ mod tests {
         let active = Some(("r", "c"));
         let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
         render(&mut app, &mut terminal, active, now);
-        let (_, header, _) = app.tools.sweep.as_ref().unwrap();
-        assert_eq!(header.age, Duration::from_millis(156));
+        let (_, _, _, age, _) = app.tools.sweep.as_ref().unwrap();
+        assert_eq!(*age, Duration::from_millis(156));
         let parts = main_transcript(&app.records, None, 1500);
         assert!(Layout::new(&parts, 60, None, false, active).sweep.is_none());
     }
@@ -988,7 +1427,7 @@ mod tests {
             let baseline = terminal.backend().buffer().clone();
             let mut later = baseline.clone();
             app.tools
-                .paint_sweep(&mut later, now + Duration::from_millis(700));
+                .paint_motion(&mut later, now + Duration::from_millis(700));
             assert!(app.tools.sweep.is_none());
             assert_eq!(baseline, later);
             assert_eq!(baseline[(0, 1)].fg, fg);

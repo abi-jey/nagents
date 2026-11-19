@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.18
+
+- Successful native tool cards now run one foreground-only completion wipe and settle green. Exposed parts keep animating beside an approval dialog, while reduced motion and restored history render the settled style immediately.
+
 ## 0.100.17
 
 - Long assistant code fences in the native terminal clip instead of wrapping. Press F8 to focus an overflowing fence and use the left and right arrows to scroll it horizontally.
