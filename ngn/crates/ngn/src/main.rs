@@ -465,8 +465,13 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
                 | Commands::Upgrade { .. },
             ) => unreachable!(),
             None => {
-                let id = session(&host, cli.resume.as_deref(), cli.continue_session).await?;
-                tui::run(host.clone(), id, !cli.no_animations.is_empty()).await?;
+                tui::run(
+                    host.clone(),
+                    cli.resume.as_deref(),
+                    cli.continue_session,
+                    !cli.no_animations.is_empty(),
+                )
+                .await?;
                 Ok(0)
             }
         }

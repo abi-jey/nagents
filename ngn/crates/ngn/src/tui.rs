@@ -44,6 +44,7 @@ mod composer;
 mod footer;
 mod picker;
 mod shimmer;
+mod startup;
 mod tool_cards;
 
 use completion::Command;
@@ -950,7 +951,12 @@ fn animations_enabled(no_animations: bool, saved: Option<bool>, textual: Option<
         && !textual.is_some_and(|value| value.eq_ignore_ascii_case("none"))
 }
 
-pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Result<()> {
+pub async fn run(
+    host: Arc<Host>,
+    resume: Option<&str>,
+    continue_session: bool,
+    no_animations: bool,
+) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let animate = animations_enabled(
         no_animations,
@@ -959,7 +965,6 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
     );
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     let mut app = App {
-        session,
         records: Vec::new(),
         after: 0,
         input: String::new(),
@@ -983,17 +988,29 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
         submission: None,
         ..App::default()
     };
-    app.catch_up(&host).await?;
-    app.tools.skip_completions(app.after);
-    app.activity.reset(app.after, Instant::now());
-    app.state(&host).await;
+    let signal = startup::shutdown_signal()?;
+    tokio::pin!(signal);
+    let initialize = async {
+        app.session = crate::session(&host, resume, continue_session).await?;
+        app.catch_up(&host).await?;
+        app.tools.skip_completions(app.after);
+        app.activity.reset(app.after, Instant::now());
+        app.state(&host).await;
+        Ok(())
+    };
+    let Some(draft) = startup::prepare(animate, initialize, signal.as_mut()).await? else {
+        return Ok(());
+    };
+    if !draft.is_empty() {
+        app.input = draft;
+        app.completion.edited(&app.input);
+        app.caret.restart(Instant::now());
+    }
     enable_raw_mode()?;
     let restore = Restore;
     execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut input = EventStream::new();
-    let signal = crate::shutdown_signal();
-    tokio::pin!(signal);
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
     let mut motion = tokio::time::interval(footer::FRAME);
     motion.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1157,9 +1174,9 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
             }
         }
     }
-    host.shutdown().await;
     drop(terminal);
     drop(restore);
+    host.shutdown().await;
     println!(
         "ngn {} · Session {}\nResume with: ngn -C {} --resume {}",
         env!("CARGO_PKG_VERSION"),
