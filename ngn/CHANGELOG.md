@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.22
+
+- Web chat and Live voice keep active runs going when SQLite is temporarily busy during a follow-up inbox check. Queued follow-ups are retried in order even while the root waits for child agents.
+
 ## 0.100.21
 
 - Fix #311: name the occupied ngn destination, distinguish permission errors, and show a version-pinned side-by-side retry using a separate bin directory and prefix without replacing the existing ngn.

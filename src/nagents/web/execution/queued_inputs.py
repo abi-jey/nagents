@@ -14,9 +14,11 @@ from fastapi import HTTPException
 
 from nagents.harness.runtime.commands import split_command
 from nagents.harness.runtime.followups import RunInput
+from nagents.harness.runtime.followups import RunInputRead
 
 from .._async import finish_on_cancel
 from .._async import join_owned
+from ..http.routing import FollowupClaimDeferred
 from ..settings import skills
 
 if TYPE_CHECKING:
@@ -166,7 +168,7 @@ class QueuedInputs:
         except (ValueError, PermissionError, OSError) as error:
             raise SkillInvocationError(f"Skill command could not run: {error}") from None
 
-    async def pull(self, run: Run) -> RunInput | None:
+    async def pull(self, run: Run) -> RunInput | RunInputRead | None:
         state = self.state
         # Channel-owned replies keep their existing delivery owner. Browser
         # inputs wait behind them rather than leaking into an external reply.
@@ -182,10 +184,17 @@ class QueuedInputs:
             claim = asyncio.create_task(state.channels.store.claim_work(web_only=True, session_id=run.session_id))
             try:
                 work = await asyncio.shield(claim)
+            except FollowupClaimDeferred:
+                return RunInputRead.DEFERRED
             except asyncio.CancelledError:
 
                 async def interrupt_claim(pending: asyncio.Task[Work | None]) -> None:
-                    claimed = await pending
+                    try:
+                        claimed = await pending
+                    except FollowupClaimDeferred:
+                        # A deferred claim owns no row. Preserve the Stop that
+                        # arrived while waiting for its probe or rollback.
+                        return
                     if claimed is not None:
                         await state.channels.store.release_work(claimed)
 

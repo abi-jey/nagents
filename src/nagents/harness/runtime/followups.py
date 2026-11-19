@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from contextlib import AbstractAsyncContextManager
 from contextlib import contextmanager
 from contextlib import nullcontext
 from dataclasses import dataclass
 from dataclasses import field
+from enum import Enum
 from typing import TYPE_CHECKING
 from typing import Literal
 from uuid import uuid4
@@ -24,6 +26,13 @@ if TYPE_CHECKING:
     from nagents.types import ContentPart
 
     from ..agents.subagents import SubagentManager
+
+
+_INPUT_RETRY_DELAY = 0.25
+
+
+class RunInputRead(Enum):
+    DEFERRED = "deferred"
 
 
 @dataclass(frozen=True)
@@ -61,7 +70,8 @@ class RunInputs(AgentPlugin):
         self._session = ""
         self._observer: Callable[[RunTurn], None] | None = None
         self.current = RunTurn("", "", "", ())
-        self._reader: Callable[[], Awaitable[RunInput | None]] | None = None
+        self._reader: Callable[[], Awaitable[RunInput | RunInputRead | None]] | None = None
+        self.retry_at: float | None = None
         self._changed = False
         self._origin = ("", "")
         self.shell_reader: Callable[[], Awaitable[RunInput | None]] | None = None
@@ -85,6 +95,7 @@ class RunInputs(AgentPlugin):
         self._session = ""
         self._pending.clear()
         self._changed = False
+        self.retry_at = None
 
     def admit(self, session_id: str, message: RunInput) -> bool:
         if not self._session or session_id != self._session:
@@ -112,21 +123,26 @@ class RunInputs(AgentPlugin):
 
     @contextmanager
     def source(
-        self, reader: Callable[[], Awaitable[RunInput | None]], origin: tuple[str, str] = ("", "")
+        self, reader: Callable[[], Awaitable[RunInput | RunInputRead | None]], origin: tuple[str, str] = ("", "")
     ) -> Iterator[None]:
-        previous, old_origin = self._reader, self._origin
-        self._reader, self._origin = reader, origin
+        previous, old_origin, old_retry = self._reader, self._origin, self.retry_at
+        self._reader, self._origin, self.retry_at = reader, origin, None
         try:
             yield
         finally:
-            self._reader, self._origin = previous, old_origin
+            self._reader, self._origin, self.retry_at = previous, old_origin, old_retry
 
     async def _pull(self) -> None:
         self._changed = False
-        if self._reader is not None and not self._pending:
+        loop = asyncio.get_running_loop()
+        if self._reader is not None and not self._pending and (self.retry_at is None or loop.time() >= self.retry_at):
             message = await self._reader()
-            if message is not None:
-                self._pending.append(message)
+            if message is RunInputRead.DEFERRED:
+                self.retry_at = loop.time() + _INPUT_RETRY_DELAY
+            else:
+                self.retry_at = None
+                if message is not None:
+                    self._pending.append(message)
         if self.shell_reader is not None and not self._pending:
             message = await self.shell_reader()
             if message is not None:

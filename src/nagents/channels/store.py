@@ -31,6 +31,11 @@ InboxStatus = Literal["completed", "failed", "interrupted"]
 logger = logging.getLogger(__name__)
 
 
+def is_sqlite_busy(error: sqlite3.OperationalError) -> bool:
+    code = getattr(error, "sqlite_errorcode", None)
+    return type(code) is int and code >= 0 and code & 0xFF == sqlite3.SQLITE_BUSY
+
+
 class Admission(Enum):
     INSERTED = "inserted"
     DUPLICATE = "duplicate"
@@ -53,16 +58,38 @@ class InboxStore:
         self.session_id = session_id
         self.inbox_limit = inbox_limit
 
-    async def _transaction(self, operation: Callable[[sqlite3.Connection], T]) -> T:
+    async def _transaction(
+        self,
+        operation: Callable[[sqlite3.Connection], T],
+        *,
+        on_busy: Callable[[sqlite3.OperationalError], T] | None = None,
+    ) -> T:
         def execute() -> T:
             phase = "connect"
             try:
-                with closing(sqlite3.connect(self.db_path, timeout=5)) as db, db:
-                    phase = "begin"
-                    db.execute("BEGIN IMMEDIATE")
-                    phase = "body"
-                    result = operation(db)
-                    phase = "commit"
+                with closing(sqlite3.connect(self.db_path, timeout=5)) as db:
+                    try:
+                        phase = "begin"
+                        db.execute("BEGIN IMMEDIATE")
+                        phase = "body"
+                        result = operation(db)
+                        phase = "commit"
+                        db.commit()
+                    except BaseException as error:
+                        active = db.in_transaction
+                        if active:
+                            db.rollback()
+                        # An unsuccessful BEGIN touched no rows; a BUSY COMMIT
+                        # must have left an open transaction for us to roll back.
+                        # Never defer a rollback failure or an ambiguous commit.
+                        if (
+                            on_busy is not None
+                            and isinstance(error, sqlite3.OperationalError)
+                            and is_sqlite_busy(error)
+                            and (phase == "begin" or active)
+                        ):
+                            return on_busy(error)
+                        raise
                     return result
             except sqlite3.Error as error:
                 try:

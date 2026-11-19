@@ -3,7 +3,7 @@
 # complete Python-inclusive release; this script never invokes Python or pip.
 set -eu
 
-NGN_BOOTSTRAP_VERSION=0.100.21
+NGN_BOOTSTRAP_VERSION=0.100.22
 
 fail() {
     printf 'ngn installer: %s\n' "$*" >&2
