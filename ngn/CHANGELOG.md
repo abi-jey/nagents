@@ -1,22 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.100.7
 
-- Without `--config`, native ngn reads the existing Python ngn provider and model
-  settings without writing them or requiring a new configuration file.
-- Native ngn honors Python's `read_only` setting without adopting its approval
-  or tool policy. Python ChatGPT credentials stay separate: when Python's
-  connection would use ChatGPT, select a native configuration and sign in to the
-  intended account instead of falling back to another route.
-- Python ngn `auth: "codex"` connections require local Codex files
-  (`$CODEX_HOME` or `~/.codex`) and honor their OAuth or API-key policy.
-- The welcome screen explains when no provider is usable and how to fix it.
-  `ngn doctor` also lists legacy files read and unavailable connections.
-- Add opt-in wire logs and local diagnostic logs.
-- Add an explicit `ngn upgrade` command that copies supported Python ngn history
-  into separate Rust-owned databases without changing the original.
-- Not yet supported from legacy files: Foundry/Azure `api_version` routes, Entra
-  auth, and the `assistant.md` system prompt (the Rust default prompt is used).
+- **Python configuration and auth:** Without `--config`, native ngn reads existing
+  Python provider/model settings and honors `read_only`, without writing config
+  or importing Python approval or tool policies. Python ChatGPT credentials stay
+  separate: if the selected route would use them, configure native ChatGPT and
+  sign in to the intended account rather than falling back to another route.
+  `auth: "codex"` requires local Codex files and honors their OAuth or API-key
+  policy. The welcome screen and `ngn doctor` explain unavailable connections.
+  Legacy Foundry/Azure `api_version` routes, Entra auth, and the `assistant.md`
+  system prompt are not imported.
+- **Logs:** Local lifecycle diagnostics omit prompts, tool payloads, credentials
+  and runner stderr; the TUI shows the log path on exit when available. Provider
+  HTTP capture (`--wire-log`) is off by default. Its private log redacts transport
+  authentication, but payloads can still contain sensitive content.
+- **Terminal parity:** Textual-style activity and provider/model footer; a
+  filter-first session picker (`F2`, `/sessions`, or bare `/resume`); one
+  transcript row per tool call that updates as it progresses; and native slash
+  command suggestions that complete a command without executing it.
+- **Python history:** On Linux and macOS, normal workspace startup can make a
+  one-time copy of supported Python user/assistant text into separate Rust-owned
+  read-only archives (host schema 5). The original database is not changed.
+  Archives are not synced or resumable; no model context, credentials, approvals,
+  or tool state are imported and no actions are replayed. Missing, busy, unsafe,
+  unsupported, or WAL databases are skipped without blocking startup. Use
+  `ngn upgrade --from BACKUP` with a standalone rollback-journal backup and a
+  fresh `--data-dir` if needed. Back up native state before upgrading; use separate
+  state or restore a backup to downgrade.
 
 ## 0.100.6
 
