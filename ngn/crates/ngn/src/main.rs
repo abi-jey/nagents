@@ -7,6 +7,7 @@ mod view;
 mod web;
 
 use std::{
+    ffi::OsString,
     io::{IsTerminal, Read, Write},
     net::{IpAddr, SocketAddr},
     path::PathBuf,
@@ -14,7 +15,7 @@ use std::{
 };
 
 use anyhow::{Result, ensure};
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, error::ErrorKind};
 use ngn_core::auth::{self, Operation};
 use ngn_core::{ApprovalMode, Config, Host};
 use ngn_protocol::{Event, EventRecord, RunStatus};
@@ -59,8 +60,17 @@ struct Cli {
     #[arg(short = 'c', long = "continue", global = true)]
     continue_session: bool,
     /// Disable TUI activity and caret animations for this invocation.
-    #[arg(long, global = true, overrides_with = "no_animations")]
-    no_animations: bool,
+    #[arg(
+        long,
+        global = true,
+        aliases = ["no-a", "no-an", "no-ani", "no-anim", "no-anima", "no-animat",
+                   "no-animati", "no-animatio", "no-animation"],
+        // Keep every occurrence's position without consuming an argument value.
+        action = ArgAction::Append,
+        num_args = 0,
+        default_missing_value = "true",
+    )]
+    no_animations: Vec<bool>,
     /// Capture sensitive provider HTTP payloads in a private local log (off by default).
     #[arg(long, global = true, overrides_with_all = ["wire_log", "no_wire_log"])]
     wire_log: bool,
@@ -456,7 +466,7 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
             ) => unreachable!(),
             None => {
                 let id = session(&host, cli.resume.as_deref(), cli.continue_session).await?;
-                tui::run(host.clone(), id, cli.no_animations).await?;
+                tui::run(host.clone(), id, !cli.no_animations.is_empty()).await?;
                 Ok(0)
             }
         }
@@ -466,10 +476,36 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
     result
 }
 
+fn parse_cli(args: &[OsString]) -> Result<Cli, clap::Error> {
+    let mut command = Cli::command();
+    let mut matches = command.try_get_matches_from_mut(args)?;
+    if let Some(run) = matches.subcommand_matches("run")
+        && let Some(mut prompt) = run.indices_of("prompt")
+        && let Some(first) = prompt.next()
+        && let Some(mut flags) = run.indices_of("no_animations")
+        && let Some(split) = flags.find(|&index| index > first)
+    {
+        // Python's run parser consumes one contiguous variadic prompt. If it
+        // has already started, the motion flag ends it. Use Clap's positions
+        // rather than scanning tokens for words (options can take values).
+        let has_tail = prompt.any(|index| index > split);
+        // Clap drops an empty trailing delimiter; Python treats it as extra
+        // input after a flag has already ended the prompt.
+        let bare_delimiter_at_end = args.last().is_some_and(|arg| arg == "--");
+        if has_tail || bare_delimiter_at_end {
+            return Err(command.error(
+                ErrorKind::UnknownArgument,
+                "unexpected arguments after --no-animations; place it before or after the entire prompt",
+            ));
+        }
+    }
+    Cli::from_arg_matches_mut(&mut matches)
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
-    let cli = Cli::parse_from(&args);
+    let cli = parse_cli(&args).unwrap_or_else(|error| error.exit());
     // Clap propagates global arguments between parser levels, but does not
     // preserve the relative order of different flag IDs across a subcommand.
     let wire_log_override = if cli.wire_log || cli.no_wire_log {
@@ -499,21 +535,151 @@ async fn main() -> std::process::ExitCode {
 mod tests {
     use super::*;
 
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        parse_cli(
+            &std::iter::once("ngn")
+                .chain(args.iter().copied())
+                .map(OsString::from)
+                .collect::<Vec<_>>(),
+        )
+    }
+
     #[test]
-    fn no_animations_is_an_opt_in_cli_flag() {
-        assert!(!Cli::try_parse_from(["ngn"]).unwrap().no_animations);
-        assert!(
-            Cli::try_parse_from(["ngn", "--no-animations"])
-                .unwrap()
-                .no_animations
+    fn no_animations_matches_python_prefixes_and_placement() {
+        // Observed via Python ngn's _parser().parse_args at ba0a7bc:
+        // --n, --no and --no- are ambiguous; every longer prefix is accepted.
+        const FULL: &str = "--no-animations";
+        assert!(parse(&[]).unwrap().no_animations.is_empty());
+        for flag in ["--n", "--no", "--no-", "--no-animationz"] {
+            assert!(parse(&[flag]).is_err(), "{flag}");
+            assert!(parse(&["run", "hello", flag]).is_err(), "{flag}");
+        }
+        for end in "--no-a".len()..=FULL.len() {
+            let flag = &FULL[..end];
+            assert_eq!(parse(&[flag, flag]).unwrap().no_animations.len(), 2);
+            for args in [
+                [flag, "run", "hello", "world"],
+                ["run", flag, "hello", "world"],
+                ["run", "hello", "world", flag],
+            ] {
+                let cli = parse(&args).unwrap();
+                assert!(!cli.no_animations.is_empty(), "{args:?}");
+                assert!(
+                    matches!(cli.command, Some(Commands::Run { prompt, .. }) if prompt == ["hello", "world"]),
+                    "{args:?}"
+                );
+            }
+            for args in [
+                &["run", "hello", flag, "world"][..],
+                &["run", "hello", flag, "world", FULL],
+                &[FULL, "run", "hello", flag, FULL, "world"],
+                &["run", "hello", flag, "--", "world"],
+                &["run", "hello", flag, "--"],
+            ] {
+                assert!(
+                    matches!(parse(args), Err(error) if error.kind() == ErrorKind::UnknownArgument),
+                    "{args:?}"
+                );
+            }
+            assert!(parse(&[&format!("{flag}=true")]).is_err());
+        }
+    }
+
+    #[test]
+    fn no_animations_respects_literal_delimiter_and_option_values() {
+        for (args, disabled, expected) in [
+            (
+                &["run", "--", "--no-animations"][..],
+                false,
+                &["--no-animations"][..],
+            ),
+            (
+                &["run", "hello", "--", "--no-anim", "world"],
+                false,
+                &["hello", "--no-anim", "world"],
+            ),
+            (
+                &["run", "--no-animations", "--", "hello", "--no-anim"],
+                true,
+                &["hello", "--no-anim"],
+            ),
+            (&["run", "--no-animations", "hello", "--"], true, &["hello"]),
+            (
+                &[
+                    "run",
+                    "--config",
+                    "run",
+                    "--model",
+                    "hello",
+                    "--no-anim",
+                    "world",
+                ],
+                true,
+                &["world"],
+            ),
+            (
+                &[
+                    "--config",
+                    "run",
+                    "run",
+                    "--model=hello",
+                    "--no-anim",
+                    "world",
+                ],
+                true,
+                &["world"],
+            ),
+            (
+                &["run", "hello", "--no-anim", "--model", "world"],
+                true,
+                &["hello"],
+            ),
+            (&["run", "hello", "--no-anim", "-mworld"], true, &["hello"]),
+            (
+                &["run", "hello", "--no-anim", "--config=world"],
+                true,
+                &["hello"],
+            ),
+            (
+                &[
+                    "run",
+                    "--model=--no-anim",
+                    "--config=--no-animation",
+                    "hello",
+                ],
+                false,
+                &["hello"],
+            ),
+            (&["run", "-m--no-anim", "hello"], false, &["hello"]),
+        ] {
+            let cli = parse(args).unwrap();
+            assert_eq!(!cli.no_animations.is_empty(), disabled, "{args:?}");
+            assert!(
+                matches!(cli.command, Some(Commands::Run { prompt, .. }) if prompt == expected),
+                "{args:?}"
+            );
+        }
+        let cli = parse(&[
+            "run",
+            "--model=--no-anim",
+            "--config=--no-animation",
+            "hello",
+        ])
+        .unwrap();
+        assert_eq!(cli.model.as_deref(), Some("--no-anim"));
+        assert_eq!(
+            cli.config.as_deref(),
+            Some(std::path::Path::new("--no-animation"))
         );
+    }
+
+    #[test]
+    fn no_animations_does_not_change_other_options() {
+        assert!(parse(&["--mod", "fixture"]).is_err());
+        let cli = parse(&["run", "hello", "--model", "fixture", "world"]).unwrap();
+        assert_eq!(cli.model.as_deref(), Some("fixture"));
         assert!(
-            Cli::try_parse_from(["ngn", "--no-animations", "--no-animations"])
-                .unwrap()
-                .no_animations
+            matches!(cli.command, Some(Commands::Run { prompt, .. }) if prompt == ["hello", "world"])
         );
-        let cli = Cli::try_parse_from(["ngn", "run", "--no-animations", "hello"]).unwrap();
-        assert!(cli.no_animations);
-        assert!(matches!(cli.command, Some(Commands::Run { prompt, .. }) if prompt == ["hello"]));
     }
 }
