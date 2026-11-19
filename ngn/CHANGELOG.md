@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.30
+
+- Hide the successful turn marker in the main native transcript while keeping tool badges and actionable statuses.
+
 ## 0.100.29
 
 - Remove the empty row between adjacent compact native tool cards while preserving prose and expanded detail spacing.
