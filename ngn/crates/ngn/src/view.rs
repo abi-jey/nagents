@@ -647,7 +647,7 @@ pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_
                 "\n[Input queue resumed]\n"
             }),
             Event::RunStarted { prompt } => {
-                output.push_str(&format!("\nYOU\n{prompt}\n\nNGN\n"));
+                output.push_str(&format!("\n{prompt}\n\n"));
             }
             Event::Notice { text } => output.push_str(&format!("\n{text}\n")),
             Event::TaskStarted { task } => output.push_str(&format!(
@@ -855,7 +855,7 @@ mod tests {
         assert!(matches!(&pending[..], [
             TranscriptPart::Text(prose),
             TranscriptPart::Code(_, code),
-        ] if prose == "\nYOU\n```user\nplain\n```\n\nNGN\n# literal heading\n"
+        ] if prose == "\n```user\nplain\n```\n\n# literal heading\n"
             && code == "  **literal**[31m\n```\n"));
 
         let parts = project(&records, 10);
@@ -892,7 +892,7 @@ mod tests {
             && tilde == "keep indent\n```\n~~~not-a-close\n"
             && between == "outside\n"
             && unfinished == "unfinished\n"
-            && after == "\n~~~notice\nnot code\nnew assistant text\n\nYOU\n~~~user\n\nNGN\n"));
+            && after == "\n~~~notice\nnot code\nnew assistant text\n\n~~~user\n\n"));
     }
 
     #[test]
@@ -991,7 +991,7 @@ mod tests {
         ];
         assert!(matches!(&project(&records, 0)[..], [
             TranscriptPart::Text(before), TranscriptPart::Code(_, code), TranscriptPart::Text(after),
-        ] if before == "\nYOU\nuserliteral\n\nNGN\nplainprose\n"
+        ] if before == "\nuserliteral\n\nplainprose\n"
             && code == "SAME\n EXTRA\nFEWER\n TAB\n\tFULL-TAB\n[999~\n"
             && after == "POSTPLAIN\n"));
     }
