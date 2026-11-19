@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use crossterm::{
+    cursor::{Hide, Show},
     event::{
         DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
         KeyEvent, KeyEventKind, KeyModifiers,
@@ -37,6 +38,7 @@ use uuid::Uuid;
 use crate::view;
 
 mod completion;
+mod composer;
 mod footer;
 mod picker;
 
@@ -60,7 +62,7 @@ struct Restore;
 impl Drop for Restore {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(stdout(), DisableBracketedPaste, LeaveAlternateScreen);
+        let _ = execute!(stdout(), DisableBracketedPaste, LeaveAlternateScreen, Show);
     }
 }
 
@@ -78,6 +80,7 @@ struct App {
     records: Vec<EventRecord>,
     after: i64,
     input: String,
+    caret: composer::Caret,
     completion: completion::Completion,
     status: String,
     /// The last Enter submission failed; render its reason as an error, not a hint.
@@ -276,6 +279,10 @@ impl App {
         !self.shows_overlay() && self.approval.is_none()
     }
 
+    fn caret_visible(&self, now: Instant) -> bool {
+        self.composer_available() && self.caret.visible(now)
+    }
+
     fn completion_key(&mut self, key: KeyEvent) -> bool {
         self.composer_available() && self.completion.key(&mut self.input, key)
     }
@@ -419,21 +426,20 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
     if let Some(menu) = menu {
         menu.draw(frame, rows[2], accent, muted);
     }
-    let input_lines = app.input.lines().count().max(1) as u16;
-    frame.render_widget(
-        Paragraph::new(view::plain(&app.input))
-            .wrap(Wrap { trim: false })
-            .scroll((input_lines.saturating_sub(3), 0))
-            .block(
-                Block::bordered()
-                    .title(format!(
-                        " Message · Enter send/queue · /steer TEXT active turn · {} pending{} ",
-                        app.queue.entries.len(),
-                        if app.queue.paused { " · PAUSED" } else { "" }
-                    ))
-                    .border_style(Style::new().fg(accent)),
-            ),
-        rows[3],
+    let composer = Block::bordered()
+        .title(format!(
+            " Message · Enter send/queue · /steer TEXT active turn · {} pending{} ",
+            app.queue.entries.len(),
+            if app.queue.paused { " · PAUSED" } else { "" }
+        ))
+        .border_style(Style::new().fg(accent));
+    let input_area = composer.inner(rows[3]);
+    frame.render_widget(composer, rows[3]);
+    let _ = composer::draw(
+        frame.buffer_mut(),
+        input_area,
+        &app.input,
+        app.caret_visible(now),
     );
     app.activity.draw(frame, footer, app, &host.config, now);
     if app.task_picker {
@@ -816,16 +822,15 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
 
 pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut receiver = host.events.subscribe();
+    let animate =
+        !std::env::var("TEXTUAL_ANIMATIONS").is_ok_and(|value| value.eq_ignore_ascii_case("none"));
     let mut app = App {
         session,
         records: Vec::new(),
         after: 0,
         input: String::new(),
-        activity: footer::Activity::new(
-            Instant::now(),
-            !std::env::var("TEXTUAL_ANIMATIONS")
-                .is_ok_and(|value| value.eq_ignore_ascii_case("none")),
-        ),
+        caret: composer::Caret::new(animate),
+        activity: footer::Activity::new(Instant::now(), animate),
         active: None,
         approval: None,
         scroll: 0,
@@ -848,7 +853,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     app.state(&host).await;
     enable_raw_mode()?;
     let restore = Restore;
-    execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut input = EventStream::new();
     let signal = crate::shutdown_signal();
@@ -858,12 +863,16 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     motion.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cached: Option<Buffer> = None;
     let mut footer_only = false;
+    let mut cached_caret_visible = false;
     loop {
         let now = Instant::now();
+        app.caret.focus(app.composer_available(), now);
+        let caret_visible = app.caret_visible(now);
         let animate = app.activity.needs_frame(now) && !app.shows_overlay();
         app.activity.advance(now);
         terminal.draw(|frame| {
             if footer_only
+                && cached_caret_visible == caret_visible
                 && let Some(previous) = &cached
                 && previous.area == frame.area()
             {
@@ -876,6 +885,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
             } else {
                 draw(frame, &app, &host, now);
                 cached = animate.then(|| frame.buffer_mut().clone());
+                cached_caret_visible = caret_visible;
             }
         })?;
         footer_only = false;
@@ -891,6 +901,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                 let Some(event) = event else { break; };
                 match event? {
                     TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                        if app.composer_available() { app.caret.restart(Instant::now()); }
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if control && key.code == KeyCode::Char('q') { break; }
                         if control && key.code == KeyCode::Char('c') { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } else { break; } continue; }
@@ -983,6 +994,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             if app.input.len() + text.len() > 32_000 {
                                 app.status = "Paste exceeds 32000 UTF-8 bytes".into();
                             } else if !text.is_empty() {
+                                app.caret.restart(Instant::now());
                                 app.input.push_str(&text);
                                 app.completion.edited(&app.input);
                             }
@@ -1342,7 +1354,10 @@ mod tests {
         };
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         app.state(&host).await;
+        let now = Instant::now();
+        app.caret.focus(true, now);
         app.open_picker(&host).await.unwrap(); // F2
+        assert!(!app.caret_visible(now));
         app.picker_key(&host, key(KeyCode::Char('x')))
             .await
             .unwrap();
@@ -1371,6 +1386,11 @@ mod tests {
                 let buffer = terminal.backend().buffer();
                 let row = |y| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
                 assert!(row(height - 6).contains(draft));
+                assert!(
+                    buffer[(1 + draft.len() as u16, height - 6)]
+                        .modifier
+                        .contains(Modifier::REVERSED)
+                ); // slash suggestions keep composer focus
                 let status = row(height - 2);
                 assert!(status.contains("Esc"), "{width} columns: {status}");
                 let menu_rows = height - 12..height - 7;
@@ -1490,11 +1510,14 @@ mod tests {
             ..App::default()
         };
         app.state(&host).await;
+        let now = Instant::now();
+        app.caret.focus(true, now);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         for code in [KeyCode::Tab, KeyCode::Esc] {
             assert!(!app.completion_key(key(code)));
         }
         app.task_picker = false;
+        assert!(!app.caret_visible(now)); // approval alone suppresses the caret
         for code in [KeyCode::Tab, KeyCode::Esc] {
             assert!(!app.completion_key(key(code))); // approval alone still takes priority
         }
