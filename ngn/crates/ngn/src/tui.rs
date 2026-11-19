@@ -917,13 +917,16 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
     }
 }
 
-fn animations_enabled(saved: Option<bool>, textual: Option<&str>) -> bool {
-    saved.unwrap_or(true) && !textual.is_some_and(|value| value.eq_ignore_ascii_case("none"))
+fn animations_enabled(no_animations: bool, saved: Option<bool>, textual: Option<&str>) -> bool {
+    !no_animations
+        && saved.unwrap_or(true)
+        && !textual.is_some_and(|value| value.eq_ignore_ascii_case("none"))
 }
 
-pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
+pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let animate = animations_enabled(
+        no_animations,
         host.config.legacy_animations,
         std::env::var("TEXTUAL_ANIMATIONS").ok().as_deref(),
     );
@@ -1142,18 +1145,20 @@ mod tests {
     use ngn_core::{Config, config::Backend};
 
     #[test]
-    fn saved_motion_and_textual_override_control_footer_and_caret() {
+    fn cli_saved_motion_and_textual_override_control_footer_and_caret() {
         let now = Instant::now();
         let later = now + Duration::from_millis(600);
-        for (saved, textual, expected) in [
-            (None, None, true),
-            (Some(true), None, true),
-            (Some(false), None, false),
-            (Some(false), Some("full"), false),
-            (None, Some("none"), false),
-            (Some(true), Some("NoNe"), false),
+        for (no_animations, saved, textual, expected) in [
+            (false, None, None, true),
+            (false, Some(true), None, true),
+            (false, Some(false), None, false),
+            (false, Some(false), Some("full"), false),
+            (false, None, Some("none"), false),
+            (false, Some(true), Some("NoNe"), false),
+            (true, None, None, false),
+            (true, Some(true), Some("full"), false),
         ] {
-            let animate = animations_enabled(saved, textual);
+            let animate = animations_enabled(no_animations, saved, textual);
             let mut activity = footer::Activity::new(now, animate);
             activity.sync(Some("root"), false, false, &[], now, 0);
             assert_eq!(activity.needs_frame(later), expected);

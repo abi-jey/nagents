@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.14
+
+- Restore the native --no-animations CLI flag, including unambiguous Python abbreviations. It disables activity motion, tool-card shimmer, and caret blinking for one invocation without changing saved preferences or stopping elapsed timers.
+
 ## 0.100.13
 
 - The native TUI now honors the saved Python ngn animation preference, keeping tool-card shimmer, footer motion, and caret blinking off with animations disabled while elapsed timers continue to update.
