@@ -51,15 +51,23 @@ impl Input {
         Ok(true)
     }
 
-    /// Called after entering the alternate screen but before starting its
-    /// event reader. Any input queued across that boundary is still draft-only.
-    pub(super) fn finish(&mut self) -> io::Result<Option<String>> {
+    /// Snapshot the draft for the first frame without consuming decoder state.
+    pub(super) fn draft_for_first_frame(&mut self) -> io::Result<Option<&str>> {
         if !self.drain()? {
             return Ok(None);
         }
         #[cfg(unix)]
+        if let Some(input) = &self.0 {
+            return Ok(Some(input.draft()));
+        }
+        Ok(Some(""))
+    }
+
+    /// Only release stdin after the first frame's output has been flushed.
+    pub(super) async fn finish(&mut self) -> io::Result<Option<String>> {
+        #[cfg(unix)]
         if let Some(input) = &mut self.0 {
-            return Ok(Some(input.take_draft()));
+            return input.finish().await;
         }
         Ok(Some(String::new()))
     }
@@ -81,7 +89,7 @@ pub(super) async fn prepare(
         return Ok(None);
     };
     // Honor input already queued at readiness without flashing the workspace
-    // on cancellation. The last drain is after entering the alternate screen.
+    // on cancellation. Stdin remains ours through the first workspace frame.
     Ok(input.drain()?.then_some(input))
 }
 
@@ -222,6 +230,7 @@ mod posix {
 
     const POLL: Duration = Duration::from_millis(10);
     const DRAFT_CAP: usize = 4096;
+    const UTF8_HANDOFF_GRACE: Duration = Duration::from_millis(50);
     const HIDE: &str = "\x1b[?25l";
     const SHOW: &str = "\x1b[?25h";
     const SAVE: &str = "\x1b7";
@@ -477,10 +486,27 @@ mod posix {
             Ok(!self.keys.cancelled)
         }
 
-        pub(super) fn take_draft(&mut self) -> String {
+        pub(super) fn draft(&self) -> &str {
+            &self.keys.draft
+        }
+
+        pub(super) async fn finish(&mut self) -> io::Result<Option<String>> {
+            let deadline = Instant::now() + UTF8_HANDOFF_GRACE;
+            loop {
+                if !self.drain()? {
+                    return Ok(None);
+                }
+                // Keep the same decoder through the frame. If the last read
+                // ended mid-character, allow a bounded time for its suffix.
+                let now = Instant::now();
+                if self.keys.pending.is_empty() || now >= deadline {
+                    break;
+                }
+                sleep_until((now + POLL).min(deadline)).await;
+            }
             self.mode.handed_off = true;
             self.keys.pending.clear();
-            std::mem::take(&mut self.keys.draft)
+            Ok(Some(std::mem::take(&mut self.keys.draft)))
         }
     }
 

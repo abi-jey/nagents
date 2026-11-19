@@ -1007,17 +1007,17 @@ pub async fn run(
     // the original tty attributes held by startup_input.
     let restore = Restore;
     execute!(stdout(), EnterAlternateScreen, Hide)?;
-    let Some(draft) = startup_input.finish()? else {
+    let Some(draft) = startup_input.draft_for_first_frame()? else {
         return Ok(());
     };
     execute!(stdout(), EnableBracketedPaste)?;
     if !draft.is_empty() {
-        app.input = draft;
+        app.input.push_str(draft);
         app.completion.edited(&app.input);
         app.caret.restart(Instant::now());
     }
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-    let mut input = EventStream::new();
+    let mut input = None;
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
     let mut motion = tokio::time::interval(footer::FRAME);
     motion.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1059,6 +1059,30 @@ pub async fn run(
             .area
             .width;
         motion_only = false;
+        let mut redraw = false;
+        if input.is_none() {
+            // Ratatui has flushed the first visible frame. Keep the startup
+            // reader (including its UTF-8 state) until this point so that keys
+            // typed before the frame cannot become workspace actions.
+            let draft = tokio::select! {
+                biased;
+                _ = &mut signal => None,
+                draft = startup_input.finish() => draft?,
+            };
+            let Some(draft) = draft else {
+                return Ok(());
+            };
+            if draft != app.input {
+                app.input = draft;
+                app.completion.edited(&app.input);
+                app.caret.restart(Instant::now());
+                redraw = true;
+            }
+        }
+        let input = input.get_or_insert_with(EventStream::new);
+        if redraw {
+            continue;
+        }
         let animate = (activity_motion || app.tools.needs_frame(now)) && !app.shows_overlay();
         tokio::select! {
             _ = &mut signal => break,
