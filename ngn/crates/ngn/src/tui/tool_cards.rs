@@ -583,7 +583,7 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub(super) fn text(&mut self, text: &'a str) {
+    fn text(&mut self, text: &'a str) {
         for mut line in text.lines() {
             // Keep any one logical line below Paragraph's u16 offset even in
             // a one-column viewport. Ordinary prose uses native word wrapping.
@@ -969,6 +969,7 @@ mod tests {
                 "F1 help",
                 &app.session,
                 "Welcome to ngn",
+                "Tip: F1",
                 "synthetic result",
             ] {
                 assert!(!screen.contains(old));

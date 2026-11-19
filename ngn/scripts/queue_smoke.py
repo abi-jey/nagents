@@ -16,7 +16,7 @@ from pathlib import Path
 
 import aiohttp
 from protocol_fixture import CRASH_NOTICE, CRASH_PROMPT
-from pty_smoke import WorkspaceReady
+from pty_smoke import COMPOSER_TITLE, WorkspaceReady
 from subagent_smoke import require, terminal_text
 
 
@@ -372,7 +372,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
             raise AssertionError(explanation + f": {visible()[-2500:]!r}")
 
         wait_for(
-            lambda: ready.observe(output, b"Welcome to ngn" in visible()),
+            lambda: ready.observe(output, COMPOSER_TITLE in visible()),
             "Queue TUI did not render and repaint at the resized PTY dimensions",
         )
         database = next(data.rglob("host.sqlite3"))
@@ -460,6 +460,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
             lambda: ready.observe(output, "1 pending · PAUSED".encode() in visible()),
             "Resumed queue TUI did not render and repaint at the resized PTY dimensions",
         )
+        require(b"Tip: F1" not in visible(), "Resumed nonempty transcript showed the empty-session tip")
         os.write(master, b"\x1b[17~")
         wait_for(
             lambda: b"Input queue: PAUSED" in visible() and b"read persisted input" in visible(),

@@ -2,6 +2,8 @@
 
 import re
 
+COMPOSER_TITLE = "Message · Enter send/queue".encode()
+
 
 class WorkspaceReady:
     def __init__(self, master: int) -> None:

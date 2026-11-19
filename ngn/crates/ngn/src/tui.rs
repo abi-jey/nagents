@@ -29,7 +29,8 @@ use ratatui::{
     backend::CrosstermBackend,
     buffer::Buffer,
     layout::{Constraint, Layout, Position, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
+    text::Line,
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use uuid::Uuid;
@@ -66,6 +67,8 @@ Enter  Send or queue · Shift+Enter  Newline
 Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)";
+
+const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
 
 #[derive(Default)]
 struct Restore {
@@ -409,16 +412,6 @@ impl App {
     }
 }
 
-fn welcome(config: &ngn_core::Config) -> String {
-    let next = match config.selected_provider() {
-        Ok(_) => "Type a prompt and press Enter.".to_owned(),
-        Err(error) => format!("Prompts cannot be sent yet. {error}"),
-    };
-    format!(
-        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\n{next}\n\nF1 or /help for commands and shortcuts."
-    )
-}
-
 fn center(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2));
     let height = height.min(area.height.saturating_sub(2));
@@ -522,10 +515,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     } else if let Some((_, area)) = approval_dialog {
         transcript.mask_wipes(area);
     }
-    let welcome_text;
     if app.records.is_empty() {
-        welcome_text = welcome(&host.config);
-        transcript.text(&welcome_text);
+        let tip = Line::styled(EMPTY_TIP, Style::new().add_modifier(Modifier::DIM));
+        if tip.width() <= usize::from(transcript_area.width) {
+            transcript.push(tip);
+        }
     }
     if let Some(reason) = &app.failure {
         // Keep the complete rejection in the scrollable conversation as well
@@ -1236,7 +1230,6 @@ pub async fn run(
 mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
-    use ratatui::style::Modifier;
 
     #[test]
     fn cli_saved_motion_and_textual_override_control_footer_and_caret() {
@@ -1275,7 +1268,6 @@ mod tests {
         }
         .resolve()
         .unwrap();
-        assert!(welcome(&config).contains("Prompts cannot be sent yet."));
         let host = Host::open(config).unwrap();
         let mut app = App {
             session: host.store.create_session().await.unwrap().id,
@@ -1331,6 +1323,54 @@ mod tests {
         ] {
             assert!(screen.contains(expected));
         }
+    }
+
+    #[test]
+    fn empty_transcript_tip_uses_at_most_one_dim_row_and_does_not_touch_the_draft() {
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: dir.path().into(),
+                data_dir: dir.path().join("state"),
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let now = Instant::now();
+        let mut app = App {
+            input: "draft".into(),
+            ..App::default()
+        };
+        app.caret.focus(true, now);
+        for width in [1, 20, 42, 43, 80, 111] {
+            let mut terminal =
+                Terminal::new(ratatui::backend::TestBackend::new(width, 16)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut app, &host, now))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let [transcript, _, composer] = content_rows(buffer.area, 0);
+            let (main, _) = agents::split(transcript);
+            let row = |y| -> String { (0..main.width).map(|x| buffer[(x, y)].symbol()).collect() };
+            let fits = width >= 43;
+            assert_eq!(row(0).trim_end(), if fits { EMPTY_TIP } else { "" });
+            assert_eq!(buffer[(0, 0)].modifier.contains(Modifier::DIM), fits);
+            assert!((1..transcript.height).all(|y| row(y).trim().is_empty()));
+            if width >= 20 {
+                assert!(row(composer.y + 1).contains("draft"));
+                assert!(
+                    buffer[(6, composer.y + 1)]
+                        .modifier
+                        .contains(Modifier::REVERSED)
+                );
+            }
+            if width >= 43 {
+                assert!(row(15).contains("Provider not configured"));
+            }
+        }
+        assert!(app.composer_available());
     }
 
     #[tokio::test]

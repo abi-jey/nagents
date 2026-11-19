@@ -22,7 +22,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 from protocol_fixture import write_config as write_protocol_fixture_config
-from pty_smoke import WorkspaceReady
+from pty_smoke import COMPOSER_TITLE, WorkspaceReady
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -381,11 +381,11 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
 
         ready = WorkspaceReady(master)
         deadline = time.monotonic() + 10
-        while not ready.observe(output, b"Welcome to ngn" in visible()) and time.monotonic() < deadline:
+        while not ready.observe(output, COMPOSER_TITLE in visible()) and time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
                 output += os.read(master, 65536)
         require(
-            ready.observe(output, b"Welcome to ngn" in visible()),
+            ready.observe(output, COMPOSER_TITLE in visible()),
             "Native TUI did not render and repaint at the resized PTY dimensions",
         )
         destination = workspace / "changed.txt"
