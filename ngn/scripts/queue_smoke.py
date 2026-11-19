@@ -457,7 +457,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
         )
         ready = WorkspaceReady(master)
         wait_for(
-            lambda: ready.observe(output, b"F1 help" in visible()),
+            lambda: ready.observe(output, "1 pending · PAUSED".encode() in visible()),
             "Resumed queue TUI did not render and repaint at the resized PTY dimensions",
         )
         os.write(master, b"\x1b[17~")

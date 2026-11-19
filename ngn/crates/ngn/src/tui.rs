@@ -29,9 +29,8 @@ use ratatui::{
     backend::CrosstermBackend,
     buffer::Buffer,
     layout::{Constraint, Layout, Position, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    style::{Color, Style},
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use uuid::Uuid;
 
@@ -436,37 +435,20 @@ fn footer_area(area: Rect) -> Rect {
     Rect::new(area.x, area.bottom() - height, area.width, height)
 }
 
-fn content_rows(area: Rect, menu_height: u16) -> [Rect; 4] {
+fn content_rows(area: Rect, menu_height: u16) -> [Rect; 3] {
     let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(2));
-    let wide = agents::is_wide(area.width);
-    let (header, composer) = if wide {
-        // Preserve a compact header/composer and seven rows for the tree
-        // (border, heading, four tasks) before adding any optional chrome.
-        // Each extra screen row can buy at most one row of chrome.
-        let extra = body.height.saturating_sub(1 + 3 + 7);
-        (
-            1 + extra.saturating_sub(2).min(2),
-            body.height.min(3) + extra.min(2),
-        )
+    let composer = if agents::is_wide(area.width) {
+        // Keep the draft compact on short screens. Grow it at the same heights
+        // as before so the reclaimed rows go to the transcript and Agents rail.
+        let extra = body.height.saturating_sub(11);
+        body.height.min(3) + extra.min(2)
+    } else if body.height >= 5 {
+        5.min(body.height - 2)
     } else {
-        (
-            3,
-            if body.height >= 5 {
-                5.min(body.height - 2)
-            } else {
-                body.height
-            },
-        )
-    };
-    let menu_height = menu_height.min(
         body.height
-            .saturating_sub(composer + if wide { header + 2 } else { 3 }),
-    );
-    let header_height = header
-        .min(body.height.saturating_sub(composer + 2))
-        .min(body.height.saturating_sub(composer + menu_height + 1));
+    };
+    let menu_height = menu_height.min(body.height.saturating_sub(composer + 2));
     Layout::vertical([
-        Constraint::Length(header_height),
         Constraint::Min(0),
         Constraint::Length(menu_height),
         Constraint::Length(composer),
@@ -507,43 +489,21 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         .composer_available()
         .then(|| app.completion.menu(&app.input))
         .flatten();
-    let rows = content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
-    let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                format!(" ngn {} ", env!("CARGO_PKG_VERSION")),
-                Style::new().fg(accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("· F1 help", Style::new().fg(muted)),
-        ]),
-        Line::from(Span::styled(
-            format!(
-                " {} · {}",
-                view::plain(&host.config.workspace.display().to_string()),
-                app.session
-            ),
-            Style::new().fg(muted),
-        )),
-    ]);
-    frame.render_widget(header, rows[0]);
+    let [conversation, suggestions, draft] =
+        content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
     // Suggestions occupy the bottom of the left column, not rows of the
     // adjacent tree. The tree's height is independent of the draft/menu.
-    let (mut conversation, rail) = agents::split(Rect {
-        height: rows[1].height + rows[2].height,
-        ..rows[1]
+    let (mut transcript_area, rail) = agents::split(Rect {
+        height: conversation.height + suggestions.height,
+        ..conversation
     });
-    conversation.height = rows[1].height;
+    transcript_area.height = conversation.height;
     let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
     app.agents.observe_context(context);
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::new().fg(Color::DarkGray));
-    let transcript_area = block.inner(conversation);
-    app.transcript_area = transcript_area;
     let approval_dialog = app
         .approval
         .as_ref()
-        .map(|approval| (approval, center(rows[1], 110, 32)));
+        .map(|approval| (approval, center(conversation, 110, 32)));
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
@@ -574,15 +534,20 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             transcript.push(line);
         }
     }
-    app.tools
-        .draw(frame, transcript_area, transcript, &mut app.scroll, now);
-    frame.render_widget(block.title(app.tools.title(interactive)), conversation);
+    app.transcript_area = app.tools.draw(
+        frame,
+        transcript_area,
+        transcript,
+        &mut app.scroll,
+        now,
+        Some(Style::new().fg(muted)),
+    );
     if let Some(menu) = menu {
         menu.draw(
             frame,
             Rect {
-                width: conversation.width,
-                ..rows[2]
+                width: transcript_area.width,
+                ..suggestions
             },
             accent,
             muted,
@@ -595,8 +560,8 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             if app.queue.paused { " · PAUSED" } else { "" }
         ))
         .border_style(Style::new().fg(accent));
-    let input_area = composer.inner(rows[3]);
-    frame.render_widget(composer, rows[3]);
+    let input_area = composer.inner(draft);
+    frame.render_widget(composer, draft);
     let _ = composer::draw(
         frame.buffer_mut(),
         input_area,
@@ -1065,7 +1030,7 @@ pub async fn run(
                 let area = frame.area();
                 // Suggestions never take vertical space from the tree.
                 app.agents
-                    .resize(area.width, content_rows(area, 0)[1].height);
+                    .resize(area.width, content_rows(area, 0)[0].height);
                 app.caret.focus(app.composer_available(), now);
                 let caret_visible = app.caret_visible(now);
                 if motion_only
@@ -1271,6 +1236,7 @@ pub async fn run(
 mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
+    use ratatui::style::Modifier;
 
     #[test]
     fn cli_saved_motion_and_textual_override_control_footer_and_caret() {

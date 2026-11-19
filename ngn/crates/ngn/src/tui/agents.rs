@@ -729,16 +729,16 @@ mod tests {
             assert_eq!(buffer[(width - 1, 13)].symbol(), "┐"); // Composer top-right.
             assert!(row(buffer, 14, 0..width).contains("draft"));
             if width == 111 {
-                assert_eq!(buffer[(80, 3)].symbol(), "╭");
-                assert_eq!(buffer[(110, 3)].symbol(), "╮");
+                assert_eq!(buffer[(80, 0)].symbol(), "╭");
+                assert_eq!(buffer[(110, 0)].symbol(), "╮");
                 assert_eq!(buffer[(110, 12)].symbol(), "╯");
-                assert!(row(buffer, 3, 80..111).contains("Agents / Ctrl+T"));
-                assert!(row(buffer, 4, 82..109).starts_with("Agents / 0"));
+                assert!(row(buffer, 0, 80..111).contains("Agents / Ctrl+T"));
+                assert!(row(buffer, 1, 82..109).starts_with("Agents / 0"));
                 assert!(row(buffer, 11, 80..111).contains("▸ Workspace & context"));
-                assert!(!(4..11).any(|y| row(buffer, y, 80..111).contains("WORKSPACE")));
+                assert!(!(1..11).any(|y| row(buffer, y, 80..111).contains("WORKSPACE")));
             } else {
-                assert!(!row(buffer, 3, 0..110).contains("Agents /"));
-                assert!(!(4..13).any(|y| row(buffer, y, 0..110).contains("Workspace & context")));
+                assert!(!(0..13).any(|y| row(buffer, y, 0..110).contains("Agents /")));
+                assert!(!(0..13).any(|y| row(buffer, y, 0..110).contains("Workspace & context")));
             }
         }
     }
@@ -766,7 +766,7 @@ mod tests {
         for draft in ["plain draft", "/se"] {
             app.input = draft.into();
             app.completion.edited(&app.input);
-            for (height, expected) in [(11, 2), (13, 4), (14, 4), (15, 4)] {
+            for (height, expected) in [(11, 3), (13, 4), (14, 4), (15, 4)] {
                 let mut terminal = Terminal::new(TestBackend::new(111, height)).unwrap();
                 terminal
                     .draw(|frame| super::super::draw(frame, &mut app, &host, now))
@@ -1074,7 +1074,7 @@ mod tests {
             assert_eq!(app.agents.context.scroll, saved);
         }
         let restored = draw(&mut app, 40);
-        for y in 3..33 {
+        for y in 0..33 {
             assert_eq!(row(&full, y, 80..111), row(&restored, y, 80..111));
         }
         assert!(app.rail_has_focus() && app.agents.context.focused);
