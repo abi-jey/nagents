@@ -1,15 +1,21 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::Rect,
+    buffer::Buffer,
+    layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
 
-use crate::view::{ToolCard, TranscriptPart, duration};
+use crate::view::{ToolCard, ToolKey, TranscriptPart, duration};
+
+use super::shimmer::Sweep;
 
 type Key = (String, String);
 
@@ -23,6 +29,36 @@ pub(super) struct Cards {
     height: usize,
     bottom: usize,
     rendered_top: usize,
+    sweep: Option<(Position, HeaderSweep, Instant)>,
+}
+
+struct HeaderSweep {
+    age: Duration,
+    count: usize,
+    // (terminal column, character index). A wide or combining grapheme is
+    // painted once, but the wave follows legacy character indices.
+    cells: Vec<(u16, usize)>,
+}
+
+impl HeaderSweep {
+    fn new(title: &Span<'_>, elapsed: u64) -> Self {
+        let mut column = 0;
+        let mut count = 0;
+        let mut cells = Vec::new();
+        for grapheme in title.styled_graphemes(Style::default()) {
+            let width = Span::raw(grapheme.symbol).width() as u16;
+            if width != 0 {
+                cells.push((column, count));
+                column += width;
+            }
+            count += grapheme.symbol.chars().count();
+        }
+        Self {
+            age: Duration::from_millis(elapsed),
+            count,
+            cells,
+        }
+    }
 }
 
 impl Cards {
@@ -130,6 +166,7 @@ impl Cards {
         area: Rect,
         layout: Layout<'_>,
         scroll: &mut Option<usize>,
+        now: Instant,
     ) {
         let height = usize::from(area.height);
         self.bottom = layout.rows.saturating_sub(height);
@@ -165,11 +202,33 @@ impl Cards {
         self.rendered_top = top;
         self.height = height;
         layout.render(frame, area, top);
+        self.sweep = layout.sweep.and_then(|(row, sweep)| {
+            ((top..top + height).contains(&row) && !area.is_empty()).then(|| {
+                (
+                    Position::new(area.x, area.y + (row - top) as u16),
+                    sweep,
+                    now,
+                )
+            })
+        });
+        self.paint_sweep(frame.buffer_mut(), now);
         if !self.expanded.is_empty() {
             let retained: HashSet<_> = layout.headers.iter().map(|(key, _)| key).collect();
             self.expanded.retain(|key| retained.contains(key));
         }
         self.headers = layout.headers;
+    }
+
+    pub(super) fn paint_sweep(&self, buffer: &mut Buffer, now: Instant) {
+        if let Some((origin, header, observed_at)) = &self.sweep {
+            let age = header
+                .age
+                .saturating_add(now.saturating_duration_since(*observed_at));
+            let sweep = Sweep::new(header.count, age);
+            for &(column, index) in &header.cells {
+                buffer[(origin.x + column, origin.y)].fg = sweep.color(index);
+            }
+        }
     }
 }
 
@@ -249,6 +308,7 @@ pub(super) struct Layout<'a> {
     rows: usize,
     lines: Vec<(usize, Line<'a>)>,
     headers: Vec<(Key, usize)>,
+    sweep: Option<(usize, HeaderSweep)>,
 }
 
 impl<'a> Layout<'a> {
@@ -257,12 +317,14 @@ impl<'a> Layout<'a> {
         width: u16,
         cards: Option<&Cards>,
         interactive: bool,
+        active: Option<ToolKey<'_>>,
     ) -> Self {
         let mut layout = Self {
             width,
             rows: 0,
             lines: Vec::new(),
             headers: Vec::new(),
+            sweep: None,
         };
         for part in parts {
             match part {
@@ -295,7 +357,15 @@ impl<'a> Layout<'a> {
                             style = style.add_modifier(Modifier::UNDERLINED);
                         }
                     }
-                    layout.push(Line::raw(summary(card, marker, width)).style(style));
+                    let title = Span::raw(summary(card, marker, width));
+                    if cards.is_some()
+                        && Some(card.key) == active
+                        && card.status == "running"
+                        && let Some(elapsed) = card.elapsed
+                    {
+                        layout.sweep = Some((layout.rows, HeaderSweep::new(&title, elapsed)));
+                    }
+                    layout.push(Line::from(title).style(style));
                     if expanded {
                         for detail in card.details() {
                             layout.detail(&detail);
@@ -390,12 +460,13 @@ fn paragraph<'a>(text: impl Into<ratatui::text::Text<'a>>) -> Paragraph<'a> {
 mod tests {
     use crossterm::event::KeyModifiers;
     use ngn_core::host::Approval;
-    use ngn_protocol::{Event, EventRecord, ToolCall, ToolResult};
+    use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
     use ratatui::{Terminal, backend::TestBackend};
     use serde_json::json;
 
     use super::*;
-    use crate::{tui::App, view};
+    use crate::tui::footer::Activity;
+    use crate::tui::{App, main_transcript};
 
     fn event(run: &str, event: Event) -> EventRecord {
         EventRecord {
@@ -444,16 +515,33 @@ mod tests {
         app.tool_card_key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
-    fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) -> Vec<String> {
+    fn render(
+        app: &mut App,
+        terminal: &mut Terminal<TestBackend>,
+        active: Option<ToolKey<'_>>,
+        now: Instant,
+    ) {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                let parts = view::transcript(&app.records, 1500);
-                let layout =
-                    Layout::new(&parts, area.width, Some(&app.tools), app.tools_available());
-                app.tools.draw(frame, area, layout, &mut app.scroll);
+                frame
+                    .buffer_mut()
+                    .set_style(area, Style::new().bg(Color::Blue));
+                let parts = main_transcript(&app.records, app.approval.as_ref(), 1500);
+                let layout = Layout::new(
+                    &parts,
+                    area.width,
+                    Some(&app.tools),
+                    app.tools_available(),
+                    active,
+                );
+                app.tools.draw(frame, area, layout, &mut app.scroll, now);
             })
             .unwrap();
+    }
+
+    fn draw(app: &mut App, terminal: &mut Terminal<TestBackend>) -> Vec<String> {
+        render(app, terminal, None, Instant::now());
         terminal
             .backend()
             .buffer()
@@ -461,6 +549,167 @@ mod tests {
             .chunks(terminal.size().unwrap().width as usize)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect()
+    }
+
+    #[test]
+    fn sweep_repaints_only_the_visible_active_header_foreground() {
+        let now = Instant::now();
+        let active = Some(("live", "shared"));
+        for width in [1, 30, 60] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            let mut app = App {
+                records: vec![
+                    started("history", "shared", "unrelated"),
+                    started("live", "shared", "工作工作 e\u{301}"),
+                ],
+                ..App::default()
+            };
+            render(&mut app, &mut terminal, None, now);
+            assert!(key(&mut app, KeyCode::F(4)));
+            render(&mut app, &mut terminal, None, now);
+            let baseline = terminal.backend().buffer().clone();
+            let row = app.tools.headers[1].1 as u16;
+            assert!(baseline[(0, row)].modifier.contains(Modifier::UNDERLINED));
+            assert_eq!(baseline[(0, row)].bg, Color::Blue);
+
+            render(&mut app, &mut terminal, active, now);
+            let painted = terminal.backend().buffer().clone();
+            let mut later = painted.clone(); // The motion tick starts from the cached frame.
+            app.tools
+                .paint_sweep(&mut later, now + Duration::from_millis(700));
+            assert_ne!(painted, later);
+            assert_ne!(painted, baseline);
+            for mut frame in [painted, later] {
+                for column in 0..width {
+                    frame[(column, row)].fg = baseline[(column, row)].fg;
+                }
+                assert_eq!(frame, baseline); // Text, background, modifiers and other rows.
+            }
+            if width == 30 {
+                assert_eq!(baseline[(10, row)].symbol(), "工");
+                assert_eq!(baseline[(11, row)].symbol(), " "); // continuation cell
+            }
+        }
+    }
+
+    #[test]
+    fn resumed_sweep_uses_host_active_time_and_stays_out_of_the_inspector() {
+        let now = Instant::now();
+        let mut app = App {
+            records: vec![started("r", "c", "active")],
+            ..App::default()
+        };
+        for (timestamp_ms, transition) in [
+            (
+                200,
+                Event::ApprovalRequested {
+                    approval_id: "approval".into(),
+                    call: call("c", "active"),
+                    preview: String::new(),
+                },
+            ),
+            (
+                201,
+                Event::ToolApprovalTiming {
+                    call_id: "c".into(),
+                    elapsed_ms: 56,
+                    waiting: true,
+                },
+            ),
+            (
+                1400,
+                Event::ToolApprovalTiming {
+                    call_id: "c".into(),
+                    elapsed_ms: 56,
+                    waiting: false,
+                },
+            ),
+            (
+                1450,
+                Event::ApprovalResolved {
+                    approval_id: "approval".into(),
+                    allowed: true,
+                },
+            ),
+        ] {
+            app.records.push(EventRecord {
+                timestamp_ms,
+                ..event("r", transition)
+            });
+        }
+        let active = Some(("r", "c"));
+        let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+        render(&mut app, &mut terminal, active, now);
+        let (_, header, _) = app.tools.sweep.as_ref().unwrap();
+        assert_eq!(header.age, Duration::from_millis(156));
+        let parts = main_transcript(&app.records, None, 1500);
+        assert!(Layout::new(&parts, 60, None, false, active).sweep.is_none());
+    }
+
+    #[test]
+    fn sweep_stops_when_waiting_or_terminal_and_reduced_motion_is_static() {
+        let now = Instant::now();
+        let mut app = App {
+            records: vec![started("r", "c", "active")],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+        let mut activity = Activity::new(now, false);
+        activity.sync(Some("r"), false, false, &app.records, now, 1500);
+        assert_eq!(activity.shimmering_tool(), None);
+        render(&mut app, &mut terminal, activity.shimmering_tool(), now);
+        assert_eq!(terminal.backend().buffer()[(0, 1)].fg, Color::Reset);
+
+        let mut activity = Activity::new(now, true);
+        activity.sync(Some("r"), false, false, &app.records, now, 1500);
+        assert_eq!(activity.shimmering_tool(), Some(("r", "c")));
+        activity.sync(Some("r"), true, false, &app.records, now, 1500);
+        assert_eq!(activity.shimmering_tool(), None);
+
+        for (event, outcome, fg) in [
+            (
+                Event::ApprovalRequested {
+                    approval_id: "approval".into(),
+                    call: call("c", "active"),
+                    preview: String::new(),
+                },
+                "Approval waiting",
+                Color::Reset,
+            ),
+            (
+                Event::RunFinished {
+                    status: RunStatus::Cancelled,
+                    error: String::new(),
+                },
+                "cancelled",
+                Color::Magenta,
+            ),
+            (
+                finished("r", "c", json!(null), "failed").event,
+                "failed",
+                Color::Red,
+            ),
+            (
+                finished("r", "c", json!("ok"), "").event,
+                "complete",
+                Color::Reset,
+            ),
+        ] {
+            app.records.truncate(1);
+            render(&mut app, &mut terminal, Some(("r", "c")), now);
+            assert!(app.tools.sweep.is_some());
+            app.records.push(self::event("r", event));
+            // Even if the active key hasn't changed, projected state must veto the sweep.
+            render(&mut app, &mut terminal, Some(("r", "c")), now);
+            let baseline = terminal.backend().buffer().clone();
+            let mut later = baseline.clone();
+            app.tools
+                .paint_sweep(&mut later, now + Duration::from_millis(700));
+            assert!(app.tools.sweep.is_none());
+            assert_eq!(baseline, later);
+            assert_eq!(baseline[(0, 1)].fg, fg);
+            assert!(draw(&mut app, &mut terminal)[1].contains(outcome));
+        }
     }
 
     #[test]
@@ -541,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn overlays_and_approval_suspend_card_keys() {
+    fn overlays_and_live_approval_suspend_card_keys() {
         let mut app = App {
             records: vec![started("r", "c", "test")],
             ..App::default()
@@ -567,6 +816,12 @@ mod tests {
         assert!(key(&mut app, KeyCode::Enter));
         assert!(app.tools.focused());
         assert!(app.tools.expanded.is_empty());
+        // The modal is visible even though the durable request has not caught up.
+        render(&mut app, &mut terminal, Some(("r", "c")), Instant::now());
+        assert!(app.tools.sweep.is_none());
+        let rows = draw(&mut app, &mut terminal);
+        assert!(rows[1].contains("Approval waiting"));
+        assert!(!rows[1].contains("running"));
         app.approval = None;
         assert!(key(&mut app, KeyCode::Enter));
         assert_eq!(app.tools.expanded.len(), 1);
@@ -599,7 +854,7 @@ mod tests {
         assert!(rows[1].starts_with("v shell"));
         assert!(rows[2].contains("Arguments:"));
         assert_eq!(app.tools.rendered_top, 0);
-        let parts = view::transcript(&app.records, 0);
+        let parts = crate::view::transcript(&app.records, 0);
         let TranscriptPart::Card(card) = &parts[1] else {
             panic!("expected card")
         };
