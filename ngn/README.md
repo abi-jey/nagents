@@ -124,7 +124,10 @@ matching published core. The API is **not available in nagents
   **Ctrl+T** focuses it (or opens the catalog at narrower widths). Use **↑/↓**
   or **PageUp/PageDown** to move, **Space** or **←/→** to fold/unfold a branch,
   and **Enter** to inspect the selected run. **Esc** returns to the draft from
-  the sidebar or an inspection opened from it.
+  the sidebar or an inspection opened from it. **Tab/Shift+Tab** moves between
+  the tree and **Workspace & context**, collapsed by default. With the disclosure focused,
+  **Enter/Space** toggles it and **↑/↓**, **PageUp/PageDown**, or **Home/End**
+  scroll its details.
 - **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
   selected input, **Ctrl+K** clears pending inputs and pauses. These do not cancel active work.
 - **`/steer TEXT`** targets the capable active root at its next persisted safe point;
@@ -141,8 +144,9 @@ It uses the legacy default terminal palette and respects `TEXTUAL_ANIMATIONS=non
 Saved Python theme and animation settings, startup/exit transitions, and token
 usage in the footer are not supported by the native client.
 The Agents sidebar shows native run status, the displayed child approval, and
-read-only permissions, not Python model activity phases or the Workspace &
-context panel.
+read-only permissions, not Python model activity phases. Its context panel shows
+workspace, session, provider/model and configured authentication mode, not Python
+profiles, plugins, project trust, credentials or credential health.
 
 The browser also shows agent status, independent child transcripts, child-only
 cancellation, and correctly attributed child approvals in the root workspace.

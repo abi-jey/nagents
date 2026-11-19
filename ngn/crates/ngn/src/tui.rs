@@ -52,6 +52,8 @@ F3  New conversation (/new)
 F4  Focus tool cards · Up/Down select · Enter/Space toggle · Esc back
 F5  Subagents (/tasks)
 Ctrl+T  Focus Agents rail at wide widths; otherwise open inspector
+Agents: Tab/Shift+Tab  Focus Workspace & context · Enter/Space  Toggle
+Context: ↑/↓, PgUp/PgDn, Home/End  Scroll · Esc  Return to draft
 F6  Input queue (/queue [pause|resume|clear])
 F7  Steering receipts (/steering)
 Enter  Send or queue · Shift+Enter  Newline
@@ -445,18 +447,8 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     ]);
     frame.render_widget(header, rows[0]);
     let (conversation, rail) = agents::split(rows[1]);
-    if let Some(rail) = rail {
-        app.agents.draw(
-            frame,
-            rail,
-            &app.tasks,
-            app.rail_has_focus(),
-            (accent, muted),
-            app.approval
-                .as_ref()
-                .map(|approval| approval.run_id.as_str()),
-        );
-    }
+    let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
+    app.agents.observe_context(context);
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::new().fg(Color::DarkGray));
