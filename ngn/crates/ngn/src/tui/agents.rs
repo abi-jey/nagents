@@ -108,11 +108,17 @@ impl Context {
         let Some(viewport) = self.viewport else {
             return;
         };
+        if matches!(code, KeyCode::Enter | KeyCode::Char(' ')) {
+            self.expanded = !self.expanded;
+            self.scroll = 0;
+            return;
+        }
+        // A title-only viewport cannot scroll. Keep the offset for when the
+        // terminal is tall enough to show details again.
+        if viewport.page == 0 {
+            return;
+        }
         match code {
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                self.expanded = !self.expanded;
-                self.scroll = 0;
-            }
             KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::Down => self.scroll = self.scroll.saturating_add(1),
             KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(viewport.page),
@@ -142,7 +148,7 @@ impl Context {
         area: Rect,
         active: bool,
         (config, session): (&Config, &str),
-        (accent, muted): (Color, Color),
+        muted: Color,
     ) -> ContextViewport {
         let info = Color::Rgb(129, 199, 190);
         let title_style = if active {
@@ -163,7 +169,13 @@ impl Context {
             };
         }
         let clean = |value: &str| view::plain(value).replace(['\n', '\t'], " ");
-        let heading = |title| Line::styled(title, Style::new().add_modifier(Modifier::BOLD));
+        // Match the Python terminal theme's heading and assistant roles.
+        let heading = |title| {
+            Line::styled(
+                title,
+                Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD),
+            )
+        };
         // Allowlist display fields. Never format the provider or its errors,
         // nor consult environment variables, auth stores, or runtime auth.
         let (provider, model, auth) = match config.providers.get(&config.provider) {
@@ -188,7 +200,7 @@ impl Context {
             ),
         };
         let paragraph = Paragraph::new(vec![
-            heading("Workspace"),
+            heading("WORKSPACE"),
             Line::raw(clean(&config.workspace.to_string_lossy())),
             Line::raw(if config.read_only {
                 "Read-only mode: on"
@@ -196,17 +208,17 @@ impl Context {
                 "Read-only mode: off"
             }),
             Line::default(),
-            heading("Session"),
+            heading("SESSION"),
             Line::styled(
                 if session.is_empty() {
                     "New session".into()
                 } else {
                     clean(session)
                 },
-                Style::new().fg(accent),
+                Style::new().fg(Color::Cyan),
             ),
             Line::default(),
-            heading("Configuration"),
+            heading("CONFIGURATION"),
             Line::raw(provider),
             Line::raw(model),
             Line::styled(
@@ -214,7 +226,7 @@ impl Context {
                 Style::new().fg(muted),
             ),
             Line::default(),
-            heading("Authentication"),
+            heading("AUTHENTICATION"),
             Line::styled(auth, Style::new().fg(info)),
             Line::styled("Credential status not checked", Style::new().fg(muted)),
         ])
@@ -524,7 +536,7 @@ impl Rail {
                 Rect::new(inner.x, rows.bottom(), inner.width, context_height),
                 focused && self.context.focused,
                 (config, session),
-                (accent, muted),
+                muted,
             )
         })
     }
@@ -723,7 +735,7 @@ mod tests {
                 assert!(row(buffer, 3, 80..111).contains("Agents / Ctrl+T"));
                 assert!(row(buffer, 4, 82..109).starts_with("Agents / 0"));
                 assert!(row(buffer, 11, 80..111).contains("▸ Workspace & context"));
-                assert!(!(4..11).any(|y| row(buffer, y, 80..111).contains("Workspace")));
+                assert!(!(4..11).any(|y| row(buffer, y, 80..111).contains("WORKSPACE")));
             } else {
                 assert!(!row(buffer, 3, 0..110).contains("Agents /"));
                 assert!(!(4..13).any(|y| row(buffer, y, 0..110).contains("Workspace & context")));
@@ -901,6 +913,7 @@ mod tests {
         let buffer = paint_rail(&mut app, &config, 30);
         assert!(buffer[(3, 2)].modifier.contains(Modifier::REVERSED));
         assert!(row(&buffer, 28, 2..31).contains("▸ Workspace & context"));
+        assert_eq!(buffer[(3, 28)].fg, Color::Rgb(129, 199, 190));
         assert!(app.agents_key(key(KeyCode::Tab), 111));
         assert!(app.agents_key(key(KeyCode::Enter), 111));
         let buffer = paint_rail(&mut app, &config, 30);
@@ -909,9 +922,24 @@ mod tests {
         assert!(viewport.max_scroll > 0);
         assert!(buffer[(3, 18)].modifier.contains(Modifier::REVERSED));
         assert!(!buffer[(3, 2)].modifier.contains(Modifier::REVERSED));
-        assert!(buffer[(3, 19)].modifier.contains(Modifier::BOLD));
         assert!(row(&buffer, 18, 2..31).contains("▾ Workspace & context"));
-        assert!(row(&buffer, 19, 2..31).contains("Workspace"));
+        let find_row = |buffer: &Buffer, text: &str| {
+            (19..29)
+                .find(|&y| row(buffer, y, 3..29).trim_end() == text)
+                .unwrap_or_else(|| panic!("missing context row: {text}"))
+        };
+        let check_heading = |buffer: &Buffer, text: &str| {
+            let cell = &buffer[(3, find_row(buffer, text))];
+            assert_eq!(cell.fg, Color::Blue, "{text}");
+            assert!(cell.modifier.contains(Modifier::BOLD), "{text}");
+        };
+        for text in ["WORKSPACE", "SESSION", "CONFIGURATION"] {
+            check_heading(&buffer, text);
+        }
+        assert_eq!(
+            buffer[(3, find_row(&buffer, "session-example"))].fg,
+            Color::Cyan
+        );
         let panel = |buffer: &Buffer| {
             (19..29)
                 .map(|y| row(buffer, y, 3..29))
@@ -921,15 +949,17 @@ mod tests {
         let first = panel(&buffer);
         assert!(first.replace(' ', "").contains("日本語project"), "{first}");
         assert!(first.contains("Read-only mode: on"));
-        assert!(first.contains("Session") && first.contains("session-example"));
-        assert!(first.contains("Configuration"));
         assert!(!first.contains('\x1b'));
         assert!(app.agents_key(key(KeyCode::PageDown), 111));
         assert_eq!(app.agents.context.scroll, viewport.max_scroll.min(10));
         let buffer = paint_rail(&mut app, &config, 30);
         let last = panel(&buffer);
         assert!(last.contains("Provider: openai") && last.contains("Model: configured-model"));
-        assert!(last.contains("Authentication") && last.contains("API key mode"));
+        check_heading(&buffer, "AUTHENTICATION");
+        assert_eq!(
+            buffer[(3, find_row(&buffer, "API key mode"))].fg,
+            Color::Rgb(129, 199, 190)
+        );
         assert!(last.contains("Credential status not"));
         for forbidden in ["secret", "PRIVATE_KEY_VAR", "/private", "openai.json"] {
             assert!(!first.contains(forbidden) && !last.contains(forbidden));
@@ -963,6 +993,76 @@ mod tests {
         let last = panel(&paint_rail(&mut app, &config, 30));
         assert!(last.contains("Provider unavailable"), "{last}");
         assert!(last.contains("Mode unavailable") && !last.contains("/private"));
+    }
+
+    #[test]
+    fn title_only_resize_preserves_scroll_and_focus_but_allows_toggle() {
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: dir.path().into(),
+                data_dir: dir.path().join("state"),
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = App::default();
+        let draw = |app: &mut App, height| {
+            let mut terminal = Terminal::new(TestBackend::new(111, height)).unwrap();
+            terminal
+                .draw(|frame| super::super::draw(frame, app, &host, Instant::now()))
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let rail_has = |buffer: &Buffer, text: &str| {
+            (0..buffer.area.height).any(|y| row(buffer, y, 80..111).contains(text))
+        };
+        draw(&mut app, 40);
+        assert!(app.agents_key(
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+            111
+        ));
+        assert!(app.agents_key(key(KeyCode::Tab), 111));
+        assert!(app.agents_key(key(KeyCode::Enter), 111));
+        draw(&mut app, 40);
+        assert_eq!(app.agents.context.viewport.unwrap().page, 10);
+        assert!(app.agents_key(key(KeyCode::End), 111));
+        let full = draw(&mut app, 40);
+        assert!(rail_has(&full, "AUTHENTICATION"));
+        let saved = app.agents.context.scroll;
+        assert!(saved > 0);
+
+        let short = draw(&mut app, 15);
+        assert_eq!(app.agents.context.viewport.unwrap().page, 0);
+        assert!(rail_has(&short, "▾ Workspace & context"));
+        assert!(!rail_has(&short, "AUTHENTICATION"));
+        for code in [
+            KeyCode::Down,
+            KeyCode::Up,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Home,
+            KeyCode::End,
+        ] {
+            assert!(app.agents_key(key(code), 111));
+            assert_eq!(app.agents.context.scroll, saved);
+        }
+        let restored = draw(&mut app, 40);
+        for y in 3..33 {
+            assert_eq!(row(&full, y, 80..111), row(&restored, y, 80..111));
+        }
+        assert!(app.rail_has_focus() && app.agents.context.focused);
+
+        draw(&mut app, 15);
+        assert!(app.agents_key(key(KeyCode::Char(' ')), 111));
+        assert!(rail_has(&draw(&mut app, 15), "▸ Workspace & context"));
+        assert!(app.agents_key(key(KeyCode::Enter), 111));
+        assert_eq!(app.agents.context.scroll, 0);
+        assert!(rail_has(&draw(&mut app, 40), "WORKSPACE"));
+        assert!(app.rail_has_focus() && app.agents.context.focused);
     }
 
     #[test]
