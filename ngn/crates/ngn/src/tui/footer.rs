@@ -14,13 +14,13 @@ use ratatui::{
 
 use crate::view;
 
+use super::shimmer::Sweep;
+
 // Textual's activity.py and app.py: the field has seven Braille cells and
 // completion holds its own target for two seconds before returning to idle.
 pub(super) const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
 const DONE: Duration = Duration::from_secs(2);
 const IDLE_SETTLE: Duration = Duration::from_millis(1500);
-const SHIMMER_SECONDS: f64 = 1.8;
-const SHIMMER_NEUTRAL: f64 = 136.0;
 const WIDTH: usize = 7;
 const INFO: Color = Color::Cyan;
 const READY: Color = Color::Green;
@@ -180,9 +180,16 @@ pub(super) struct Activity {
     frame_at: Instant,
     seen: i64,
     run: Option<(String, Clock)>,
-    tool: Option<(i64, String, Clock)>,
+    tool: Option<ActiveTool>,
     responding: bool,
     outcome: Option<(RunStatus, String, Instant)>,
+}
+
+struct ActiveTool {
+    sequence: i64,
+    call_id: String,
+    name: String,
+    clock: Clock,
 }
 
 impl Default for Activity {
@@ -262,14 +269,14 @@ impl Activity {
                     Clock::new(now, wall_ms, started.unwrap_or(wall_ms)),
                 ));
             }
-            if self.tool.as_ref().map(|(seq, _, _)| *seq) != tool.map(|(record, _)| record.sequence)
+            if self.tool.as_ref().map(|tool| tool.sequence)
+                != tool.map(|(record, _)| record.sequence)
             {
-                self.tool = tool.map(|(record, call)| {
-                    (
-                        record.sequence,
-                        inline(&call.name),
-                        Clock::new(now, wall_ms, record.timestamp_ms),
-                    )
+                self.tool = tool.map(|(record, call)| ActiveTool {
+                    sequence: record.sequence,
+                    call_id: call.call_id.clone(),
+                    name: inline(&call.name),
+                    clock: Clock::new(now, wall_ms, record.timestamp_ms),
                 });
             }
             self.responding = responding;
@@ -369,6 +376,16 @@ impl Activity {
         }
     }
 
+    pub(super) fn shimmering_tool(&self) -> Option<view::ToolKey<'_>> {
+        if self.animated && self.phase == Phase::Tool {
+            let (run, _) = self.run.as_ref()?;
+            let tool = self.tool.as_ref()?;
+            Some((run, &tool.call_id))
+        } else {
+            None
+        }
+    }
+
     fn line(
         &self,
         now: Instant,
@@ -398,11 +415,12 @@ impl Activity {
                 style,
             )),
             Phase::Tool => {
-                if let Some((_, name, clock)) = &self.tool {
-                    let label = Span::styled(format!("Running {name}  /  Esc to cancel"), style);
+                if let Some(tool) = &self.tool {
+                    let label =
+                        Span::styled(format!("Running {}  /  Esc to cancel", tool.name), style);
                     spans.push(Span::styled(" · ", style));
                     if self.animated {
-                        spans.extend(shimmer(&label, clock.age(now)));
+                        spans.extend(shimmer(&label, tool.clock.age(now)));
                     } else {
                         spans.push(label);
                     }
@@ -465,28 +483,14 @@ fn inline(text: &str) -> String {
 }
 
 fn shimmer(label: &Span<'_>, age: Duration) -> Vec<Span<'static>> {
-    fn ease(x: f64) -> f64 {
-        x.powi(3) * (x * (x * 6. - 15.) + 10.)
-    }
-    // Match the default/unknown-surface branch of ToolCall in widgets.py.
-    let phase = (age.as_secs_f64() % SHIMMER_SECONDS) / SHIMMER_SECONDS;
-    let head = -4. + ease(phase) * (label.content.chars().count() as f64 + 12.);
-    let mut index = 0.;
+    let sweep = Sweep::new(label.content.chars().count(), age);
+    let mut index = 0;
     label
         .styled_graphemes(Style::default())
         .map(|grapheme| {
-            let distance = index - head;
-            index += grapheme.symbol.chars().count() as f64;
-            let amount = ease((1. - distance.abs() / 5.).max(0.));
-            let blend = ((distance + 5.) / 10.).clamp(0., 1.);
-            let [r, g, b] = [(129., 181.), (199., 165.), (190., 223.)].map(|(a, b)| {
-                let tint = a + (b - a) * blend;
-                channel(SHIMMER_NEUTRAL + (tint - SHIMMER_NEUTRAL) * amount)
-            });
-            Span::styled(
-                grapheme.symbol.to_owned(),
-                grapheme.style.fg(Color::Rgb(r, g, b)),
-            )
+            let color = sweep.color(index);
+            index += grapheme.symbol.chars().count();
+            Span::styled(grapheme.symbol.to_owned(), grapheme.style.fg(color))
         })
         .collect()
 }

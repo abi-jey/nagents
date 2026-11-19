@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.12
+
+- Animate the active native terminal tool card with a foreground-only teal/lavender sweep that respects reduced motion and stops for approval or completion.
+
 ## 0.100.11
 
 - The wide native ngn Agents sidebar adds a collapsed Workspace & context panel for workspace, session, provider, model, and configured authentication mode. Press Tab from the tree to focus the panel and Enter or Space to open it.

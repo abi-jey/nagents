@@ -42,6 +42,7 @@ mod completion;
 mod composer;
 mod footer;
 mod picker;
+mod shimmer;
 mod tool_cards;
 
 use completion::Command;
@@ -429,6 +430,29 @@ fn content_rows(area: Rect, menu_height: u16) -> [Rect; 4] {
     .areas(body)
 }
 
+fn main_transcript<'a>(
+    records: &'a [EventRecord],
+    approval: Option<&Approval>,
+    wall_ms: u64,
+) -> Vec<view::TranscriptPart<'a>> {
+    let mut parts = view::transcript(records, wall_ms);
+    if let Some(approval) = approval {
+        for part in &mut parts {
+            if let view::TranscriptPart::Card(card) = part
+                && card.key == (approval.run_id.as_str(), approval.call.call_id.as_str())
+                && card.status == "running"
+            {
+                // The live modal can precede its durable request. Don't
+                // report running or extrapolate elapsed through that gap.
+                card.status = "Approval waiting";
+                card.elapsed = None;
+                break;
+            }
+        }
+    }
+    parts
+}
+
 fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let wall_ms = ngn_core::store::now_ms();
     let accent = Color::Rgb(190, 224, 163);
@@ -471,10 +495,18 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         .borders(Borders::TOP)
         .border_style(Style::new().fg(Color::DarkGray));
     let transcript_area = block.inner(conversation);
-    let parts = view::transcript(&app.records, wall_ms);
+    let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     let interactive = app.tools_available();
-    let mut transcript =
-        tool_cards::Layout::new(&parts, transcript_area.width, Some(&app.tools), interactive);
+    let sweep = (!app.shows_overlay())
+        .then(|| app.activity.shimmering_tool())
+        .flatten();
+    let mut transcript = tool_cards::Layout::new(
+        &parts,
+        transcript_area.width,
+        Some(&app.tools),
+        interactive,
+        sweep,
+    );
     let welcome_text;
     if app.records.is_empty() {
         welcome_text = welcome(&host.config);
@@ -488,7 +520,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         }
     }
     app.tools
-        .draw(frame, transcript_area, transcript, &mut app.scroll);
+        .draw(frame, transcript_area, transcript, &mut app.scroll, now);
     frame.render_widget(block.title(app.tools.title(interactive)), conversation);
     if let Some(menu) = menu {
         menu.draw(
@@ -532,7 +564,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             ));
             let inner = block.inner(area);
             let parts = view::transcript(&app.task_records, wall_ms);
-            let transcript = tool_cards::Layout::new(&parts, inner.width, None, false);
+            let transcript = tool_cards::Layout::new(&parts, inner.width, None, false, None);
             frame.render_widget(block, area);
             transcript.draw_from_bottom(frame, inner, app.task_scroll);
         } else {
@@ -925,7 +957,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
     let mut motion = tokio::time::interval(footer::FRAME);
     motion.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cached: Option<Buffer> = None;
-    let mut footer_only = false;
+    let mut motion_only = false;
     let mut cached_caret_visible = false;
     loop {
         let now = Instant::now();
@@ -939,7 +971,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                     .resize(area.width, content_rows(area, 0)[1].height);
                 app.caret.focus(app.composer_available(), now);
                 let caret_visible = app.caret_visible(now);
-                if footer_only
+                if motion_only
                     && cached_caret_visible == caret_visible
                     && let Some(previous) = &cached
                     && previous.area == frame.area()
@@ -948,6 +980,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                     // full frame rather than reflow 5000 transcript events at 30fps.
                     let area = footer_area(frame.area());
                     frame.buffer_mut().clone_from(previous);
+                    app.tools.paint_sweep(frame.buffer_mut(), now);
                     frame.render_widget(Clear, area);
                     app.activity.draw(frame, area, &app, &host.config, now);
                 } else {
@@ -958,11 +991,11 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
             })?
             .area
             .width;
-        footer_only = false;
+        motion_only = false;
         tokio::select! {
             _ = &mut signal => break,
             _ = ticks.tick() => app.state(&host).await,
-            _ = motion.tick(), if animate => footer_only = true,
+            _ = motion.tick(), if animate => motion_only = true,
             received = receiver.recv() => {
                 match received { Ok(record) if record.session_id == app.session => app.catch_up(&host).await?, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => app.catch_up(&host).await?, _ => () }
                 app.state(&host).await;
