@@ -3,7 +3,7 @@ members = ["crates/ngn-protocol", "crates/ngn-core", "crates/ngn"]
 resolver = "2"
 
 [workspace.package]
-version = "0.100.17"
+version = "0.100.18"
 edition = "2024"
 rust-version = "1.93"
 license = "MIT"
