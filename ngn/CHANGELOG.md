@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.28
+
+- Remove the native YOU and NGN transcript headings without changing message content.
+
 ## 0.100.27
 
 - Empty native conversations show one short F1 and `/sessions` tip instead of the multi-line welcome. The tip is hidden when it does not fit or the conversation already has content.
