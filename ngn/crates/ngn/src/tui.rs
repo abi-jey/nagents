@@ -42,13 +42,14 @@ mod completion;
 mod composer;
 mod footer;
 mod picker;
+mod tool_cards;
 
 use completion::Command;
 
 const HELP: &str = "\
 F2  Conversations (/sessions, /resume; /resume ID opens directly)
 F3  New conversation (/new)
-F4  Toggle tool details
+F4  Focus tool cards · Up/Down select · Enter/Space toggle · Esc back
 F5  Subagents (/tasks)
 Ctrl+T  Focus Agents rail at wide widths; otherwise open inspector
 F6  Input queue (/queue [pause|resume|clear])
@@ -90,9 +91,9 @@ struct App {
     activity: footer::Activity,
     active: Option<Run>,
     approval: Option<Approval>,
-    scroll: u16,
+    scroll: Option<usize>,
     preview_scroll: u16,
-    details: bool,
+    tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
     agents: agents::Rail,
@@ -289,11 +290,26 @@ impl App {
     }
 
     fn composer_available(&self) -> bool {
+        self.tools_available() && !self.tools.focused()
+    }
+
+    fn tools_available(&self) -> bool {
         !self.shows_overlay() && self.approval.is_none() && !self.agents.focused
     }
 
     fn caret_visible(&self, now: Instant) -> bool {
         self.composer_available() && self.caret.visible(now)
+    }
+
+    fn tool_card_key(&mut self, key: KeyEvent) -> bool {
+        if self.tools_available() {
+            self.tools.key(key, &mut self.scroll)
+        } else {
+            // Modal handlers take priority. If approval suspended card focus,
+            // don't let its unhandled Enter/Space fall through to the composer.
+            key.code == KeyCode::F(4)
+                || (self.tools.focused() && !matches!(key.code, KeyCode::F(_)))
+        }
     }
 
     fn completion_key(&mut self, key: KeyEvent) -> bool {
@@ -323,7 +339,8 @@ impl App {
         self.session = id;
         self.after = 0;
         self.records.clear();
-        self.scroll = 0;
+        self.scroll = None;
+        self.tools = tool_cards::Cards::default();
         self.picker = None;
         self.tasks.clear();
         self.agents = agents::Rail::default();
@@ -410,7 +427,7 @@ fn content_rows(area: Rect, menu_height: u16) -> [Rect; 4] {
     .areas(body)
 }
 
-fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
+fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let wall_ms = ngn_core::store::now_ms();
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
@@ -458,27 +475,29 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 .map(|approval| approval.run_id.as_str()),
         );
     }
-    let text = if app.records.is_empty() {
-        welcome(&host.config)
-    } else {
-        view::transcript(&app.records, app.details, wall_ms)
-    };
-    let mut lines: Vec<Line<'_>> = text.lines().map(Line::raw).collect();
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::new().fg(Color::DarkGray));
+    let transcript_area = block.inner(conversation);
+    let parts = view::transcript(&app.records, wall_ms);
+    let interactive = app.tools_available();
+    let mut transcript =
+        tool_cards::Layout::new(&parts, transcript_area.width, Some(&app.tools), interactive);
+    let welcome_text;
+    if app.records.is_empty() {
+        welcome_text = welcome(&host.config);
+        transcript.text(&welcome_text);
+    }
     if let Some(reason) = &app.failure {
         // Keep the complete rejection in the scrollable conversation as well
         // as the one-line footer. It remains visible without submitting again.
-        lines.extend(footer::failure_lines(reason, conversation.width));
+        for line in footer::failure_lines(reason, transcript_area.width) {
+            transcript.push(line);
+        }
     }
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::new().fg(Color::DarkGray)),
-    );
-    let total = paragraph.line_count(conversation.width) as u16;
-    let top = total
-        .saturating_sub(conversation.height.saturating_sub(1))
-        .saturating_sub(app.scroll);
-    frame.render_widget(paragraph.scroll((top, 0)), conversation);
+    app.tools
+        .draw(frame, transcript_area, transcript, &mut app.scroll);
+    frame.render_widget(block.title(app.tools.title(interactive)), conversation);
     if let Some(menu) = menu {
         menu.draw(
             frame,
@@ -514,25 +533,16 @@ fn draw(frame: &mut Frame, app: &App, host: &Host, now: Instant) {
                 .tasks
                 .get(app.task_index)
                 .map_or("Subagent", |task| task.title.as_str());
-            let text = view::transcript(&app.task_records, app.details, wall_ms);
-            let paragraph =
-                Paragraph::new(text)
-                    .wrap(Wrap { trim: false })
-                    .block(Block::bordered().title(format!(
-                        " Agent: {} · Esc {} · Ctrl+X cancel ",
-                        view::plain(title),
-                        if app.task_from_rail { "close" } else { "back" }
-                    )));
-            let lines = paragraph.line_count(area.width) as u16;
-            frame.render_widget(
-                paragraph.scroll((
-                    lines
-                        .saturating_sub(area.height.saturating_sub(2))
-                        .saturating_sub(app.task_scroll),
-                    0,
-                )),
-                area,
-            );
+            let block = Block::bordered().title(format!(
+                " Agent: {} · Esc {} · Ctrl+X cancel ",
+                view::plain(title),
+                if app.task_from_rail { "close" } else { "back" }
+            ));
+            let inner = block.inner(area);
+            let parts = view::transcript(&app.task_records, wall_ms);
+            let transcript = tool_cards::Layout::new(&parts, inner.width, None, false);
+            frame.render_widget(block, area);
+            transcript.draw_from_bottom(frame, inner, app.task_scroll);
         } else {
             let items = app.tasks.iter().map(|task| {
                 ListItem::new(format!(
@@ -856,7 +866,7 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
             } else {
                 String::new()
             };
-            app.scroll = 0;
+            app.scroll = None;
         }
     }
     app.input.clear();
@@ -877,7 +887,7 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
         }
         Err(error) => {
             app.failure = Some(format!("Not sent: {error}"));
-            app.scroll = 0;
+            app.scroll = None;
             false
         }
     }
@@ -896,9 +906,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
         activity: footer::Activity::new(Instant::now(), animate),
         active: None,
         approval: None,
-        scroll: 0,
         preview_scroll: 0,
-        details: false,
         tasks: Vec::new(),
         task_picker: false,
         task_index: 0,
@@ -951,7 +959,7 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                     frame.render_widget(Clear, area);
                     app.activity.draw(frame, area, &app, &host.config, now);
                 } else {
-                    draw(frame, &app, &host, now);
+                    draw(frame, &mut app, &host, now);
                     cached = animate.then(|| frame.buffer_mut().clone());
                     cached_caret_visible = caret_visible;
                 }
@@ -1030,20 +1038,20 @@ pub async fn run(host: Arc<Host>, session: String) -> Result<()> {
                             app.state(&host).await; continue;
                         }
                         if app.agents_key(key, width) {
+                            if app.agents.focused { app.tools.blur(); }
                             if app.task_picker { app.state(&host).await; }
                             continue;
                         }
+                        if app.tool_card_key(key) { continue; }
                         if app.completion_key(key) { continue; }
                         match key.code {
                             KeyCode::Esc => { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } },
                             KeyCode::F(1) => { app.help = true; app.help_scroll = 0; },
                             KeyCode::F(2) => app.open_picker(&host).await?,
                             KeyCode::F(3) => { app.switch(&host, host.store.create_session().await?.id).await?; },
-                            KeyCode::F(4) => app.details = !app.details,
                             KeyCode::F(5) => { app.open_tasks(false); app.state(&host).await; },
                             KeyCode::F(6) => { app.queue_picker = true; app.queue_index = 0; app.state(&host).await; },
-                            KeyCode::PageUp => app.scroll = app.scroll.saturating_add(10),
-                            KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
+                            KeyCode::PageUp | KeyCode::PageDown => app.tools.page(&mut app.scroll, key.code == KeyCode::PageUp),
                             // Approval and overlay shortcuts above retain their routing.
                             // Draft edits and submission require the same focus as the caret.
                             _ if !app.composer_available() => (),
@@ -1130,7 +1138,7 @@ mod tests {
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(28, 32)).unwrap();
         let now = Instant::now();
         terminal
-            .draw(|frame| draw(frame, &app, &host, now))
+            .draw(|frame| draw(frame, &mut app, &host, now))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let row = |y| -> String {
@@ -1151,7 +1159,7 @@ mod tests {
         // Shortcuts are in the help overlay, not the two status rows.
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 32)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &app, &host, now))
+            .draw(|frame| draw(frame, &mut app, &host, now))
             .unwrap();
         let screen: String = terminal
             .backend()
@@ -1341,7 +1349,7 @@ mod tests {
         assert_eq!(app.queue.entries.len(), 2);
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(130, 35)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &app, &host, Instant::now()))
+            .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
             .unwrap();
         let contents: String = terminal
             .backend()
@@ -1373,7 +1381,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let app = App {
+        let mut app = App {
             session: "ngn-test".into(),
             input: "hello".into(),
             status: "Ready".into(),
@@ -1383,7 +1391,7 @@ mod tests {
             let mut terminal =
                 Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &app, &host, Instant::now()))
+                .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
                 .unwrap();
         }
     }
@@ -1417,7 +1425,7 @@ mod tests {
         let mut app = App {
             session: first.id.clone(),
             input: "unsent draft".into(),
-            scroll: 13,
+            scroll: Some(13),
             ..App::default()
         };
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
@@ -1435,7 +1443,7 @@ mod tests {
         app.picker_key(&host, key(KeyCode::Esc)).await.unwrap();
         assert!(app.picker.is_none());
         assert_eq!(app.input, "unsent draft");
-        assert_eq!(app.scroll, 13);
+        assert_eq!(app.scroll, Some(13));
         assert!(host.active().await.iter().any(|active| active.id == run.id));
 
         for (draft, suggestion, hint) in [
@@ -1449,7 +1457,7 @@ mod tests {
                 let mut terminal =
                     Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
                 terminal
-                    .draw(|frame| draw(frame, &app, &host, Instant::now()))
+                    .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 let row = |y| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
@@ -1562,9 +1570,7 @@ mod tests {
             status: String::new(),
             active: None,
             approval: None,
-            scroll: 0,
             preview_scroll: 0,
-            details: false,
             tasks: Vec::new(),
             task_picker: false,
             task_index: 0,
@@ -1602,6 +1608,26 @@ mod tests {
         assert_eq!(approval.run_id, child_id);
         assert_eq!(approval.agent_title, "Preview child");
         assert_eq!(approval.depth, 1);
+        let child_run = host
+            .active()
+            .await
+            .into_iter()
+            .find(|run| run.id == child_id)
+            .unwrap();
+        host.emit(
+            &child_run,
+            ngn_protocol::Event::ToolCompleted {
+                result: ngn_protocol::ToolResult {
+                    call_id: "child-failure".into(),
+                    name: "read_file".into(),
+                    result: serde_json::Value::Null,
+                    error: "child fixture failed: \x1b[2Jmissing file".into(),
+                },
+                duration_ms: 7,
+            },
+        )
+        .await
+        .unwrap();
         assert!(host.decide(&root.id, &approval.id, true).await.is_err());
         host.decide(child_id, &approval.id, false).await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1620,12 +1646,11 @@ mod tests {
         app.catch_up(&host).await.unwrap();
         app.state(&host).await;
         assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[app.task_index].run_id, child_id);
         assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Completed);
-        assert!(
-            app.task_records
-                .iter()
-                .all(|record| record.session_id == app.tasks[0].session_id)
-        );
+        assert!(app.task_records.iter().all(
+            |record| record.session_id == app.tasks[0].session_id && record.run_id == child_id
+        ));
         assert!(
             app.task_records
                 .iter()
@@ -1638,7 +1663,7 @@ mod tests {
         );
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &app, &host, Instant::now()))
+            .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
             .unwrap();
         let contents: String = terminal
             .backend()
@@ -1648,6 +1673,12 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(contents.contains("Agent: Preview child"));
+        assert!(contents.contains("read_file · failed · 7ms"));
+        assert!(contents.contains("Error: child fixture failed: [2Jmissing file"));
+        assert!(contents.contains("Error: Tool approval denied, expired or cancelled"));
+        assert!(!contents.contains('\x1b'));
+        assert!(!contents.contains("Arguments:"));
+        assert!(!contents.contains("Result:"));
         assert!(!directory.path().join("demo.txt").exists());
         host.shutdown().await;
     }

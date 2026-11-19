@@ -453,14 +453,14 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let app = App {
+        let mut app = App {
             input: "draft".into(),
             ..App::default()
         };
         for width in [110, 111] {
             let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
             terminal
-                .draw(|frame| super::super::draw(frame, &app, &host, Instant::now()))
+                .draw(|frame| super::super::draw(frame, &mut app, &host, Instant::now()))
                 .unwrap();
             let buffer = terminal.backend().buffer();
             assert_eq!(buffer[(width - 1, 13)].symbol(), "┐"); // Composer top-right.
@@ -503,7 +503,7 @@ mod tests {
             for (height, expected) in [(11, 2), (13, 4), (14, 4), (15, 4)] {
                 let mut terminal = Terminal::new(TestBackend::new(111, height)).unwrap();
                 terminal
-                    .draw(|frame| super::super::draw(frame, &app, &host, now))
+                    .draw(|frame| super::super::draw(frame, &mut app, &host, now))
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 let rail_rows: Vec<_> = (0..height).map(|y| row(buffer, y, 82..109)).collect();
@@ -650,7 +650,7 @@ mod tests {
         let mut app = App {
             session: host.store.create_session().await.unwrap().id,
             input: "/se".into(),
-            scroll: 7,
+            scroll: Some(7),
             ..App::default()
         };
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
@@ -693,7 +693,7 @@ mod tests {
         assert!(!app.agents_key(focus, 111)); // Inspector owns input.
         app.task_key(&host, key(KeyCode::PageUp)).await;
         assert_eq!(app.task_scroll, 10);
-        assert_eq!(app.scroll, 7);
+        assert_eq!(app.scroll, Some(7));
         app.task_key(&host, key(KeyCode::Esc)).await;
         assert!(!app.task_picker && app.composer_available());
         assert!(app.agents_key(focus, 111));
@@ -709,7 +709,7 @@ mod tests {
         app.task_key(&host, key(KeyCode::Esc)).await;
         assert!(!app.rail_has_focus());
         assert_eq!(app.input, "/se");
-        assert_eq!(app.scroll, 7);
+        assert_eq!(app.scroll, Some(7));
         assert!(host.active().await.is_empty());
         assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
         assert!(host.store.events(&app.session, 0).await.unwrap().is_empty());

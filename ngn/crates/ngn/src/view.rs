@@ -107,6 +107,48 @@ struct ToolRow<'a> {
     active_ms: u64,
 }
 
+pub type ToolKey<'a> = (&'a str, &'a str);
+
+pub struct ToolCard<'a> {
+    pub key: ToolKey<'a>,
+    pub label: String,
+    pub status: &'static str,
+    pub elapsed: Option<u64>,
+    call: Option<&'a ToolCall>,
+    result: Option<&'a ToolResult>,
+}
+
+impl ToolCard<'_> {
+    pub fn error_detail(&self) -> Option<String> {
+        self.result
+            .filter(|result| !result.error.is_empty())
+            .map(|result| {
+                let error = ngn_core::tools::bounded(&result.error, 4096);
+                format!("  Error: {}", plain(&error))
+            })
+    }
+
+    pub fn details(&self) -> impl Iterator<Item = String> {
+        use ngn_core::tools::bounded;
+
+        let arguments = self.call.map(|call| {
+            format!(
+                "  Arguments: {}",
+                bounded(&call.arguments.to_string(), 4096)
+            )
+        });
+        let result = self
+            .result
+            .filter(|result| !result.result.is_null())
+            .map(|result| format!("  Result: {}", bounded(&result.result.to_string(), 4096)));
+        [arguments, result]
+            .into_iter()
+            .flatten()
+            .map(|text| plain(&text))
+            .chain(self.error_detail())
+    }
+}
+
 impl<'a> ToolRow<'a> {
     fn new(index: usize, call: Option<&'a ToolCall>, since_ms: u64) -> Self {
         Self {
@@ -117,49 +159,39 @@ impl<'a> ToolRow<'a> {
         }
     }
 
-    fn render(&self, output: &mut String, details: bool, now_ms: u64, finished: Option<RunStatus>) {
-        use std::fmt::Write as _;
-
-        let (status, result) = match self.state {
+    fn card(&self, key: ToolKey<'a>, now_ms: u64, finished: Option<RunStatus>) -> ToolCard<'a> {
+        let (status, elapsed, result) = match self.state {
             ToolState::Completed {
                 result,
                 elapsed_ms,
                 denied,
             } => (
-                format!(
-                    "{} · {}",
-                    if denied {
-                        "denied"
-                    } else if result.error.is_empty() {
-                        "complete"
-                    } else {
-                        "failed"
-                    },
-                    duration(elapsed_ms)
-                ),
+                if denied {
+                    "denied"
+                } else if result.error.is_empty() {
+                    "complete"
+                } else {
+                    "failed"
+                },
+                Some(elapsed_ms),
                 Some(result),
             ),
-            ToolState::Denied => (format!("denied · {}", duration(self.active_ms)), None),
+            ToolState::Denied => ("denied", Some(self.active_ms), None),
             _ if finished.is_some() => (
                 match finished {
                     Some(RunStatus::Cancelled) => "cancelled",
                     Some(RunStatus::Failed) => "failed",
                     _ => "interrupted",
-                }
-                .into(),
+                },
+                None,
                 None,
             ),
-            ToolState::Waiting { .. } => (
-                format!("Approval waiting · active {}", duration(self.active_ms)),
-                None,
-            ),
+            ToolState::Waiting { .. } => ("Approval waiting", Some(self.active_ms), None),
             ToolState::Running { since_ms } => (
-                format!(
-                    "running · {}",
-                    duration(
-                        self.active_ms
-                            .saturating_add(now_ms.saturating_sub(since_ms))
-                    )
+                "running",
+                Some(
+                    self.active_ms
+                        .saturating_add(now_ms.saturating_sub(since_ms)),
                 ),
                 None,
             ),
@@ -173,27 +205,30 @@ impl<'a> ToolRow<'a> {
             },
             |call| (call.name.as_str(), target(call)),
         );
-        let _ = write!(output, "\n  ◇ {name}{hint} · {status}");
-        if let Some(result) = result.filter(|result| !result.error.is_empty()) {
-            let _ = write!(output, ": {}", result.error);
-        }
-        output.push('\n');
-        if details {
-            if let Some(call) = self.call {
-                output.push_str(&ngn_core::tools::bounded(&call.arguments.to_string(), 4096));
-                output.push('\n');
-            }
-            if let Some(result) = result.filter(|result| !result.result.is_null()) {
-                output.push_str(&ngn_core::tools::bounded(&result.result.to_string(), 4096));
-                output.push('\n');
-            }
+        let name = plain(name);
+        ToolCard {
+            key,
+            label: format!(
+                "{}{hint}",
+                name.split_whitespace().collect::<Vec<_>>().join(" ")
+            ),
+            status,
+            elapsed,
+            call: self.call,
+            result,
         }
     }
 }
 
 /// Project each tool into the position of its first retained event, not a new
 /// transcript row at every transition. The durable event history is unchanged.
-fn tool_rows(records: &[EventRecord]) -> HashMap<usize, (ToolRow<'_>, Option<RunStatus>)> {
+struct ProjectedTool<'a> {
+    key: ToolKey<'a>,
+    row: ToolRow<'a>,
+    finished: Option<RunStatus>,
+}
+
+fn tool_rows(records: &[EventRecord]) -> HashMap<usize, ProjectedTool<'_>> {
     let mut calls = HashMap::new();
     let mut approvals = HashMap::new();
     let mut finished = HashMap::new();
@@ -282,17 +317,34 @@ fn tool_rows(records: &[EventRecord]) -> HashMap<usize, (ToolRow<'_>, Option<Run
     }
     calls
         .into_iter()
-        .map(|((run, _), row)| (row.index, (row, finished.get(run).copied())))
+        .map(|(key, row)| {
+            (
+                row.index,
+                ProjectedTool {
+                    key,
+                    row,
+                    finished: finished.get(key.0).copied(),
+                },
+            )
+        })
         .collect()
 }
 
-pub fn transcript(records: &[EventRecord], details: bool, now_ms: u64) -> String {
+pub enum TranscriptPart<'a> {
+    Text(String),
+    Card(ToolCard<'a>),
+}
+
+pub fn transcript(records: &[EventRecord], now_ms: u64) -> Vec<TranscriptPart<'_>> {
     let mut output = String::new();
+    let mut cards = Vec::new();
     let mut streamed = false;
     let rows = tool_rows(records);
     for (index, record) in records.iter().enumerate() {
-        if let Some((row, finished)) = rows.get(&index) {
-            row.render(&mut output, details, now_ms, *finished);
+        if let Some(tool) = rows.get(&index) {
+            output.push('\n');
+            cards.push((output.len(), tool));
+            output.push('\n'); // One logical line, replaced by the card below.
         }
         match &record.event {
             Event::QueueUpdated { paused } => output.push_str(if *paused {
@@ -352,12 +404,59 @@ pub fn transcript(records: &[EventRecord], details: bool, now_ms: u64) -> String
     while !output.is_char_boundary(start) {
         start += 1;
     }
-    plain(&output[start..])
+    let mut parts = Vec::new();
+    for (offset, tool) in cards {
+        if offset < start {
+            continue;
+        }
+        if start < offset {
+            parts.push(TranscriptPart::Text(plain(&output[start..offset])));
+        }
+        parts.push(TranscriptPart::Card(tool.row.card(
+            tool.key,
+            now_ms,
+            tool.finished,
+        )));
+        start = offset + 1;
+    }
+    if start < output.len() {
+        parts.push(TranscriptPart::Text(plain(&output[start..])));
+    }
+    parts
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{transcript as project, *};
+
+    fn transcript(records: &[EventRecord], details: bool, now_ms: u64) -> String {
+        use std::fmt::Write as _;
+
+        let mut output = String::new();
+        for part in project(records, now_ms) {
+            match part {
+                TranscriptPart::Text(text) => output.push_str(&text),
+                TranscriptPart::Card(card) => {
+                    let _ = write!(output, "> {} · {}", card.label, card.status);
+                    if let Some(elapsed) = card.elapsed {
+                        let active = if card.status == "Approval waiting" {
+                            "active "
+                        } else {
+                            ""
+                        };
+                        let _ = write!(output, " · {active}{}", duration(elapsed));
+                    }
+                    output.push('\n');
+                    if details {
+                        for line in card.details() {
+                            let _ = writeln!(output, "{line}");
+                        }
+                    }
+                }
+            }
+        }
+        output
+    }
 
     fn event(run: &str, timestamp_ms: u64, event: Event) -> EventRecord {
         EventRecord {
@@ -440,25 +539,25 @@ mod tests {
         let waiting = transcript(&records, false, 9100);
         assert_eq!(
             waiting,
-            "\n  ◇ shell · first · Approval waiting · active 8ms\n\
-             \n  ◇ shell · other · running · 8.1s\n\
-             \n  ◇ shell · second-run · Approval waiting · active 12ms\n"
+            "\n> shell · first · Approval waiting · active 8ms\n\
+             \n> shell · other · running · 8.1s\n\
+             \n> shell · second-run · Approval waiting · active 12ms\n"
         );
         records.push(event("r1", 9100, timing("shared", 8, false)));
         assert_eq!(transcript(&records, false, 9100), waiting);
         records.push(event("r1", 9101, decision("approval", true)));
         let running = transcript(&records, false, 9300);
-        assert!(running.starts_with("\n  ◇ shell · first · running · 208ms\n"));
+        assert!(running.starts_with("\n> shell · first · running · 208ms\n"));
         assert!(running.ends_with("second-run · Approval waiting · active 12ms\n"));
         assert!(transcript(&records, false, 10342).contains("first · running · 1.25s"));
         records.push(event("r1", 14112, complete(&first, 5012, "")));
         let terminal = transcript(&records, false, 17000);
-        assert!(terminal.starts_with("\n  ◇ shell · first · complete · 5.01s\n"));
-        assert_eq!(terminal.matches("◇ shell · first").count(), 1);
+        assert!(terminal.starts_with("\n> shell · first · complete · 5.01s\n"));
+        assert_eq!(terminal.matches("> shell · first").count(), 1);
         assert_eq!(terminal.lines().count(), running.lines().count());
         assert!(!terminal.contains("tool output"));
         assert!(transcript(&records, true, 17000).starts_with(
-            "\n  ◇ shell · first · complete · 5.01s\n{\"command\":\"first\"}\n{\"stdout\":\"tool output\"}\n"
+            "\n> shell · first · complete · 5.01s\n  Arguments: {\"command\":\"first\"}\n  Result: {\"stdout\":\"tool output\"}\n"
         ));
     }
 
@@ -474,16 +573,17 @@ mod tests {
         records.push(event("r1", 5001, decision("approval", false)));
         assert_eq!(
             transcript(&records, false, 6000),
-            "\n  ◇ shell · denial · denied · 8ms\n"
+            "\n> shell · denial · denied · 8ms\n"
         );
         records.push(event(
             "r1",
             5002,
             complete(&call, 10, "Tool approval denied"),
         ));
-        let denied = "\n  ◇ shell · denial · denied · 10ms: Tool approval denied\n";
+        let denied = "\n> shell · denial · denied · 10ms\n";
         assert_eq!(transcript(&records, false, 6000), denied);
         assert_eq!(transcript(&records, false, 60000), denied);
+        assert!(transcript(&records, true, 60000).contains("Error: Tool approval denied"));
     }
 
     #[test]
@@ -535,8 +635,9 @@ mod tests {
         let records = [event("r1", 1, complete(&call, 1220, "execution failed"))];
         assert_eq!(
             transcript(&records, false, 10000),
-            "\n  ◇ shell · failed · 1.22s: execution failed\n"
+            "\n> shell · failed · 1.22s\n"
         );
+        assert!(transcript(&records, true, 10000).contains("Error: execution failed"));
     }
 
     #[test]
