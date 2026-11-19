@@ -16,6 +16,7 @@ from pathlib import Path
 
 import aiohttp
 from protocol_fixture import CRASH_NOTICE, CRASH_PROMPT
+from pty_smoke import WorkspaceReady
 from subagent_smoke import require, terminal_text
 
 
@@ -310,7 +311,13 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, c
 
 
 def _wait_for_tui_exit(
-    process: subprocess.Popen[bytes], master: int, output: bytes, phase: str, *, timeout: float = 15
+    process: subprocess.Popen[bytes],
+    master: int,
+    output: bytes,
+    phase: str,
+    *,
+    timeout: float = 15,
+    dimensions: tuple[int, int] = (40, 140),
 ) -> None:
     # A final redraw or terminal cleanup can block on a full PTY. Keep reading
     # while waiting, then collect any buffered tail before reusing the PTY.
@@ -328,7 +335,7 @@ def _wait_for_tui_exit(
             break
     else:
         failure = f"did not finish shutdown within {timeout:g}s of Ctrl+Q (exit={process.poll()})"
-    pane = terminal_text(bytes(captured))[-2500:].decode(errors="replace") or "<empty>"
+    pane = terminal_text(bytes(captured), *dimensions)[-2500:].decode(errors="replace") or "<empty>"
     raise AssertionError(f"{phase} queue TUI {failure}\nFinal pane: {pane}\nPTY tail: {bytes(captured[-3000:])!r}")
 
 
@@ -345,9 +352,10 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
     process = subprocess.Popen(arguments, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     output = b""
     try:
+        ready = WorkspaceReady(master)
 
         def visible() -> bytes:
-            return terminal_text(output)
+            return terminal_text(output, ready.rows, ready.columns)
 
         def wait_for(predicate: Callable[[], bool], explanation: str) -> None:
             nonlocal output
@@ -363,7 +371,10 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
                     output += os.read(master, 65536)
             raise AssertionError(explanation + f": {visible()[-2500:]!r}")
 
-        wait_for(lambda: b"Welcome to ngn" in visible(), "Queue TUI did not render")
+        wait_for(
+            lambda: ready.observe(output, b"Welcome to ngn" in visible()),
+            "Queue TUI did not render and repaint at the resized PTY dimensions",
+        )
         database = next(data.rglob("host.sqlite3"))
 
         def statuses() -> dict[str, str]:
@@ -430,7 +441,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
         with sqlite3.connect(database) as connection:
             session = connection.execute("SELECT id FROM sessions").fetchone()[0]
         os.write(master, b"\x11")
-        _wait_for_tui_exit(process, master, output, "First")
+        _wait_for_tui_exit(process, master, output, "First", dimensions=(ready.rows, ready.columns))
         mask = termios.ECHO | termios.ICANON | termios.ISIG
         require(
             termios.tcgetattr(slave)[3] & mask == before[3] & mask,
@@ -444,7 +455,11 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
             stderr=slave,
             start_new_session=True,
         )
-        wait_for(lambda: b"F1 help" in visible(), "Resumed queue TUI did not render")
+        ready = WorkspaceReady(master)
+        wait_for(
+            lambda: ready.observe(output, b"F1 help" in visible()),
+            "Resumed queue TUI did not render and repaint at the resized PTY dimensions",
+        )
         os.write(master, b"\x1b[17~")
         wait_for(
             lambda: b"Input queue: PAUSED" in visible() and b"read persisted input" in visible(),
@@ -460,7 +475,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
             "Recovered TUI input did not complete on explicit resume",
         )
         os.write(master, b"\x11")
-        _wait_for_tui_exit(process, master, output, "Resumed")
+        _wait_for_tui_exit(process, master, output, "Resumed", dimensions=(ready.rows, ready.columns))
         require(
             termios.tcgetattr(slave)[3] & mask == before[3] & mask,
             "Resumed queue TUI did not restore terminal mode",

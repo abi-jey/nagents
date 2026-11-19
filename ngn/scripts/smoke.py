@@ -22,6 +22,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 from protocol_fixture import write_config as write_protocol_fixture_config
+from pty_smoke import WorkspaceReady
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -378,11 +379,15 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
             # real PTY, not a plain text pipe; normalize CSI boundaries for assertions.
             return b" ".join(re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b" ", output).split())
 
+        ready = WorkspaceReady(master)
         deadline = time.monotonic() + 10
-        while b"Welcome to ngn" not in visible() and time.monotonic() < deadline:
+        while not ready.observe(output, b"Welcome to ngn" in visible()) and time.monotonic() < deadline:
             if select.select([master], [], [], 0.1)[0]:
                 output += os.read(master, 65536)
-        require(b"Welcome to ngn" in visible(), "Native TUI did not render on a real PTY")
+        require(
+            ready.observe(output, b"Welcome to ngn" in visible()),
+            "Native TUI did not render and repaint at the resized PTY dimensions",
+        )
         destination = workspace / "changed.txt"
         require(not destination.exists(), "Approval fixture destination already exists")
         os.write(master, b"write a file\r")
