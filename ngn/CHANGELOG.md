@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.10
+
+- The native ngn TUI now has individually expandable tool cards: press F4 to focus, use arrows to select, and press Enter or Space to toggle. The read-only Agents inspector shows tool failure and denial reasons inline.
+
 ## 0.100.9
 
 - The native ngn TUI now shows a persistent Agents sidebar above 110 columns, with a collapsible task tree, native status and read-only labels, and exact-run inspection.
