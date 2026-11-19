@@ -118,6 +118,12 @@ matching published core. The API is **not available in nagents
   or press **Esc** to close without changing the draft or scroll position.
   **`/resume ID`** opens an exact ID directly. **F3** creates a session and
   **F4** toggles tool details.
+- Long assistant code fences clip rather than wrap. Unlike Python Textual's
+  scrollable fence widgets, the native conversation uses **F8** to focus an
+  overflowing block without changing Tab or composer controls. Use **←/→** to
+  pan, **Home/End** to jump to an edge, **↑/↓** to select another overflowing
+  fence, and **Esc** or **F8** to return to the draft. The read-only agent
+  inspector clips at the left edge and does not offer code focus.
 - **F5** opens the agent catalog; **Enter** inspects a child conversation and
   **Ctrl+X** cancels that child and its descendants, not its parent or siblings.
 - Above 110 columns, the Agents sidebar stays beside the conversation.

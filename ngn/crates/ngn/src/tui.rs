@@ -38,6 +38,7 @@ use uuid::Uuid;
 use crate::view;
 
 mod agents;
+mod code_fences;
 mod completion;
 mod composer;
 mod footer;
@@ -57,6 +58,8 @@ Agents: Tab/Shift+Tab  Focus Workspace & context · Enter/Space  Toggle
 Context: ↑/↓, PgUp/PgDn, Home/End  Scroll · Esc  Return to draft
 F6  Input queue (/queue [pause|resume|clear])
 F7  Steering receipts (/steering)
+F8  Focus long code blocks · Left/Right pan · Up/Down select
+Code: Home/End  Pan to edge · Esc or F8  Return to draft
 Enter  Send or queue · Shift+Enter  Newline
 /  Show commands · Up/Down select · Tab/Enter fill · Esc close
 /steer TEXT  Steer the active turn explicitly
@@ -306,13 +309,13 @@ impl App {
         self.composer_available() && self.caret.visible(now)
     }
 
-    fn tool_card_key(&mut self, key: KeyEvent) -> bool {
+    fn transcript_key(&mut self, key: KeyEvent) -> bool {
         if self.tools_available() {
             self.tools.key(key, &mut self.scroll)
         } else {
-            // Modal handlers take priority. If approval suspended card focus,
+            // Modal handlers take priority. If approval suspended transcript focus,
             // don't let its unhandled Enter/Space fall through to the composer.
-            key.code == KeyCode::F(4)
+            matches!(key.code, KeyCode::F(4) | KeyCode::F(8))
                 || (self.tools.focused() && !matches!(key.code, KeyCode::F(_)))
         }
     }
@@ -627,7 +630,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         ))).highlight_style(Style::new().fg(accent)), area, &mut selection);
     }
     if app.help {
-        let area = center(frame.area(), 76, 16);
+        let area = center(frame.area(), 76, 18);
         frame.render_widget(Clear, area);
         frame.render_widget(
             Paragraph::new(HELP)
@@ -1093,7 +1096,7 @@ pub async fn run(host: Arc<Host>, session: String, no_animations: bool) -> Resul
                             if app.task_picker { app.state(&host).await; }
                             continue;
                         }
-                        if app.tool_card_key(key) { continue; }
+                        if app.transcript_key(key) { continue; }
                         if app.completion_key(key) { continue; }
                         match key.code {
                             KeyCode::Esc => { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } },
@@ -1249,6 +1252,7 @@ mod tests {
         for expected in [
             "F2  Conversations",
             "F7  Steering receipts",
+            "F8  Focus long code blocks",
             "Ctrl+Y  Approve once",
         ] {
             assert!(screen.contains(expected));
