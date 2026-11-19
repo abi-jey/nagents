@@ -4,10 +4,16 @@
 use super::*;
 use flate2::{Compression, write::GzEncoder};
 use ngn_core::bundle::{PLATFORM, PythonBundle};
+use nix::{
+    poll::{PollFd, PollFlags, PollTimeout, poll},
+    pty::openpty,
+    sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr},
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
+    os::fd::AsFd,
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -129,6 +135,7 @@ struct FixtureTransport {
     bodies: BTreeMap<String, Vec<u8>>,
     calls: Mutex<Vec<String>>,
     fail_payload: bool,
+    payload_gate: Option<tokio::sync::Notify>,
 }
 
 impl Transport for FixtureTransport {
@@ -138,15 +145,21 @@ impl Transport for FixtureTransport {
             .bodies
             .get(url)
             .context("Unexpected network call in private fixture")?;
-        if self.fail_payload && url.ends_with("bundle.tar.gz") {
-            output.write_all(&bytes[..bytes.len() / 2])?;
-            bail!("Synthetic truncated download");
-        }
         ensure!(
             bytes.len() as u64 <= limit,
             "Synthetic response exceeds limit"
         );
-        output.write_all(bytes)?;
+        let mut remaining = bytes.as_slice();
+        if url.ends_with("bundle.tar.gz") && (self.fail_payload || self.payload_gate.is_some()) {
+            let (first, rest) = remaining.split_at(bytes.len() / 2);
+            output.write_all(first)?;
+            if let Some(gate) = &self.payload_gate {
+                gate.notified().await;
+            }
+            ensure!(!self.fail_payload, "Synthetic truncated download");
+            remaining = rest;
+        }
+        output.write_all(remaining)?;
         Ok(())
     }
 }
@@ -220,6 +233,128 @@ impl Probe for SyntheticProbe {
 
 fn installation(root: &Path) -> Installation {
     Installation::prepare(root.join("prefix"), root.join("bin")).unwrap()
+}
+
+async fn apply<T: Transport, P: Probe>(
+    installation: &Installation,
+    source: &Source,
+    check: bool,
+    transport: &T,
+    probe: &P,
+    cancel: &CancellationToken,
+) -> Result<Outcome> {
+    super::apply(
+        installation,
+        source,
+        check,
+        transport,
+        probe,
+        cancel,
+        Progress::default(),
+    )
+    .await
+}
+
+fn drain_pty(master: &mut File, transcript: &mut Vec<u8>) {
+    let mut bytes = [0; 1024];
+    while poll(
+        &mut [PollFd::new(master.as_fd(), PollFlags::POLLIN)],
+        PollTimeout::ZERO,
+    )
+    .unwrap()
+        != 0
+    {
+        let count = master.read(&mut bytes).unwrap();
+        assert_ne!(count, 0);
+        transcript.extend_from_slice(&bytes[..count]);
+    }
+}
+
+#[tokio::test]
+async fn delayed_download_reports_live_progress_and_cleans_pty_on_success_or_error() {
+    for fail in [false, true] {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let install = installation(directory.path());
+        let manifest = metadata("0.100.3", true);
+        let transport = FixtureTransport {
+            fail_payload: fail,
+            payload_gate: Some(tokio::sync::Notify::new()),
+            ..network(&manifest)
+        };
+        let source = Source {
+            version: None,
+            archive: None,
+            sha256: None,
+        };
+        let probe = SyntheticProbe::success();
+        let cancel = CancellationToken::new();
+        let pty = openpty(None, None).unwrap();
+        let mut mode = tcgetattr(&pty.slave).unwrap();
+        cfmakeraw(&mut mode);
+        tcsetattr(&pty.slave, SetArg::TCSANOW, &mode).unwrap();
+        let slave = File::from(pty.slave);
+        let mut master = File::from(pty.master);
+        let progress = Progress::new(slave.try_clone().unwrap(), !fail, true);
+        let mut transcript = Vec::new();
+        let (result, ()) = tokio::join!(
+            super::apply(
+                &install, &source, false, &transport, &probe, &cancel, progress
+            ),
+            async {
+                // The transfer cannot finish until we have read live frames from
+                // the PTY. This asserts visibility, not a guessed timing budget.
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !transcript.windows(4).any(|bytes| bytes == b"\r|\r/") {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        drain_pty(&mut master, &mut transcript);
+                    }
+                })
+                .await
+                .unwrap();
+                let prefix = if fail {
+                    "ngn update:"
+                } else {
+                    "\x1b[1;36mngn update:\x1b[0m"
+                };
+                assert!(
+                    transcript.starts_with(format!(
+                        "{prefix} Checking release metadata...\n{prefix} Downloading bundle...\n\r|\r/"
+                    )
+                    .as_bytes()),
+                    "{transcript:?}"
+                );
+                assert!(current(&install.identity).unwrap().is_none());
+                transport.payload_gate.as_ref().unwrap().notify_one();
+            }
+        );
+        drain_pty(&mut master, &mut transcript);
+        let offset = transcript
+            .windows(3)
+            .position(|bytes| bytes == b"\r \r")
+            .unwrap();
+        let tail = &transcript[offset + 3..];
+        if fail {
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Synthetic truncated download"
+            );
+            assert!(tail.is_empty());
+            assert!(current(&install.identity).unwrap().is_none());
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                Outcome::Installed(ReleaseVersion::parse("0.100.3").unwrap())
+            );
+            let tail = String::from_utf8_lossy(tail);
+            assert!(
+                tail.contains("Verifying and staging bundle...\n"),
+                "{tail:?}"
+            );
+            assert!(tail.ends_with("Activating release...\n"), "{tail:?}");
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        }
+    }
 }
 
 #[tokio::test]

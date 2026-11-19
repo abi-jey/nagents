@@ -35,7 +35,7 @@ use ratatui::{
 };
 use uuid::Uuid;
 
-use crate::view;
+use crate::{animations_enabled, view};
 
 mod agents;
 mod code_fences;
@@ -943,12 +943,6 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
             false
         }
     }
-}
-
-fn animations_enabled(no_animations: bool, saved: Option<bool>, textual: Option<&str>) -> bool {
-    !no_animations
-        && saved.unwrap_or(true)
-        && !textual.is_some_and(|value| value.eq_ignore_ascii_case("none"))
 }
 
 pub async fn run(

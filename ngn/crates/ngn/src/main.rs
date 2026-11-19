@@ -59,7 +59,7 @@ struct Cli {
     resume: Option<String>,
     #[arg(short = 'c', long = "continue", global = true)]
     continue_session: bool,
-    /// Disable TUI activity and caret animations for this invocation.
+    /// Disable TUI and update progress animations for this invocation.
     #[arg(
         long,
         global = true,
@@ -96,6 +96,12 @@ fn wire_log_enabled(wire_log_override: Option<bool>) -> Result<bool> {
             anyhow::bail!("NGN_WIRE_LOG must be true/false or 1/0")
         }
     }
+}
+
+fn animations_enabled(no_animations: bool, saved: Option<bool>, textual: Option<&str>) -> bool {
+    !no_animations
+        && saved.unwrap_or(true)
+        && !textual.is_some_and(|value| value.eq_ignore_ascii_case("none"))
 }
 
 #[derive(Subcommand)]
@@ -277,7 +283,9 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
         let operation = async {
             match command {
                 Commands::Install(arguments) => install::install(arguments, &cancel).await,
-                Commands::Update(arguments) => install::update(arguments, &cancel).await,
+                Commands::Update(arguments) => {
+                    install::update(arguments, &cancel, !cli.no_animations.is_empty()).await
+                }
                 _ => unreachable!(),
             }
         };
