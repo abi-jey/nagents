@@ -367,6 +367,125 @@ fn fixture_retarget(prefix: &Path, target: &Path) -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn managed_update_keeps_its_verified_generation_and_failure_atomicity() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let prepared = installation(directory.path());
+    let cancel = CancellationToken::new();
+    let old_version = env!("CARGO_PKG_VERSION");
+    let patch: u32 = old_version.trim_start_matches("0.100.").parse().unwrap();
+    let next_version = format!("0.100.{}", patch + 1);
+    let source = Source {
+        version: None,
+        archive: None,
+        sha256: None,
+    };
+    let existing = network(&metadata(old_version, true));
+    apply(
+        &prepared,
+        &source,
+        false,
+        &existing,
+        &SyntheticProbe::success(),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    let prefix = prepared.identity.prefix.clone();
+    let bin = prepared.identity.bin_dir.join("ngn");
+    let old_root = prefix.join("releases").join(old_version);
+    let pointer = prefix.join("current");
+    let old_target = fs::read_link(&pointer).unwrap();
+    let identity = fs::read(prefix.join("install.json")).unwrap();
+    let old_hash = file_hash(&old_root.join("ngn")).unwrap();
+    drop(prepared);
+
+    let managed = Installation::from_executable(&bin, &mut Progress::default()).unwrap();
+    assert!(
+        Lock::acquire(&prefix, false)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Another installer")
+    );
+    let probe = SyntheticProbe::success();
+    let next = network(&metadata(&next_version, true));
+    let installed = ReleaseVersion::parse(old_version).unwrap();
+    let target = ReleaseVersion::parse(&next_version).unwrap();
+
+    existing.calls.lock().unwrap().clear();
+    for check in [false, true] {
+        assert_eq!(
+            apply(&managed, &source, check, &existing, &probe, &cancel)
+                .await
+                .unwrap(),
+            Outcome::Current(installed)
+        );
+    }
+    {
+        let calls = existing.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        assert!(calls.iter().all(|url| !url.ends_with("bundle.tar.gz")));
+    }
+    assert_eq!(
+        apply(&managed, &source, true, &next, &probe, &cancel)
+            .await
+            .unwrap(),
+        Outcome::Available(target)
+    );
+    assert_eq!(next.calls.lock().unwrap().len(), 2);
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fs::read_link(&pointer).unwrap(), old_target);
+
+    let downgrade = Source {
+        version: Some("0.100.0".into()),
+        archive: None,
+        sha256: None,
+    };
+    let no_network = FixtureTransport::default();
+    assert!(
+        apply(&managed, &downgrade, false, &no_network, &probe, &cancel)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Downgrades")
+    );
+    assert!(no_network.calls.lock().unwrap().is_empty());
+
+    // A failed probe must leave the old generation active and permit a retry.
+    let failing_probe = SyntheticProbe {
+        calls: AtomicUsize::new(0),
+        fail: true,
+    };
+    assert!(
+        apply(&managed, &source, false, &next, &failing_probe, &cancel)
+            .await
+            .is_err()
+    );
+    assert_eq!(failing_probe.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fs::read_link(&pointer).unwrap(), old_target);
+    assert!(!prefix.join("releases").join(&next_version).exists());
+    assert_eq!(
+        apply(&managed, &source, false, &next, &probe, &cancel)
+            .await
+            .unwrap(),
+        Outcome::Installed(target)
+    );
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fs::read_link(&pointer).unwrap(),
+        Path::new("releases").join(next_version)
+    );
+    assert_eq!(file_hash(&old_root.join("ngn")).unwrap(), old_hash);
+    assert_eq!(fs::read(prefix.join("install.json")).unwrap(), identity);
+    assert_eq!(fs::read_link(&bin).unwrap(), prefix.join("current/ngn"));
+    drop(managed);
+    assert!(
+        Installation::from_executable(&old_root.join("ngn"), &mut Progress::default()).is_err()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn activation_rejects_a_valid_retarget_during_staged_probes_and_can_retry() {
     struct Retarget<'a> {
         prefix: &'a Path,
@@ -477,6 +596,68 @@ fn final_switch_rechecks_current_after_pointer_staging() {
     fs::remove_file(prefix.join("current")).unwrap();
     switch_current(&install, &pending, None, &CancellationToken::new()).unwrap();
     assert_eq!(fs::read_link(prefix.join("current")).unwrap(), target);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_update_rechecks_current_and_detects_tampering_before_discovery() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let prepared = installation(directory.path());
+    let cancel = CancellationToken::new();
+    let probe = SyntheticProbe::success();
+    let transport = FixtureTransport::default();
+    let version = env!("CARGO_PKG_VERSION");
+    let bundle = local(directory.path(), &metadata(version, false), |_| {});
+    apply(&prepared, &bundle, false, &transport, &probe, &cancel)
+        .await
+        .unwrap();
+    let prefix = prepared.identity.prefix.clone();
+    let bin = prepared.identity.bin_dir.join("ngn");
+    let pointer = prefix.join("current");
+    let target = fs::read_link(&pointer).unwrap();
+    drop(prepared);
+
+    let managed = Installation::from_executable(&bin, &mut Progress::default()).unwrap();
+    let source = Source {
+        version: None,
+        archive: None,
+        sha256: None,
+    };
+    let alternate = Path::new("releases/0.100.0");
+    ancestry(&prefix.join(alternate), true).unwrap();
+    fs::remove_file(&pointer).unwrap();
+    symlink(alternate, &pointer).unwrap();
+    assert!(
+        apply(&managed, &source, true, &transport, &probe, &cancel)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Managed current changed")
+    );
+    fs::remove_file(&pointer).unwrap();
+    symlink(&target, &pointer).unwrap();
+
+    fs::write(prefix.join(&target).join(CA), b"tampered").unwrap();
+    assert!(
+        apply(&managed, &source, false, &transport, &probe, &cancel)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Bundle file checksum mismatch")
+    );
+    assert_eq!(fs::read_link(&pointer).unwrap(), target);
+    assert!(transport.calls.lock().unwrap().is_empty());
+    drop(managed);
+
+    fs::remove_file(&bin).unwrap();
+    symlink(Path::new("/usr/bin/false"), &bin).unwrap();
+    assert!(
+        Installation::from_executable(&prefix.join(target).join("ngn"), &mut Progress::default())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("existing unmanaged entry")
+    );
 }
 
 #[tokio::test]

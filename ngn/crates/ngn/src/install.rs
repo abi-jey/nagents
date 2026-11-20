@@ -526,6 +526,7 @@ fn current(identity: &Identity) -> Result<Option<ReleaseVersion>> {
 
 struct Installation {
     identity: Identity,
+    expected_current: Option<ReleaseVersion>,
     _lock: Lock,
 }
 
@@ -590,6 +591,7 @@ impl Installation {
         current(&identity)?;
         Ok(Self {
             identity,
+            expected_current: None,
             _lock: lock,
         })
     }
@@ -615,20 +617,24 @@ impl Installation {
             UNMANAGED
         );
         progress.phase("Inspecting installed bundle...");
-        let bundle = BundleManifest::read(release)?;
-        ensure!(
-            bundle.ngn_version == version.to_string(),
-            "Installed bundle version mismatch"
-        );
-        bundle.verify_tree(release)?;
+        // Keep the executable-to-generation binding under the prefix lock.
+        // Read and hash that generation once, in installed_bundle before discovery.
         Ok(Self {
             identity,
+            expected_current: Some(version),
             _lock: lock,
         })
     }
 
     fn installed_bundle(&self) -> Result<Option<BundleManifest>> {
-        current(&self.identity)?
+        let version = current(&self.identity)?;
+        if let Some(expected) = self.expected_current {
+            ensure!(
+                version == Some(expected),
+                "Managed current changed; retry from the current ngn executable"
+            );
+        }
+        version
             .map(|version| {
                 let root = self
                     .identity
