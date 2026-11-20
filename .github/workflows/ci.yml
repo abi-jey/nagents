@@ -19,16 +19,6 @@ on:
         required: false
         default: false
         type: boolean
-      version_bump:
-        description: 'Legacy Python-only bump; update coordinated 0.100.x metadata together in source'
-        required: false
-        default: 'none'
-        type: choice
-        options:
-          - none
-          - patch
-          - minor
-          - major
       sqlite_trace:
         description: 'Manually enable scoped failure-only SQLite diagnostics for Windows tests; other events enable them automatically'
         required: false
@@ -57,64 +47,49 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Reject Python-only bumps of coordinated versions
-        if: github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'
-        shell: python
-        run: |
-          from pathlib import Path
-          import tomllib
-          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
-          if version.startswith('0.100.'):
-              raise SystemExit('Update all component metadata together and tag verified main; Python-only automatic bumps are disabled for 0.100.x.')
-
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          components: rustfmt, clippy
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
+      - name: Install pre-commit
+        run: pip install pre-commit
 
-      - name: Install pre-commit and runtime adapter in an explicit environment
-        run: |
-          python -m venv "$RUNNER_TEMP/lint-venv"
-          "$RUNNER_TEMP/lint-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents pre-commit ruff mypy
-          echo "$RUNNER_TEMP/lint-venv/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=$RUNNER_TEMP/lint-venv" >> "$GITHUB_ENV"
-
+      # The ngn-* hooks (Rust fmt/clippy/tests, adapter and browser gates) run in
+      # Rust harness CI whenever ngn/ or src/nagents/ changes; don't repeat them here.
       - name: Run pre-commit
-        run: pre-commit run --all-files
-
-      - name: Validate release modes
-        if: github.event_name == 'workflow_dispatch'
         env:
-          PUBLISH_DEV: ${{ inputs.publish_dev }}
-          BUMP: ${{ inputs.version_bump }}
-        run: test "$PUBLISH_DEV" != true || test "$BUMP" = none
+          SKIP: ngn-rust-format,ngn-rust-clippy,ngn-rust-tests,ngn-python-lint,ngn-python-format,ngn-python-types,ngn-python-tests,ngn-browser-syntax,ngn-browser-tests
+        run: pre-commit run --all-files
 
       - name: Validate alpha release request
         if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
         env:
           REF: ${{ github.ref }}
-          BUMP: ${{ inputs.version_bump }}
           PUBLISH_DEV: ${{ inputs.publish_dev }}
         run: |
           case "$REF" in refs/heads/*) ;; *) exit 1 ;; esac
           test "$REF" != refs/heads/main
-          test "$BUMP" = none
           test "$PUBLISH_DEV" = false
 
   # =============================================================================
-  # LINUX TESTS
+  # TESTS: oldest and newest supported Python on Linux, newest on macOS and
+  # Windows. Every job runs one third of tests/ so the slowest shard sets the pace.
   # =============================================================================
-  test-linux:
-    name: Test Linux (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  test:
+    name: Test ${{ matrix.os }} (py${{ matrix.python-version }}, shard ${{ matrix.group }}/3)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12', '3.13', '3.14', '3.15.x']
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.15.x']
+        group: [1, 2, 3]
+        include:
+          - {os: ubuntu-latest, python-version: '3.12', group: 1}
+          - {os: ubuntu-latest, python-version: '3.12', group: 2}
+          - {os: ubuntu-latest, python-version: '3.12', group: 3}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,20 +104,18 @@ jobs:
       - name: Install package and test dependencies
         run: pip install -e ".[dev,tui,voice,web]"
 
-      - name: Verify package import
-        run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
-
-      - name: Run tests
-        run: pytest tests/ -n auto -v --cov=nagents --cov-report=xml --cov-report=term-missing
-
-      - name: Check offline harness diagnostics
-        if: matrix.python-version == '3.12'
-        run: >-
-          pytest -q benchmarks/terminal_bench/tests/test_runner.py
-          benchmarks/diagnostics/tests/test_diagnostic.py
+      - name: Run tests (POSIX harness cases are marked for Windows)
+        shell: bash
+        env:
+          NGN_SQLITE_TRACE: ${{ runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || inputs.sqlite_trace) && '1' || '0' }}
+          COVERAGE: ${{ runner.os == 'Linux' && matrix.python-version == '3.12' && '--cov=nagents --cov-report=xml' || '' }}
+        run: |
+          python -m pytest -p tests.support.sqlite_trace $COVERAGE \
+            $(python .github/scripts/shard_tests.py --shards 3 --group ${{ matrix.group }}) \
+            -n auto -q -rs -o faulthandler_timeout=60
 
       - name: Upload coverage
-        if: matrix.python-version == '3.12'
+        if: runner.os == 'Linux' && matrix.python-version == '3.12'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage.xml
@@ -150,185 +123,7 @@ jobs:
           fail_ci_if_error: false
 
   # =============================================================================
-  # MACOS TESTS
-  # =============================================================================
-  test-macos:
-    name: Test macOS (${{ matrix.os }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest]
-        python-version: ['3.12', '3.13', '3.14', '3.15.x']
-        include:
-          - os: macos-15-intel
-            python-version: '3.13'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-          cache-dependency-path: pyproject.toml
-
-      - name: Install package and test dependencies
-        run: pip install -e ".[dev,tui,voice,web]"
-
-      - name: Report platform
-        run: python -c "import platform; print(platform.platform(), platform.machine())"
-
-      - name: Verify package import
-        run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
-
-      - name: Run tests
-        run: pytest tests/ -n auto -v -o faulthandler_timeout=60
-
-  # =============================================================================
-  # WINDOWS TESTS
-  # =============================================================================
-  test-windows:
-    name: Test Windows (py${{ matrix.python-version }}, shard ${{ matrix.group }}/${{ matrix.shards }})
-    runs-on: windows-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.12', '3.13', '3.14', '3.15.x']
-        shards: [3]
-        group: [1, 2, 3]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-          cache-dependency-path: pyproject.toml
-
-      - name: Install package and test dependencies
-        run: pip install -e ".[dev,tui,voice,web]"
-
-      - name: Verify package import
-        run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
-
-      - name: Run portable tests (POSIX harness cases are marked)
-        shell: bash
-        env:
-          NGN_SQLITE_TRACE: ${{ (github.event_name != 'workflow_dispatch' || inputs.sqlite_trace) && '1' || '0' }}
-        run: |
-          python -m pytest -p tests.support.sqlite_trace \
-            $(python .github/scripts/shard_tests.py --shards ${{ matrix.shards }} --group ${{ matrix.group }}) \
-            -n auto -v -rs -o faulthandler_timeout=60
-
-  # =============================================================================
-  # BUMP VERSION (runs only after all tests pass)
-  # =============================================================================
-  bump-version:
-    name: Bump Version
-    runs-on: ubuntu-latest
-    needs: [lint, test-linux, test-macos, test-windows]
-    if: |
-      github.event_name == 'workflow_dispatch' &&
-      inputs.version_bump != 'none' &&
-      needs.lint.result == 'success' &&
-      needs.test-linux.result == 'success' &&
-      needs.test-macos.result == 'success' &&
-      needs.test-windows.result == 'success'
-    outputs:
-      version: ${{ steps.bump.outputs.version }}
-      commit: ${{ steps.commit.outputs.sha }}
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install toml packaging
-
-      - name: Bump version
-        id: bump
-        run: |
-          import toml
-          import subprocess
-          import os
-          from packaging.version import Version
-
-          bump_type = "${{ inputs.version_bump }}"
-
-          # Never release untested changes from a moving branch tip.
-          subprocess.run(["git", "fetch", "origin", "main"], check=True)
-          candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          remote = subprocess.check_output(["git", "rev-parse", "origin/main"], text=True).strip()
-          if os.environ["GITHUB_REF"] != "refs/heads/main" or candidate != remote:
-              raise SystemExit("Stable bumps require the tested main SHA; rerun CI on current main.")
-
-          with open('pyproject.toml', 'r') as f:
-              config = toml.load(f)
-
-          current = config['project']['version']
-          if current.startswith('0.100.'):
-              raise SystemExit('Update all component metadata together and tag verified main; Python-only automatic bumps are disabled for 0.100.x.')
-          major, minor, patch = Version(current).release
-
-          if bump_type == 'major':
-              major += 1
-              minor = 0
-              patch = 0
-          elif bump_type == 'minor':
-              minor += 1
-              patch = 0
-          elif bump_type == 'patch':
-              patch += 1
-
-          new_version = f"{major}.{minor}.{patch}"
-
-          # If this tag already exists, keep bumping patch until we find a free version
-          while True:
-              tag = f"v{new_version}"
-              result = subprocess.run(["git", "tag", "-l", tag], capture_output=True, text=True)
-              if result.stdout.strip() == tag:
-                  print(f"Tag {tag} already exists, bumping patch")
-                  patch += 1
-                  new_version = f"{major}.{minor}.{patch}"
-              else:
-                  break
-
-          config['project']['version'] = new_version
-          with open('pyproject.toml', 'w') as f:
-              toml.dump(config, f)
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={new_version}\n")
-
-          print(f"Bumped version: {current} -> {new_version}")
-        shell: python
-
-      - name: Commit and push version bump
-        id: commit
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add pyproject.toml
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
-          git push origin HEAD:refs/heads/main
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  # =============================================================================
-  # BUILD DISTRIBUTION
+  # BUILD DISTRIBUTION (runs alongside tests; publishing jobs wait for both)
   # =============================================================================
   build:
     name: Build Distribution
@@ -336,24 +131,10 @@ jobs:
     outputs:
       sha: ${{ steps.candidate.outputs.sha }}
       version: ${{ steps.candidate.outputs.version }}
-    needs: [lint, bump-version, test-linux, test-macos, test-windows]
-    if: |
-      always() &&
-      needs.lint.result == 'success' &&
-      needs.test-linux.result == 'success' &&
-      needs.test-macos.result == 'success' &&
-      needs.test-windows.result == 'success' &&
-      (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-
-      - name: Fetch successful version bump
-        if: needs.bump-version.result == 'success'
-        env:
-          RELEASE_SHA: ${{ needs.bump-version.outputs.commit }}
-        run: git fetch origin "$RELEASE_SHA" && git checkout --detach "$RELEASE_SHA"
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -532,13 +313,10 @@ jobs:
   docker-build:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: [build, bump-version]
+    needs: [lint, test, build]
     if: |
-      always() &&
-      needs.build.result == 'success' &&
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) ||
-       github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none' && needs.bump-version.result == 'success' ||
-       github.event_name == 'workflow_dispatch' && inputs.publish_alpha)
+      github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) ||
+      github.event_name == 'workflow_dispatch' && inputs.publish_alpha
     permissions:
       packages: write
     env:
@@ -548,12 +326,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-
-      - name: Fetch exact version bump
-        if: github.event_name == 'workflow_dispatch' && needs.bump-version.result == 'success'
-        env:
-          RELEASE_SHA: ${{ needs.bump-version.outputs.commit }}
-        run: git fetch origin "$RELEASE_SHA" && git checkout --detach "$RELEASE_SHA"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
@@ -584,7 +356,6 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=alpha-${{ github.run_number }}-${{ github.run_attempt }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish_alpha }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=v${{ needs.bump-version.outputs.version }},enable=${{ needs.bump-version.result == 'success' }}
 
       - name: Verify Docker candidate
         env:
@@ -608,12 +379,8 @@ jobs:
   publish-stable:
     name: Publish Core to PyPI (Stable)
     runs-on: ubuntu-latest
-    needs: [bump-version, build]
-    if: |
-      always() &&
-      needs.build.result == 'success' &&
-      !inputs.publish_alpha &&
-      (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'))
+    needs: [lint, test, build]
+    if: startsWith(github.ref, 'refs/tags/v') && !inputs.publish_alpha
     environment:
       name: pypi-stable
       url: https://pypi.org/project/nagents/
@@ -627,7 +394,7 @@ jobs:
 
       - name: Checkout exact release candidate
         env:
-          RELEASE_SHA: ${{ needs.bump-version.outputs.commit || github.sha }}
+          RELEASE_SHA: ${{ github.sha }}
         run: git fetch origin "$RELEASE_SHA" && git checkout --detach "$RELEASE_SHA"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -695,8 +462,8 @@ jobs:
   publish-alpha:
     name: Publish Feature Alpha
     runs-on: ubuntu-latest
-    needs: [build]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish_alpha && needs.build.result == 'success' }}
+    needs: [lint, test, build]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
     environment:
       name: pypi-alpha
       url: https://pypi.org/project/nagents/
@@ -737,7 +504,7 @@ jobs:
   publish-dev:
     name: Publish Core to PyPI (Dev)
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [lint, test, build]
     if: github.event_name == 'workflow_dispatch' && inputs.publish_dev
     environment:
       name: pypi-dev
