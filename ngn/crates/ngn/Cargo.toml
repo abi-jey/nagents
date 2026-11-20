@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64 = "0.22"
 clap.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true

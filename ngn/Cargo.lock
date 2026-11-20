@@ -1170,6 +1170,7 @@ version = "0.100.37"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "clap",
  "crossterm",
  "flate2",
