@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.35
+
+- Use Enter to steer a capable active turn and Ctrl+Enter to queue; an unchanged draft rejected during an idle-to-active race cannot steer on retry.
+
 ## 0.100.34
 
 - Keep native FIFO retries bound to their exact durable receipt, even when saved status or SQLite key types are damaged; warn on dispatch failure without resending.
