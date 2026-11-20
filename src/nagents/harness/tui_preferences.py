@@ -6,6 +6,7 @@ import stat
 import tempfile
 from pathlib import Path
 
+from ..protected_store import unsafe_ancestor
 from .private_store import ProtectedStoreError
 from .providers.registry import _exclusive_lock
 
@@ -36,10 +37,8 @@ class TuiPreferenceStore:
             return
         if not stat.S_ISDIR(info.st_mode):
             raise ProtectedStoreError("Terminal preference directories must not be symlinks.")
-        if os.name == "posix":
-            sticky_root = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            if info.st_uid not in {0, os.getuid()} or (info.st_mode & 0o022 and not sticky_root):
-                raise ProtectedStoreError("Terminal preference directories must not be writable by other users.")
+        if os.name == "posix" and unsafe_ancestor(info):
+            raise ProtectedStoreError("Terminal preference directories must not be writable by other users.")
 
     @staticmethod
     def _check_file(path: Path) -> None:
@@ -49,7 +48,7 @@ class TuiPreferenceStore:
             return
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_BYTES:
             raise ProtectedStoreError("Terminal preferences require a regular, bounded, unlinked file.")
-        if os.name == "posix" and (info.st_uid != os.getuid() or info.st_mode & 0o022):
+        if os.name == "posix" and (info.st_uid != os.getuid() or info.st_mode & 0o002):
             raise ProtectedStoreError("Terminal preference files must be owned and not writable by other users.")
 
     def load(self) -> dict[str, object]:

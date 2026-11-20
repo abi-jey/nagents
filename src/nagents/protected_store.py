@@ -29,6 +29,23 @@ class ProtectedStoreError(RuntimeError):
     """Safe, human-readable storage errors without file contents."""
 
 
+def unsafe_ancestor(info: os.stat_result) -> bool:
+    """Whether a directory on the path to private data lets another user swap it.
+
+    Matches common practice (OpenSSH-style): refuse foreign owners and
+    world-writable directories unless root-owned and sticky (``/tmp``). Group
+    write is accepted on directories the user owns, as Ubuntu's default umask
+    0002 with per-user private groups creates them that way.
+    """
+    owner = info.st_uid
+    if owner not in {0, os.getuid()}:
+        return True
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o002:
+        return not (owner == 0 and bool(info.st_mode & stat.S_ISVTX))
+    return bool(mode & 0o020) and owner != os.getuid()
+
+
 class ProtectedFileStore:
     """One protected file below ``$XDG_DATA_HOME/ngn/auth`` by default."""
 
@@ -73,10 +90,7 @@ class ProtectedFileStore:
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
                 os.close(descriptor)
                 descriptor = child
-                info = os.fstat(descriptor)
-                writable = stat.S_IMODE(info.st_mode) & 0o022
-                trusted_sticky = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-                if info.st_uid not in {0, os.getuid()} or (writable and not trusted_sticky):
+                if unsafe_ancestor(os.fstat(descriptor)):
                     raise self._error(self._unsafe)
             info = os.fstat(descriptor)
             if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
