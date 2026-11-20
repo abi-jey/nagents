@@ -1,5 +1,7 @@
 //! Rust-owned delegation policy and immutable activation context.
 
+use std::sync::{Arc, atomic::AtomicI64};
+
 use ngn_protocol::{RunStatus, TaskInfo, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -43,6 +45,9 @@ pub(crate) struct Execution {
     pub read_only: bool,
     pub approval: ApprovalMode,
     pub cancel: CancellationToken,
+    // A signed durable sequence: positive opens public text, negative closes
+    // it, zero means no edge. Shared only for this live child execution.
+    pub text_edge: Option<Arc<AtomicI64>>,
 }
 
 impl Execution {

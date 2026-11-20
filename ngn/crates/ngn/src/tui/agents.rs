@@ -2,11 +2,14 @@
 
 use std::collections::{HashMap, HashSet};
 
+mod activity;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ngn_core::{Config, Host};
 use ngn_protocol::{ProviderAuth, RunStatus, TaskInfo};
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -16,7 +19,7 @@ use ratatui::{
     },
 };
 
-use super::App;
+use super::{App, footer};
 use crate::view;
 
 const BREAKPOINT: u16 = 110;
@@ -268,6 +271,9 @@ pub(super) struct Rail {
     viewport: usize,
     offset: usize,
     context: Context,
+    pub(super) activity: activity::Activity,
+    motion_rows: Vec<(usize, Rect, Style)>,
+    activity_rows: Vec<usize>,
 }
 
 fn window_start(offset: usize, cursor: usize, length: usize, height: usize) -> usize {
@@ -288,6 +294,8 @@ impl Rail {
     pub(super) fn refresh(&mut self, tasks: &[TaskInfo]) {
         self.current = true;
         self.nodes = tree(tasks);
+        self.clear_motion_rows();
+        self.activity.catalog(tasks);
         let ids: HashSet<_> = tasks.iter().map(|task| task.run_id.as_str()).collect();
         self.collapsed.retain(|run| ids.contains(run.as_str()));
         if self.selected.as_deref().is_some_and(|id| !ids.contains(id)) {
@@ -408,14 +416,16 @@ impl Rail {
     }
 
     fn draw(
-        &self,
+        &mut self,
         frame: &mut Frame,
         area: Rect,
         tasks: &[TaskInfo],
-        (focused, approval_run): (bool, Option<&str>),
+        focused: bool,
         (config, session): (&Config, &str),
         (accent, muted): (Color, Color),
     ) -> Option<ContextViewport> {
+        self.motion_rows.clear();
+        self.activity_rows.clear();
         let heading = Style::new().fg(accent).add_modifier(Modifier::BOLD);
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
@@ -458,23 +468,15 @@ impl Rail {
         let width = rows.width.saturating_sub(u16::from(overflow > 0));
         for (row, node) in visible.iter().skip(start).take(height).enumerate() {
             let task = &tasks[node.task];
+            if task.status == RunStatus::Running {
+                self.activity_rows.push(node.task);
+            }
             let selected =
                 focused && (!self.context.focused || context_height == 0) && start + row == cursor;
             let style = if selected {
                 Style::new().add_modifier(Modifier::REVERSED)
             } else {
                 Style::new()
-            };
-            let (status, color) = match task.status {
-                RunStatus::Queued => ("Queued", muted),
-                RunStatus::Running if approval_run == Some(task.run_id.as_str()) => {
-                    ("Approval", Color::Yellow)
-                }
-                RunStatus::Running => ("Running", accent),
-                RunStatus::Completed => ("Done", Color::Green),
-                RunStatus::Failed => ("Error", Color::Red),
-                RunStatus::Cancelled => ("Cancelled", muted),
-                RunStatus::Interrupted => ("Interrupted", Color::Yellow),
             };
             let marker = if node.has_children {
                 if self.collapsed.contains(&task.run_id) {
@@ -497,38 +499,51 @@ impl Rail {
             } else {
                 &title
             };
-            let line = Line::from(vec![
-                Span::raw(format!("{indent}{marker} ")),
-                Span::styled(status, Style::new().fg(color)),
-                Span::raw(" "),
-                Span::styled(
-                    title,
-                    if task.status == RunStatus::Running {
-                        heading
-                    } else {
-                        Style::new()
-                    },
-                ),
-            ])
-            .style(style);
-            let area = Rect::new(rows.x, rows.y + row as u16, width, 1);
-            if task.read_only {
-                const LABEL: &str = " read-only";
-                let left = area.width.saturating_sub(LABEL.len() as u16);
-                frame.render_widget(
-                    line,
-                    Rect {
-                        width: left,
-                        ..area
-                    },
-                );
-                frame.render_widget(
-                    Line::styled(LABEL, style.fg(muted)),
-                    Rect::new(area.x + left, area.y, area.width - left, 1),
-                );
-            } else {
-                frame.render_widget(line, area);
+            let prefix = format!("{indent}{marker} ");
+            let (indicator, suffix) = self.activity.indicator(task, muted);
+            let label = if task.read_only { " read-only" } else { "" };
+            let name_width = width
+                .saturating_sub((prefix.chars().count() + footer::WIDTH + 1 + label.len()) as u16);
+            let name = Span::styled(
+                title.to_owned(),
+                if task.status == RunStatus::Running {
+                    heading
+                } else {
+                    Style::new()
+                },
+            );
+            let name_width = usize::from(name_width);
+            let show_suffix = name.width() + suffix.chars().count() <= name_width;
+            let name = footer::fit(Line::from(name), name_width);
+            let used = name.width()
+                + if show_suffix {
+                    suffix.chars().count()
+                } else {
+                    0
+                };
+            let indicator_area = Rect::new(
+                rows.x + prefix.chars().count() as u16,
+                rows.y + row as u16,
+                footer::WIDTH as u16,
+                1,
+            );
+            if self.activity.moving(task) {
+                self.motion_rows.push((node.task, indicator_area, style));
             }
+            let line = Line::from_iter(
+                [Span::raw(prefix)]
+                    .into_iter()
+                    .chain(indicator.spans)
+                    .chain(std::iter::once(Span::raw(" ")))
+                    .chain(name.spans)
+                    .chain(show_suffix.then_some(Span::styled(suffix, Style::new().fg(muted))))
+                    .chain([
+                        Span::raw(" ".repeat(name_width.saturating_sub(used))),
+                        Span::styled(label, Style::new().fg(muted)),
+                    ]),
+            )
+            .style(style);
+            frame.render_widget(line, Rect::new(rows.x, indicator_area.y, width, 1));
         }
         (context_height > 0).then(|| {
             self.context.draw(
@@ -540,26 +555,52 @@ impl Rail {
             )
         })
     }
+
+    pub(super) fn clear_motion_rows(&mut self) {
+        self.motion_rows.clear();
+        self.activity_rows.clear();
+    }
+
+    pub(super) fn recover_activity(&mut self, store: &ngn_core::store::Store, tasks: &[TaskInfo]) {
+        if !self.activity_rows.is_empty() {
+            self.activity
+                .recover(store, self.activity_rows.iter().map(|&index| &tasks[index]));
+        }
+    }
+
+    pub(super) fn advance_activity(&mut self, tasks: &[TaskInfo], now: std::time::Instant) {
+        for &(index, _, _) in &self.motion_rows {
+            self.activity.advance(&tasks[index], now);
+        }
+    }
+
+    pub(super) fn needs_frame(&self) -> bool {
+        !self.motion_rows.is_empty()
+    }
+
+    pub(super) fn paint_motion(&self, buffer: &mut Buffer, tasks: &[TaskInfo]) {
+        for &(index, area, style) in &self.motion_rows {
+            let (mut indicator, _) = self.activity.indicator(&tasks[index], Color::Reset);
+            indicator.style = style;
+            buffer.set_line(area.x, area.y, &indicator, area.width);
+        }
+    }
 }
 
 impl App {
     pub(super) fn draw_agents(
-        &self,
+        &mut self,
         frame: &mut Frame,
         area: Rect,
         config: &Config,
         colors: (Color, Color),
     ) -> Option<ContextViewport> {
+        let focused = self.rail_has_focus();
         self.agents.draw(
             frame,
             area,
             &self.tasks,
-            (
-                self.rail_has_focus(),
-                self.approval
-                    .as_ref()
-                    .map(|approval| approval.run_id.as_str()),
-            ),
+            focused,
             (config, &self.session),
             colors,
         )
@@ -663,6 +704,7 @@ impl App {
 mod tests {
     use std::time::Instant;
 
+    use ngn_protocol::{Event, EventRecord, ToolCall, ToolResult, VERSION};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use super::*;
@@ -701,6 +743,211 @@ mod tests {
             })
             .unwrap();
         terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn concurrent_fields_use_exact_events_and_only_repaint_visible_active_cells() {
+        use std::time::Duration;
+
+        let t = Instant::now();
+        let step = |ms| t + Duration::from_millis(ms);
+        let mut app = App {
+            tasks: [
+                ("alpha", RunStatus::Running),
+                ("beta", RunStatus::Running),
+                ("gamma", RunStatus::Running),
+                ("queued", RunStatus::Queued),
+                ("past", RunStatus::Completed),
+            ]
+            .into_iter()
+            .map(|(id, status)| task(id, "root", status))
+            .collect(),
+            ..App::default()
+        };
+        app.agents.refresh(&app.tasks);
+        app.agents.activity.set_animated(true);
+        let event = |sequence, run: &str, session: &str, event| EventRecord {
+            schema_version: VERSION,
+            sequence,
+            run_id: run.into(),
+            session_id: session.into(),
+            timestamp_ms: 1, // Deliberately NOT used as a phase's age.
+            event,
+        };
+        let started = || Event::RunStarted {
+            prompt: "go".into(),
+        };
+        let call = ToolCall {
+            call_id: "same-call-id".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({}),
+        };
+        let mut events = vec![
+            event(1, "alpha", "session-alpha", started()),
+            event(2, "beta", "session-beta", started()),
+            event(
+                3,
+                "alpha",
+                "session-alpha",
+                Event::ToolStarted { call: call.clone() },
+            ),
+            event(
+                4,
+                "beta",
+                "session-beta",
+                Event::TextDelta { text: "abc".into() },
+            ),
+            event(
+                5,
+                "gamma",
+                "session-beta",
+                Event::ToolStarted { call: call.clone() },
+            ),
+            event(6, "beta", "session-gamma", started()),
+            event(
+                7,
+                "alpha",
+                "session-alpha",
+                Event::ApprovalRequested {
+                    approval_id: "allowed".into(),
+                    call: call.clone(),
+                    preview: "".into(),
+                },
+            ),
+            event(
+                8,
+                "alpha",
+                "session-alpha",
+                Event::ApprovalResolved {
+                    approval_id: "allowed".into(),
+                    allowed: true,
+                },
+            ),
+        ];
+        let config = Config::default();
+        app.agents.activity.observe(&app.tasks, &events, &[], t);
+        app.agents
+            .activity
+            .sync_dispatches(&[ngn_core::host::ChildToolDispatch {
+                run_id: "alpha".into(),
+                session_id: "session-alpha".into(),
+                call_id: call.call_id.clone(),
+            }]);
+        let first = paint_rail(&mut app, &config, 11);
+        let text = |buffer: &Buffer, y| row(buffer, y, 3..30);
+        assert!(text(&first, 2).starts_with("─ ⠀⠀⠖⠶⠲⠀⠀ alpha · Tool"));
+        assert!(text(&first, 3).starts_with("─ ⠀⠀⠖⠶⠲⠀⠀ beta · Responding"));
+        assert_eq!(text(&first, 4).trim_end(), "─ ⠀⠀⠖⠶⠲⠀⠀ gamma");
+        assert!(text(&first, 5).contains("Queued"));
+        assert_eq!(text(&first, 6).matches("Done").count(), 1);
+        assert!(app.agents.needs_frame());
+        for ms in (33..800).step_by(33).chain([800]) {
+            app.agents.advance_activity(&app.tasks, step(ms));
+        }
+        let mut moved = first.clone();
+        app.agents.paint_motion(&mut moved, &app.tasks);
+        assert_ne!(row(&moved, 2, 5..12), row(&first, 2, 5..12));
+        assert_ne!(row(&moved, 2, 5..12), row(&moved, 3, 5..12));
+        assert_eq!(row(&first, 2, 12..30), row(&moved, 2, 12..30));
+        assert_eq!(text(&moved, 5), text(&first, 5));
+        assert_eq!(text(&moved, 6), text(&first, 6));
+
+        events.push(event(
+            10,
+            "alpha",
+            "session-alpha",
+            Event::ApprovalRequested {
+                approval_id: "approval".into(),
+                call: call.clone(),
+                preview: "".into(),
+            },
+        ));
+        app.agents
+            .activity
+            .observe(&app.tasks, &events, &["alpha", "gamma"], step(800));
+        let waiting = paint_rail(&mut app, &config, 11);
+        assert!(text(&waiting, 2).starts_with("─ Appr.   alpha"));
+        assert!(text(&waiting, 4).starts_with("─ Appr.   gamma"));
+        assert!(text(&waiting, 3).contains("Responding"));
+        for ms in (833..1200).step_by(33).chain([1200]) {
+            app.agents.advance_activity(&app.tasks, step(ms));
+        }
+        let mut next = waiting.clone();
+        app.agents.paint_motion(&mut next, &app.tasks);
+        assert_eq!(text(&next, 2), text(&waiting, 2));
+        assert_ne!(text(&next, 3), text(&waiting, 3));
+
+        events.extend([
+            event(
+                11,
+                "alpha",
+                "session-alpha",
+                Event::ApprovalResolved {
+                    approval_id: "approval".into(),
+                    allowed: false,
+                },
+            ),
+            event(
+                12,
+                "gamma",
+                "session-gamma",
+                Event::RunFinished {
+                    status: RunStatus::Cancelled,
+                    error: String::new(),
+                },
+            ),
+        ]);
+        app.agents
+            .activity
+            .observe(&app.tasks, &events, &[], step(1200));
+        let denied = paint_rail(&mut app, &config, 11);
+        assert!(!text(&denied, 2).contains("Tool"));
+        assert!(text(&denied, 4).starts_with("─ Canc'd  gamma"));
+        events.push(event(
+            13,
+            "alpha",
+            "session-alpha",
+            Event::ToolCompleted {
+                result: ToolResult {
+                    call_id: call.call_id,
+                    name: call.name,
+                    result: serde_json::Value::Null,
+                    error: "denied".into(),
+                },
+                duration_ms: 0,
+            },
+        ));
+        app.agents
+            .activity
+            .observe(&app.tasks, &events, &[], step(1400));
+        let after_tool = paint_rail(&mut app, &config, 11);
+        assert!(!text(&after_tool, 2).contains(" · "));
+
+        app.tasks.rotate_left(1);
+        app.tasks[0].status = RunStatus::Completed;
+        app.agents.refresh(&app.tasks);
+        app.agents
+            .activity
+            .observe(&app.tasks, &events, &[], step(1500));
+        let reordered = paint_rail(&mut app, &config, 11);
+        assert!(text(&reordered, 2).starts_with("─ Done    beta"));
+        assert!(text(&reordered, 3).starts_with("─ Canc'd  gamma"));
+
+        let mut static_app = App {
+            tasks: app.tasks,
+            ..App::default()
+        };
+        static_app.agents.refresh(&static_app.tasks);
+        static_app
+            .agents
+            .activity
+            .observe(&static_app.tasks, &events, &[], t);
+        let still = paint_rail(&mut static_app, &config, 11);
+        assert!(!static_app.agents.needs_frame());
+        static_app
+            .agents
+            .advance_activity(&static_app.tasks, step(4000));
+        assert_eq!(still, paint_rail(&mut static_app, &config, 11));
     }
 
     #[test]
@@ -849,29 +1096,30 @@ mod tests {
         rail.refresh(&tasks);
         rail.resize(111, 8);
         let mut terminal = Terminal::new(TestBackend::new(32, 8)).unwrap();
-        let paint = |terminal: &mut Terminal<TestBackend>, rail: &Rail, approval_run| {
+        let paint = |terminal: &mut Terminal<TestBackend>, rail: &mut Rail| {
             terminal
                 .draw(|frame| {
                     rail.draw(
                         frame,
                         Rect::new(1, 0, WIDTH, 8),
                         &tasks,
-                        (true, approval_run),
+                        true,
                         (&Config::default(), ""),
                         (Color::LightGreen, Color::Gray),
                     );
                 })
                 .unwrap();
         };
-        paint(&mut terminal, &rail, None);
+        paint(&mut terminal, &mut rail);
         let buffer = terminal.backend().buffer();
         assert!(row(buffer, 0, 1..32).contains("Agents / Ctrl+T"));
         assert!(buffer[(3, 0)].modifier.contains(Modifier::BOLD));
         assert!(row(buffer, 1, 3..30).starts_with("Agents / 6"));
-        assert!(row(buffer, 2, 3..29).starts_with("▾ Running parent"));
+        assert!(row(buffer, 2, 3..29).starts_with("▾ ⠀⠀⠖⠶⠲⠀⠀ parent"));
         assert!(buffer[(13, 2)].modifier.contains(Modifier::BOLD));
         let child = row(buffer, 3, 3..29);
-        assert!(child.starts_with("  ─ Error 見"));
+        assert!(child.starts_with("  ─ Failed  見"));
+        assert!(child.contains('…'));
         assert!(!child.contains('\x1b'));
         assert!(child.ends_with(" read-only"));
         assert_eq!(buffer[(7, 3)].fg, Color::Red);
@@ -879,10 +1127,12 @@ mod tests {
         assert_eq!(row(buffer, 3, 30..32), " │");
         assert_eq!(buffer[(29, 2)].symbol(), "█");
         assert_eq!(buffer[(29, 5)].symbol(), "│");
-        assert!(row(buffer, 4, 3..29).starts_with("─ Done complete"));
-        assert!(row(buffer, 5, 3..29).starts_with("─ Cancelled cancel"));
-        paint(&mut terminal, &rail, Some("parent"));
-        assert!(row(terminal.backend().buffer(), 2, 3..29).starts_with("▾ Approval parent"));
+        assert!(row(buffer, 4, 3..29).starts_with("─ Done    complete"));
+        assert!(row(buffer, 5, 3..29).starts_with("─ Canc'd  cancel"));
+        rail.activity
+            .observe(&tasks, &[], &["parent"], Instant::now());
+        paint(&mut terminal, &mut rail);
+        assert!(row(terminal.backend().buffer(), 2, 3..29).starts_with("▾ Appr.   parent"));
         rail.key(KeyCode::Down, &tasks);
         rail.key(KeyCode::Down, &tasks);
         rail.key(KeyCode::Down, &tasks);
@@ -891,10 +1141,10 @@ mod tests {
         rail.key(KeyCode::PageDown, &tasks);
         assert_eq!(rail.selected.as_deref(), Some("interrupt"));
         assert_eq!(rail.offset, 2);
-        paint(&mut terminal, &rail, None);
+        paint(&mut terminal, &mut rail);
         let buffer = terminal.backend().buffer();
-        assert!(row(buffer, 4, 3..29).starts_with("─ Interrupted interrupt"));
-        assert!(row(buffer, 5, 3..29).starts_with("─ Queued queued"));
+        assert!(row(buffer, 4, 3..29).starts_with("─ Intrpt. interrupt"));
+        assert!(row(buffer, 5, 3..29).starts_with("─ Queued  queued"));
         assert_eq!(buffer[(29, 2)].symbol(), "│");
         assert_eq!(buffer[(29, 5)].symbol(), "█");
         assert!(buffer[(5, 4)].modifier.contains(Modifier::REVERSED));

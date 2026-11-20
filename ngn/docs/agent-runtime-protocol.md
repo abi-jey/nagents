@@ -142,6 +142,18 @@ model/runtime text cannot grant approval. Schema-valid data is not authorization
 v1 handles tool requests sequentially. It does not promise multiplexed parallel
 tool execution, cross-process replay, or exactly-once side effects.
 
+The separate native host event stream uses `tool_started` as a provisional
+notification. The native Agents sidebar shows `Tool` only from the live host's
+exact child dispatch state, after preparation and any required approval.
+Dispatch adds no journal entry or wire event and does not imply success.
+Without that live proof (for example, when replaying history), a provisional
+tool start cannot establish execution. On lag, bounded recovery preserves
+confirmed activity and applies newer exact phase edges without rewinding its
+event cursor. The host also retains the last committed public text-phase edge
+for each live child, so an omitted completion still closes `Responding` even
+if later notices fill the replay tail. This snapshot retains no text payload
+and does not advance the durable event cursor.
+
 ## Cancellation and recovery
 
 ```json

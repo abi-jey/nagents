@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use ngn_protocol::{Event, EventRecord, RunStatus, TaskInfo, VERSION};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -141,6 +141,7 @@ impl InputReceipt {
 #[derive(Clone)]
 pub struct Store {
     connection: Arc<Mutex<Connection>>,
+    path: Arc<PathBuf>,
     _lock: Arc<StateLock>,
 }
 
@@ -224,14 +225,26 @@ impl Store {
 
     pub fn open(directory: &Path) -> Result<Self> {
         fs::create_dir_all(directory)?;
+        let metadata = directory.symlink_metadata()?;
         ensure!(
-            !directory.symlink_metadata()?.file_type().is_symlink(),
+            !metadata.file_type().is_symlink(),
             "State directory cannot be a symlink"
         );
+        // SQLite NOFOLLOW rejects symlinks anywhere in the path, including
+        // macOS /var and /tmp. Resolve the directory once so the lock, writer
+        // and later readers share one spelling even if an alias is retargeted.
+        // Never resolve the database or lock file itself.
+        let directory = directory.canonicalize()?;
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let resolved = directory.symlink_metadata()?;
+            ensure!(
+                resolved.is_dir()
+                    && (resolved.dev(), resolved.ino()) == (metadata.dev(), metadata.ino()),
+                "State directory changed while resolving its path"
+            );
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
         }
         let lock = private_file(&directory.join("host.lock"))?;
         lock.try_lock_exclusive()
@@ -239,7 +252,10 @@ impl Store {
         let lock = StateLock(lock);
         let path = directory.join("host.sqlite3");
         private_file(&path)?;
-        let mut connection = Connection::open(path)?;
+        let mut connection = Connection::open_with_flags(
+            &path,
+            OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
@@ -350,6 +366,7 @@ impl Store {
         transaction.commit()?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            path: Arc::new(path),
             _lock: Arc::new(lock),
         })
     }
@@ -745,11 +762,213 @@ impl Store {
             rows.map(|row| { let (sequence, run_id, session_id, timestamp_ms, payload) = row?; Ok(EventRecord { schema_version: VERSION, sequence, run_id, session_id, timestamp_ms, event: serde_json::from_str(&payload)? }) }).collect()
         }).await
     }
+
+    /// A small indexed tail for best-effort live task activity after joining
+    /// or losing broadcast records. This is not a conversation replay.
+    pub async fn task_activity_tail(
+        &self,
+        targets: Vec<(String, String)>,
+    ) -> Result<Vec<Vec<EventRecord>>> {
+        ensure!(targets.len() <= 4, "Too many activity tails");
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ownership = store._lock;
+            let _writer = store.connection;
+            // An optional TUI hint must not take the primary connection's
+            // mutex or queue behind its busy timeout. Read the already-owned
+            // WAL database through a separate, read-only connection.
+            let db = Connection::open_with_flags(
+                store.path.as_path(),
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )?;
+            db.busy_timeout(std::time::Duration::ZERO)?;
+            let mut statement = db.prepare(
+                "SELECT sequence, COALESCE(run_id, ''), timestamp_ms,
+                        CASE WHEN length(CAST(payload AS BLOB)) <= 8192 THEN payload END
+                 FROM events WHERE session_id = ? ORDER BY sequence DESC LIMIT 8",
+            )?;
+            targets
+                .into_iter()
+                .map(|(session, run)| {
+                    let mut rows = statement.query([&session])?;
+                    let mut records = Vec::new();
+                    while let Some(row) = rows.next()? {
+                        let run_id: String = row.get(1)?;
+                        if run_id != run {
+                            continue;
+                        }
+                        let Some(payload) = row.get::<_, Option<String>>(3)? else {
+                            // A potentially phase-changing record is missing.
+                            return Ok(Vec::new());
+                        };
+                        records.push(EventRecord {
+                            schema_version: VERSION,
+                            sequence: row.get(0)?,
+                            run_id,
+                            session_id: session.clone(),
+                            timestamp_ms: row.get(2)?,
+                            event: serde_json::from_str(&payload)?,
+                        });
+                    }
+                    records.reverse();
+                    Ok(records)
+                })
+                .collect()
+        })
+        .await?
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn task_activity_tail_is_small_ordered_and_exact() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let session = store.create_session().await.unwrap();
+        let (run, _) = store.accept(&session.id, "request", "go").await.unwrap();
+        for n in 0..24 {
+            store
+                .append(
+                    &run,
+                    Event::TextDelta {
+                        text: n.to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let exact = (session.id.clone(), run.id.clone());
+        let (held, holding) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let writer = store.clone();
+        let blocker = tokio::spawn(async move {
+            writer
+                .with(move |_| {
+                    let _ = held.send(());
+                    let _ = released.recv_timeout(std::time::Duration::from_secs(5));
+                    Ok(())
+                })
+                .await
+        });
+        holding.await.unwrap();
+        let batches = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            store.task_activity_tail(vec![exact.clone(), (session.id, "different-run".into())]),
+        )
+        .await;
+        release.send(()).unwrap();
+        blocker.await.unwrap().unwrap();
+        let batches = batches.unwrap().unwrap();
+        assert_eq!(batches[0].len(), 8);
+        assert!(batches[0].windows(2).all(|p| p[0].sequence < p[1].sequence));
+        assert!(matches!(&batches[0][7].event, Event::TextDelta { text } if text == "23"));
+        assert!(batches[1].is_empty());
+        assert!(
+            store
+                .task_activity_tail(vec![exact.clone(); 5])
+                .await
+                .is_err()
+        );
+
+        store
+            .append(
+                &run,
+                Event::TextDelta {
+                    text: "ä".repeat(4096),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(store.task_activity_tail(vec![exact]).await.unwrap()[0].is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_activity_tail_pins_state_behind_an_ancestor_alias() {
+        use std::os::unix::fs::symlink;
+
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let original = directory.path().join("original");
+        let alternate = directory.path().join("alternate");
+        let alias = directory.path().join("alias");
+        fs::create_dir(&original).unwrap();
+        symlink(&original, &alias).unwrap();
+        assert!(Store::open(&alias).is_err(), "state leaf cannot be a link");
+        let store = Store::open(&alias.join("state")).unwrap();
+        let other = Store::open(&alternate.join("state")).unwrap();
+        let session = store.create_session().await.unwrap();
+        let (run, _) = store.accept(&session.id, "request", "go").await.unwrap();
+        let event = store
+            .append(
+                &run,
+                Event::TextDelta {
+                    text: "live".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let target = (session.id, run.id);
+        let batches = store
+            .task_activity_tail(vec![target.clone()])
+            .await
+            .unwrap();
+        assert_eq!(batches[0].last().unwrap().sequence, event.sequence);
+
+        fs::remove_file(&alias).unwrap();
+        symlink(&alternate, &alias).unwrap();
+        assert!(Store::open(&original.join("state")).is_err());
+        assert!(
+            other
+                .task_activity_tail(vec![target.clone()])
+                .await
+                .unwrap()[0]
+                .is_empty()
+        );
+        let batches = store.task_activity_tail(vec![target]).await.unwrap();
+        assert_eq!(batches[0].last().unwrap().sequence, event.sequence);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_activity_tail_refuses_database_leaf_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let state = directory.path().canonicalize().unwrap().join("state");
+        let store = Store::open(&state).unwrap();
+        let alternate = state.with_file_name("alternate");
+        drop(Store::open(&alternate).unwrap());
+        let target = alternate.join("host.sqlite3");
+        let before = fs::read(&target).unwrap();
+        let db = state.join("host.sqlite3");
+        let original = state.join("original.sqlite3");
+        fs::rename(&db, &original).unwrap();
+        symlink(&target, &db).unwrap();
+        let result = store.task_activity_tail(Vec::new()).await;
+        fs::remove_file(&db).unwrap();
+        fs::rename(&original, &db).unwrap();
+        let error = result.unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<rusqlite::Error>(),
+                Some(rusqlite::Error::SqliteFailure(code, _))
+                    if code.extended_code == rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK
+            ),
+            "{error:#}"
+        );
+
+        drop(store);
+        fs::remove_file(&db).unwrap();
+        symlink(&target, &db).unwrap();
+        let Err(error) = Store::open(&state) else {
+            panic!("writer followed the database leaf symlink");
+        };
+        assert!(error.to_string().contains("not a symlink"));
+        assert_eq!(fs::read(&target).unwrap(), before);
+    }
 
     #[tokio::test]
     async fn recovery_and_exclusive_ownership() {

@@ -227,11 +227,8 @@ impl App {
 
     async fn state(&mut self, host: &Host) {
         let previous = self.active.as_ref().map(|run| run.id.clone());
-        self.active = host
-            .active()
-            .await
-            .into_iter()
-            .find(|run| run.session_id == self.session);
+        let (active, child_text) = host.conversation_activity(&self.session).await;
+        self.active = active;
         let changed = previous.as_deref() != self.active.as_ref().map(|run| run.id.as_str());
         if changed && let Err(error) = self.catch_up(host).await {
             self.status = format!("Cannot load conversation: {error}");
@@ -258,9 +255,13 @@ impl App {
             }
             self.steering_dirty = false;
         }
-        let approval = host.approvals().await.into_iter().find(|approval| {
-            approval.root_session_id == self.session || approval.session_id == self.session
-        });
+        let approvals = host.approvals().await;
+        let approval = approvals
+            .iter()
+            .find(|approval| {
+                approval.root_session_id == self.session || approval.session_id == self.session
+            })
+            .cloned();
         if self.approval.as_ref().map(|approval| &approval.id)
             != approval.as_ref().map(|approval| &approval.id)
         {
@@ -320,6 +321,12 @@ impl App {
                 Err(error) => self.status = format!("Cannot load subagents: {error}"),
             }
         }
+        self.agents.activity.set_animated(self.activity.animated());
+        self.agents.activity.sync_approvals(&approvals);
+        self.agents
+            .activity
+            .sync_dispatches(&host.child_tool_dispatches());
+        self.agents.activity.sync_text_phases(&child_text);
         if self.task_picker
             && self.task_detail
             && let Some(task) = self.tasks.get(self.task_index)
@@ -527,12 +534,14 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         ..conversation
     });
     transcript_area.height = conversation.height;
+    app.agents.clear_motion_rows();
     let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
     app.agents.observe_context(context);
+    // Keep the exact waiting child visible next to its approval prompt.
     let approval_dialog = app
         .approval
         .as_ref()
-        .map(|approval| (approval, center(conversation, 110, 32)));
+        .map(|approval| (approval, center(transcript_area, 110, 32)));
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
@@ -685,20 +694,26 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     }
     if let Some((approval, area)) = approval_dialog {
         frame.render_widget(Clear, area);
+        let title = format!(
+            " Approval: depth {} · {} / {} ",
+            approval.depth,
+            view::plain(&approval.agent_title),
+            view::plain(&approval.call.name)
+        );
+        const KEYS: &str = "Ctrl+Y allow once · Ctrl+D deny · Esc cancel";
+        let block = Block::bordered().border_style(Style::new().fg(Color::Yellow));
+        let block = if rail.is_some() {
+            // The dialog is narrower alongside the rail. Keep the controls
+            // visible even when a long agent title fills the top border.
+            block.title(title).title_bottom(format!(" {KEYS} "))
+        } else {
+            block.title(format!("{title}· {KEYS} "))
+        };
         frame.render_widget(
             Paragraph::new(view::plain(&approval.preview))
                 .wrap(Wrap { trim: false })
                 .scroll((app.preview_scroll, 0))
-                .block(
-                    Block::bordered()
-                        .title(format!(
-                            " Approval: depth {} · {} / {} · Ctrl+Y allow once · Ctrl+D deny · Esc cancel ",
-                            approval.depth,
-                            view::plain(&approval.agent_title),
-                            view::plain(&approval.call.name)
-                        ))
-                        .border_style(Style::new().fg(Color::Yellow)),
-                ),
+                .block(block),
             area,
         );
     }
@@ -720,16 +735,20 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         picker.draw(frame, accent, muted);
     }
     if app.no_color {
-        // Crossterm otherwise emits empty SGR color transitions under NO_COLOR.
-        // Those reset attributes too, including the composer's reverse caret.
-        frame.buffer_mut().set_style(
-            area,
-            Style::new()
-                .fg(Color::Reset)
-                .bg(Color::Reset)
-                .underline_color(Color::Reset),
-        );
+        strip_color(frame.buffer_mut(), area);
     }
+}
+
+fn strip_color(buffer: &mut Buffer, area: Rect) {
+    // Crossterm otherwise emits empty SGR color transitions under NO_COLOR.
+    // Those reset attributes too, including the composer's reverse caret.
+    buffer.set_style(
+        area,
+        Style::new()
+            .fg(Color::Reset)
+            .bg(Color::Reset)
+            .underline_color(Color::Reset),
+    );
 }
 
 fn steering_status(status: SteeringStatus) -> &'static str {
@@ -1173,6 +1192,7 @@ pub async fn run(
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut input = None;
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut motion = tokio::time::interval(footer::FRAME);
     motion.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cached: Option<Buffer> = None;
@@ -1182,6 +1202,7 @@ pub async fn run(
         let now = Instant::now();
         let activity_motion = app.activity.needs_frame(now);
         app.activity.advance(now);
+        app.agents.advance_activity(&app.tasks, now);
         let width = terminal
             .draw(|frame| {
                 let area = frame.area();
@@ -1200,12 +1221,18 @@ pub async fn run(
                     let area = footer_area(frame.area());
                     frame.buffer_mut().clone_from(previous);
                     app.tools.paint_motion(frame.buffer_mut(), now);
+                    app.agents.paint_motion(frame.buffer_mut(), &app.tasks);
                     frame.render_widget(Clear, area);
                     app.activity.draw(frame, area, &app, &host.config, now);
+                    if app.no_color {
+                        let area = frame.area();
+                        strip_color(frame.buffer_mut(), area);
+                    }
                 } else {
                     draw(frame, &mut app, &host, now);
                     let animate =
-                        (activity_motion || app.tools.needs_frame(now)) && !app.shows_overlay();
+                        (activity_motion || app.tools.needs_frame(now) || app.agents.needs_frame())
+                            && !app.shows_overlay();
                     cached = animate.then(|| frame.buffer_mut().clone());
                     cached_caret_visible = caret_visible;
                 }
@@ -1244,17 +1271,35 @@ pub async fn run(
         if redraw {
             continue;
         }
-        let animate = (activity_motion || app.tools.needs_frame(now)) && !app.shows_overlay();
+        let animate = (activity_motion || app.tools.needs_frame(now) || app.agents.needs_frame())
+            && !app.shows_overlay();
         tokio::select! {
             _ = &mut signal => break,
-            _ = ticks.tick() => app.state(&host).await,
+            _ = ticks.tick() => {
+                if !app.shows_overlay() {
+                    app.agents.recover_activity(&host.store, &app.tasks);
+                }
+                app.state(&host).await;
+            },
             _ = motion.tick(), if animate => motion_only = true,
             received = receiver.recv() => {
                 match received {
-                    Ok(record) if record.session_id == app.session => app.catch_up(&host).await?,
+                    Ok(record) => {
+                        if record.session_id == app.session {
+                            app.catch_up(&host).await?;
+                        } else {
+                            app.agents.activity.ingest(&record);
+                            if matches!(record.event, ngn_protocol::Event::TextDelta { .. } | ngn_protocol::Event::TextCompleted { .. }) {
+                                // Private streaming text cannot alter the root's
+                                // queue, catalog, or pending approval snapshot.
+                                continue;
+                            }
+                        }
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         app.catch_up(&host).await?;
                         app.tools.skip_completions(app.after);
+                        app.agents.activity.invalidate();
                     }
                     _ => ()
                 }

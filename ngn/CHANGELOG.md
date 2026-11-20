@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.37
+
+- Show each native Agents sidebar row’s live activity, approval and terminal state, with the main agent’s Braille motion and a static reduced-motion view.
+
 ## 0.100.36
 
 - Simplify the native composer to a Message title and a right-aligned count for nonempty queues; keep shortcuts in Help.
