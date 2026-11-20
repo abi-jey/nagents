@@ -225,14 +225,26 @@ impl Store {
 
     pub fn open(directory: &Path) -> Result<Self> {
         fs::create_dir_all(directory)?;
+        let metadata = directory.symlink_metadata()?;
         ensure!(
-            !directory.symlink_metadata()?.file_type().is_symlink(),
+            !metadata.file_type().is_symlink(),
             "State directory cannot be a symlink"
         );
+        // SQLite NOFOLLOW rejects symlinks anywhere in the path, including
+        // macOS /var and /tmp. Resolve the directory once so the lock, writer
+        // and later readers share one spelling even if an alias is retargeted.
+        // Never resolve the database or lock file itself.
+        let directory = directory.canonicalize()?;
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let resolved = directory.symlink_metadata()?;
+            ensure!(
+                resolved.is_dir()
+                    && (resolved.dev(), resolved.ino()) == (metadata.dev(), metadata.ino()),
+                "State directory changed while resolving its path"
+            );
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
         }
         let lock = private_file(&directory.join("host.lock"))?;
         lock.try_lock_exclusive()
@@ -240,7 +252,10 @@ impl Store {
         let lock = StateLock(lock);
         let path = directory.join("host.sqlite3");
         private_file(&path)?;
-        let mut connection = Connection::open(&path)?;
+        let mut connection = Connection::open_with_flags(
+            &path,
+            OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
@@ -868,6 +883,91 @@ mod tests {
             .await
             .unwrap();
         assert!(store.task_activity_tail(vec![exact]).await.unwrap()[0].is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_activity_tail_pins_state_behind_an_ancestor_alias() {
+        use std::os::unix::fs::symlink;
+
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let original = directory.path().join("original");
+        let alternate = directory.path().join("alternate");
+        let alias = directory.path().join("alias");
+        fs::create_dir(&original).unwrap();
+        symlink(&original, &alias).unwrap();
+        assert!(Store::open(&alias).is_err(), "state leaf cannot be a link");
+        let store = Store::open(&alias.join("state")).unwrap();
+        let other = Store::open(&alternate.join("state")).unwrap();
+        let session = store.create_session().await.unwrap();
+        let (run, _) = store.accept(&session.id, "request", "go").await.unwrap();
+        let event = store
+            .append(
+                &run,
+                Event::TextDelta {
+                    text: "live".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let target = (session.id, run.id);
+        let batches = store
+            .task_activity_tail(vec![target.clone()])
+            .await
+            .unwrap();
+        assert_eq!(batches[0].last().unwrap().sequence, event.sequence);
+
+        fs::remove_file(&alias).unwrap();
+        symlink(&alternate, &alias).unwrap();
+        assert!(Store::open(&original.join("state")).is_err());
+        assert!(
+            other
+                .task_activity_tail(vec![target.clone()])
+                .await
+                .unwrap()[0]
+                .is_empty()
+        );
+        let batches = store.task_activity_tail(vec![target]).await.unwrap();
+        assert_eq!(batches[0].last().unwrap().sequence, event.sequence);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_activity_tail_refuses_database_leaf_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let state = directory.path().canonicalize().unwrap().join("state");
+        let store = Store::open(&state).unwrap();
+        let alternate = state.with_file_name("alternate");
+        drop(Store::open(&alternate).unwrap());
+        let target = alternate.join("host.sqlite3");
+        let before = fs::read(&target).unwrap();
+        let db = state.join("host.sqlite3");
+        let original = state.join("original.sqlite3");
+        fs::rename(&db, &original).unwrap();
+        symlink(&target, &db).unwrap();
+        let result = store.task_activity_tail(Vec::new()).await;
+        fs::remove_file(&db).unwrap();
+        fs::rename(&original, &db).unwrap();
+        let error = result.unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<rusqlite::Error>(),
+                Some(rusqlite::Error::SqliteFailure(code, _))
+                    if code.extended_code == rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK
+            ),
+            "{error:#}"
+        );
+
+        drop(store);
+        fs::remove_file(&db).unwrap();
+        symlink(&target, &db).unwrap();
+        let Err(error) = Store::open(&state) else {
+            panic!("writer followed the database leaf symlink");
+        };
+        assert!(error.to_string().contains("not a symlink"));
+        assert_eq!(fs::read(&target).unwrap(), before);
     }
 
     #[tokio::test]
