@@ -3,8 +3,8 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as SyncMutex,
+        atomic::{AtomicBool, AtomicI64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -101,6 +101,48 @@ struct Pending {
     answer: oneshot::Sender<bool>,
 }
 
+/// Ephemeral host state, not a journal, web event, or runtime frame.
+#[derive(Clone)]
+pub struct ChildToolDispatch {
+    pub run_id: String,
+    pub session_id: String,
+    pub call_id: String,
+}
+
+/// Latest committed public text-phase edge of an exact live child.
+/// No text payload is retained, and this is not a published event.
+pub struct ChildTextPhase {
+    pub run_id: String,
+    pub session_id: String,
+    pub sequence: i64,
+    pub responding: bool,
+}
+
+impl ChildTextPhase {
+    fn edge(event: &Event) -> Option<bool> {
+        match event {
+            Event::TextDelta { text } if !text.is_empty() => Some(true),
+            Event::RunStarted { .. }
+            | Event::TextCompleted { .. }
+            | Event::ToolStarted { .. }
+            | Event::ApprovalRequested { .. }
+            | Event::ToolCompleted { .. } => Some(false),
+            _ => None,
+        }
+    }
+}
+
+struct ChildToolGuard<'a> {
+    active: &'a SyncMutex<HashMap<String, ChildToolDispatch>>,
+    run_id: &'a str,
+}
+
+impl Drop for ChildToolGuard<'_> {
+    fn drop(&mut self) {
+        self.active.lock().unwrap().remove(self.run_id);
+    }
+}
+
 pub struct Host {
     pub config: Config,
     pub store: Store,
@@ -109,6 +151,7 @@ pub struct Host {
     pub(crate) logs: Logs,
     active: Mutex<HashMap<String, ActiveRun>>,
     pending: Mutex<HashMap<String, Pending>>,
+    child_tools: SyncMutex<HashMap<String, ChildToolDispatch>>,
     workers: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     emission: Mutex<()>,
     closed: AtomicBool,
@@ -147,6 +190,7 @@ impl Host {
             logs,
             active: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
+            child_tools: SyncMutex::new(HashMap::new()),
             workers: Mutex::new(Vec::new()),
             emission: Mutex::new(()),
             closed: AtomicBool::new(false),
@@ -608,6 +652,7 @@ impl Host {
             read_only: self.config.read_only,
             approval,
             cancel: CancellationToken::new(),
+            text_edge: None,
         };
         let (completed, receiver) = watch::channel(false);
         active.insert(
@@ -807,6 +852,19 @@ impl Host {
         );
         let _emission = self.emission.lock().await;
         let record = self.store.append(run, event).await?;
+        if let Some(edge) = &execution.text_edge
+            && let Some(open) = ChildTextPhase::edge(&record.event)
+        {
+            // Make the committed edge observable even if broadcast drops it.
+            edge.store(
+                if open {
+                    record.sequence
+                } else {
+                    -record.sequence
+                },
+                Ordering::Release,
+            );
+        }
         let _ = self.events.send(record);
         if attention && let Some(task) = execution.task {
             // Root operators need child approval attention, never child reasoning
@@ -827,6 +885,34 @@ impl Host {
             .values()
             .map(|active| active.execution.run.clone())
             .collect()
+    }
+
+    /// Read the foreground run and related ephemeral child text state in one
+    /// active-set lock, with no history read or extra poll.
+    pub async fn conversation_activity(&self, session: &str) -> (Option<Run>, Vec<ChildTextPhase>) {
+        let active = self.active.lock().await;
+        let mut current = None;
+        let mut children = Vec::new();
+        for entry in active.values() {
+            let execution = &entry.execution;
+            if execution.run.session_id == session {
+                current = Some(execution.run.clone());
+            }
+            if let (Some(task), Some(edge)) = (&execution.task, &execution.text_edge)
+                && (task.root_session_id == session || task.parent_session_id == session)
+            {
+                let position = edge.load(Ordering::Acquire);
+                if position != 0 {
+                    children.push(ChildTextPhase {
+                        run_id: execution.run.id.clone(),
+                        session_id: execution.run.session_id.clone(),
+                        sequence: position.abs(),
+                        responding: position > 0,
+                    });
+                }
+            }
+        }
+        (current, children)
     }
     pub async fn approvals(&self) -> Vec<Approval> {
         self.pending
@@ -902,16 +988,6 @@ impl Host {
         call: &ToolCall,
         input: DelegateInput,
     ) -> Result<TaskOutcome> {
-        ensure!(
-            !input.prompt.trim().is_empty() && input.prompt.len() <= 32_000,
-            "Delegation prompt must contain 1..32000 UTF-8 bytes"
-        );
-        ensure!(
-            !input.title.trim().is_empty()
-                && input.title.len() <= 160
-                && input.title.chars().all(|character| !character.is_control()),
-            "Subagent title must contain 1..160 UTF-8 bytes without control characters"
-        );
         let mut active = self.active.lock().await;
         ensure!(
             !self.closed.load(Ordering::Acquire),
@@ -955,6 +1031,7 @@ impl Host {
             read_only,
             approval: owner.approval,
             cancel: owner.cancel.child_token(),
+            text_edge: Some(Arc::new(AtomicI64::new(0))),
         };
         let (completed, receiver) = watch::channel(false);
         active.insert(
@@ -1002,8 +1079,13 @@ impl Host {
         owner: &Execution,
         run_id: &str,
         timeout: Option<Duration>,
+        dispatch: Option<&ToolCall>,
     ) -> Result<TaskOutcome> {
         let outcome = self.owned_task(owner, run_id).await?;
+        let _dispatch = dispatch
+            .map(|call| self.begin_child_tool(owner, call))
+            .transpose()?
+            .flatten();
         if subagents::terminal(outcome.task.status) {
             return Ok(outcome);
         }
@@ -1030,6 +1112,39 @@ impl Host {
         self.owned_task(owner, run_id).await
     }
 
+    pub fn child_tool_dispatches(&self) -> Vec<ChildToolDispatch> {
+        self.child_tools.lock().unwrap().values().cloned().collect()
+    }
+
+    fn begin_child_tool<'a>(
+        &'a self,
+        owner: &'a Execution,
+        call: &ToolCall,
+    ) -> Result<Option<ChildToolGuard<'a>>> {
+        if owner.task.is_none() {
+            return Ok(None);
+        }
+        ensure!(!owner.cancel.is_cancelled(), "Run was cancelled");
+        let run_id = &owner.run.id;
+        let mut active = self.child_tools.lock().unwrap();
+        ensure!(
+            !active.contains_key(run_id),
+            "Child already dispatching a tool"
+        );
+        active.insert(
+            run_id.clone(),
+            ChildToolDispatch {
+                run_id: run_id.clone(),
+                session_id: owner.run.session_id.clone(),
+                call_id: call.call_id.clone(),
+            },
+        );
+        Ok(Some(ChildToolGuard {
+            active: &self.child_tools,
+            run_id,
+        }))
+    }
+
     pub async fn tool(self: &Arc<Self>, run: &Run, call: ToolCall) -> Result<ToolResult> {
         let owner = self.execution(run).await?;
         ensure!(!owner.cancel.is_cancelled(), "Run was cancelled");
@@ -1045,24 +1160,36 @@ impl Host {
             match call.name.as_str() {
                 "to_agent" => {
                     let input: DelegateInput = serde_json::from_value(call.arguments.clone())?;
+                    ensure!(
+                        !input.prompt.trim().is_empty() && input.prompt.len() <= 32_000,
+                        "Delegation prompt must contain 1..32000 UTF-8 bytes"
+                    );
+                    ensure!(
+                        !input.title.trim().is_empty()
+                            && input.title.len() <= 160
+                            && input.title.chars().all(|character| !character.is_control()),
+                        "Subagent title must contain 1..160 UTF-8 bytes without control characters"
+                    );
                     let background = input.background;
+                    let _dispatch = self.begin_child_tool(&owner, &call)?;
                     let task = self.delegate(&owner, &call, input).await?;
                     if background { return Ok(serde_json::to_value(task)?); }
-                    return Ok(serde_json::to_value(self.wait_task(&owner, &task.task.run_id, None).await?)?);
+                    return Ok(serde_json::to_value(self.wait_task(&owner, &task.task.run_id, None, None).await?)?);
                 }
                 "agent_status" | "agent_cancel" => {
                     let input: TaskInput = serde_json::from_value(call.arguments.clone())?;
                     let task = self.owned_task(&owner, &input.run_id).await?;
+                    let _dispatch = self.begin_child_tool(&owner, &call)?;
                     if call.name == "agent_cancel" && task.task.status == RunStatus::Running {
                         let _ = self.cancel(&input.run_id).await;
-                        return Ok(serde_json::to_value(self.wait_task(&owner, &input.run_id, None).await?)?);
+                        return Ok(serde_json::to_value(self.wait_task(&owner, &input.run_id, None, None).await?)?);
                     }
                     return Ok(serde_json::to_value(self.owned_task(&owner, &input.run_id).await?)?);
                 }
                 "agent_wait" => {
                     let input: WaitInput = serde_json::from_value(call.arguments.clone())?;
                     ensure!((1..=60).contains(&input.timeout_seconds), "Wait timeout must be 1..60 seconds");
-                    return Ok(serde_json::to_value(self.wait_task(&owner, &input.run_id, Some(Duration::from_secs(input.timeout_seconds))).await?)?);
+                    return Ok(serde_json::to_value(self.wait_task(&owner, &input.run_id, Some(Duration::from_secs(input.timeout_seconds)), Some(&call)).await?)?);
                 }
                 _ => (),
             }
@@ -1086,6 +1213,7 @@ impl Host {
                 self.emit(run, Event::ApprovalResolved { approval_id:id, allowed }).await?;
                 ensure!(allowed && !owner.cancel.is_cancelled(), "Tool approval denied, expired or cancelled");
             }
+            let _dispatch = self.begin_child_tool(&owner, &call)?;
             tools.execute(prepared, owner.cancel.clone()).await
         }.await;
         let (result, error) = match result {

@@ -21,14 +21,14 @@ use super::shimmer::Sweep;
 pub(super) const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
 const DONE: Duration = Duration::from_secs(2);
 const IDLE_SETTLE: Duration = Duration::from_millis(1500);
-const WIDTH: usize = 7;
+pub(super) const WIDTH: usize = 7;
 const INFO: Color = Color::Cyan;
 const READY: Color = Color::Green;
 const WORKING: Color = Color::Magenta;
 const ERROR: Color = Color::Red;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Phase {
+pub(super) enum Phase {
     Idle,
     Working,
     Tool,
@@ -84,13 +84,20 @@ impl Spring {
     }
 }
 
-struct Field {
+pub(super) struct Field {
     phase: f64,
     springs: [Spring; 13],
 }
 
 impl Field {
-    fn advance(&mut self, seconds: f64) {
+    pub(super) fn new() -> Self {
+        Self {
+            phase: 0.,
+            springs: Phase::Idle.channels().map(Spring::new),
+        }
+    }
+
+    pub(super) fn advance(&mut self, seconds: f64) {
         // Exact critically damped spring, including the integral of the speed
         // channel so interrupting a transition doesn't jump the particle phase.
         const F: f64 = 6.5;
@@ -108,7 +115,7 @@ impl Field {
         }
     }
 
-    fn select(&mut self, phase: Phase, immediate: bool) {
+    pub(super) fn select(&mut self, phase: Phase, immediate: bool) {
         for (spring, target) in self.springs.iter_mut().zip(phase.channels()) {
             if immediate {
                 *spring = Spring::new(target);
@@ -118,7 +125,7 @@ impl Field {
         }
     }
 
-    fn spans(&self) -> impl Iterator<Item = Span<'static>> {
+    pub(super) fn spans(&self) -> impl Iterator<Item = Span<'static>> {
         const BITS: [[u8; 2]; 4] = [[1, 8], [2, 16], [4, 32], [64, 128]];
         let [reach, flow, wave] = [10, 11, 12].map(|idx| self.springs[idx].value);
         let mut cells = [0; WIDTH];
@@ -199,13 +206,14 @@ impl Default for Activity {
 }
 
 impl Activity {
+    pub(super) fn animated(&self) -> bool {
+        self.animated
+    }
+
     pub(super) fn new(now: Instant, animated: bool) -> Self {
         Self {
             animated,
-            field: Field {
-                phase: 0.,
-                springs: Phase::Idle.channels().map(Spring::new),
-            },
+            field: Field::new(),
             phase: Phase::Idle,
             phase_since: now,
             frame_at: now,
@@ -495,7 +503,7 @@ fn shimmer(label: &Span<'_>, age: Duration) -> Vec<Span<'static>> {
         .collect()
 }
 
-fn fit(line: Line<'static>, width: usize) -> Line<'static> {
+pub(super) fn fit(line: Line<'static>, width: usize) -> Line<'static> {
     if line.width() <= width {
         return line;
     }
