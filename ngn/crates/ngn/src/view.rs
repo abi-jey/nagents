@@ -369,6 +369,7 @@ pub type FenceKey = (i64, usize);
 
 pub enum TranscriptPart<'a> {
     Text(String),
+    User(String),
     Code(FenceKey, String),
     Card(ToolCard<'a>),
 }
@@ -602,13 +603,18 @@ pub enum TranscriptScope {
     AgentInspector,
 }
 
+enum TranscriptBoundary<'projection, 'event> {
+    User { end: usize },
+    Card(&'projection ProjectedTool<'event>),
+}
+
 pub fn transcript(
     records: &[EventRecord],
     now_ms: u64,
     scope: TranscriptScope,
 ) -> Vec<TranscriptPart<'_>> {
     let mut output = String::new();
-    let mut cards = Vec::new();
+    let mut boundaries = Vec::new();
     let mut assistant: Vec<(i64, Range<usize>)> = Vec::new();
     let mut continuing = None;
     let rows = tool_rows(records);
@@ -622,7 +628,7 @@ pub fn transcript(
         let before_card = output.len();
         if let Some(tool) = tool {
             output.push('\n');
-            cards.push((output.len(), tool));
+            boundaries.push((output.len(), TranscriptBoundary::Card(tool)));
             output.push('\n'); // One logical line, replaced by the card below.
         }
         let start = output.len();
@@ -656,7 +662,14 @@ pub fn transcript(
                 "\n[Input queue resumed]\n"
             }),
             Event::RunStarted { prompt } => {
-                output.push_str(&format!("\n{prompt}\n\n"));
+                // Preserve the existing separators, but mark only the prompt
+                // rows (including explicit blank lines within the prompt).
+                output.push('\n');
+                let user_start = output.len();
+                output.push_str(prompt);
+                output.push('\n');
+                boundaries.push((user_start, TranscriptBoundary::User { end: output.len() }));
+                output.push('\n');
             }
             Event::Notice { text } => output.push_str(&format!("\n{text}\n")),
             Event::TaskStarted { task } => output.push_str(&format!(
@@ -708,17 +721,26 @@ pub fn transcript(
     }
     let mut parts = Vec::new();
     let mut assistant = assistant.into_iter().peekable();
-    for (offset, tool) in cards {
-        if offset < start {
+    for (offset, part) in boundaries {
+        let end = match part {
+            TranscriptBoundary::User { end } => end,
+            TranscriptBoundary::Card(_) => offset + 1,
+        };
+        if end <= start {
             continue;
         }
-        text_parts(&output, start, offset, &mut assistant, &mut parts);
-        parts.push(TranscriptPart::Card(tool.row.card(
-            tool.key,
-            now_ms,
-            tool.finished,
-        )));
-        start = offset + 1;
+        if start < offset {
+            text_parts(&output, start, offset, &mut assistant, &mut parts);
+        }
+        parts.push(match part {
+            TranscriptBoundary::User { .. } => {
+                TranscriptPart::User(plain(&output[start.max(offset)..end]))
+            }
+            TranscriptBoundary::Card(tool) => {
+                TranscriptPart::Card(tool.row.card(tool.key, now_ms, tool.finished))
+            }
+        });
+        start = end;
     }
     text_parts(&output, start, output.len(), &mut assistant, &mut parts);
     parts
@@ -738,9 +760,9 @@ mod tests {
         let mut output = String::new();
         for part in project(records, now_ms) {
             match part {
-                TranscriptPart::Text(text) | TranscriptPart::Code(_, text) => {
-                    output.push_str(&text)
-                }
+                TranscriptPart::Text(text)
+                | TranscriptPart::User(text)
+                | TranscriptPart::Code(_, text) => output.push_str(&text),
                 TranscriptPart::Card(card) => {
                     let _ = write!(output, "> {} · {}", card.label, card.status);
                     if let Some(elapsed) = card.elapsed {
@@ -875,13 +897,17 @@ mod tests {
         ];
         let pending = project(&records[..3], 10);
         assert!(matches!(&pending[..], [
+            TranscriptPart::Text(gap),
+            TranscriptPart::User(user),
             TranscriptPart::Text(prose),
             TranscriptPart::Code(_, code),
-        ] if prose == "\n```user\nplain\n```\n\n# literal heading\n"
+        ] if gap == "\n" && user == "```user\nplain\n```\n" && prose == "\n# literal heading\n"
             && code == "  **literal**[31m\n```\n"));
 
         let parts = project(&records, 10);
         assert!(matches!(&parts[..], [
+            TranscriptPart::Text(_),
+            TranscriptPart::User(_),
             TranscriptPart::Text(_),
             TranscriptPart::Code(_, code),
             TranscriptPart::Text(prose),
@@ -910,11 +936,14 @@ mod tests {
             TranscriptPart::Text(between),
             TranscriptPart::Code(_, unfinished),
             TranscriptPart::Text(after),
+            TranscriptPart::User(user),
+            TranscriptPart::Text(gap),
         ] if before == "inline ```not a block\n    ```indented\n```bad`info\n```\n"
             && tilde == "keep indent\n```\n~~~not-a-close\n"
             && between == "outside\n"
             && unfinished == "unfinished\n"
-            && after == "\n~~~notice\nnot code\nnew assistant text\n\n~~~user\n\n"));
+            && after == "\n~~~notice\nnot code\nnew assistant text\n\n"
+            && user == "~~~user\n" && gap == "\n"));
     }
 
     #[test]
@@ -1059,10 +1088,34 @@ mod tests {
             }),
         ];
         assert!(matches!(&project(&records, 0)[..], [
+            TranscriptPart::Text(gap), TranscriptPart::User(user),
             TranscriptPart::Text(before), TranscriptPart::Code(_, code), TranscriptPart::Text(after),
-        ] if before == "\nuserliteral\n\nplainprose\n"
+        ] if gap == "\n" && user == "userliteral\n" && before == "\nplainprose\n"
             && code == "SAME\n EXTRA\nFEWER\n TAB\n\tFULL-TAB\n[999~\n"
             && after == "POSTPLAIN\n"));
+    }
+
+    #[test]
+    fn retained_tail_can_start_inside_a_user_prompt() {
+        let records = [
+            event(
+                "r",
+                1,
+                Event::RunStarted {
+                    prompt: "界".repeat(11),
+                },
+            ),
+            event(
+                "r",
+                2,
+                Event::TextCompleted {
+                    text: "x".repeat(511_989),
+                },
+            ),
+        ];
+        assert!(matches!(&project(&records, 0)[..], [
+            TranscriptPart::User(prompt), TranscriptPart::Text(prose),
+        ] if prompt == "界界\n" && prose.starts_with("\nx")));
     }
 
     #[test]
