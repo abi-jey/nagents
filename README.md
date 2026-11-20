@@ -44,7 +44,7 @@ It never overwrites an existing Python `ngn`; see the
 
 ## Library Installation
 
-Use your selected Python 3.11+ virtual environment, or `poetry add nagents` in an
+Use a Python 3.12–3.15 virtual environment, or `poetry add nagents` in an
 existing Poetry project. Do not replace an existing environment:
 
 ```sh

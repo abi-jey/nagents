@@ -69,7 +69,7 @@ and jobs directory for a setup-repair run, preserving the original results.
 If shipping ngn code also changed, report it as a new candidate rather than an
 identical-baseline retry.
 
-Setup checks Python 3.11+ and `ensurepip` before creating its private venv.
+Setup checks Python 3.12+ and `ensurepip` before creating its private venv.
 If `ensurepip` is missing on Debian/Ubuntu, it explicitly runs `apt-get update`
 and installs the matching `python3.x-venv` package. Images missing it on other
 distributions fail clearly. Setup collects `install.log`, Python version,

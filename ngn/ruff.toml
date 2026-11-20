@@ -1,6 +1,7 @@
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+# Keep the existing TypeAlias and TypeVar declarations instead of requiring PEP 695.
+ignore = ["E501", "UP040", "UP047"]
