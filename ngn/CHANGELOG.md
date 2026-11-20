@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.36
+
+- Simplify the native composer to a Message title and a right-aligned count for nonempty queues; keep shortcuts in Help.
+
 ## 0.100.35
 
 - Use Enter to steer a capable active turn and Ctrl+Enter to queue; an unchanged draft rejected during an idle-to-active race cannot steer on retry.

@@ -89,6 +89,7 @@ def check(binary: Path, root: Path, *, reduced_motion: bool) -> None:
             wait_for(lambda: b"Opening workspace..." in history, "startup prelude")
             os.write(master, b"startup draft\r\r")
         wait_for(lambda: KEYS_ON in history, "keyboard enhancement after input handoff")
+        require(b"Message" in visible() and b"0 pending" not in visible(), "Empty composer title contains queue chrome")
         database = next(state.rglob("host.sqlite3"))
 
         def runs() -> list[tuple[str, str, str]]:
@@ -156,6 +157,19 @@ def check(binary: Path, root: Path, *, reduced_motion: bool) -> None:
             [row[1:] for row in runs()[-2:]] == [("paused Ctrl+Enter", "queued"), ("paused Enter", "queued")],
             "Paused inputs ran or changed FIFO order",
         )
+        badge = b"3 pending" if reduced_motion else b"2 pending"
+        rows, columns = 12, 24
+        resize_at = len(history)
+        termios.tcsetwinsize(slave, (rows, columns))
+        wait_for(
+            lambda: b"\x1b[2J" in history[resize_at:] and b"Message" in visible() and badge in visible(),
+            "narrow composer shows its title and count",
+        )
+        os.write(master, b"/st")
+        wait_for(lambda: b"/steer" in visible() and badge in visible(), "narrow slash completion preserves the badge")
+        os.write(master, ENTER)
+        wait_for(lambda: b"/steer" in visible() and b"Tab/Enter" not in visible(), "Enter filled the command")
+        require(runs()[-1][1] == "paused Enter", "Command completion submitted an input")
         if reduced_motion:
             process.send_signal(signal.SIGTERM)
         else:
@@ -183,4 +197,7 @@ if __name__ == "__main__":
     for reduced in (False, True):
         with tempfile.TemporaryDirectory(prefix="ngn-composer-") as directory:
             check(args.binary.resolve(), Path(directory), reduced_motion=reduced)
-    print("PASS: startup handoff, idle/busy Enter and Ctrl+Enter, approval, stale retry, paused FIFO, and tty restore")
+    print(
+        "PASS: startup handoff, idle/busy Enter and Ctrl+Enter, approval, stale retry, paused FIFO, "
+        "narrow composer and slash completion, and tty restore"
+    )

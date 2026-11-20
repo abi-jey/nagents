@@ -457,7 +457,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
         )
         ready = WorkspaceReady(master)
         wait_for(
-            lambda: ready.observe(output, "1 pending · PAUSED".encode() in visible()),
+            lambda: ready.observe(output, COMPOSER_TITLE in visible()),
             "Resumed queue TUI did not render and repaint at the resized PTY dimensions",
         )
         require(b"Tip: F1" not in visible(), "Resumed nonempty transcript showed the empty-session tip")
