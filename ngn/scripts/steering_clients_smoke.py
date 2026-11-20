@@ -28,6 +28,7 @@ from uuid import uuid4
 
 from aiohttp import web
 from playwright.async_api import Browser, Page, async_playwright
+from pty_smoke import COMPOSER_TITLE, WorkspaceReady
 from steering_smoke import REPO, adapter_runner, require, server
 
 
@@ -290,7 +291,15 @@ def pty_check(binary: Path, config: Path, workspace: Path, data: Path, output: P
         raise AssertionError(f"PTY delivery/storage boundary not reached: {sql}")
 
     try:
-        wait(b"Welcome to ngn")
+        ready = WorkspaceReady(master)
+        deadline = time.monotonic() + 20
+        while not ready.observe(history, COMPOSER_TITLE in visible(history)) and time.monotonic() < deadline:
+            read()
+            require(process.poll() is None, "TUI exited before repainting the workspace")
+        require(
+            ready.observe(history, COMPOSER_TITLE in visible(history)),
+            "Steering TUI did not render and repaint at the resized PTY dimensions",
+        )
         os.write(master, b"pty batch\r")
         wait(b"Approval:")
         root = str(rows("SELECT id FROM runs WHERE status = 'running'", 1)[0][0])

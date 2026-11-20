@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import aiohttp
-from pty_smoke import WorkspaceReady
+from pty_smoke import COMPOSER_TITLE, WorkspaceReady
 
 
 def require(condition: object, message: str) -> None:
@@ -369,7 +369,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
             raise AssertionError(explanation)
 
         wait_for(
-            lambda: ready.observe(output, b"Welcome to ngn" in visible()),
+            lambda: ready.observe(output, COMPOSER_TITLE in visible()),
             "Subagent TUI did not render and repaint at the resized PTY dimensions",
         )
         os.write(master, b"delegate hold\r")

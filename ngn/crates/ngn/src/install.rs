@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, Write},
+    io::{BufReader, IsTerminal, Read, Seek, Write},
     path::{Component, Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -165,7 +165,7 @@ async fn json<T: Transport, D: serde::de::DeserializeOwned>(transport: &T, url: 
         "Release manifest exceeds 8 MiB"
     );
     file.rewind()?;
-    serde_json::from_reader(file).context("Invalid official release metadata")
+    serde_json::from_reader(BufReader::new(file)).context("Invalid official release metadata")
 }
 
 async fn discover<T: Transport>(
@@ -526,6 +526,7 @@ fn current(identity: &Identity) -> Result<Option<ReleaseVersion>> {
 
 struct Installation {
     identity: Identity,
+    expected_current: Option<ReleaseVersion>,
     _lock: Lock,
 }
 
@@ -590,11 +591,12 @@ impl Installation {
         current(&identity)?;
         Ok(Self {
             identity,
+            expected_current: None,
             _lock: lock,
         })
     }
 
-    fn from_executable(executable: &Path) -> Result<Self> {
+    fn from_executable(executable: &Path, progress: &mut Progress) -> Result<Self> {
         let executable = executable.canonicalize().context(UNMANAGED)?;
         let release = executable.parent().context(UNMANAGED)?;
         let releases = release.parent().context(UNMANAGED)?;
@@ -614,20 +616,25 @@ impl Installation {
                 && version.to_string() == env!("CARGO_PKG_VERSION"),
             UNMANAGED
         );
-        let bundle = BundleManifest::read(release)?;
-        ensure!(
-            bundle.ngn_version == version.to_string(),
-            "Installed bundle version mismatch"
-        );
-        bundle.verify_tree(release)?;
+        progress.phase("Inspecting installed bundle...");
+        // Keep the executable-to-generation binding under the prefix lock.
+        // Read and hash that generation once, in installed_bundle before discovery.
         Ok(Self {
             identity,
+            expected_current: Some(version),
             _lock: lock,
         })
     }
 
     fn installed_bundle(&self) -> Result<Option<BundleManifest>> {
-        current(&self.identity)?
+        let version = current(&self.identity)?;
+        if let Some(expected) = self.expected_current {
+            ensure!(
+                version == Some(expected),
+                "Managed current changed; retry from the current ngn executable"
+            );
+        }
+        version
             .map(|version| {
                 let root = self
                     .identity
@@ -989,6 +996,95 @@ impl std::fmt::Display for Outcome {
     }
 }
 
+/// Best-effort stderr feedback; a broken progress stream must not affect activation.
+#[derive(Default)]
+struct Progress {
+    output: Option<Box<dyn Write + Send>>,
+    color: bool,
+    animate: bool,
+}
+
+impl Progress {
+    fn stderr(no_animations: bool) -> Self {
+        let capable = std::env::var_os("TERM").as_deref() != Some("dumb".as_ref());
+        let color = std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());
+        // The installer never loads host/TUI configuration.
+        let animate = crate::animations_enabled(
+            no_animations,
+            None,
+            std::env::var("TEXTUAL_ANIMATIONS").ok().as_deref(),
+        );
+        Self::new(std::io::stderr(), capable && color, capable && animate)
+    }
+
+    fn new(output: impl Write + IsTerminal + Send + 'static, color: bool, animate: bool) -> Self {
+        let tty = output.is_terminal();
+        Self {
+            output: Some(Box::new(output)),
+            color: tty && color,
+            animate: tty && animate,
+        }
+    }
+
+    fn write(&mut self, text: std::fmt::Arguments<'_>) {
+        if let Some(output) = &mut self.output {
+            let _ = output.write_fmt(text).and_then(|()| output.flush());
+        }
+    }
+
+    fn phase(&mut self, text: &str) {
+        let prefix = if self.color {
+            "\x1b[1;36mngn update:\x1b[0m"
+        } else {
+            "ngn update:"
+        };
+        self.write(format_args!("{prefix} {text}\n"));
+    }
+
+    async fn wait<T>(&mut self, work: impl Future<Output = T>) -> T {
+        if !self.animate {
+            return work.await;
+        }
+        let mut spinner = Spinner {
+            progress: self,
+            visible: false,
+        };
+        let mut tick = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_millis(250),
+            Duration::from_millis(100),
+        );
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tokio::pin!(work);
+        let frames = ['|', '/', '-', '\\'];
+        let mut frame = 0;
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut work => return result,
+                _ = tick.tick() => {
+                    spinner.visible = true;
+                    spinner.progress.write(format_args!("\r{}", frames[frame]));
+                    frame = (frame + 1) % frames.len();
+                }
+            }
+        }
+    }
+}
+
+struct Spinner<'a> {
+    progress: &'a mut Progress,
+    visible: bool,
+}
+
+impl Drop for Spinner<'_> {
+    fn drop(&mut self) {
+        // Only the single transient cell below the phase line is redrawn.
+        if self.visible {
+            self.progress.write(format_args!("\r \r"));
+        }
+    }
+}
+
 fn compare(version: ReleaseVersion, installed: Option<&BundleManifest>) -> Result<()> {
     if let Some(old) = installed {
         ensure!(
@@ -1006,6 +1102,7 @@ async fn apply<T: Transport, P: Probe>(
     transport: &T,
     probe: &P,
     cancel: &CancellationToken,
+    mut progress: Progress,
 ) -> Result<Outcome> {
     cancelled(cancel)?;
     let pin = source
@@ -1021,12 +1118,17 @@ async fn apply<T: Transport, P: Probe>(
         ensure!(hex(hash, 64), "Expected a lowercase 64-character SHA-256");
     }
     let installed = installation.installed_bundle()?;
+    let expected_current = installed
+        .as_ref()
+        .map(|bundle| ReleaseVersion::parse(&bundle.ngn_version))
+        .transpose()?;
     if let Some(pin) = pin {
         compare(pin, installed.as_ref())?;
     }
     let release = if source.archive.is_none() {
+        progress.phase("Checking release metadata...");
         Some(tokio::select! {
-            result = discover(transport, pin) => result?,
+            result = progress.wait(discover(transport, pin)) => result?,
             _ = cancel.cancelled() => bail!("Installation cancelled before activation"),
         })
     } else {
@@ -1053,6 +1155,7 @@ async fn apply<T: Transport, P: Probe>(
     let stage = private_tempdir_in(&installation.identity.prefix, ".stage-")?;
     let mut archive = tempfile::NamedTempFile::new_in(stage.path())?;
     let expected = if let Some(path) = &source.archive {
+        progress.phase("Reading local bundle...");
         ensure!(
             File::open(path)?.metadata()?.len() <= MAX_COMPRESSED,
             "Compressed archive exceeds 256 MiB"
@@ -1062,12 +1165,14 @@ async fn apply<T: Transport, P: Probe>(
     } else {
         let release = release.as_ref().context("Missing release")?;
         let url = format!("{DOWNLOAD}/v{}/{}", release.ngn_version, release.bundle);
+        progress.phase("Downloading bundle...");
         tokio::select! {
-            result = transport.fetch(&url, archive.as_file_mut(), MAX_COMPRESSED) => result?,
+            result = progress.wait(transport.fetch(&url, archive.as_file_mut(), MAX_COMPRESSED)) => result?,
             _ = cancel.cancelled() => bail!("Installation cancelled before activation"),
         }
         release.validate(ReleaseVersion::parse(&release.ngn_version)?)?
     };
+    progress.phase("Verifying and staging bundle...");
     ensure!(
         archive.as_file().metadata()?.len() <= MAX_COMPRESSED
             && file_hash(archive.path())? == expected,
@@ -1077,8 +1182,11 @@ async fn apply<T: Transport, P: Probe>(
     let archive_path = archive.path().to_path_buf();
     let stage_path = stage.path().to_path_buf();
     let token = cancel.clone();
-    let (root, bundle) =
-        tokio::task::spawn_blocking(move || unpack(&archive_path, &stage_path, &token)).await??;
+    let (root, bundle) = progress
+        .wait(tokio::task::spawn_blocking(move || {
+            unpack(&archive_path, &stage_path, &token)
+        }))
+        .await??;
     let version = ReleaseVersion::parse(&bundle.ngn_version)?;
     ensure!(
         pin.is_none_or(|pin| pin == version),
@@ -1108,12 +1216,20 @@ async fn apply<T: Transport, P: Probe>(
     }
     cancelled(cancel)?;
     tokio::select! {
-        result = probe.verify(&root, &bundle) => result?,
+        result = progress.wait(probe.verify(&root, &bundle)) => result?,
         _ = cancel.cancelled() => bail!("Installation cancelled before activation"),
     }
     cancelled(cancel)?;
     sync_tree(&root, cancel)?;
-    activate(installation, &root, &bundle, &stage, cancel)?;
+    progress.phase("Activating release...");
+    activate(
+        installation,
+        &root,
+        &bundle,
+        &stage,
+        expected_current,
+        cancel,
+    )?;
     Ok(Outcome::Installed(version))
 }
 
@@ -1142,6 +1258,7 @@ fn activate(
     root: &Path,
     bundle: &BundleManifest,
     stage: &TempDir,
+    expected_current: Option<ReleaseVersion>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let identity = &installation.identity;
@@ -1157,7 +1274,7 @@ fn activate(
         "Release version directory already exists; immutable releases are never overwritten. Use a new release version/prefix."
     );
     let had_binary = binary_link(identity, false)?;
-    current(identity)?;
+    require_activation_base(identity, expected_current)?;
     cancelled(cancel)?;
     // No fallible payload checks after this point. An unreferenced generation is
     // safe to retain on a filesystem/sync failure, and is never executed.
@@ -1173,6 +1290,27 @@ fn activate(
     let pointer = stage.path().join("current");
     symlink(&Path::new("releases").join(&bundle.ngn_version), &pointer)?;
     sync_directory(stage.path())?;
+    switch_current(installation, &pointer, expected_current, cancel)
+}
+
+fn require_activation_base(identity: &Identity, expected: Option<ReleaseVersion>) -> Result<()> {
+    ensure!(
+        current(identity)? == expected,
+        "Managed current changed before activation; this operation did not activate a release"
+    );
+    Ok(())
+}
+
+fn switch_current(
+    installation: &Installation,
+    pointer: &Path,
+    expected_current: Option<ReleaseVersion>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let identity = &installation.identity;
+    // Recheck after the staging writes/syncs, under the prefix lock. This is
+    // not a filesystem compare-and-swap against writers that ignore the lock.
+    require_activation_base(identity, expected_current)?;
     cancelled(cancel)?;
     fs::rename(pointer, identity.prefix.join("current"))
         .context("Cannot atomically activate verified release")?;
@@ -1212,6 +1350,7 @@ pub(crate) async fn install(arguments: &Install, cancel: &CancellationToken) -> 
         &Https::new()?,
         &RuntimeProbe,
         cancel,
+        Progress::default(),
     )
     .await?;
     println!(
@@ -1221,9 +1360,14 @@ pub(crate) async fn install(arguments: &Install, cancel: &CancellationToken) -> 
     Ok(())
 }
 
-pub(crate) async fn update(arguments: &Update, cancel: &CancellationToken) -> Result<()> {
+pub(crate) async fn update(
+    arguments: &Update,
+    cancel: &CancellationToken,
+    no_animations: bool,
+) -> Result<()> {
     supported_platform()?;
-    let installation = Installation::from_executable(&std::env::current_exe()?)?;
+    let mut progress = Progress::stderr(no_animations);
+    let installation = Installation::from_executable(&std::env::current_exe()?, &mut progress)?;
     let result = apply(
         &installation,
         &arguments.source,
@@ -1231,6 +1375,7 @@ pub(crate) async fn update(arguments: &Update, cancel: &CancellationToken) -> Re
         &Https::new()?,
         &RuntimeProbe,
         cancel,
+        progress,
     )
     .await?;
     println!("{result}");

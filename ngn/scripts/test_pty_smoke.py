@@ -3,7 +3,7 @@
 import os
 import unittest
 
-from pty_smoke import WorkspaceReady
+from pty_smoke import COMPOSER_TITLE, WorkspaceReady
 
 
 @unittest.skipUnless(os.name == "posix", "requires a PTY")
@@ -20,8 +20,8 @@ class WorkspaceReadyTest(unittest.TestCase):
             prelude = b"\x1b[2J\x1b[41;3H"
             self.assertFalse(ready.observe(prelude, False))
             self.assertEqual(termios.tcgetwinsize(slave), (40, 140))
-            first = prelude + b"\x1b[?1049hWelcome to ngn"
-            self.assertFalse(ready.observe(first, True))
+            first = prelude + b"\x1b[?1049h" + COMPOSER_TITLE
+            self.assertFalse(ready.observe(first, COMPOSER_TITLE in first))
             self.assertEqual(termios.tcgetwinsize(slave), (41, 140))
             old_tail = first + b"\x1b[40;3Hold footer"
             self.assertFalse(ready.observe(old_tail, True))

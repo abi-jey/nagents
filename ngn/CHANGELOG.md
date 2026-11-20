@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.100.32
+
+- Native updates verify the active bundle once instead of scanning it twice before release discovery.
+
+## 0.100.31
+
+- Native updates refuse to switch releases if the active generation changed during staging.
+
+## 0.100.30
+
+- Hide the successful turn marker in the main native transcript while keeping tool badges and actionable statuses.
+
+## 0.100.29
+
+- Remove the empty row between adjacent compact native tool cards while preserving prose and expanded detail spacing.
+
+## 0.100.28
+
+- Remove the native YOU and NGN transcript headings without changing message content.
+
+## 0.100.27
+
+- Empty native conversations show one short F1 and `/sessions` tip instead of the multi-line welcome. The tip is hidden when it does not fit or the conversation already has content.
+
+## 0.100.26
+
+- The native workspace no longer shows the top version, path and session banner or its divider, leaving more room for the conversation. F1 still opens help.
+
+## 0.100.25
+
+- Managed updates use buffered reads to parse official release metadata, reducing file reads without changing validation or progress output.
+
+## 0.100.24
+
+- The mouse wheel now scrolls the native ngn conversation without moving focus. Scrolling up keeps your place as output streams; scrolling back to the bottom resumes following new output.
+
+## 0.100.23
+
+- Managed ngn updates now report what they are doing on stderr, with a spinner during longer waits on interactive terminals. Redirected output stays plain, and the final result on stdout is unchanged.
+
 ## 0.100.22
 
 - Web chat and Live voice keep active runs going when SQLite is temporarily busy during a follow-up inbox check. Queued follow-ups are retried in order even while the root waits for child agents.

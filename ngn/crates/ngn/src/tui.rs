@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    io::stdout,
+    io::{self, Write, stdout},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -10,7 +10,7 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{
         DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
-        KeyEvent, KeyEventKind, KeyModifiers,
+        KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -28,14 +28,14 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    text::Line,
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use uuid::Uuid;
 
-use crate::view;
+use crate::{animations_enabled, view};
 
 mod agents;
 mod code_fences;
@@ -68,9 +68,32 @@ Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)";
 
-struct Restore;
+const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
+
+#[derive(Default)]
+struct Restore {
+    mouse_reporting: bool,
+}
+
+impl Restore {
+    fn enable_wheel(&mut self) -> io::Result<()> {
+        // Normal button reporting includes wheel events. SGR gives us cell
+        // coordinates even in large windows; no motion/drag reporting is needed.
+        // Arm cleanup before the write in case enabling succeeds only in part.
+        self.mouse_reporting = true;
+        let mut output = stdout().lock();
+        output.write_all(b"\x1b[?1000h\x1b[?1006h")?;
+        output.flush()
+    }
+}
+
 impl Drop for Restore {
     fn drop(&mut self) {
+        if self.mouse_reporting {
+            let mut output = stdout().lock();
+            let _ = output.write_all(b"\x1b[?1006l\x1b[?1000l");
+            let _ = output.flush();
+        }
         let _ = disable_raw_mode();
         let _ = execute!(stdout(), DisableBracketedPaste, LeaveAlternateScreen, Show);
     }
@@ -101,6 +124,7 @@ struct App {
     active: Option<Run>,
     approval: Option<Approval>,
     scroll: Option<usize>,
+    transcript_area: Rect,
     preview_scroll: u16,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
@@ -321,6 +345,21 @@ impl App {
         }
     }
 
+    fn transcript_wheel(&mut self, mouse: MouseEvent) {
+        let up = match mouse.kind {
+            MouseEventKind::ScrollUp => true,
+            MouseEventKind::ScrollDown => false,
+            _ => return,
+        };
+        if self.tools_available()
+            // Textual interprets Shift/Ctrl+wheel as horizontal scrolling.
+            && !mouse.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
+            && self.transcript_area.contains(Position::new(mouse.column, mouse.row))
+        {
+            self.tools.scroll_rows(&mut self.scroll, up, 2);
+        }
+    }
+
     fn completion_key(&mut self, key: KeyEvent) -> bool {
         self.composer_available() && self.completion.key(&mut self.input, key)
     }
@@ -373,16 +412,6 @@ impl App {
     }
 }
 
-fn welcome(config: &ngn_core::Config) -> String {
-    let next = match config.selected_provider() {
-        Ok(_) => "Type a prompt and press Enter.".to_owned(),
-        Err(error) => format!("Prompts cannot be sent yet. {error}"),
-    };
-    format!(
-        "\nWelcome to ngn.\n\nRust owns the harness, native tools, approvals and terminal rendering.\nThe optional nagents runtime supplies the Python agent/model loop.\n\n{next}\n\nF1 or /help for commands and shortcuts."
-    )
-}
-
 fn center(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2));
     let height = height.min(area.height.saturating_sub(2));
@@ -399,37 +428,20 @@ fn footer_area(area: Rect) -> Rect {
     Rect::new(area.x, area.bottom() - height, area.width, height)
 }
 
-fn content_rows(area: Rect, menu_height: u16) -> [Rect; 4] {
+fn content_rows(area: Rect, menu_height: u16) -> [Rect; 3] {
     let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(2));
-    let wide = agents::is_wide(area.width);
-    let (header, composer) = if wide {
-        // Preserve a compact header/composer and seven rows for the tree
-        // (border, heading, four tasks) before adding any optional chrome.
-        // Each extra screen row can buy at most one row of chrome.
-        let extra = body.height.saturating_sub(1 + 3 + 7);
-        (
-            1 + extra.saturating_sub(2).min(2),
-            body.height.min(3) + extra.min(2),
-        )
+    let composer = if agents::is_wide(area.width) {
+        // Keep the draft compact on short screens. Grow it at the same heights
+        // as before so the reclaimed rows go to the transcript and Agents rail.
+        let extra = body.height.saturating_sub(11);
+        body.height.min(3) + extra.min(2)
+    } else if body.height >= 5 {
+        5.min(body.height - 2)
     } else {
-        (
-            3,
-            if body.height >= 5 {
-                5.min(body.height - 2)
-            } else {
-                body.height
-            },
-        )
-    };
-    let menu_height = menu_height.min(
         body.height
-            .saturating_sub(composer + if wide { header + 2 } else { 3 }),
-    );
-    let header_height = header
-        .min(body.height.saturating_sub(composer + 2))
-        .min(body.height.saturating_sub(composer + menu_height + 1));
+    };
+    let menu_height = menu_height.min(body.height.saturating_sub(composer + 2));
     Layout::vertical([
-        Constraint::Length(header_height),
         Constraint::Min(0),
         Constraint::Length(menu_height),
         Constraint::Length(composer),
@@ -442,7 +454,7 @@ fn main_transcript<'a>(
     approval: Option<&Approval>,
     wall_ms: u64,
 ) -> Vec<view::TranscriptPart<'a>> {
-    let mut parts = view::transcript(records, wall_ms);
+    let mut parts = view::transcript(records, wall_ms, view::TranscriptScope::Main);
     if let Some(approval) = approval {
         for part in &mut parts {
             if let view::TranscriptPart::Card(card) = part
@@ -470,42 +482,21 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         .composer_available()
         .then(|| app.completion.menu(&app.input))
         .flatten();
-    let rows = content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
-    let header = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                format!(" ngn {} ", env!("CARGO_PKG_VERSION")),
-                Style::new().fg(accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("· F1 help", Style::new().fg(muted)),
-        ]),
-        Line::from(Span::styled(
-            format!(
-                " {} · {}",
-                view::plain(&host.config.workspace.display().to_string()),
-                app.session
-            ),
-            Style::new().fg(muted),
-        )),
-    ]);
-    frame.render_widget(header, rows[0]);
+    let [conversation, suggestions, draft] =
+        content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
     // Suggestions occupy the bottom of the left column, not rows of the
     // adjacent tree. The tree's height is independent of the draft/menu.
-    let (mut conversation, rail) = agents::split(Rect {
-        height: rows[1].height + rows[2].height,
-        ..rows[1]
+    let (mut transcript_area, rail) = agents::split(Rect {
+        height: conversation.height + suggestions.height,
+        ..conversation
     });
-    conversation.height = rows[1].height;
+    transcript_area.height = conversation.height;
     let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
     app.agents.observe_context(context);
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::new().fg(Color::DarkGray));
-    let transcript_area = block.inner(conversation);
     let approval_dialog = app
         .approval
         .as_ref()
-        .map(|approval| (approval, center(rows[1], 110, 32)));
+        .map(|approval| (approval, center(conversation, 110, 32)));
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
@@ -524,10 +515,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     } else if let Some((_, area)) = approval_dialog {
         transcript.mask_wipes(area);
     }
-    let welcome_text;
     if app.records.is_empty() {
-        welcome_text = welcome(&host.config);
-        transcript.text(&welcome_text);
+        let tip = Line::styled(EMPTY_TIP, Style::new().add_modifier(Modifier::DIM));
+        if tip.width() <= usize::from(transcript_area.width) {
+            transcript.push(tip);
+        }
     }
     if let Some(reason) = &app.failure {
         // Keep the complete rejection in the scrollable conversation as well
@@ -536,15 +528,20 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             transcript.push(line);
         }
     }
-    app.tools
-        .draw(frame, transcript_area, transcript, &mut app.scroll, now);
-    frame.render_widget(block.title(app.tools.title(interactive)), conversation);
+    app.transcript_area = app.tools.draw(
+        frame,
+        transcript_area,
+        transcript,
+        &mut app.scroll,
+        now,
+        Some(Style::new().fg(muted)),
+    );
     if let Some(menu) = menu {
         menu.draw(
             frame,
             Rect {
-                width: conversation.width,
-                ..rows[2]
+                width: transcript_area.width,
+                ..suggestions
             },
             accent,
             muted,
@@ -557,8 +554,8 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             if app.queue.paused { " · PAUSED" } else { "" }
         ))
         .border_style(Style::new().fg(accent));
-    let input_area = composer.inner(rows[3]);
-    frame.render_widget(composer, rows[3]);
+    let input_area = composer.inner(draft);
+    frame.render_widget(composer, draft);
     let _ = composer::draw(
         frame.buffer_mut(),
         input_area,
@@ -581,7 +578,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
                 if app.task_from_rail { "close" } else { "back" }
             ));
             let inner = block.inner(area);
-            let parts = view::transcript(&app.task_records, wall_ms);
+            let parts = view::transcript(
+                &app.task_records,
+                wall_ms,
+                view::TranscriptScope::AgentInspector,
+            );
             let transcript = tool_cards::Layout::new(&parts, inner.width, None, false, None);
             frame.render_widget(block, area);
             transcript.draw_from_bottom(frame, inner, app.task_scroll);
@@ -945,12 +946,6 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
     }
 }
 
-fn animations_enabled(no_animations: bool, saved: Option<bool>, textual: Option<&str>) -> bool {
-    !no_animations
-        && saved.unwrap_or(true)
-        && !textual.is_some_and(|value| value.eq_ignore_ascii_case("none"))
-}
-
 pub async fn run(
     host: Arc<Host>,
     resume: Option<&str>,
@@ -1005,7 +1000,7 @@ pub async fn run(
     enable_raw_mode()?;
     // Crossterm restores the startup mode; drop this guard before restoring
     // the original tty attributes held by startup_input.
-    let restore = Restore;
+    let mut restore = Restore::default();
     execute!(stdout(), EnterAlternateScreen, Hide)?;
     let Some(draft) = startup_input.draft_for_first_frame()? else {
         return Ok(());
@@ -1033,7 +1028,7 @@ pub async fn run(
                 let area = frame.area();
                 // Suggestions never take vertical space from the tree.
                 app.agents
-                    .resize(area.width, content_rows(area, 0)[1].height);
+                    .resize(area.width, content_rows(area, 0)[0].height);
                 app.caret.focus(app.composer_available(), now);
                 let caret_visible = app.caret_visible(now);
                 if motion_only
@@ -1072,6 +1067,9 @@ pub async fn run(
             let Some(draft) = draft else {
                 return Ok(());
             };
+            // Don't request wheel reports while the draft-only startup reader
+            // still owns stdin. EventStream will decode them after handoff.
+            restore.enable_wheel()?;
             if draft != app.input {
                 app.input = draft;
                 app.completion.edited(&app.input);
@@ -1200,11 +1198,13 @@ pub async fn run(
                             }
                         }
                     }
+                    TerminalEvent::Mouse(mouse) => app.transcript_wheel(mouse),
                     _ => (),
                 }
             }
         }
     }
+    drop(input);
     drop(terminal);
     drop(restore);
     drop(startup_input);
@@ -1272,7 +1272,6 @@ mod tests {
         }
         .resolve()
         .unwrap();
-        assert!(welcome(&config).contains("Prompts cannot be sent yet."));
         let host = Host::open(config).unwrap();
         let mut app = App {
             session: host.store.create_session().await.unwrap().id,
@@ -1328,6 +1327,54 @@ mod tests {
         ] {
             assert!(screen.contains(expected));
         }
+    }
+
+    #[test]
+    fn empty_transcript_tip_uses_at_most_one_dim_row_and_does_not_touch_the_draft() {
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: dir.path().into(),
+                data_dir: dir.path().join("state"),
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let now = Instant::now();
+        let mut app = App {
+            input: "draft".into(),
+            ..App::default()
+        };
+        app.caret.focus(true, now);
+        for width in [1, 20, 42, 43, 80, 111] {
+            let mut terminal =
+                Terminal::new(ratatui::backend::TestBackend::new(width, 16)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut app, &host, now))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let [transcript, _, composer] = content_rows(buffer.area, 0);
+            let (main, _) = agents::split(transcript);
+            let row = |y| -> String { (0..main.width).map(|x| buffer[(x, y)].symbol()).collect() };
+            let fits = width >= 43;
+            assert_eq!(row(0).trim_end(), if fits { EMPTY_TIP } else { "" });
+            assert_eq!(buffer[(0, 0)].modifier.contains(Modifier::DIM), fits);
+            assert!((1..transcript.height).all(|y| row(y).trim().is_empty()));
+            if width >= 20 {
+                assert!(row(composer.y + 1).contains("draft"));
+                assert!(
+                    buffer[(6, composer.y + 1)]
+                        .modifier
+                        .contains(Modifier::REVERSED)
+                );
+            }
+            if width >= 43 {
+                assert!(row(15).contains("Provider not configured"));
+            }
+        }
+        assert!(app.composer_available());
     }
 
     #[tokio::test]
@@ -1547,6 +1594,119 @@ mod tests {
                 .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn transcript_wheel_uses_rendered_bounds_and_preserves_scroll_anchor() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = App {
+            input: "/".into(), // Keep the suggestion menu visible below the transcript.
+            ..App::default()
+        };
+        app.completion.edited(&app.input);
+        let lines = |sequence, text| EventRecord {
+            schema_version: 1,
+            sequence,
+            session_id: "session".into(),
+            run_id: "run".into(),
+            timestamp_ms: 0,
+            event: ngn_protocol::Event::TextDelta { text },
+        };
+        app.records.push(lines(1, "history\n".repeat(80)));
+        let redraw = |app: &mut App, width, height| {
+            Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                .unwrap()
+                .draw(|frame| draw(frame, app, &host, Instant::now()))
+                .unwrap();
+        };
+        let wheel = |column, row, kind| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        redraw(&mut app, 120, 16);
+        let wide = app.transcript_area;
+        redraw(&mut app, 100, 32);
+        let tall = app.transcript_area;
+        assert!(tall.width > wide.width && tall.height > wide.height);
+        redraw(&mut app, 120, 16);
+        let up = wheel(wide.x, wide.y, MouseEventKind::ScrollUp);
+
+        for event in [
+            wheel(wide.right(), wide.y, MouseEventKind::ScrollUp), // Agents rail
+            wheel(wide.x, wide.bottom(), MouseEventKind::ScrollUp), // Command suggestions
+            wheel(0, 12, MouseEventKind::ScrollUp),                // Composer
+            wheel(0, 15, MouseEventKind::ScrollUp),                // Footer
+            wheel(wide.x, wide.y, MouseEventKind::ScrollLeft),
+            wheel(
+                wide.x,
+                wide.y,
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            ),
+            MouseEvent {
+                modifiers: KeyModifiers::SHIFT,
+                ..up
+            },
+        ] {
+            app.transcript_wheel(event);
+            assert_eq!(app.scroll, None, "unexpected scroll for {event:?}");
+        }
+        app.agents.focused = true;
+        app.transcript_wheel(up);
+        assert!(app.agents.focused && app.scroll.is_none());
+        app.agents.focused = false;
+        app.queue_picker = true;
+        app.transcript_wheel(up);
+        assert!(app.queue_picker && app.scroll.is_none());
+        app.queue_picker = false;
+
+        app.approval = Some(Approval {
+            id: "approval".into(),
+            run_id: "run".into(),
+            session_id: "session".into(),
+            root_session_id: "session".into(),
+            agent_title: "Assistant".into(),
+            depth: 0,
+            call: ngn_protocol::ToolCall {
+                call_id: "call".into(),
+                name: "write".into(),
+                arguments: serde_json::json!({}),
+            },
+            preview: "Proposed write".into(),
+        });
+        app.transcript_wheel(up);
+        assert!(app.approval.is_some() && app.scroll.is_none() && app.preview_scroll == 0);
+        app.approval = None;
+
+        app.transcript_wheel(up);
+        let anchored = app.scroll.expect("wheel moved up from the tail");
+        assert!(app.composer_available());
+        assert_eq!(app.input, "/");
+        app.records.push(lines(2, "streamed\n".repeat(40)));
+        redraw(&mut app, 100, 32);
+        assert_eq!(app.scroll, Some(anchored));
+        let down = wheel(tall.x, tall.y, MouseEventKind::ScrollDown);
+        for _ in 0..100 {
+            app.transcript_wheel(down);
+        }
+        assert_eq!(app.scroll, None);
+        let up = wheel(tall.x, tall.y, MouseEventKind::ScrollUp);
+        for _ in 0..100 {
+            app.transcript_wheel(up);
+        }
+        assert_eq!(app.scroll, Some(0));
     }
 
     #[tokio::test]

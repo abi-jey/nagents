@@ -4,10 +4,16 @@
 use super::*;
 use flate2::{Compression, write::GzEncoder};
 use ngn_core::bundle::{PLATFORM, PythonBundle};
+use nix::{
+    poll::{PollFd, PollFlags, PollTimeout, poll},
+    pty::openpty,
+    sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr},
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
+    os::fd::AsFd,
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -129,6 +135,7 @@ struct FixtureTransport {
     bodies: BTreeMap<String, Vec<u8>>,
     calls: Mutex<Vec<String>>,
     fail_payload: bool,
+    payload_gate: Option<tokio::sync::Notify>,
 }
 
 impl Transport for FixtureTransport {
@@ -138,15 +145,21 @@ impl Transport for FixtureTransport {
             .bodies
             .get(url)
             .context("Unexpected network call in private fixture")?;
-        if self.fail_payload && url.ends_with("bundle.tar.gz") {
-            output.write_all(&bytes[..bytes.len() / 2])?;
-            bail!("Synthetic truncated download");
-        }
         ensure!(
             bytes.len() as u64 <= limit,
             "Synthetic response exceeds limit"
         );
-        output.write_all(bytes)?;
+        let mut remaining = bytes.as_slice();
+        if url.ends_with("bundle.tar.gz") && (self.fail_payload || self.payload_gate.is_some()) {
+            let (first, rest) = remaining.split_at(bytes.len() / 2);
+            output.write_all(first)?;
+            if let Some(gate) = &self.payload_gate {
+                gate.notified().await;
+            }
+            ensure!(!self.fail_payload, "Synthetic truncated download");
+            remaining = rest;
+        }
+        output.write_all(remaining)?;
         Ok(())
     }
 }
@@ -222,6 +235,431 @@ fn installation(root: &Path) -> Installation {
     Installation::prepare(root.join("prefix"), root.join("bin")).unwrap()
 }
 
+async fn apply<T: Transport, P: Probe>(
+    installation: &Installation,
+    source: &Source,
+    check: bool,
+    transport: &T,
+    probe: &P,
+    cancel: &CancellationToken,
+) -> Result<Outcome> {
+    super::apply(
+        installation,
+        source,
+        check,
+        transport,
+        probe,
+        cancel,
+        Progress::default(),
+    )
+    .await
+}
+
+fn drain_pty(master: &mut File, transcript: &mut Vec<u8>) {
+    let mut bytes = [0; 1024];
+    while poll(
+        &mut [PollFd::new(master.as_fd(), PollFlags::POLLIN)],
+        PollTimeout::ZERO,
+    )
+    .unwrap()
+        != 0
+    {
+        let count = master.read(&mut bytes).unwrap();
+        assert_ne!(count, 0);
+        transcript.extend_from_slice(&bytes[..count]);
+    }
+}
+
+#[tokio::test]
+async fn delayed_download_reports_live_progress_and_cleans_pty_on_success_or_error() {
+    for fail in [false, true] {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let install = installation(directory.path());
+        let manifest = metadata("0.100.3", true);
+        let transport = FixtureTransport {
+            fail_payload: fail,
+            payload_gate: Some(tokio::sync::Notify::new()),
+            ..network(&manifest)
+        };
+        let source = Source {
+            version: None,
+            archive: None,
+            sha256: None,
+        };
+        let probe = SyntheticProbe::success();
+        let cancel = CancellationToken::new();
+        let pty = openpty(None, None).unwrap();
+        let mut mode = tcgetattr(&pty.slave).unwrap();
+        cfmakeraw(&mut mode);
+        tcsetattr(&pty.slave, SetArg::TCSANOW, &mode).unwrap();
+        let slave = File::from(pty.slave);
+        let mut master = File::from(pty.master);
+        let progress = Progress::new(slave.try_clone().unwrap(), !fail, true);
+        let mut transcript = Vec::new();
+        let (result, ()) = tokio::join!(
+            super::apply(
+                &install, &source, false, &transport, &probe, &cancel, progress
+            ),
+            async {
+                // The transfer cannot finish until we have read live frames from
+                // the PTY. This asserts visibility, not a guessed timing budget.
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !transcript.windows(4).any(|bytes| bytes == b"\r|\r/") {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        drain_pty(&mut master, &mut transcript);
+                    }
+                })
+                .await
+                .unwrap();
+                let prefix = if fail {
+                    "ngn update:"
+                } else {
+                    "\x1b[1;36mngn update:\x1b[0m"
+                };
+                assert!(
+                    transcript.starts_with(format!(
+                        "{prefix} Checking release metadata...\n{prefix} Downloading bundle...\n\r|\r/"
+                    )
+                    .as_bytes()),
+                    "{transcript:?}"
+                );
+                assert!(current(&install.identity).unwrap().is_none());
+                transport.payload_gate.as_ref().unwrap().notify_one();
+            }
+        );
+        drain_pty(&mut master, &mut transcript);
+        let offset = transcript
+            .windows(3)
+            .position(|bytes| bytes == b"\r \r")
+            .unwrap();
+        let tail = &transcript[offset + 3..];
+        if fail {
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Synthetic truncated download"
+            );
+            assert!(tail.is_empty());
+            assert!(current(&install.identity).unwrap().is_none());
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                Outcome::Installed(ReleaseVersion::parse("0.100.3").unwrap())
+            );
+            let tail = String::from_utf8_lossy(tail);
+            assert!(
+                tail.contains("Verifying and staging bundle...\n"),
+                "{tail:?}"
+            );
+            assert!(tail.ends_with("Activating release...\n"), "{tail:?}");
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn fixture_retarget(prefix: &Path, target: &Path) -> Result<()> {
+    let pending = prefix.join(".fixture-current");
+    symlink(target, &pending)?;
+    fs::rename(pending, prefix.join("current"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_update_keeps_its_verified_generation_and_failure_atomicity() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let prepared = installation(directory.path());
+    let cancel = CancellationToken::new();
+    let old_version = env!("CARGO_PKG_VERSION");
+    let patch: u32 = old_version.trim_start_matches("0.100.").parse().unwrap();
+    let next_version = format!("0.100.{}", patch + 1);
+    let source = Source {
+        version: None,
+        archive: None,
+        sha256: None,
+    };
+    let existing = network(&metadata(old_version, true));
+    apply(
+        &prepared,
+        &source,
+        false,
+        &existing,
+        &SyntheticProbe::success(),
+        &cancel,
+    )
+    .await
+    .unwrap();
+    let prefix = prepared.identity.prefix.clone();
+    let bin = prepared.identity.bin_dir.join("ngn");
+    let old_root = prefix.join("releases").join(old_version);
+    let pointer = prefix.join("current");
+    let old_target = fs::read_link(&pointer).unwrap();
+    let identity = fs::read(prefix.join("install.json")).unwrap();
+    let old_hash = file_hash(&old_root.join("ngn")).unwrap();
+    drop(prepared);
+
+    let managed = Installation::from_executable(&bin, &mut Progress::default()).unwrap();
+    assert!(
+        Lock::acquire(&prefix, false)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Another installer")
+    );
+    let probe = SyntheticProbe::success();
+    let next = network(&metadata(&next_version, true));
+    let installed = ReleaseVersion::parse(old_version).unwrap();
+    let target = ReleaseVersion::parse(&next_version).unwrap();
+
+    existing.calls.lock().unwrap().clear();
+    for check in [false, true] {
+        assert_eq!(
+            apply(&managed, &source, check, &existing, &probe, &cancel)
+                .await
+                .unwrap(),
+            Outcome::Current(installed)
+        );
+    }
+    {
+        let calls = existing.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        assert!(calls.iter().all(|url| !url.ends_with("bundle.tar.gz")));
+    }
+    assert_eq!(
+        apply(&managed, &source, true, &next, &probe, &cancel)
+            .await
+            .unwrap(),
+        Outcome::Available(target)
+    );
+    assert_eq!(next.calls.lock().unwrap().len(), 2);
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fs::read_link(&pointer).unwrap(), old_target);
+
+    let downgrade = Source {
+        version: Some("0.100.0".into()),
+        archive: None,
+        sha256: None,
+    };
+    let no_network = FixtureTransport::default();
+    assert!(
+        apply(&managed, &downgrade, false, &no_network, &probe, &cancel)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Downgrades")
+    );
+    assert!(no_network.calls.lock().unwrap().is_empty());
+
+    // A failed probe must leave the old generation active and permit a retry.
+    let failing_probe = SyntheticProbe {
+        calls: AtomicUsize::new(0),
+        fail: true,
+    };
+    assert!(
+        apply(&managed, &source, false, &next, &failing_probe, &cancel)
+            .await
+            .is_err()
+    );
+    assert_eq!(failing_probe.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fs::read_link(&pointer).unwrap(), old_target);
+    assert!(!prefix.join("releases").join(&next_version).exists());
+    assert_eq!(
+        apply(&managed, &source, false, &next, &probe, &cancel)
+            .await
+            .unwrap(),
+        Outcome::Installed(target)
+    );
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fs::read_link(&pointer).unwrap(),
+        Path::new("releases").join(next_version)
+    );
+    assert_eq!(file_hash(&old_root.join("ngn")).unwrap(), old_hash);
+    assert_eq!(fs::read(prefix.join("install.json")).unwrap(), identity);
+    assert_eq!(fs::read_link(&bin).unwrap(), prefix.join("current/ngn"));
+    drop(managed);
+    assert!(
+        Installation::from_executable(&old_root.join("ngn"), &mut Progress::default()).is_err()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn activation_rejects_a_valid_retarget_during_staged_probes_and_can_retry() {
+    struct Retarget<'a> {
+        prefix: &'a Path,
+        target: &'a Path,
+    }
+
+    impl Probe for Retarget<'_> {
+        async fn verify(&self, _: &Path, _: &BundleManifest) -> Result<()> {
+            assert!(Lock::acquire(self.prefix, false).is_err());
+            fixture_retarget(self.prefix, self.target)
+        }
+    }
+
+    for managed in [false, true] {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let prepared = installation(directory.path());
+        let transport = FixtureTransport::default();
+        let probe = SyntheticProbe::success();
+        let cancel = CancellationToken::new();
+        let old = env!("CARGO_PKG_VERSION");
+        let install = if managed {
+            let first = local(directory.path(), &metadata(old, false), |_| {});
+            apply(&prepared, &first, false, &transport, &probe, &cancel)
+                .await
+                .unwrap();
+            let executable = prepared.identity.bin_dir.join("ngn");
+            drop(prepared);
+            Installation::from_executable(&executable, &mut Progress::default()).unwrap()
+        } else {
+            prepared
+        };
+        let prefix = &install.identity.prefix;
+        let binary = install.identity.bin_dir.join("ngn");
+        let identity = fs::read(prefix.join("install.json")).unwrap();
+        let alternate = Path::new("releases/0.100.999");
+        let archive = local(directory.path(), &metadata("0.100.999", false), |_| {})
+            .archive
+            .unwrap();
+        let stage = private_tempdir_in(prefix, ".fixture-").unwrap();
+        let (root, _) = unpack(&archive, stage.path(), &cancel).unwrap();
+        fs::rename(root, prefix.join(alternate)).unwrap();
+        let next = local(directory.path(), &metadata("0.100.100", false), |_| {});
+        let next_target = Path::new("releases/0.100.100");
+
+        let retarget = Retarget {
+            prefix,
+            target: alternate,
+        };
+        let error = apply(&install, &next, false, &transport, &retarget, &cancel)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("current changed before activation")
+        );
+        assert_eq!(fs::read_link(prefix.join("current")).unwrap(), alternate);
+        assert!(!prefix.join(next_target).exists());
+        assert_eq!(binary.symlink_metadata().is_ok(), managed);
+        assert_eq!(fs::read(prefix.join("install.json")).unwrap(), identity);
+
+        if managed {
+            let old_target = Path::new("releases").join(old);
+            fixture_retarget(prefix, &old_target).unwrap();
+        } else {
+            fs::remove_file(prefix.join("current")).unwrap();
+        }
+        assert_eq!(
+            apply(&install, &next, false, &transport, &probe, &cancel)
+                .await
+                .unwrap(),
+            Outcome::Installed(ReleaseVersion::parse("0.100.100").unwrap())
+        );
+        assert_eq!(fs::read_link(prefix.join("current")).unwrap(), next_target);
+        assert_eq!(fs::read_link(binary).unwrap(), prefix.join("current/ngn"));
+        assert!(prefix.join(alternate).is_dir());
+        assert!(transport.calls.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn final_switch_rechecks_current_after_pointer_staging() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let install = installation(directory.path());
+    let prefix = &install.identity.prefix;
+    let alternate = Path::new("releases/0.100.999");
+    let target = Path::new("releases/0.100.100");
+    for path in [alternate, target] {
+        ancestry(&prefix.join(path), true).unwrap();
+    }
+    let stage = private_tempdir_in(prefix, ".fixture-").unwrap();
+    let pending = stage.path().join("current");
+    symlink(target, &pending).unwrap();
+    sync_directory(stage.path()).unwrap();
+    require_activation_base(&install.identity, None).unwrap();
+
+    fixture_retarget(prefix, alternate).unwrap();
+    let error = switch_current(&install, &pending, None, &CancellationToken::new()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("current changed before activation")
+    );
+    assert_eq!(fs::read_link(&pending).unwrap(), target);
+    assert_eq!(fs::read_link(prefix.join("current")).unwrap(), alternate);
+
+    fs::remove_file(prefix.join("current")).unwrap();
+    switch_current(&install, &pending, None, &CancellationToken::new()).unwrap();
+    assert_eq!(fs::read_link(prefix.join("current")).unwrap(), target);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_update_rechecks_current_and_detects_tampering_before_discovery() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let prepared = installation(directory.path());
+    let cancel = CancellationToken::new();
+    let probe = SyntheticProbe::success();
+    let transport = FixtureTransport::default();
+    let version = env!("CARGO_PKG_VERSION");
+    let bundle = local(directory.path(), &metadata(version, false), |_| {});
+    apply(&prepared, &bundle, false, &transport, &probe, &cancel)
+        .await
+        .unwrap();
+    let prefix = prepared.identity.prefix.clone();
+    let bin = prepared.identity.bin_dir.join("ngn");
+    let pointer = prefix.join("current");
+    let target = fs::read_link(&pointer).unwrap();
+    drop(prepared);
+
+    let managed = Installation::from_executable(&bin, &mut Progress::default()).unwrap();
+    let source = Source {
+        version: None,
+        archive: None,
+        sha256: None,
+    };
+    let alternate = Path::new("releases/0.100.0");
+    ancestry(&prefix.join(alternate), true).unwrap();
+    fs::remove_file(&pointer).unwrap();
+    symlink(alternate, &pointer).unwrap();
+    assert!(
+        apply(&managed, &source, true, &transport, &probe, &cancel)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Managed current changed")
+    );
+    fs::remove_file(&pointer).unwrap();
+    symlink(&target, &pointer).unwrap();
+
+    fs::write(prefix.join(&target).join(CA), b"tampered").unwrap();
+    assert!(
+        apply(&managed, &source, false, &transport, &probe, &cancel)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Bundle file checksum mismatch")
+    );
+    assert_eq!(fs::read_link(&pointer).unwrap(), target);
+    assert!(transport.calls.lock().unwrap().is_empty());
+    drop(managed);
+
+    fs::remove_file(&bin).unwrap();
+    symlink(Path::new("/usr/bin/false"), &bin).unwrap();
+    assert!(
+        Installation::from_executable(&prefix.join(target).join("ngn"), &mut Progress::default())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("existing unmanaged entry")
+    );
+}
+
 #[tokio::test]
 async fn local_install_check_noop_pin_upgrade_and_downgrade_are_failure_atomic() {
     let directory = crate::test_support::private_tempdir().unwrap();
@@ -295,6 +733,66 @@ async fn local_install_check_noop_pin_upgrade_and_downgrade_are_failure_atomic()
         install.identity.prefix.join("current/ngn")
     );
     assert!(transport.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn release_metadata_keeps_full_document_and_size_checks() {
+    struct Metadata(Vec<u8>);
+
+    impl Transport for Metadata {
+        async fn fetch(&self, _: &str, output: &mut File, _: u64) -> Result<()> {
+            // Deliberately bypass the transport's cap to exercise json's own check.
+            output.write_all(&self.0)?;
+            Ok(())
+        }
+    }
+
+    let mut bytes = br#"{"tag_name":"v0.100.21","draft":false,"prerelease":false}"#.to_vec();
+    bytes.resize(MAX_MANIFEST as usize, b' ');
+    let mut body = Metadata(bytes);
+    let release: GitHubRelease = json(&body, API).await.unwrap();
+    assert_eq!(release.tag_name, "v0.100.21");
+
+    body.0.push(b' ');
+    let oversized = json::<_, serde_json::Value>(&body, API).await;
+    assert!(oversized.unwrap_err().to_string().contains("exceeds 8 MiB"));
+
+    for bytes in [b"{".as_slice(), b"{} {}", b"{} trailing"] {
+        let invalid = json::<_, serde_json::Value>(&Metadata(bytes.to_vec()), API).await;
+        assert_eq!(
+            invalid.unwrap_err().to_string(),
+            "Invalid official release metadata"
+        );
+    }
+}
+
+#[tokio::test]
+async fn unpinned_discovery_uses_numeric_maximum_across_pages() {
+    let bundle = metadata("0.100.10", true);
+    let mut transport = network(&bundle);
+    let mut page = vec![json!({"tag_name":"v0.100.9", "draft":false, "prerelease":false}); 100];
+    transport.bodies.insert(
+        format!("{API}?per_page=100&page=1"),
+        serde_json::to_vec(&page).unwrap(),
+    );
+    page.truncate(1);
+    page[0]["tag_name"] = json!("v0.100.10");
+    transport.bodies.insert(
+        format!("{API}?per_page=100&page=2"),
+        serde_json::to_vec(&page).unwrap(),
+    );
+    assert_eq!(
+        discover(&transport, None).await.unwrap().ngn_version,
+        "0.100.10"
+    );
+    assert_eq!(
+        *transport.calls.lock().unwrap(),
+        [
+            format!("{API}?per_page=100&page=1"),
+            format!("{API}?per_page=100&page=2"),
+            format!("{DOWNLOAD}/v0.100.10/{}", release_manifest_name()),
+        ]
+    );
 }
 
 #[tokio::test]

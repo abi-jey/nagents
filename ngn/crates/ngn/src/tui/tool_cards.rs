@@ -157,30 +157,34 @@ impl Cards {
         self.code.blur();
     }
 
-    pub(super) fn title(&self, interactive: bool) -> &'static str {
-        if self.focused && interactive {
+    fn title(&self, has_headers: bool) -> &'static str {
+        if self.focused {
             " Tools · ↑/↓ select · Enter/Space toggle · Esc back "
-        } else if self.code.focused() && interactive {
+        } else if self.code.focused() {
             " Code · ←/→ pan · ↑/↓ select · Esc back "
-        } else if interactive && !self.headers.is_empty() && self.code.can_pan() {
+        } else if has_headers && self.code.can_pan() {
             " Tools F4 · Code F8 "
-        } else if interactive && !self.headers.is_empty() {
+        } else if has_headers {
             " Tools · F4 focus "
-        } else if interactive && self.code.can_pan() {
+        } else if self.code.can_pan() {
             " Code · F8 pan "
         } else {
             ""
         }
     }
 
+    pub(super) fn page(&self, scroll: &mut Option<usize>, up: bool) {
+        self.scroll_rows(scroll, up, 10);
+    }
+
     // None follows the tail. Otherwise keep the same top row as new rows arrive
     // rather than maintaining a fixed distance from the moving tail.
-    pub(super) fn page(&self, scroll: &mut Option<usize>, up: bool) {
+    pub(super) fn scroll_rows(&self, scroll: &mut Option<usize>, up: bool, rows: usize) {
         let current = scroll.unwrap_or(self.bottom);
         let top = if up {
-            current.saturating_sub(10)
+            current.saturating_sub(rows)
         } else {
-            current.saturating_add(10)
+            current.saturating_add(rows)
         };
         *scroll = (top < self.bottom).then_some(top);
     }
@@ -266,11 +270,27 @@ impl Cards {
     pub(super) fn draw(
         &mut self,
         frame: &mut Frame,
-        area: Rect,
+        mut area: Rect,
         mut layout: Layout<'_>,
         scroll: &mut Option<usize>,
         now: Instant,
-    ) {
+        hint_style: Option<Style>,
+    ) -> Rect {
+        self.code.observe(std::mem::take(&mut layout.fences));
+        if let Some(style) = hint_style
+            && layout.interactive
+            && area.height > 1
+        {
+            let title = self.title(!layout.headers.is_empty());
+            if !title.is_empty() {
+                frame.render_widget(
+                    Line::styled(title, style),
+                    Rect::new(area.x, area.y, area.width, 1),
+                );
+                area.y += 1;
+                area.height -= 1;
+            }
+        }
         let height = usize::from(area.height);
         self.bottom = layout.rows.saturating_sub(height);
         let header = |headers: &[(Key, usize)]| {
@@ -298,7 +318,6 @@ impl Cards {
             self.selected = None;
         }
         self.reveal &= height == 0;
-        self.code.observe(std::mem::take(&mut layout.fences));
         top = self.code.reveal(top, height).min(self.bottom);
         if scroll.is_some() {
             *scroll = Some(top);
@@ -330,6 +349,7 @@ impl Cards {
             self.expanded.retain(|key| retained.contains(key));
         }
         self.headers = layout.headers;
+        area
     }
 
     pub(super) fn paint_motion(&mut self, buffer: &mut Buffer, now: Instant) {
@@ -469,9 +489,26 @@ impl<'a> Layout<'a> {
             wipes: Vec::new(),
             wipe_mask: None,
         };
-        for part in parts {
+        for (index, part) in parts.iter().enumerate() {
             match part {
-                TranscriptPart::Text(text) => layout.text(text),
+                TranscriptPart::Text(text) => {
+                    if text == "\n"
+                        && let Some(cards) = cards
+                        && let Some([TranscriptPart::Card(before), _, TranscriptPart::Card(after)]) =
+                            parts.get(index.saturating_sub(1)..=index + 1)
+                        && before.key.0 == after.key.0
+                        && [before, after].iter().all(|card| {
+                            !cards
+                                .expanded
+                                .contains(&(card.key.0.to_owned(), card.key.1.to_owned()))
+                        })
+                    {
+                        // The projection inserts one empty row between adjacent
+                        // calls. Keep other text and expanded-detail boundaries.
+                        continue;
+                    }
+                    layout.text(text);
+                }
                 TranscriptPart::Code(key, text) => layout.code(*key, text, cards.is_some()),
                 TranscriptPart::Card(card) => {
                     let key = (card.key.0.to_owned(), card.key.1.to_owned());
@@ -563,7 +600,7 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub(super) fn text(&mut self, text: &'a str) {
+    fn text(&mut self, text: &'a str) {
         for mut line in text.lines() {
             // Keep any one logical line below Paragraph's u16 offset even in
             // a one-column viewport. Ordinary prose uses native word wrapping.
@@ -797,7 +834,8 @@ mod tests {
                 } else if let Some(area) = dialog {
                     layout.mask_wipes(area);
                 }
-                app.tools.draw(frame, area, layout, &mut app.scroll, now);
+                app.tools
+                    .draw(frame, area, layout, &mut app.scroll, now, None);
                 if let Some(area) = dialog {
                     frame.render_widget(ratatui::widgets::Clear, area);
                     frame.render_widget(
@@ -832,6 +870,148 @@ mod tests {
             sequence: app.after,
             ..record
         });
+    }
+
+    #[test]
+    fn workspace_renders_multiple_turns_and_completed_cards_without_top_chrome() {
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let host = ngn_core::Host::open(
+            ngn_core::Config {
+                workspace: dir.path().into(),
+                data_dir: dir.path().join("state"),
+                ..ngn_core::Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let now = Instant::now();
+        let mut app = App {
+            session: "synthetic-workspace-session".into(),
+            input: "/se".into(),
+            ..App::default()
+        };
+        app.caret.focus(true, now);
+        app.completion.edited(&app.input);
+        let mut ordered = Vec::new();
+        for (run, prompt, intro, tools, conclusion) in [
+            (
+                "first",
+                "First synthetic prompt",
+                "First introductory reply",
+                &["lookup alpha", "lookup beta"][..],
+                "First concluding reply",
+            ),
+            (
+                "second",
+                "Second synthetic prompt",
+                "Second introductory reply",
+                &["lookup gamma"][..],
+                "Second concluding reply",
+            ),
+        ] {
+            push(
+                &mut app,
+                event(
+                    run,
+                    Event::RunStarted {
+                        prompt: prompt.into(),
+                    },
+                ),
+            );
+            push(
+                &mut app,
+                event(run, Event::TextDelta { text: intro.into() }),
+            );
+            ordered.extend([prompt, intro]);
+            for name in tools {
+                push(&mut app, started(run, name, name));
+                push(&mut app, finished(run, name, json!("synthetic result"), ""));
+                ordered.push(name);
+            }
+            push(
+                &mut app,
+                event(
+                    run,
+                    Event::TextDelta {
+                        text: conclusion.into(),
+                    },
+                ),
+            );
+            push(
+                &mut app,
+                event(
+                    run,
+                    Event::RunFinished {
+                        status: ngn_protocol::RunStatus::Completed,
+                        error: String::new(),
+                    },
+                ),
+            );
+            ordered.push(conclusion);
+        }
+        let paint = |app: &mut App, width| {
+            let mut terminal = Terminal::new(TestBackend::new(width, 36)).unwrap();
+            terminal
+                .draw(|frame| super::super::draw(frame, app, &host, now))
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let rows = |buffer: &Buffer, left_width| -> Vec<String> {
+            (0..buffer.area.height)
+                .map(|y| (0..left_width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect()
+        };
+        for (width, left_width) in [(110, 110), (111, 80)] {
+            let buffer = paint(&mut app, width);
+            let left = rows(&buffer, left_width);
+            assert_eq!(left[0].trim(), "Tools · F4 focus");
+            // The plain F4 hint is chrome, not a scrollable transcript cell.
+            assert_eq!(app.transcript_area.y, 1);
+            assert_eq!(app.transcript_area.width, left_width);
+            let screen = left.join("\n");
+            let mut previous = 0;
+            for &item in &ordered {
+                let offset = screen.find(item).expect(item);
+                assert!(offset > previous);
+                previous = offset;
+                if item.starts_with("lookup ") {
+                    assert!(
+                        left.iter()
+                            .any(|row| row.contains(item) && row.contains("complete"))
+                    );
+                }
+            }
+            for old in [
+                "F1 help",
+                &app.session,
+                "Welcome to ngn",
+                "Tip: F1",
+                "synthetic result",
+            ] {
+                assert!(!screen.contains(old));
+            }
+            assert!(screen.contains("› /sessions"));
+            assert_eq!(
+                rows(&buffer, width)[0].contains("Agents / Ctrl+T"),
+                width == 111
+            );
+            assert_eq!(buffer[(width - 1, 29)].symbol(), "┐");
+        }
+
+        assert!(key(&mut app, KeyCode::F(4)));
+        assert!(key(&mut app, KeyCode::Enter));
+        let focused = rows(&paint(&mut app, 111), 80);
+        assert!(focused[0].contains("Enter/Space toggle"));
+        assert!(focused.iter().any(|row| row.contains("synthetic result")));
+        assert!(key(&mut app, KeyCode::Esc));
+        assert_eq!(app.input, "/se");
+        assert!(app.composer_available());
+        assert!(
+            rows(&paint(&mut app, 111), 80)
+                .iter()
+                .any(|row| row.contains("› /sessions"))
+        );
     }
 
     #[test]
@@ -1169,7 +1349,11 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(9, 18)).unwrap();
         draw(&mut app, &mut terminal);
-        assert!(app.tools.title(true).contains("Code F8"));
+        assert!(
+            app.tools
+                .title(!app.tools.headers.is_empty())
+                .contains("Code F8")
+        );
         assert!(!key(&mut app, KeyCode::Tab));
         assert!(!key(&mut app, KeyCode::Left));
         assert!(key(&mut app, KeyCode::F(4)));
@@ -1436,6 +1620,67 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_compact_calls_share_rows_without_losing_prose_or_detail_spacing() {
+        let mut app = App {
+            records: vec![
+                event(
+                    "r",
+                    Event::TextCompleted {
+                        text: "before\n\nprose".into(),
+                    },
+                ),
+                started("r", "a", "甲"),
+                finished("r", "a", json!("ok"), ""),
+                started("r", "b", "乙"),
+                finished("r", "b", json!("ok"), ""),
+                event(
+                    "r",
+                    Event::TextCompleted {
+                        text: "between".into(),
+                    },
+                ),
+                started("r", "c", "丙"),
+                finished("r", "c", json!("ok"), "detail\n\nstill here"),
+                started("r", "d", "丁"),
+                finished("r", "d", json!("ok"), ""),
+                started("other", "e", "戊"),
+                finished("other", "e", json!("ok"), ""),
+            ],
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(42, 22)).unwrap();
+        let rows = |app: &mut App, terminal: &mut Terminal<_>| {
+            draw(app, terminal)
+                .iter()
+                .map(|row| row.trim_end().replace("  ·", " ·"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let compact = rows(&mut app, &mut terminal);
+        assert!(
+            compact.contains(concat!(
+                "before\n\nprose\n\n",
+                "> shell · 甲 · complete · 1.25s\n> shell · 乙 · complete · 1.25s\n",
+                "between\n\n> shell · 丙 · failed · 1.25s\n",
+                "> shell · 丁 · complete · 1.25s\n\n> shell · 戊 · complete · 1.25s",
+            )),
+            "{compact}"
+        );
+
+        app.tools.expanded.insert(("r".into(), "b".into()));
+        app.tools.expanded.insert(("r".into(), "c".into()));
+        let expanded = rows(&mut app, &mut terminal);
+        assert!(
+            expanded.contains("> shell · 甲 · complete · 1.25s\n\nv shell · 乙 · complete · 1.25s"),
+            "{expanded}"
+        );
+        assert!(
+            expanded.contains("Error: detail\n\nstill here\n\n> shell · 丁 · complete · 1.25s"),
+            "{expanded}"
+        );
+    }
+
+    #[test]
     fn card_focus_and_disclosure_are_independent_by_run_and_call() {
         let mut app = App {
             records: vec![
@@ -1620,7 +1865,11 @@ mod tests {
         assert!(rows[1].starts_with("v shell"));
         assert!(rows[2].contains("Arguments:"));
         assert_eq!(app.tools.rendered_top, 0);
-        let parts = crate::view::transcript(&app.records, 0);
+        let parts = crate::view::transcript(
+            &app.records,
+            0,
+            crate::view::TranscriptScope::AgentInspector,
+        );
         let TranscriptPart::Card(card) = &parts[1] else {
             panic!("expected card")
         };

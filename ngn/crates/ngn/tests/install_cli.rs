@@ -99,8 +99,10 @@ fn installer_and_unmanaged_check_dispatch_before_config_workspace_and_host() {
         .output()
         .unwrap();
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     assert!(!root.path().join("prefix/current").exists());
     assert!(!String::from_utf8_lossy(&output.stderr).contains("configuration"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("ngn update:"));
     no_host_state(root.path());
 }
 
@@ -192,8 +194,34 @@ fn managed_local_check_noop_and_doctor_need_no_python_config_or_host_state() {
         }
         let output = cli.output().unwrap();
         succeeded(&output);
-        assert!(String::from_utf8_lossy(&output.stdout).contains("already current"));
+        assert_eq!(
+            output.stdout,
+            format!("ngn {} is already current.\n", manifest.ngn_version).as_bytes()
+        );
+        assert_eq!(
+            output.stderr,
+            b"ngn update: Inspecting installed bundle...\n\
+              ngn update: Reading local bundle...\n\
+              ngn update: Verifying and staging bundle...\n"
+        );
     }
+    let current = fs::read_link(prefix.join("current")).unwrap();
+    let output = command(root.path(), &bin.join("ngn"))
+        .args(["update", "--bundle"])
+        .arg(&bundle)
+        .args(["--sha256", &"0".repeat(64)])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"ngn update: Inspecting installed bundle...\n\
+          ngn update: Reading local bundle...\n\
+          ngn update: Verifying and staging bundle...\n\
+          ngn: Bundle archive SHA-256 mismatch; no payload was extracted or activated\n"
+    );
+    assert_eq!(fs::read_link(prefix.join("current")).unwrap(), current);
     let output = Command::new(bin.join("ngn"))
         .env("HOME", root.path())
         .env("PATH", "")
