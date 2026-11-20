@@ -27,7 +27,7 @@ use crate::{
     queues::{QueueAction, QueueState},
     runner::{self, RunOutput},
     steering::{self, SteeringReceipt, SteeringState},
-    store::{Run, Store},
+    store::{InputReceipt, Run, Store},
     subagents::{
         self, ChildAdmission, DelegateInput, Execution, TaskInput, TaskOutcome, WaitInput,
     },
@@ -39,6 +39,27 @@ use crate::{
 pub enum ApprovalMode {
     Deny,
     Interactive,
+}
+
+/// Admission and dispatch are separate: a durable receipt is never a rejection.
+pub enum InputAdmission {
+    Accepted {
+        receipt: InputReceipt,
+        warning: Option<anyhow::Error>,
+    },
+    Rejected(anyhow::Error),
+    Unconfirmed(anyhow::Error),
+}
+
+impl InputAdmission {
+    fn recovered(receipt: InputReceipt, warning: Option<anyhow::Error>) -> Self {
+        let warning = warning.or_else(|| {
+            receipt.status.is_none().then(|| {
+                anyhow::anyhow!("Saved run status is unreadable; the exact admission is confirmed")
+            })
+        });
+        Self::Accepted { receipt, warning }
+    }
 }
 
 struct ActiveRun {
@@ -386,33 +407,65 @@ impl Host {
         request_id: &str,
         approval: ApprovalMode,
     ) -> Result<Run> {
-        ensure!(
-            !prompt.trim().is_empty() && prompt.len() <= 32_000,
-            "Prompt must contain 1..32000 UTF-8 bytes"
-        );
-        Uuid::parse_str(request_id).context(
-            "request_id must be a UUID; reuse it only when retrying the same submission",
-        )?;
-        self.root_session(session).await?;
-        self.store.ensure_not_archive(session).await?;
+        match self
+            .submit_with_receipt(session, prompt, request_id, approval)
+            .await
+        {
+            InputAdmission::Accepted { receipt, warning } => {
+                if warning.is_some() {
+                    eprintln!("ngn: input accepted with a queue warning; inspect the input queue");
+                }
+                receipt.into_run()
+            }
+            InputAdmission::Rejected(error) => Err(error),
+            InputAdmission::Unconfirmed(error) => Err(anyhow::anyhow!(
+                "Input acceptance unconfirmed; retry only with the same session, text and request ID: {error}"
+            )),
+        }
+    }
+
+    /// Inspect only the exact acceptance identity. Never enqueue or dispatch.
+    pub async fn input_receipt(
+        &self,
+        session: &str,
+        prompt: &str,
+        request_id: &str,
+    ) -> Result<Option<InputReceipt>> {
+        let _active = self.active.lock().await;
+        self.store.input_receipt(session, request_id, prompt).await
+    }
+
+    pub async fn submit_with_receipt(
+        self: &Arc<Self>,
+        session: &str,
+        prompt: &str,
+        request_id: &str,
+        approval: ApprovalMode,
+    ) -> InputAdmission {
+        if prompt.trim().is_empty() || prompt.len() > 32_000 {
+            return InputAdmission::Rejected(anyhow::anyhow!(
+                "Prompt must contain 1..32000 UTF-8 bytes"
+            ));
+        }
+        if let Err(error) = Uuid::parse_str(request_id)
+            .context("request_id must be a UUID; reuse it only when retrying the same submission")
+        {
+            return InputAdmission::Rejected(error);
+        }
         let mut active = self.active.lock().await;
-        ensure!(
-            !self.closed.load(Ordering::Acquire),
-            "Host is shutting down"
-        );
-        if let Some(existing) = self
-            .store
-            .existing_request(session, request_id, prompt)
-            .await?
-        {
-            return Ok(existing);
+        // Reconcile before admission preconditions (including shutdown). A
+        // retry can confirm a finished or cancelled run, without dispatching it.
+        match self.store.input_receipt(session, request_id, prompt).await {
+            Ok(Some(receipt)) => return InputAdmission::recovered(receipt, None),
+            Ok(None) => (),
+            Err(error) => return InputAdmission::Unconfirmed(error),
         }
-        if self.config.backend == Backend::Nagents {
-            self.config.selected_provider()?;
+        if let Err(error) = self.check_input_admission(session).await {
+            return InputAdmission::Rejected(error);
         }
-        {
+        let enqueued = {
             let _emission = self.emission.lock().await;
-            let (_, record) = self
+            let enqueued = self
                 .store
                 .enqueue(
                     session,
@@ -420,14 +473,54 @@ impl Host {
                     request_id,
                     approval == ApprovalMode::Interactive,
                 )
-                .await?;
-            let _ = self.events.send(record);
+                .await;
+            enqueued.map(|(run, record)| {
+                let _ = self.events.send(record);
+                run
+            })
+        };
+        let mut run = match enqueued {
+            Ok(run) => run,
+            Err(error) => {
+                // A store error is not proof that the enqueue failed to commit.
+                return match self.store.input_receipt(session, request_id, prompt).await {
+                    Ok(Some(receipt)) => InputAdmission::recovered(
+                        receipt,
+                        Some(error.context("Enqueue reported an error; dispatch skipped")),
+                    ),
+                    Ok(None) => InputAdmission::Rejected(error),
+                    Err(read) => InputAdmission::Unconfirmed(
+                        error.context(format!("Cannot confirm the FIFO receipt: {read}")),
+                    ),
+                };
+            }
+        };
+        let warning = self.dispatch(&mut active).await.err().map(|error| {
+            self.logs.record(RuntimeEvent::DispatchFailed);
+            anyhow::anyhow!("Cannot dispatch pending inputs: {error}")
+        });
+        if active.contains_key(&run.id) {
+            run.status = RunStatus::Running;
         }
-        self.dispatch(&mut active).await?;
-        self.store
-            .existing_request(session, request_id, prompt)
-            .await?
-            .context("Accepted input is missing")
+        // The enqueue transaction returned a durable receipt. Even if dispatch
+        // fails, the caller must stop treating this draft as unsent.
+        InputAdmission::Accepted {
+            receipt: run.into(),
+            warning,
+        }
+    }
+
+    async fn check_input_admission(&self, session: &str) -> Result<()> {
+        ensure!(
+            !self.closed.load(Ordering::Acquire),
+            "Host is shutting down"
+        );
+        self.root_session(session).await?;
+        self.store.ensure_not_archive(session).await?;
+        if self.config.backend == Backend::Nagents {
+            self.config.selected_provider()?;
+        }
+        Ok(())
     }
 
     pub async fn control_queue(

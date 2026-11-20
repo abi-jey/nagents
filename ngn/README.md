@@ -136,6 +136,18 @@ matching published core. The API is **not available in nagents
   scroll its details.
 - **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
   selected input, **Ctrl+K** clears pending inputs and pauses. These do not cancel active work.
+- If an input was accepted but dispatch failed, the composer clears and shows
+  an acceptance warning. Inspect the queue instead of resending. A matching
+  durable receipt confirms admission even if its saved run status is unreadable.
+  The native composer protects up to 16 unconfirmed requests without blocking
+  unrelated drafts or replacing an unresolved request. In the original
+  conversation, **`/queue verify [REQUEST_ID]`** checks the exact receipt without
+  sending anything, and releases the binding only on confirmed admission or
+  absence. **`/queue retry [REQUEST_ID]`** restores its text without sending it;
+  submit that text again to retry the original UUID. With no ID, these commands
+  target the newest unconfirmed request in the conversation. This retry state
+  lasts only while the TUI is open; after exit, inspect the conversation and
+  queue before resending.
 - **`/steer TEXT`** targets the capable active root at its next persisted safe point;
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
@@ -146,7 +158,7 @@ matching published core. The API is **not available in nagents
   **Shift** while dragging, where supported) to select text in the terminal.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+Q** quits and joins runners before restoring the terminal.
-- `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
+- `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
 

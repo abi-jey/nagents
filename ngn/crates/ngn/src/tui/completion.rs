@@ -24,7 +24,11 @@ pub(super) enum Command {
 const COMMANDS: &[(&str, Command, &str)] = &[
     ("/help", Command::Help, "Show keyboard shortcuts"),
     ("/new", Command::New, "New conversation"),
-    ("/queue", Command::Queue, "[pause|resume|clear] Input queue"),
+    (
+        "/queue",
+        Command::Queue,
+        "[pause|resume|clear|retry|verify] Input queue",
+    ),
     ("/resume", Command::Resume, "[ID] Resume a conversation"),
     ("/sessions", Command::Sessions, "Find a conversation"),
     ("/steer", Command::Steer, "TEXT  Steer the active turn"),
