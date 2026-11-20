@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.32
+
+- Native updates verify the active bundle once instead of scanning it twice before release discovery.
+
 ## 0.100.31
 
 - Native updates refuse to switch releases if the active generation changed during staging.
