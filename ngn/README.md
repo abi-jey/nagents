@@ -176,14 +176,15 @@ Use `--no-animations` to disable both for one invocation without changing the
 saved setting. `TEXTUAL_ANIMATIONS=none` also disables both regardless of the
 saved setting. Elapsed timers and input still work.
 
-Without `--config`, the native Message editor and caret also honor saved painted
-Python themes: `graphite`, `ocean`, and `ember` with `theme_background` set to
-`auto` (the default) or `theme`, and `terminal` with `theme_background: "theme"`.
+Without `--config`, the native Message editor, caret, and user transcript bubbles
+honor saved painted Python themes: `graphite`, `ocean`, and `ember` with
+`theme_background` set to `auto` (the default) or `theme`, and `terminal` with
+`theme_background: "theme"`.
 The default, a `terminal` background override, unsupported values, and
-nonempty `NO_COLOR` keep the editor on terminal-default colors with a reverse
-caret. The native client does not query terminal colors. The rest of the UI is
-not themed by this setting; theme controls, startup/exit transitions, and footer
-token usage are not supported.
+nonempty `NO_COLOR` keep user transcript rows unshaded and the editor on
+terminal-default colors with a reverse caret. The native client does not query
+terminal colors, so it cannot match the Python bubble shade in terminal-native mode.
+The rest of the UI is not themed by this setting.
 
 The Agents sidebar shows native run status, the displayed child approval, and
 read-only permissions, not Python model activity phases. Its context panel shows

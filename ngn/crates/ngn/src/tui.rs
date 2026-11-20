@@ -573,6 +573,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         Some(&app.tools),
         interactive,
         sweep,
+        app.composer_palette.user_surface(),
     );
     if app.shows_overlay() {
         transcript.hide_wipes();
@@ -647,7 +648,14 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
                 wall_ms,
                 view::TranscriptScope::AgentInspector,
             );
-            let transcript = tool_cards::Layout::new(&parts, inner.width, None, false, None);
+            let transcript = tool_cards::Layout::new(
+                &parts,
+                inner.width,
+                None,
+                false,
+                None,
+                app.composer_palette.user_surface(),
+            );
             frame.render_widget(block, area);
             transcript.draw_from_bottom(frame, inner, app.task_scroll);
         } else {

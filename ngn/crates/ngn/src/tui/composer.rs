@@ -58,9 +58,12 @@ impl Palette {
     }
 
     fn surface(self) -> Style {
-        self.0.map_or(Style::new(), |(shade, text, _)| {
-            Style::new().bg(shade).fg(text)
-        })
+        self.user_surface().unwrap_or_default()
+    }
+
+    pub(super) fn user_surface(self) -> Option<Style> {
+        self.0
+            .map(|(shade, text, _)| Style::new().bg(shade).fg(text))
     }
 
     fn cursor(self) -> Style {

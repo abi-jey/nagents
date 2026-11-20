@@ -538,6 +538,7 @@ const DISCLOSURE_WIDTH: usize = 2;
 
 pub(super) struct Layout<'a> {
     width: u16,
+    user_surface: Option<Style>,
     rows: usize,
     lines: Vec<(usize, Row<'a>)>,
     headers: Vec<(Key, usize)>,
@@ -549,9 +550,13 @@ pub(super) struct Layout<'a> {
 }
 
 enum Row<'a> {
-    Plain(Line<'a>),
+    Plain(Line<'a>, bool),
     Code(FenceKey, &'a str),
 }
+
+// Match the Python user bubble's horizontal padding, but drop the inset if
+// it would leave fewer than two cells for a wide grapheme.
+const USER_PADDING: u16 = 3;
 
 impl<'a> Layout<'a> {
     pub(super) fn new(
@@ -560,9 +565,11 @@ impl<'a> Layout<'a> {
         cards: Option<&Cards>,
         interactive: bool,
         active: Option<ToolKey<'_>>,
+        user_surface: Option<Style>,
     ) -> Self {
         let mut layout = Self {
             width,
+            user_surface,
             rows: 0,
             lines: Vec::new(),
             headers: Vec::new(),
@@ -590,8 +597,9 @@ impl<'a> Layout<'a> {
                         // calls. Keep other text and expanded-detail boundaries.
                         continue;
                     }
-                    layout.text(text);
+                    layout.text(text, false);
                 }
+                TranscriptPart::User(text) => layout.text(text, user_surface.is_some()),
                 TranscriptPart::Code(key, text) => layout.code(*key, text, cards.is_some()),
                 TranscriptPart::Card(card) => {
                     let key = (card.key.0.to_owned(), card.key.1.to_owned());
@@ -683,8 +691,12 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn text(&mut self, text: &'a str) {
+    fn text(&mut self, text: &'a str, user: bool) {
         for mut line in text.lines() {
+            if user {
+                self.user_line(line);
+                continue;
+            }
             // Keep any one logical line below Paragraph's u16 offset even in
             // a one-column viewport. Ordinary prose uses native word wrapping.
             while line.len() > 24_000 {
@@ -697,6 +709,50 @@ impl<'a> Layout<'a> {
                 line = rest;
             }
             self.push(Line::raw(line));
+        }
+    }
+
+    fn user_line(&mut self, mut line: &'a str) {
+        let width = usize::from(self.width - self.padding(true));
+        if width == 0 {
+            return;
+        }
+        // Wrap before rendering so an overlong word cannot paint a wide
+        // glyph into the inset. Prefer word boundaries when possible.
+        loop {
+            let span = Span::raw(line);
+            let mut end = 0;
+            let mut cells = 0;
+            let mut word_end = 0;
+            let mut overflow = None;
+            for grapheme in span.styled_graphemes(Style::default()) {
+                let columns = Span::raw(grapheme.symbol).width();
+                if cells + columns > width {
+                    overflow = Some(grapheme.symbol.len());
+                    break;
+                }
+                cells += columns;
+                end += grapheme.symbol.len();
+                if grapheme.symbol.chars().all(char::is_whitespace) {
+                    word_end = end;
+                }
+            }
+            let Some(glyph_bytes) = overflow else {
+                self.push_plain(Line::raw(line), true);
+                break;
+            };
+            if end == 0 {
+                // One cell cannot display a two-cell symbol.
+                self.push_plain(Line::raw("�"), true);
+                line = &line[glyph_bytes..];
+            } else {
+                let split = if word_end > 0 { word_end } else { end };
+                self.push_plain(Line::raw(&line[..split]), true);
+                line = &line[split..];
+            }
+            if line.is_empty() {
+                break;
+            }
         }
     }
 
@@ -726,15 +782,28 @@ impl<'a> Layout<'a> {
     }
 
     pub(super) fn push(&mut self, line: Line<'a>) {
-        if self.width == 0 {
+        self.push_plain(line, false);
+    }
+
+    fn padding(&self, user: bool) -> u16 {
+        if user && self.width >= USER_PADDING + 2 {
+            USER_PADDING
+        } else {
+            0
+        }
+    }
+
+    fn push_plain(&mut self, line: Line<'a>, user: bool) {
+        let width = self.width - self.padding(user);
+        if width == 0 {
             return;
         }
-        let height = if line.width() <= usize::from(self.width) {
+        let height = if line.width() <= usize::from(width) {
             1
         } else {
-            paragraph(line.clone()).line_count(self.width)
+            paragraph(line.clone()).line_count(width)
         };
-        self.lines.push((self.rows, Row::Plain(line)));
+        self.lines.push((self.rows, Row::Plain(line, user)));
         self.rows += height;
     }
 
@@ -770,11 +839,13 @@ impl<'a> Layout<'a> {
         let bottom = top + usize::from(area.height);
         let mut first = start;
         // Keep native word wrapping for plain runs; code has one row per line.
-        for group in self.lines[start..end]
-            .chunk_by(|(_, a), (_, b)| matches!(a, Row::Plain(_)) == matches!(b, Row::Plain(_)))
-        {
+        for group in self.lines[start..end].chunk_by(|(_, a), (_, b)| match (a, b) {
+            (Row::Plain(_, a), Row::Plain(_, b)) => a == b,
+            (Row::Code(..), Row::Code(..)) => true,
+            _ => false,
+        }) {
             match &group[0].1 {
-                Row::Plain(_) => {
+                Row::Plain(_, user) => {
                     let first_row = group[0].0;
                     let visible_start = first_row.max(top);
                     let skip = (visible_start - first_row) as u16;
@@ -788,15 +859,31 @@ impl<'a> Layout<'a> {
                     let lines = group
                         .iter()
                         .filter_map(|(_, row)| match row {
-                            Row::Plain(line) => Some(line.clone()),
+                            Row::Plain(line, _) => Some(line.clone()),
                             Row::Code(..) => None,
                         })
                         .collect::<Vec<_>>();
-                    let y = area.y + (visible_start - top) as u16;
+                    let row_area = Rect::new(
+                        area.x,
+                        area.y + (visible_start - top) as u16,
+                        area.width,
+                        height,
+                    );
+                    let padding = self.padding(*user);
                     frame.render_widget(
                         paragraph(lines).scroll((skip, 0)),
-                        Rect::new(area.x, y, area.width, height),
+                        Rect::new(
+                            row_area.x + u16::from(padding > 0),
+                            row_area.y,
+                            row_area.width - padding,
+                            row_area.height,
+                        ),
                     );
+                    if *user && let Some(surface) = self.user_surface {
+                        // Apply after writing wide glyphs: their trailing cells,
+                        // as well as wrap slack and padding, need the same shade.
+                        frame.buffer_mut().set_style(row_area, surface);
+                    }
                 }
                 Row::Code(..) => {
                     for (index, row) in group {
@@ -881,6 +968,51 @@ mod tests {
         app.transcript_key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
+    #[test]
+    fn user_shade_wraps_wide_text_without_coloring_other_rows() {
+        use ngn_core::legacy::PaintedComposerTheme;
+
+        let parts = [
+            TranscriptPart::Text("before\n".into()),
+            TranscriptPart::User("界界界\n".into()),
+            TranscriptPart::Text("after\n".into()),
+        ];
+        let paint = |surface| {
+            let mut terminal = Terminal::new(TestBackend::new(8, 5)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    Layout::new(&parts, area.width, None, false, None, surface)
+                        .render(frame, area, 0, None, false);
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let theme = Some(PaintedComposerTheme::Ocean);
+        let shaded = paint(super::super::composer::Palette::new(theme, false).user_surface());
+        for (y, columns) in [
+            (1, &[0, 1, 3, 5, 6, 7][..]),
+            (2, &[0, 1, 3, 4, 5, 6, 7][..]),
+        ] {
+            for &x in columns {
+                // Ratatui emits the leading cell of a wide glyph; the same
+                // background is applied by the terminal to its continuation.
+                assert_eq!(shaded[(x, y)].bg, Color::Rgb(29, 44, 54));
+            }
+        }
+        assert_eq!(shaded[(1, 1)].symbol(), "界");
+        assert_eq!(shaded[(1, 2)].symbol(), "界");
+        assert_eq!(shaded[(0, 0)].bg, Color::Reset);
+        assert_eq!(shaded[(0, 3)].symbol(), "a");
+        assert_eq!(shaded[(0, 3)].bg, Color::Reset);
+
+        let unshaded = paint(super::super::composer::Palette::new(theme, true).user_surface());
+        assert_eq!(unshaded, paint(None));
+        assert_eq!(unshaded[(0, 1)].symbol(), "界");
+        assert_eq!(unshaded[(0, 2)].symbol(), "a");
+        assert!(unshaded.content.iter().all(|cell| cell.bg == Color::Reset));
+    }
+
     fn render(
         app: &mut App,
         terminal: &mut Terminal<TestBackend>,
@@ -911,6 +1043,7 @@ mod tests {
                     Some(&app.tools),
                     app.tools_available(),
                     active,
+                    app.composer_palette.user_surface(),
                 );
                 if app.shows_overlay() {
                     layout.hide_wipes();
@@ -1634,7 +1767,11 @@ mod tests {
         let (_, _, _, age, _) = app.tools.sweep.as_ref().unwrap();
         assert_eq!(*age, Duration::from_millis(156));
         let parts = main_transcript(&app.records, None, 1500);
-        assert!(Layout::new(&parts, 60, None, false, active).sweep.is_none());
+        assert!(
+            Layout::new(&parts, 60, None, false, active, None)
+                .sweep
+                .is_none()
+        );
     }
 
     #[test]
