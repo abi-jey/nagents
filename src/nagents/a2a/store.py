@@ -43,6 +43,7 @@ from a2a.utils.errors import UnsupportedOperationError
 from a2a.utils.proto_utils import to_stream_response
 
 from .._async import finish_on_cancel
+from ..protected_store import unsafe_ancestor
 from .server.auth import Principal
 
 if TYPE_CHECKING:
@@ -91,9 +92,7 @@ def private_file(path: Path) -> None:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
             directory = child
-            info = os.fstat(directory)
-            sticky = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            if info.st_uid not in {0, os.getuid()} or (stat.S_IMODE(info.st_mode) & 0o022 and not sticky):
+            if unsafe_ancestor(os.fstat(directory)):
                 raise ValueError("A2A data must be in an owned private directory")
         info = os.fstat(directory)
         if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:

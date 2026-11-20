@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from nagents.observation import json_default
 from nagents.observation import observer
+from nagents.protected_store import unsafe_ancestor
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -77,7 +78,7 @@ class WireLog:
             raise ValueError("Wire log directory must be owner-controlled and not a symlink") from None
         try:
             info = os.fstat(descriptor)
-            if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            if info.st_uid != os.getuid() or unsafe_ancestor(info):
                 raise ValueError("Wire log directory must be owner-controlled and not a symlink")
             yield descriptor
         finally:

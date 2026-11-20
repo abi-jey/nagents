@@ -98,6 +98,25 @@ def test_store_treats_unsafe_or_corrupt_files_as_unusable() -> None:
 
 
 @pytest.mark.requires_posix
+@pytest.mark.parametrize(("mode", "usable"), [(0o775, True), (0o777, False)])
+def test_store_accepts_owned_group_writable_ancestors_but_not_world_writable(mode: int, usable: bool) -> None:
+    # Ubuntu's default umask 0002 creates ~/.local/share/ngn as 775 under a private user group.
+    provider_store = store()
+    provider_store.save(login())
+    ancestor = provider_store.path.parent.parent
+    ancestor.chmod(mode)
+    try:
+        if usable:
+            provider_store.save(login())
+            assert provider_store.key_for("openrouter") == SECRET
+        else:
+            with pytest.raises(ProviderLoginError):
+                provider_store.save(login())
+    finally:
+        ancestor.chmod(0o700)
+
+
+@pytest.mark.requires_posix
 def test_store_rejects_invalid_fields_before_writing() -> None:
     provider_store = store()
     with pytest.raises(ProviderLoginError):
