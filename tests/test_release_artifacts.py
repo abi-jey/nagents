@@ -72,13 +72,18 @@ def test_publications_verify_artifacts_before_upload_and_pin_sha() -> None:
         assert any(step.get("with", {}).get("name") == "release-manifest" for step in steps)
         for step in steps:
             assert "git pull" not in step.get("run", "")
-    bump_checkout = jobs["bump-version"]["steps"][0]
-    assert bump_checkout["with"]["ref"] == "${{ github.sha }}"
     for name in ("build", "docker-build"):
         runs = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
-        assert 'git checkout --detach "$RELEASE_SHA"' in runs
         assert "git pull" not in runs
         assert "FETCH_HEAD" not in runs
+
+
+def test_build_runs_alongside_tests_but_every_publication_waits_for_them() -> None:
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    assert "needs" not in jobs["build"]
+    for name in ("docker-build", "publish-stable", "publish-alpha", "publish-dev"):
+        assert set(jobs[name]["needs"]) == {"lint", "test", "build"}, name
+        assert "always()" not in jobs[name]["if"] and "cancelled()" not in jobs[name]["if"], name
 
 
 def test_stable_tag_must_equal_distribution_version() -> None:
@@ -124,7 +129,7 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
     assert caller["permissions"] == {"contents": "write"}
     candidate = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "candidate")
     assert "ngn/scripts/release.py', 'check', '--tag'" in candidate["run"]
-    assert "Python-only automatic bumps are disabled" in str(workflow["jobs"]["bump-version"])
+    assert "bump-version" not in workflow["jobs"]
     build_runs = "\n".join(step.get("run", "") for step in native["jobs"]["build"]["steps"])
     for gate in (
         "git merge-base --is-ancestor HEAD origin/main",
@@ -164,25 +169,6 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
     )
     assert "Refusing to overwrite an existing release" in publish_run
     assert "--verify-tag" in publish_run and "--draft\n" in publish_run and "--draft=false --latest" in publish_run
-
-
-@pytest.mark.parametrize("version,success", [("0.100.2", False), ("1.2.3", True)])
-def test_python_only_automatic_bump_guard_executes_before_expensive_lint_gates(
-    tmp_path: Path, version: str, success: bool
-) -> None:
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    steps = workflow["jobs"]["lint"]["steps"]
-    index = next(
-        i for i, step in enumerate(steps) if step.get("name") == "Reject Python-only bumps of coordinated versions"
-    )
-    guard = steps[index]
-    assert "inputs.version_bump != 'none'" in guard["if"]
-    assert index < next(i for i, step in enumerate(steps) if step.get("name") == "Run pre-commit")
-    (tmp_path / "pyproject.toml").write_text(f'[project]\nversion = "{version}"\n')
-    result = subprocess.run([sys.executable, "-c", guard["run"]], cwd=tmp_path, capture_output=True, text=True)
-    assert (result.returncode == 0) == success
-    if not success:
-        assert "Update all component metadata together and tag verified main" in result.stderr
 
 
 @pytest.mark.parametrize(
