@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.39
+
+- Cut CI from about 45 minutes to about 7 with a smaller sharded matrix, and let ngn login save credentials under Ubuntu's default umask 0002.
+
 ## 0.100.37
 
 - Show each native Agents sidebar row’s live activity, approval and terminal state, with the main agent’s Braille motion and a static reduced-motion view.
