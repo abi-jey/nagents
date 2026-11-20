@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.33
+
+- The nagents library, Python ngn client, and runtime adapter now support Python 3.12–3.15. If you use Python 3.11, upgrade to Python 3.12 or newer before installing this release, or stay on a prior compatible release. The native bundle still includes its unchanged CPython 3.13 runtime.
+
 ## 0.100.32
 
 - Native updates verify the active bundle once instead of scanning it twice before release discovery.
