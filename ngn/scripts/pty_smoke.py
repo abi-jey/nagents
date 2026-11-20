@@ -2,7 +2,7 @@
 
 import re
 
-COMPOSER_TITLE = "Message · Enter send/queue".encode()
+COMPOSER_TITLE = "┌ Message".encode()
 
 
 class WorkspaceReady:

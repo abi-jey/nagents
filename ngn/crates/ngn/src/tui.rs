@@ -583,13 +583,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             muted,
         );
     }
-    let composer = Block::bordered()
-        .title(format!(
-            " Message · Enter send/queue · /steer TEXT active turn · {} pending{} ",
-            app.queue.entries.len(),
-            if app.queue.paused { " · PAUSED" } else { "" }
-        ))
-        .border_style(Style::new().fg(accent));
+    let composer = composer::border(draft.width, app.queue.entries.len(), accent, muted);
     let input_area = composer.inner(draft);
     frame.render_widget(composer, draft);
     let _ = composer::draw(
@@ -1499,6 +1493,8 @@ mod tests {
             "F2  Conversations",
             "F7  Steering receipts",
             "F8  Focus long code blocks",
+            "Enter  Send when idle; steer the active turn if supported",
+            "Ctrl+Enter  Queue for a later turn if busy",
             "Ctrl+Y  Approve once",
         ] {
             assert!(screen.contains(expected));
@@ -2231,6 +2227,81 @@ mod tests {
             app.transcript_wheel(up);
         }
         assert_eq!(app.scroll, Some(0));
+    }
+
+    #[tokio::test]
+    async fn composer_header_keeps_its_title_and_pending_count_clear_of_slash_completion() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = App {
+            session: host.store.create_session().await.unwrap().id,
+            input: "/st".into(),
+            ..App::default()
+        };
+        host.control_queue(&app.session, QueueAction::Pause)
+            .await
+            .unwrap();
+        for pending in [0, 2] {
+            for _ in 0..pending {
+                host.submit(
+                    &app.session,
+                    "pending test",
+                    &Uuid::new_v4().to_string(),
+                    ApprovalMode::Interactive,
+                )
+                .await
+                .unwrap();
+            }
+            app.state(&host).await;
+            for (width, height) in [(1, 1), (11, 6), (16, 12), (24, 12), (120, 36)] {
+                let mut terminal =
+                    Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let menu_height = app.completion.menu(&app.input).unwrap().height();
+                let [_, suggestions, draft] = content_rows(buffer.area, menu_height);
+                let row = |y| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
+                if draft.height > 0 {
+                    let chrome = row(draft.top());
+                    assert!(chrome.starts_with("┌ Message "), "{chrome}");
+                    if pending == 0 || width == 11 {
+                        assert!(
+                            chrome.ends_with("─┐") || chrome == "┌ Message ┐",
+                            "{chrome}"
+                        );
+                        assert!(!chrome.contains("pending"), "{chrome}");
+                    } else if width == 16 {
+                        assert!(chrome.ends_with(" 2 ┐"), "{chrome}");
+                    } else {
+                        assert!(chrome.ends_with(" 2 pending ┐"), "{chrome}");
+                    }
+                    assert!(
+                        !chrome.contains("Enter") && !chrome.contains("PAUSED"),
+                        "{chrome}"
+                    );
+                    assert!(row(draft.top() + 1).contains("/st"));
+                }
+                if suggestions.height > 1 {
+                    assert!(row(suggestions.top() + 1).contains("/steer"));
+                }
+            }
+        }
+        assert!(app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert_eq!(app.input, "/steer ");
+        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 2);
+        host.shutdown().await;
     }
 
     #[tokio::test]

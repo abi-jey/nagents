@@ -8,12 +8,33 @@ use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Line, Span},
+    widgets::Block,
 };
 
 use crate::view;
 
 const BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
+pub(super) fn border(width: u16, pending: usize, accent: Color, muted: Color) -> Block<'static> {
+    const TITLE: &str = " Message ";
+    let mut block = Block::bordered()
+        .title_top(Line::raw(TITLE).left_aligned())
+        .border_style(Style::new().fg(accent));
+    if pending > 0 {
+        // Leave the title and a border cell intact. At narrower widths keep
+        // just the count, and omit it if even that would overlap the title.
+        let available = usize::from(width).saturating_sub(TITLE.len() + 3);
+        let mut badge = format!(" {pending} pending ");
+        if badge.len() > available {
+            badge = format!(" {pending} ");
+        }
+        if badge.len() <= available {
+            block = block.title_top(Line::styled(badge, Style::new().fg(muted)).right_aligned());
+        }
+    }
+    block
+}
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Palette(Option<(Color, Color, Color)>);
