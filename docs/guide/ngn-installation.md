@@ -52,7 +52,7 @@ well as `ngn --version` when verifying feature availability.
 
 ## Requirements
 
-- Python `>=3.11, <4.0`; Python 3.13 is used in the uv examples below.
+- Python 3.12–3.15; Python 3.13 is used in the uv examples below.
 - A POSIX host for the guarded coding tools and shell process-group cleanup.
   Windows is not yet a supported coding-tool host.
 - An interactive terminal for the full-screen TUI. Use `ngn run` for pipes,
@@ -74,7 +74,7 @@ start that server.
 
 These notes apply to the **Python** client, not the Linux-only native bundle.
 
-The coding harness targets Linux and macOS. CI exercises Python 3.11-3.14 on
+The coding harness targets Linux and macOS. CI exercises Python 3.12–3.15 on
 `macos-latest`, plus Python 3.13 on an Intel macOS runner. It uses fake audio and
 HTTP fixtures: passing CI does not validate a physical microphone, terminal key
 mapping, or access to a paid provider account.

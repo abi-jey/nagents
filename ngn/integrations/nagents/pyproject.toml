@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "ngn-nagents"
 version = "0.100.32"
 description = "Agent Runtime Protocol v1 adapter for the nagents Python library"
-requires-python = ">=3.11"
+requires-python = ">=3.12, <4.0"
 license = "MIT"
 dependencies = ["nagents>=0.100.32,<0.101"]
 
@@ -18,11 +18,12 @@ packages = ["src/ngn_nagents"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+# Keep the existing TypeAlias and TypeVar declarations instead of requiring PEP 695.
+ignore = ["E501", "UP040", "UP047"]
 
 [tool.ruff.lint.isort]
 force-single-line = true

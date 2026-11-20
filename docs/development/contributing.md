@@ -6,7 +6,7 @@ Thank you for your interest in contributing to nagents! This guide will help you
 
 ### Prerequisites
 
-- Python `>=3.11, <4.0`
+- Python 3.12–3.15
 - [Poetry](https://python-poetry.org/) for the workflow below, or an existing virtual environment with pip
 - Git for version control
 
@@ -398,7 +398,7 @@ flowchart TD
 
     **Environment**:
     - OS: [e.g., Ubuntu 22.04]
-    - Python: [e.g., 3.11.4]
+    - Python: [e.g., 3.12.10]
     - nagents version: [e.g., 0.1.0]
 
 ### Feature Requests

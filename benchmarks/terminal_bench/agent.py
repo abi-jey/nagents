@@ -39,7 +39,7 @@ fi
 if [ -x {REMOTE}/venv/bin/python ]; then
   {REMOTE}/venv/bin/python -m pip freeze > {REMOTE}/installed-dependencies.txt 2>&1 || true
 fi' EXIT
-python3 -c 'import sys; assert sys.version_info >= (3, 11), "ngn requires Python 3.11 or newer"'
+python3 -c 'import sys; assert sys.version_info >= (3, 12), "ngn requires Python 3.12 or newer"'
 if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
   echo 'ngn benchmark prerequisite: Python ensurepip is missing; installing the matching venv package.'
   if [ ! -f /etc/debian_version ] || ! command -v apt-get >/dev/null 2>&1; then

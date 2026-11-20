@@ -5,7 +5,7 @@ There are three related products. Choose the one you want before installing:
 | Product | Install path | What it provides |
 | --- | --- | --- |
 | **Native Rust ngn bundle** | [Native installer and usage](../guide/native-ngn.md) | Rust CLI, Ratatui TUI, local browser host, and an embedded Python agent runtime. No end-user Python/pip, Rust, Node or compiler installation. Linux x86_64 (glibc 2.39+) and macOS 11+ (arm64, x86_64). |
-| **Python nagents library** | Instructions below | Reusable `Agent`, providers, tools and session APIs; Python `>=3.11, <4.0`. |
+| **Python nagents library** | Instructions below | Reusable `Agent`, providers, tools and session APIs; Python 3.12–3.15. |
 | **Existing Python ngn client** | [Python client installation](../guide/ngn-installation.md) | Feature-rich Textual TUI, React web client, plugins, voice, channels and other Python harness integrations through optional extras. |
 
 !!! warning "Native release availability"
