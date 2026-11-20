@@ -357,6 +357,128 @@ async fn delayed_download_reports_live_progress_and_cleans_pty_on_success_or_err
     }
 }
 
+#[cfg(unix)]
+fn fixture_retarget(prefix: &Path, target: &Path) -> Result<()> {
+    let pending = prefix.join(".fixture-current");
+    symlink(target, &pending)?;
+    fs::rename(pending, prefix.join("current"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn activation_rejects_a_valid_retarget_during_staged_probes_and_can_retry() {
+    struct Retarget<'a> {
+        prefix: &'a Path,
+        target: &'a Path,
+    }
+
+    impl Probe for Retarget<'_> {
+        async fn verify(&self, _: &Path, _: &BundleManifest) -> Result<()> {
+            assert!(Lock::acquire(self.prefix, false).is_err());
+            fixture_retarget(self.prefix, self.target)
+        }
+    }
+
+    for managed in [false, true] {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let prepared = installation(directory.path());
+        let transport = FixtureTransport::default();
+        let probe = SyntheticProbe::success();
+        let cancel = CancellationToken::new();
+        let old = env!("CARGO_PKG_VERSION");
+        let install = if managed {
+            let first = local(directory.path(), &metadata(old, false), |_| {});
+            apply(&prepared, &first, false, &transport, &probe, &cancel)
+                .await
+                .unwrap();
+            let executable = prepared.identity.bin_dir.join("ngn");
+            drop(prepared);
+            Installation::from_executable(&executable, &mut Progress::default()).unwrap()
+        } else {
+            prepared
+        };
+        let prefix = &install.identity.prefix;
+        let binary = install.identity.bin_dir.join("ngn");
+        let identity = fs::read(prefix.join("install.json")).unwrap();
+        let alternate = Path::new("releases/0.100.999");
+        let archive = local(directory.path(), &metadata("0.100.999", false), |_| {})
+            .archive
+            .unwrap();
+        let stage = private_tempdir_in(prefix, ".fixture-").unwrap();
+        let (root, _) = unpack(&archive, stage.path(), &cancel).unwrap();
+        fs::rename(root, prefix.join(alternate)).unwrap();
+        let next = local(directory.path(), &metadata("0.100.100", false), |_| {});
+        let next_target = Path::new("releases/0.100.100");
+
+        let retarget = Retarget {
+            prefix,
+            target: alternate,
+        };
+        let error = apply(&install, &next, false, &transport, &retarget, &cancel)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("current changed before activation")
+        );
+        assert_eq!(fs::read_link(prefix.join("current")).unwrap(), alternate);
+        assert!(!prefix.join(next_target).exists());
+        assert_eq!(binary.symlink_metadata().is_ok(), managed);
+        assert_eq!(fs::read(prefix.join("install.json")).unwrap(), identity);
+
+        if managed {
+            let old_target = Path::new("releases").join(old);
+            fixture_retarget(prefix, &old_target).unwrap();
+        } else {
+            fs::remove_file(prefix.join("current")).unwrap();
+        }
+        assert_eq!(
+            apply(&install, &next, false, &transport, &probe, &cancel)
+                .await
+                .unwrap(),
+            Outcome::Installed(ReleaseVersion::parse("0.100.100").unwrap())
+        );
+        assert_eq!(fs::read_link(prefix.join("current")).unwrap(), next_target);
+        assert_eq!(fs::read_link(binary).unwrap(), prefix.join("current/ngn"));
+        assert!(prefix.join(alternate).is_dir());
+        assert!(transport.calls.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn final_switch_rechecks_current_after_pointer_staging() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let install = installation(directory.path());
+    let prefix = &install.identity.prefix;
+    let alternate = Path::new("releases/0.100.999");
+    let target = Path::new("releases/0.100.100");
+    for path in [alternate, target] {
+        ancestry(&prefix.join(path), true).unwrap();
+    }
+    let stage = private_tempdir_in(prefix, ".fixture-").unwrap();
+    let pending = stage.path().join("current");
+    symlink(target, &pending).unwrap();
+    sync_directory(stage.path()).unwrap();
+    require_activation_base(&install.identity, None).unwrap();
+
+    fixture_retarget(prefix, alternate).unwrap();
+    let error = switch_current(&install, &pending, None, &CancellationToken::new()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("current changed before activation")
+    );
+    assert_eq!(fs::read_link(&pending).unwrap(), target);
+    assert_eq!(fs::read_link(prefix.join("current")).unwrap(), alternate);
+
+    fs::remove_file(prefix.join("current")).unwrap();
+    switch_current(&install, &pending, None, &CancellationToken::new()).unwrap();
+    assert_eq!(fs::read_link(prefix.join("current")).unwrap(), target);
+}
+
 #[tokio::test]
 async fn local_install_check_noop_pin_upgrade_and_downgrade_are_failure_atomic() {
     let directory = crate::test_support::private_tempdir().unwrap();

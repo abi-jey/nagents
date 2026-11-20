@@ -1112,6 +1112,10 @@ async fn apply<T: Transport, P: Probe>(
         ensure!(hex(hash, 64), "Expected a lowercase 64-character SHA-256");
     }
     let installed = installation.installed_bundle()?;
+    let expected_current = installed
+        .as_ref()
+        .map(|bundle| ReleaseVersion::parse(&bundle.ngn_version))
+        .transpose()?;
     if let Some(pin) = pin {
         compare(pin, installed.as_ref())?;
     }
@@ -1212,7 +1216,14 @@ async fn apply<T: Transport, P: Probe>(
     cancelled(cancel)?;
     sync_tree(&root, cancel)?;
     progress.phase("Activating release...");
-    activate(installation, &root, &bundle, &stage, cancel)?;
+    activate(
+        installation,
+        &root,
+        &bundle,
+        &stage,
+        expected_current,
+        cancel,
+    )?;
     Ok(Outcome::Installed(version))
 }
 
@@ -1241,6 +1252,7 @@ fn activate(
     root: &Path,
     bundle: &BundleManifest,
     stage: &TempDir,
+    expected_current: Option<ReleaseVersion>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let identity = &installation.identity;
@@ -1256,7 +1268,7 @@ fn activate(
         "Release version directory already exists; immutable releases are never overwritten. Use a new release version/prefix."
     );
     let had_binary = binary_link(identity, false)?;
-    current(identity)?;
+    require_activation_base(identity, expected_current)?;
     cancelled(cancel)?;
     // No fallible payload checks after this point. An unreferenced generation is
     // safe to retain on a filesystem/sync failure, and is never executed.
@@ -1272,6 +1284,27 @@ fn activate(
     let pointer = stage.path().join("current");
     symlink(&Path::new("releases").join(&bundle.ngn_version), &pointer)?;
     sync_directory(stage.path())?;
+    switch_current(installation, &pointer, expected_current, cancel)
+}
+
+fn require_activation_base(identity: &Identity, expected: Option<ReleaseVersion>) -> Result<()> {
+    ensure!(
+        current(identity)? == expected,
+        "Managed current changed before activation; this operation did not activate a release"
+    );
+    Ok(())
+}
+
+fn switch_current(
+    installation: &Installation,
+    pointer: &Path,
+    expected_current: Option<ReleaseVersion>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let identity = &installation.identity;
+    // Recheck after the staging writes/syncs, under the prefix lock. This is
+    // not a filesystem compare-and-swap against writers that ignore the lock.
+    require_activation_base(identity, expected_current)?;
     cancelled(cancel)?;
     fs::rename(pointer, identity.prefix.join("current"))
         .context("Cannot atomically activate verified release")?;
