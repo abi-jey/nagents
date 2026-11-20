@@ -156,10 +156,12 @@ matching published core. The API is **not available in nagents
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - The mouse wheel scrolls the main conversation when the pointer is over it,
-  without moving focus. Modal dialogs and focused Agents controls take
-  precedence; use their keyboard shortcuts. Mouse reporting can intercept
-  terminal text selection. Hold your terminal's selection override (often
-  **Shift** while dragging, where supported) to select text in the terminal.
+  without moving focus. Hover a tool header to highlight it; click to toggle
+  its details. Drag over transcript text to select visible rows, then press
+  **Ctrl+C** to copy in terminals that accept clipboard writes (OSC 52).
+  Dialogs and focused Agents controls take precedence. For selection outside the
+  transcript, or if clipboard writes are disabled, use your terminal's own
+  selection override (often **Shift** while dragging).
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+Q** quits and joins runners before restoring the terminal.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.

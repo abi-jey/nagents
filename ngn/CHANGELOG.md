@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.38
+
+- Restore native TUI mouse hover highlighting and click-to-expand on tool headers, and drag selection with Ctrl+C copying in compatible terminals.
+
 ## 0.100.37
 
 - Show each native Agents sidebar row’s live activity, approval and terminal state, with the main agent’s Braille motion and a static reduced-motion view.

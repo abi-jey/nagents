@@ -47,6 +47,7 @@ mod completion;
 mod composer;
 mod footer;
 mod picker;
+mod selection;
 mod shimmer;
 mod startup;
 mod tool_cards;
@@ -56,7 +57,7 @@ use completion::Command;
 const HELP: &str = "\
 F2  Conversations (/sessions, /resume; /resume ID opens directly)
 F3  New conversation (/new)
-F4  Focus tool cards · Up/Down select · Enter/Space toggle · Esc back
+ F4  Focus tool cards · Up/Down select · Enter/Space toggle · Esc back
 F5  Subagents (/tasks)
 Ctrl+T  Focus Agents rail at wide widths; otherwise open inspector
 Agents: Tab/Shift+Tab  Focus Workspace & context · Enter/Space  Toggle
@@ -72,7 +73,8 @@ Ctrl+Enter  Queue for a later turn if busy · Shift+Enter  Newline
 Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
-/queue retry or /queue verify  Restore a FIFO draft or check its exact receipt";
+ /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
+ Mouse  Click tool headers · Drag transcript text · Ctrl+C to copy selection";
 
 const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
 
@@ -84,13 +86,13 @@ struct Restore {
 }
 
 impl Restore {
-    fn enable_wheel(&mut self) -> io::Result<()> {
-        // Normal button reporting includes wheel events. SGR gives us cell
-        // coordinates even in large windows; no motion/drag reporting is needed.
+    fn enable_mouse(&mut self) -> io::Result<()> {
+        // Any-motion reporting supplies hover and drag, as well as buttons
+        // and wheel. SGR gives us cell coordinates even in large windows.
         // Arm cleanup before the write in case enabling succeeds only in part.
         self.mouse_reporting = true;
         let mut output = stdout().lock();
-        output.write_all(b"\x1b[?1000h\x1b[?1006h")?;
+        output.write_all(b"\x1b[?1003h\x1b[?1006h")?;
         output.flush()
     }
 
@@ -110,7 +112,7 @@ impl Drop for Restore {
     fn drop(&mut self) {
         if self.mouse_reporting {
             let mut output = stdout().lock();
-            let _ = output.write_all(b"\x1b[?1006l\x1b[?1000l");
+            let _ = output.write_all(b"\x1b[?1006l\x1b[?1003l");
             let _ = output.flush();
         }
         #[cfg(unix)]
@@ -158,6 +160,7 @@ struct App {
     approval: Option<Approval>,
     scroll: Option<usize>,
     transcript_area: Rect,
+    selection: selection::Selection,
     preview_scroll: u16,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
@@ -403,6 +406,21 @@ impl App {
         }
     }
 
+    fn transcript_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if !self.tools_available() {
+            self.tools.clear_pointer();
+            return self.selection.clear();
+        }
+        let changed = self
+            .tools
+            .mouse(mouse, self.transcript_area, &mut self.scroll);
+        let selected = self
+            .selection
+            .mouse(mouse, self.transcript_area, self.tools.top());
+        self.transcript_wheel(mouse);
+        changed || selected
+    }
+
     fn completion_key(&mut self, key: KeyEvent) -> bool {
         self.composer_available() && self.completion.key(&mut self.input, key)
     }
@@ -432,6 +450,7 @@ impl App {
         self.records.clear();
         self.scroll = None;
         self.tools.reset();
+        self.selection.clear();
         self.picker = None;
         self.tasks.clear();
         self.agents = agents::Rail::default();
@@ -581,6 +600,12 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         now,
         Some(Style::new().fg(muted)),
     );
+    if interactive {
+        app.selection
+            .draw(frame.buffer_mut(), app.transcript_area, app.tools.top());
+    } else {
+        app.selection.clear();
+    }
     if let Some(menu) = menu {
         menu.draw(
             frame,
@@ -1198,47 +1223,52 @@ pub async fn run(
     let mut cached: Option<Buffer> = None;
     let mut motion_only = false;
     let mut cached_caret_visible = false;
+    let mut width = 0;
+    let mut skip_draw = false;
     loop {
         let now = Instant::now();
         let activity_motion = app.activity.needs_frame(now);
         app.activity.advance(now);
         app.agents.advance_activity(&app.tasks, now);
-        let width = terminal
-            .draw(|frame| {
-                let area = frame.area();
-                // Suggestions never take vertical space from the tree.
-                app.agents
-                    .resize(area.width, content_rows(area, 0)[0].height);
-                app.caret.focus(app.composer_available(), now);
-                let caret_visible = app.caret_visible(now);
-                if motion_only
-                    && cached_caret_visible == caret_visible
-                    && let Some(previous) = &cached
-                    && previous.area == frame.area()
-                {
-                    // Ratatui clears the back buffer for each draw. Reuse the last
-                    // full frame rather than reflow 5000 transcript events at 30fps.
-                    let area = footer_area(frame.area());
-                    frame.buffer_mut().clone_from(previous);
-                    app.tools.paint_motion(frame.buffer_mut(), now);
-                    app.agents.paint_motion(frame.buffer_mut(), &app.tasks);
-                    frame.render_widget(Clear, area);
-                    app.activity.draw(frame, area, &app, &host.config, now);
-                    if app.no_color {
-                        let area = frame.area();
-                        strip_color(frame.buffer_mut(), area);
-                    }
-                } else {
-                    draw(frame, &mut app, &host, now);
-                    let animate =
-                        (activity_motion || app.tools.needs_frame(now) || app.agents.needs_frame())
+        if !std::mem::take(&mut skip_draw) {
+            width = terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    // Suggestions never take vertical space from the tree.
+                    app.agents
+                        .resize(area.width, content_rows(area, 0)[0].height);
+                    app.caret.focus(app.composer_available(), now);
+                    let caret_visible = app.caret_visible(now);
+                    if motion_only
+                        && cached_caret_visible == caret_visible
+                        && let Some(previous) = &cached
+                        && previous.area == frame.area()
+                    {
+                        // Ratatui clears the back buffer for each draw. Reuse the last
+                        // full frame rather than reflow 5000 transcript events at 30fps.
+                        let area = footer_area(frame.area());
+                        frame.buffer_mut().clone_from(previous);
+                        app.tools.paint_motion(frame.buffer_mut(), now);
+                        app.agents.paint_motion(frame.buffer_mut(), &app.tasks);
+                        frame.render_widget(Clear, area);
+                        app.activity.draw(frame, area, &app, &host.config, now);
+                        if app.no_color {
+                            let area = frame.area();
+                            strip_color(frame.buffer_mut(), area);
+                        }
+                    } else {
+                        draw(frame, &mut app, &host, now);
+                        let animate = (activity_motion
+                            || app.tools.needs_frame(now)
+                            || app.agents.needs_frame())
                             && !app.shows_overlay();
-                    cached = animate.then(|| frame.buffer_mut().clone());
-                    cached_caret_visible = caret_visible;
-                }
-            })?
-            .area
-            .width;
+                        cached = animate.then(|| frame.buffer_mut().clone());
+                        cached_caret_visible = caret_visible;
+                    }
+                })?
+                .area
+                .width;
+        }
         motion_only = false;
         let mut redraw = false;
         if input.is_none() {
@@ -1253,9 +1283,9 @@ pub async fn run(
             let Some(draft) = draft else {
                 return Ok(());
             };
-            // Don't request wheel reports while the draft-only startup reader
+            // Don't request mouse reports while the draft-only startup reader
             // still owns stdin. EventStream will decode them after handoff.
-            restore.enable_wheel()?;
+            restore.enable_mouse()?;
             if draft != app.input {
                 app.input = draft;
                 app.completion.edited(&app.input);
@@ -1309,8 +1339,16 @@ pub async fn run(
                 let Some(event) = event else { break; };
                 match event? {
                     TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                        app.tools.cancel_click();
                         if app.composer_available() { app.caret.restart(Instant::now()); }
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+                        if control && matches!(key.code, KeyCode::Char('c' | 'C'))
+                            && app.tools_available() && app.selection.copy(stdout().lock())?
+                        {
+                            app.selection.clear();
+                            continue;
+                        }
+                        if app.selection.clear() && key.code == KeyCode::Esc { continue; }
                         if control && key.code == KeyCode::Char('q') { break; }
                         if control && key.code == KeyCode::Char('c') { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } else { break; } continue; }
                         // The FIFO shortcut belongs only to the composer. In
@@ -1413,7 +1451,16 @@ pub async fn run(
                             }
                         }
                     }
-                    TerminalEvent::Mouse(mouse) => app.transcript_wheel(mouse),
+                    TerminalEvent::Mouse(mouse) => {
+                        let changed = app.transcript_mouse(mouse);
+                        // A motion-reporting terminal emits many positions
+                        // while the pointer stays on the same header.
+                        skip_draw = !changed && mouse.kind == MouseEventKind::Moved;
+                    }
+                    TerminalEvent::Resize(..) => {
+                        app.tools.clear_pointer();
+                        app.selection.clear();
+                    }
                     _ => (),
                 }
             }
@@ -1542,8 +1589,20 @@ mod tests {
             "Ctrl+Enter  Queue for a later turn if busy",
             "Ctrl+Y  Approve once",
         ] {
-            assert!(screen.contains(expected));
+            assert!(screen.contains(expected), "missing help entry: {expected}");
         }
+        app.help_scroll = 10;
+        terminal
+            .draw(|frame| draw(frame, &mut app, &host, now))
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("Mouse  Click tool headers"));
     }
 
     #[test]

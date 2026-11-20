@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -26,6 +26,8 @@ type Key = (String, String);
 pub(super) struct Cards {
     expanded: HashSet<Key>,
     selected: Option<Key>,
+    pressed: Option<(Position, Key)>,
+    pointer: Option<Position>,
     focused: bool,
     reveal: bool,
     headers: Vec<(Key, usize)>,
@@ -241,11 +243,8 @@ impl Cards {
                     self.reveal = true;
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => {
-                    if let Some(key) = &self.selected {
-                        if !self.expanded.remove(key) {
-                            self.expanded.insert(key.clone());
-                        }
-                        *scroll = Some(self.rendered_top);
+                    if let Some(key) = self.selected.clone() {
+                        self.toggle(key, scroll);
                         self.reveal = true;
                     }
                 }
@@ -257,6 +256,76 @@ impl Cards {
         }
         // No text or submit/edit shortcuts reach the draft while inspecting.
         true
+    }
+
+    fn toggle(&mut self, key: Key, scroll: &mut Option<usize>) {
+        if !self.expanded.remove(&key) {
+            self.expanded.insert(key);
+        }
+        *scroll = Some(self.rendered_top);
+    }
+
+    pub(super) fn cancel_click(&mut self) {
+        self.pressed = None;
+    }
+
+    fn header_at(&self, area: Rect, position: Position) -> Option<&Key> {
+        if !area.contains(position) {
+            return None;
+        }
+        let row = self.rendered_top + usize::from(position.y - area.y);
+        self.headers
+            .iter()
+            .find(|(_, header)| *header == row)
+            .map(|(key, _)| key)
+    }
+
+    pub(super) fn clear_pointer(&mut self) {
+        self.cancel_click();
+        self.pointer = None;
+    }
+
+    pub(super) fn top(&self) -> usize {
+        self.rendered_top
+    }
+
+    pub(super) fn mouse(
+        &mut self,
+        event: MouseEvent,
+        area: Rect,
+        scroll: &mut Option<usize>,
+    ) -> bool {
+        let pressed = self.pressed.take();
+        let position = Position::new(event.column, event.row);
+        let pointer = area.contains(position).then_some(position);
+        let hover_changed = self.pointer.and_then(|p| self.header_at(area, p))
+            != pointer.and_then(|p| self.header_at(area, p));
+        self.pointer = pointer;
+        if !matches!(
+            event.kind,
+            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+        ) || !event.modifiers.is_empty()
+        {
+            return hover_changed;
+        }
+        let Some(key) = self.header_at(area, position) else {
+            return hover_changed;
+        };
+        if event.kind == MouseEventKind::Down(MouseButton::Left) {
+            self.pressed = Some((position, key.clone()));
+        } else if let Some((origin, pressed_key)) = pressed
+            && origin == position
+            && &pressed_key == key
+        {
+            // Mouse disclosure keeps the current focus. If F4 already owns
+            // input, its selection follows the card that was clicked.
+            if self.focused {
+                self.selected = Some(pressed_key.clone());
+            }
+            self.toggle(pressed_key, scroll);
+            return true;
+        }
+        hover_changed
     }
 
     fn nearest(&self) -> Option<usize> {
@@ -276,6 +345,9 @@ impl Cards {
         now: Instant,
         hint_style: Option<Style>,
     ) -> Rect {
+        if !layout.interactive {
+            self.clear_pointer();
+        }
         self.code.observe(std::mem::take(&mut layout.fences));
         if let Some(style) = hint_style
             && layout.interactive
@@ -325,6 +397,17 @@ impl Cards {
         self.rendered_top = top;
         self.height = height;
         layout.render(frame, area, top, Some(&self.code), layout.interactive);
+        if let Some(pointer) = self.pointer.filter(|&pointer| area.contains(pointer))
+            && layout
+                .headers
+                .iter()
+                .any(|(_, row)| *row == top + usize::from(pointer.y - area.y))
+        {
+            frame.buffer_mut().set_style(
+                Rect::new(area.x, pointer.y, area.width, 1),
+                Style::new().add_modifier(Modifier::BOLD),
+            );
+        }
         let origin = |row, column| {
             ((top..top + height).contains(&row) && !area.is_empty())
                 .then(|| Position::new(area.x + column, area.y + (row - top) as u16))
@@ -834,8 +917,9 @@ mod tests {
                 } else if let Some(area) = dialog {
                     layout.mask_wipes(area);
                 }
-                app.tools
-                    .draw(frame, area, layout, &mut app.scroll, now, None);
+                app.transcript_area =
+                    app.tools
+                        .draw(frame, area, layout, &mut app.scroll, now, None);
                 if let Some(area) = dialog {
                     frame.render_widget(ratatui::widgets::Clear, area);
                     frame.render_widget(
@@ -1678,6 +1762,79 @@ mod tests {
             expanded.contains("Error: detail\n\nstill here\n\n> shell · 丁 · complete · 1.25s"),
             "{expanded}"
         );
+    }
+
+    #[test]
+    fn mouse_hovers_and_toggles_the_exact_card_without_moving_focus() {
+        let mut app = App {
+            records: vec![
+                started("r1", "shared", "first"),
+                started("r2", "shared", "second"),
+                finished("r2", "shared", json!("second output"), ""),
+            ],
+            input: "unsent".into(),
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        let row = draw(&mut app, &mut terminal)
+            .iter()
+            .position(|line| line.starts_with("> shell · second"))
+            .unwrap() as u16;
+        let mouse = |kind| MouseEvent {
+            column: 0,
+            row,
+            modifiers: KeyModifiers::NONE,
+            kind,
+        };
+        let left = MouseButton::Left;
+        assert!(app.transcript_mouse(mouse(MouseEventKind::Moved)));
+        draw(&mut app, &mut terminal);
+        assert!(
+            terminal.backend().buffer()[(0, row)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(!app.transcript_mouse(mouse(MouseEventKind::Moved)));
+        app.transcript_mouse(mouse(MouseEventKind::Down(left)));
+        app.transcript_mouse(MouseEvent {
+            column: 5,
+            ..mouse(MouseEventKind::Drag(left))
+        });
+        app.transcript_mouse(mouse(MouseEventKind::Up(left)));
+        assert!(app.tools.expanded.is_empty());
+
+        let click = |app: &mut App| {
+            app.transcript_mouse(mouse(MouseEventKind::Down(left)));
+            app.transcript_mouse(mouse(MouseEventKind::Up(left)));
+        };
+        click(&mut app);
+        let rows = draw(&mut app, &mut terminal).join("\n");
+        assert!(rows.contains("> shell · first"));
+        assert!(rows.contains("v shell · second"));
+        assert!(rows.contains("second output"));
+        assert!(app.composer_available());
+        assert_eq!(app.input, "unsent");
+        app.help = true;
+        click(&mut app);
+        assert_eq!(app.tools.expanded.len(), 1);
+        app.help = false;
+        app.transcript_mouse(mouse(MouseEventKind::Down(left)));
+        app.approval = Some(Approval {
+            id: "approval".into(),
+            run_id: "r2".into(),
+            session_id: "test".into(),
+            root_session_id: "test".into(),
+            agent_title: "Main".into(),
+            depth: 0,
+            call: call("shared", "second"),
+            preview: String::new(),
+        });
+        app.transcript_mouse(mouse(MouseEventKind::Up(left)));
+        assert_eq!(app.tools.expanded.len(), 1);
+        assert!(app.approval.is_some());
+        app.approval = None;
+        click(&mut app);
+        assert!(app.tools.expanded.is_empty());
     }
 
     #[test]
