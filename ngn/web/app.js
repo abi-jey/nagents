@@ -316,7 +316,19 @@ $("composer").onsubmit = async (event) => {
   const submission = pendingSubmission;
   const mine = generation, revision = draftRevision;
   submitting = true; $("send").disabled = true;
-  try { await api(`/api/sessions/${submission.session}/runs`, { prompt, request_id: submission.id }); if (pendingSubmission === submission) pendingSubmission = null; if (mine === generation && selected === submission.session) { if (revision === draftRevision && $("prompt").value === prompt) { $("prompt").value = ""; draftRevision++; } await Promise.all([refreshState(), refreshQueue(), refreshSessions()]); } }
+  try {
+    const { warning } = await api(`/api/sessions/${submission.session}/runs`, { prompt, request_id: submission.id });
+    if (pendingSubmission === submission) pendingSubmission = null;
+    if (mine === generation && selected === submission.session) {
+      if (revision === draftRevision && $("prompt").value === prompt) { $("prompt").value = ""; draftRevision++; }
+      try {
+        await Promise.all([refreshState(), refreshQueue(), refreshSessions()]);
+        if (warning && mine === generation && selected === submission.session) status(`Input accepted · ${warning}`);
+      } catch (error) {
+        if (mine === generation && selected === submission.session) status(`Input accepted · ${warning ? warning + " · " : ""}Could not refresh: ${error.message}`);
+      }
+    }
+  }
   catch (error) { if (mine === generation && selected === submission.session) status(error.message + " · retrying this message reuses its submission ID"); }
   finally { submitting = false; $("send").disabled = false; }
 };

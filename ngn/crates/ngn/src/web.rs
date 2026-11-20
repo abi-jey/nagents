@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use futures_util::SinkExt;
-use ngn_core::{ApprovalMode, Host, queues::QueueAction};
+use ngn_core::{ApprovalMode, Host, host::InputAdmission, queues::QueueAction};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
@@ -301,9 +301,31 @@ async fn start(
     Path(id): Path<String>,
     Json(input): Json<RunInput>,
 ) -> ApiResult {
-    Ok(Json(
-        json!({"run":state.host.submit(&id, &input.prompt, &input.request_id, ApprovalMode::Interactive).await.map_err(failure)?}),
-    ))
+    match state
+        .host
+        .submit_with_receipt(
+            &id,
+            &input.prompt,
+            &input.request_id,
+            ApprovalMode::Interactive,
+        )
+        .await
+    {
+        InputAdmission::Accepted {
+            receipt,
+            warning: None,
+        } => Ok(Json(json!({"run": receipt}))),
+        InputAdmission::Accepted {
+            receipt,
+            warning: Some(warning),
+        } => Ok(Json(
+            json!({"run": receipt, "warning": warning.to_string()}),
+        )),
+        InputAdmission::Rejected(error) => Err(failure(error)),
+        InputAdmission::Unconfirmed(error) => Err(failure(anyhow::anyhow!(
+            "Input acceptance unconfirmed; retry only with the same session, text and request ID: {error}"
+        ))),
+    }
 }
 async fn cancel(
     State(state): State<WebState>,

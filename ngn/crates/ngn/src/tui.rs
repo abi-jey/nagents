@@ -18,7 +18,7 @@ use crossterm::{
 use futures_util::StreamExt;
 use ngn_core::{
     ApprovalMode, Host,
-    host::Approval,
+    host::{Approval, InputAdmission},
     queues::{QueueAction, QueueState},
     steering::{SteeringState, SteeringStatus},
     store::Run,
@@ -66,7 +66,8 @@ Enter  Send or queue · Shift+Enter  Newline
 /steer TEXT  Steer the active turn explicitly
 Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
-PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)";
+PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
+/queue retry or /queue verify  Restore a FIFO draft or check its exact receipt";
 
 const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
 
@@ -107,6 +108,15 @@ struct SteeringSubmission {
     request: String,
 }
 
+const MAX_UNCONFIRMED_FIFO: usize = 16;
+
+#[derive(Clone)]
+struct FifoSubmission {
+    session: String,
+    prompt: String,
+    request: String,
+}
+
 #[derive(Default)]
 struct App {
     session: String,
@@ -118,7 +128,7 @@ struct App {
     no_color: bool,
     completion: completion::Completion,
     status: String,
-    /// The last Enter submission failed; render its reason as an error, not a hint.
+    /// An admission error, uncertain receipt or dispatch warning, not a hint.
     failure: Option<String>,
     activity: footer::Activity,
     active: Option<Run>,
@@ -140,7 +150,8 @@ struct App {
     queue: QueueState,
     queue_picker: bool,
     queue_index: usize,
-    submission: Option<(String, String, String)>,
+    // Bounded quarantine. Never evict uncertain attempts to make room.
+    fifo_submissions: Vec<FifoSubmission>,
     steering_submissions: Vec<SteeringSubmission>,
     steering: Vec<SteeringState>,
     steering_runs: BTreeSet<String>,
@@ -778,9 +789,9 @@ async fn steer(app: &mut App, host: &Host, prompt: &str) -> Result<()> {
         "Use /steer TEXT; draft retained, not queued"
     );
     ensure!(
-        app.submission
-            .as_ref()
-            .is_none_or(|(_, text, _)| text != prompt),
+        !app.fifo_submissions
+            .iter()
+            .any(|binding| binding.prompt == prompt),
         "This text has a FIFO submission binding; retry normal Enter, not steering"
     );
     ensure!(
@@ -861,11 +872,57 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
             app.state(host).await;
         }
         (Some(Command::Queue), Some(action)) => {
+            let (verb, request) = action
+                .split_once(' ')
+                .map_or((action, None), |(verb, request)| {
+                    (verb, Some(request.trim()))
+                });
+            if matches!(verb, "retry" | "verify") {
+                let index = app
+                    .fifo_submissions
+                    .iter()
+                    .rposition(|binding| {
+                        binding.session == app.session
+                            && request.is_none_or(|request| request == binding.request)
+                    })
+                    .context("No matching unconfirmed FIFO draft in this conversation")?;
+                let binding = &app.fifo_submissions[index];
+                if verb == "retry" {
+                    app.input.clone_from(&binding.prompt);
+                    app.completion.edited(&app.input);
+                    return Ok(false);
+                }
+                match host
+                    .input_receipt(&binding.session, &binding.prompt, &binding.request)
+                    .await
+                {
+                    Ok(Some(receipt)) => {
+                        let message = format!("Original FIFO request confirmed · {}", receipt.id);
+                        if receipt.status.is_none() {
+                            app.failure = Some(format!("{message} · saved run status unreadable"));
+                        } else {
+                            app.status = message;
+                        }
+                        app.fifo_submissions.remove(index);
+                    }
+                    Ok(None) => {
+                        app.fifo_submissions.remove(index);
+                        app.status =
+                            "Original FIFO request was not admitted · retry binding released"
+                                .into();
+                    }
+                    Err(error) => {
+                        app.failure = Some(format!("FIFO acceptance still unconfirmed · {error}"));
+                    }
+                }
+                app.input.clear();
+                return Ok(false);
+            }
             let action = match action {
                 "pause" => QueueAction::Pause,
                 "resume" => QueueAction::Resume,
                 "clear" => QueueAction::Clear,
-                _ => anyhow::bail!("Use /queue pause, /queue resume or /queue clear"),
+                _ => anyhow::bail!("Use /queue pause, resume, clear, retry or verify"),
             };
             host.control_queue(&app.session, action).await?;
             app.state(host).await;
@@ -888,38 +945,76 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
                     .any(|binding| binding.prompt == input),
                 "This text is bound to steering; retry /steer TEXT, never implicitly Queue"
             );
-            ensure!(
-            !app.submission
-                .as_ref()
-                .is_some_and(|(session, prompt, _)| prompt == &input && session != &app.session),
-            "This FIFO draft is bound to its original session; resume there to retry, never rebind"
-        );
-            if !app
-                .submission
-                .as_ref()
-                .is_some_and(|(session, prompt, _)| session == &app.session && prompt == &input)
-            {
-                app.submission = Some((
-                    app.session.clone(),
-                    input.clone(),
-                    Uuid::new_v4().to_string(),
-                ));
-            }
-            let request = &app
-                .submission
-                .as_ref()
-                .expect("submission was just initialized")
-                .2;
-            let accepted = host
-                .submit(&app.session, &input, request, ApprovalMode::Interactive)
-                .await?;
-            app.submission = None;
-            app.status = if accepted.status == ngn_protocol::RunStatus::Queued {
-                "Input queued · F6 inspect · /queue resume if paused".into()
+            let saved = app
+                .fifo_submissions
+                .iter()
+                .position(|binding| binding.prompt == input);
+            let binding = if let Some(index) = saved {
+                let binding = &app.fifo_submissions[index];
+                ensure!(
+                    binding.session == app.session,
+                    "This FIFO draft is unconfirmed in {} · resume there to retry or verify",
+                    binding.session
+                );
+                binding.clone()
             } else {
-                String::new()
+                ensure!(
+                    app.fifo_submissions.len() < MAX_UNCONFIRMED_FIFO,
+                    "Unconfirmed FIFO limit reached · resolve an original request with /queue verify"
+                );
+                FifoSubmission {
+                    session: app.session.clone(),
+                    prompt: input,
+                    request: Uuid::new_v4().to_string(),
+                }
             };
+            let outcome = host
+                .submit_with_receipt(
+                    &binding.session,
+                    &binding.prompt,
+                    &binding.request,
+                    ApprovalMode::Interactive,
+                )
+                .await;
             app.scroll = None;
+            match outcome {
+                InputAdmission::Accepted { receipt, warning } => {
+                    if let Some(index) = saved {
+                        app.fifo_submissions.remove(index);
+                    }
+                    if let Some(warning) = warning {
+                        app.failure = Some(format!("Input accepted · {warning} · F6 inspect"));
+                        app.status.clear();
+                    } else {
+                        app.status = match receipt.status {
+                            Some(ngn_protocol::RunStatus::Queued) => {
+                                "Input queued · F6 inspect · /queue resume if paused".into()
+                            }
+                            Some(ngn_protocol::RunStatus::Running) => String::new(),
+                            // A retry can find a run cancelled since the original admission.
+                            _ => format!("Original FIFO request confirmed · {}", receipt.id),
+                        };
+                    }
+                }
+                InputAdmission::Rejected(error) => {
+                    // Exact receipt absent and no input was admitted; editing
+                    // or deliberately submitting to another session is safe.
+                    if let Some(index) = saved {
+                        app.fifo_submissions.remove(index);
+                    }
+                    return Err(error);
+                }
+                InputAdmission::Unconfirmed(error) => {
+                    app.failure = Some(format!(
+                        "FIFO acceptance unconfirmed · /queue verify or /queue retry · request {} · {error}",
+                        binding.request
+                    ));
+                    if saved.is_none() {
+                        app.fifo_submissions.push(binding);
+                    }
+                    return Ok(false);
+                }
+            }
         }
     }
     app.input.clear();
@@ -980,7 +1075,6 @@ pub async fn run(
         queue: QueueState::default(),
         queue_picker: false,
         queue_index: 0,
-        submission: None,
         ..App::default()
     };
     let signal = startup::shutdown_signal()?;
@@ -1378,6 +1472,187 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fifo_dispatch_failure_after_commit_confirms_the_draft_and_shows_a_warning() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let config = Config {
+            workspace: directory.path().into(),
+            data_dir: directory.path().join("state"),
+            backend: Backend::Demo,
+            ..Config::default()
+        }
+        .resolve()
+        .unwrap();
+        let database = config.state_dir().join("host.sqlite3");
+        let host = Host::open(config).unwrap();
+        let mut app = App {
+            session: host.store.create_session().await.unwrap().id,
+            input: "first draft".into(),
+            ..App::default()
+        };
+        let inject = rusqlite::Connection::open(database).unwrap();
+        inject
+            .execute_batch(
+                "CREATE TRIGGER fail_dispatch BEFORE UPDATE OF status ON runs
+             WHEN OLD.prompt = 'first draft' AND NEW.status = 'running'
+             BEGIN SELECT RAISE(ABORT, 'test: dispatch after durable enqueue'); END;
+             CREATE TRIGGER fail_enqueue BEFORE INSERT ON runs
+             WHEN NEW.prompt = 'rejected draft'
+             BEGIN SELECT RAISE(ABORT, 'test: enqueue rejected'); END;",
+            )
+            .unwrap();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        let warning = app.failure.as_deref().unwrap();
+        assert!(warning.starts_with("Input accepted"));
+        assert!(warning.contains("test: dispatch after durable enqueue"));
+        assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
+        let first = host.queue(&app.session).await.unwrap().entries[0]
+            .run
+            .clone();
+
+        app.input = "rejected draft".into();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert_eq!(app.input, "rejected draft");
+        assert!(app.fifo_submissions.is_empty());
+        assert_eq!(
+            app.failure.as_deref(),
+            Some("Not sent: test: enqueue rejected")
+        );
+        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+
+        app.input = "second draft".into();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
+        let queue = host.queue(&app.session).await.unwrap();
+        assert_eq!(queue.entries.len(), 2);
+        assert_eq!(queue.entries[0].run.request_id, first.request_id);
+        assert_eq!(queue.entries[1].prompt, "second draft");
+        assert!(host.active().await.is_empty());
+
+        // Retyping an already confirmed prompt is a new, deliberate submission.
+        app.input = "first draft".into();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        let queue = host.queue(&app.session).await.unwrap();
+        assert_eq!(queue.entries.len(), 3);
+        assert_ne!(queue.entries[2].run.request_id, first.request_id);
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fifo_uncertainty_does_not_block_unrelated_inputs_and_reconciles_exactly() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let config = Config {
+            workspace: directory.path().into(),
+            data_dir: directory.path().join("state"),
+            backend: Backend::Demo,
+            ..Config::default()
+        }
+        .resolve()
+        .unwrap();
+        let database = config.state_dir().join("host.sqlite3");
+        let host = Host::open(config).unwrap();
+        let session = host.store.create_session().await.unwrap().id;
+        let other = host.store.create_session().await.unwrap().id;
+        host.control_queue(&session, QueueAction::Pause)
+            .await
+            .unwrap();
+        host.control_queue(&other, QueueAction::Pause)
+            .await
+            .unwrap();
+        let mut app = App {
+            session: session.clone(),
+            input: "first uncertain draft".into(),
+            ..App::default()
+        };
+        let request = Uuid::new_v4().to_string();
+        let prompt = app.input.clone();
+        let run = host
+            .submit(&session, &prompt, &request, ApprovalMode::Interactive)
+            .await
+            .unwrap();
+        // Simulate losing the original response and an unreadable receipt identity.
+        app.fifo_submissions.push(FifoSubmission {
+            session: session.clone(),
+            prompt: prompt.clone(),
+            request: request.clone(),
+        });
+        let inject = rusqlite::Connection::open(database).unwrap();
+        inject
+            .execute("UPDATE runs SET prompt = X'FF' WHERE id = ?", [&run.id])
+            .unwrap();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.failure.as_deref().unwrap().contains("unconfirmed"));
+        assert_eq!(app.input, prompt);
+
+        app.input = "different draft".into();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.input.is_empty());
+        assert_eq!(app.fifo_submissions[0].request, request);
+        app.switch(&host, other.clone()).await.unwrap();
+        app.input.clone_from(&prompt);
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(
+            app.failure
+                .as_deref()
+                .unwrap()
+                .contains("draft is unconfirmed in")
+        );
+        assert!(host.queue(&other).await.unwrap().entries.is_empty());
+        app.input = "healthy conversation".into();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert_eq!(host.queue(&other).await.unwrap().entries.len(), 1);
+        assert_eq!(app.fifo_submissions[0].request, request);
+
+        // Terminal state is damaged but identity is readable again. Exact
+        // admission remains authoritative and must not queue a replacement.
+        inject
+            .execute(
+                "UPDATE runs SET prompt = ? WHERE id = ?",
+                rusqlite::params![prompt, run.id],
+            )
+            .unwrap();
+        host.control_queue(&session, QueueAction::Clear)
+            .await
+            .unwrap();
+        inject
+            .execute(
+                "UPDATE runs SET status = 'test-unreadable-status' WHERE id = ?",
+                [&run.id],
+            )
+            .unwrap();
+        app.switch(&host, session.clone()).await.unwrap();
+        app.input = "/queue retry".into();
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert_eq!(app.input, prompt);
+        assert_eq!(app.fifo_submissions[0].request, request);
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
+        let warning = app.failure.as_deref().unwrap();
+        assert!(warning.starts_with("Input accepted") && warning.contains("status is unreadable"));
+        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        assert!(host.active().await.is_empty());
+
+        // A positively verified absence releases only that binding, and never sends.
+        app.fifo_submissions.push(FifoSubmission {
+            session: session.clone(),
+            prompt: "not admitted".into(),
+            request: Uuid::new_v4().to_string(),
+        });
+        app.input = format!("/queue verify {}", app.fifo_submissions[0].request);
+        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(app.status.contains("was not admitted"));
+        assert!(app.fifo_submissions.is_empty());
+        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+
+        app.input = prompt;
+        assert!(!submit_from_enter(&mut app, &host).await);
+        let queue = host.queue(&session).await.unwrap();
+        assert!(queue.paused);
+        assert_eq!(queue.entries.len(), 1);
+        assert_ne!(queue.entries[0].run.request_id, request);
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn unsupported_steering_preserves_draft_and_retries_do_not_rebind_to_a_new_root_or_fifo()
     {
         let directory = crate::test_support::private_tempdir().unwrap();
@@ -1438,7 +1713,7 @@ mod tests {
         );
         assert_eq!(app.input, "retained text");
         assert_eq!(app.active.as_ref().unwrap().id, root.id);
-        assert!(app.submission.is_none());
+        assert!(app.fifo_submissions.is_empty());
         let other = host.store.create_session().await.unwrap().id;
         app.session = other.clone();
         app.input = "/steer retained text".into();
@@ -1893,7 +2168,6 @@ mod tests {
             queue: QueueState::default(),
             queue_picker: false,
             queue_index: 0,
-            submission: None,
             ..App::default()
         };
         app.state(&host).await;

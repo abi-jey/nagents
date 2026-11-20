@@ -102,6 +102,42 @@ pub struct Run {
     pub status: RunStatus,
 }
 
+/// Durable admission identity, even if the saved run status cannot be decoded.
+#[derive(Debug, Serialize)]
+pub struct InputReceipt {
+    pub id: String,
+    pub session_id: String,
+    pub request_id: String,
+    pub status: Option<RunStatus>,
+}
+
+impl From<Run> for InputReceipt {
+    fn from(run: Run) -> Self {
+        Self {
+            id: run.id,
+            session_id: run.session_id,
+            request_id: run.request_id,
+            status: Some(run.status),
+        }
+    }
+}
+
+impl InputReceipt {
+    pub(crate) fn into_run(self) -> Result<Run> {
+        Ok(Run {
+            status: self.status.with_context(|| {
+                format!(
+                    "Input accepted as {}; saved run status is unreadable",
+                    self.id
+                )
+            })?,
+            id: self.id,
+            session_id: self.session_id,
+            request_id: self.request_id,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct Store {
     connection: Arc<Mutex<Connection>>,
@@ -419,30 +455,61 @@ impl Store {
         request: &str,
         prompt: &str,
     ) -> Result<Option<Run>> {
+        self.input_receipt(session, request, prompt)
+            .await?
+            .map(InputReceipt::into_run)
+            .transpose()
+    }
+
+    pub(crate) async fn input_receipt(
+        &self,
+        session: &str,
+        request: &str,
+        prompt: &str,
+    ) -> Result<Option<InputReceipt>> {
         let (session, request, prompt) =
             (session.to_owned(), request.to_owned(), prompt.to_owned());
         self.with(move |db| {
-            let found: Option<(String, String, String)> = db
-                .query_row(
-                    "SELECT id, prompt, status FROM runs WHERE session_id = ? AND request_id = ?",
-                    params![session, request],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .optional()?;
-            found
-                .map(|(id, saved, status)| {
-                    ensure!(
-                        saved == prompt,
-                        "request_id already belongs to different prompt text"
-                    );
-                    Ok(Run {
-                        id,
-                        session_id: session,
-                        request_id: request,
-                        status: serde_json::from_value(serde_json::Value::String(status))?,
-                    })
-                })
-                .transpose()
+            // SQLite TEXT affinity does not convert BLOBs. Probe both storage
+            // classes with the original bytes on each side of the existing
+            // (session_id, request_id) index, without casting table columns.
+            let mut statement = db.prepare_cached(
+                "SELECT id, prompt, status, session_id, request_id FROM runs
+                 WHERE session_id IN (?1, ?2) AND request_id IN (?3, ?4)
+                 LIMIT 2",
+            )?;
+            let mut rows = statement.query(params![
+                session,
+                session.as_bytes(),
+                request,
+                request.as_bytes()
+            ])?;
+            let Some(row) = rows.next()? else {
+                return Ok(None);
+            };
+            ensure!(
+                row.get_ref(3)?.as_str().is_ok() && row.get_ref(4)?.as_str().is_ok(),
+                "FIFO receipt key has matching bytes but an invalid storage type"
+            );
+            let id = row.get(0).context("Unreadable FIFO receipt run ID")?;
+            let saved: String = row.get(1).context("Unreadable FIFO receipt prompt")?;
+            let status = row.get_ref(2)?.as_str().ok().and_then(|status| {
+                serde_json::from_value(serde_json::Value::String(status.to_owned())).ok()
+            });
+            ensure!(
+                rows.next()?.is_none(),
+                "Multiple FIFO receipts match the same session and request bytes"
+            );
+            ensure!(
+                saved == prompt,
+                "request_id already belongs to different prompt text"
+            );
+            Ok(Some(InputReceipt {
+                id,
+                session_id: session,
+                request_id: request,
+                status,
+            }))
         })
         .await
     }
@@ -708,6 +775,101 @@ mod tests {
             }
         ));
         assert_eq!(events.last().unwrap().run_id, run.id);
+    }
+
+    #[tokio::test]
+    async fn fifo_receipt_distinguishes_absence_from_byte_matching_corrupt_identity() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let session = store.create_session().await.unwrap().id;
+        let unrelated = store.create_session().await.unwrap().id;
+        let empty = store.create_session().await.unwrap().id;
+        let request = Uuid::new_v4().to_string();
+        let prompt = "exact FIFO draft";
+        let (run, _) = store.accept(&session, &request, prompt).await.unwrap();
+        let (other, _) = store.accept(&unrelated, &request, prompt).await.unwrap();
+        let lookup = || store.input_receipt(&session, &request, prompt);
+        assert_eq!(lookup().await.unwrap().unwrap().id, run.id);
+        assert!(
+            store
+                .input_receipt(&empty, &request, prompt)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let inject = Connection::open(directory.path().join("host.sqlite3")).unwrap();
+        // Simulate a pre-existing bad row, including a damaged foreign key.
+        inject.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        for (sql, diagnostic) in [
+            (
+                "UPDATE runs SET request_id = CAST(request_id AS BLOB) WHERE id = ?",
+                "matching bytes but an invalid storage type",
+            ),
+            (
+                "UPDATE runs SET session_id = CAST(session_id AS BLOB), request_id = CAST(request_id AS BLOB) WHERE id = ?",
+                "matching bytes but an invalid storage type",
+            ),
+            (
+                "UPDATE runs SET session_id = CAST(session_id AS BLOB) WHERE id = ?",
+                "matching bytes but an invalid storage type",
+            ),
+            (
+                "UPDATE runs SET prompt = CAST(prompt AS BLOB) WHERE id = ?",
+                "Unreadable FIFO receipt prompt",
+            ),
+            (
+                "UPDATE runs SET id = CAST(id AS BLOB) WHERE id = ?",
+                "Unreadable FIFO receipt run ID",
+            ),
+            (
+                "UPDATE runs SET prompt = 'different text' WHERE id = ?",
+                "already belongs to different prompt text",
+            ),
+        ] {
+            assert_eq!(inject.execute(sql, [&run.id]).unwrap(), 1);
+            let error = lookup().await.unwrap_err().to_string();
+            assert!(error.contains(diagnostic), "{error}");
+            assert_eq!(
+                store
+                    .input_receipt(&unrelated, &request, prompt)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                other.id
+            );
+            assert!(
+                store
+                    .input_receipt(&empty, &request, prompt)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            inject
+                .execute(
+                    "UPDATE runs SET id = ?1, session_id = ?2, request_id = ?3, prompt = ?4
+                 WHERE id IN (?1, CAST(?1 AS BLOB))",
+                    params![run.id, session, request, prompt],
+                )
+                .unwrap();
+        }
+
+        inject
+            .execute(
+                "UPDATE runs SET status = CAST(status AS BLOB) WHERE id = ?",
+                [&run.id],
+            )
+            .unwrap();
+        let receipt = lookup().await.unwrap().unwrap();
+        assert_eq!(receipt.id, run.id);
+        assert!(receipt.status.is_none());
+        inject.execute(
+            "INSERT INTO runs SELECT 'run-duplicate-bytes', session_id, CAST(request_id AS BLOB), prompt, status
+             FROM runs WHERE id = ?",
+            [&run.id],
+        ).unwrap();
+        assert!(lookup().await.is_err()); // TEXT and BLOB can coexist in the UNIQUE index.
     }
 
     #[tokio::test]

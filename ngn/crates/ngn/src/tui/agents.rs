@@ -1182,7 +1182,7 @@ mod tests {
         assert_eq!(app.tasks, tasks);
         assert_eq!(app.input, "/se");
         assert_eq!(app.scroll, Some(7));
-        assert!(app.queue.entries.is_empty() && app.submission.is_none());
+        assert!(app.queue.entries.is_empty() && app.fifo_submissions.is_empty());
     }
 
     #[tokio::test]
