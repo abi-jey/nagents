@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.39
+
+- Give native user messages a subtle background in saved painted themes, with cell-safe wrapping and unchanged terminal-default and NO_COLOR behavior.
+
 ## 0.100.38
 
 - Restore native TUI mouse hover highlighting and click-to-expand on tool headers, and drag selection with Ctrl+C copying in compatible terminals.
