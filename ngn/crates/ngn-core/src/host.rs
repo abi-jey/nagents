@@ -41,6 +41,20 @@ pub enum ApprovalMode {
     Interactive,
 }
 
+/// The view was idle, but a root started before admission. No new input was accepted.
+#[derive(Debug)]
+pub struct IdleTurnChanged;
+
+impl std::fmt::Display for IdleTurnChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "An active turn started; draft retained, not queued. Ctrl+Enter to queue explicitly",
+        )
+    }
+}
+
+impl std::error::Error for IdleTurnChanged {}
+
 /// Admission and dispatch are separate: a durable receipt is never a rejection.
 pub enum InputAdmission {
     Accepted {
@@ -442,6 +456,31 @@ impl Host {
         request_id: &str,
         approval: ApprovalMode,
     ) -> InputAdmission {
+        self.submit_input(session, prompt, request_id, approval, false)
+            .await
+    }
+
+    /// Send from an idle view without silently queueing behind a newly active root.
+    /// Paused queues and older entries still obey the normal durable FIFO policy.
+    pub async fn submit_idle_with_receipt(
+        self: &Arc<Self>,
+        session: &str,
+        prompt: &str,
+        request_id: &str,
+        approval: ApprovalMode,
+    ) -> InputAdmission {
+        self.submit_input(session, prompt, request_id, approval, true)
+            .await
+    }
+
+    async fn submit_input(
+        self: &Arc<Self>,
+        session: &str,
+        prompt: &str,
+        request_id: &str,
+        approval: ApprovalMode,
+        require_idle: bool,
+    ) -> InputAdmission {
         if prompt.trim().is_empty() || prompt.len() > 32_000 {
             return InputAdmission::Rejected(anyhow::anyhow!(
                 "Prompt must contain 1..32000 UTF-8 bytes"
@@ -462,6 +501,13 @@ impl Host {
         }
         if let Err(error) = self.check_input_admission(session).await {
             return InputAdmission::Rejected(error);
+        }
+        if require_idle
+            && active.values().any(|owner| {
+                owner.execution.task.is_none() && owner.execution.run.session_id == session
+            })
+        {
+            return InputAdmission::Rejected(IdleTurnChanged.into());
         }
         let enqueued = {
             let _emission = self.emission.lock().await;

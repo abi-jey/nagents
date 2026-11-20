@@ -1,8 +1,8 @@
 # Bounded active-run steering · 0.100.2
 
 This is an explicit host/API/client boundary, **not legacy UI parity**. The browser
-has a separate **Steer active turn** button; the TUI uses **`/steer TEXT`**.
-Existing Enter/Send behavior remains the durable **next-run FIFO**. `run --json`
+has a separate **Steer active turn** button; its Send/Queue remains next-run FIFO.
+The TUI steers on active-turn **Enter**, with **Ctrl+Enter** for the FIFO. `run --json`
 still starts one activation; it does not consume additional steering from stdin.
 
 ## Operator API
@@ -81,15 +81,30 @@ independent.
 
 ### Native TUI
 
-Type **`/steer TEXT`** and Enter to steer the exact capable active root, including
-while a tool approval is pending. Ordinary text + Enter still queues a next run.
+When the composer has focus, **Enter** sends ordinary text when idle and steers
+the exact active root when busy.
+**`/steer TEXT`** remains available. **Ctrl+Enter** submits to the durable FIFO for
+a separate turn, even when busy; the existing FIFO order and pause state still
+apply to all FIFO submissions. Ctrl+Enter does not execute slash commands.
+If a turn starts while an idle Enter is being admitted, the retained draft
+does not become steering on another bare Enter. Edit the draft, explicitly
+queue it with Ctrl+Enter, or deliberately use `/steer TEXT`.
 **F7** (or **`/steering`**) opens receipts with exact run, status and original text;
 **PgUp/PgDn** scroll, **F7/Esc** closes the view. F2–F6 sessions/new/tools/agents/queue,
-Ctrl+Y/Ctrl+D approvals and Esc/Ctrl+C Stop retain their roles. The approval preview
-leaves the composer visible so steering remains deliberate rather than a hidden
-keypress. Failed steering keeps its command/draft and its own retry UUID/run
+Ctrl+Y/Ctrl+D approvals and Esc/Ctrl+C Stop retain their roles. A pending approval
+keeps the composer visible but blocks both Enter submission shortcuts. Failed
+steering keeps its command/draft and its own retry UUID/run
 binding, separate from FIFO submission identity. Retrying the same text reuses that
 binding, never the latest root. No active/capable root means no new admission.
+
+On Unix the TUI requests only Kitty keyboard disambiguation after startup hands
+off input, then restores the terminal's previous mode on exit. Compatible
+terminals or multiplexers report Ctrl+Enter separately (for example, `CSI 13;5u`).
+Legacy terminals that send the same byte as Enter cannot distinguish the two:
+don't press Ctrl+Enter there to queue while busy. Wait until the turn is idle
+before sending a new draft, or use the browser's **Send / Queue** control when
+working in the browser. The TUI does not alias another control key or enable
+xterm `modifyOtherKeys`.
 
 ### Durable updates and reconnect
 

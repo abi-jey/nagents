@@ -44,7 +44,7 @@ def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
             if match is None:
                 break
             raw, _, operation = match.groups()
-            parameters = [int(value or "0") for value in raw.split(";")] if not raw.startswith("?") else []
+            parameters = [int(value or "0") for value in raw.split(";")] if re.fullmatch(r"[0-9;]*", raw) else []
             if raw == "?1049" and operation == "h" and normal_screen is None:
                 normal_screen = (screen, row, column, saved_cursor)
                 screen = [[" " for _ in range(columns)] for _ in range(rows)]

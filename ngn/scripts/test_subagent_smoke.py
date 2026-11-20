@@ -21,3 +21,6 @@ class TerminalReplayTest(unittest.TestCase):
     def test_partial_redraw_uses_visible_cells_not_a_raw_output_match(self) -> None:
         output = b"\x1b[?1049h\x1b[2;1H" + COMPOSER_TITLE + b"\x1b[2;9H\x1b[K"
         self.assertEqual(terminal_text(output), b"Message")
+
+    def test_keyboard_mode_controls_do_not_affect_cells(self) -> None:
+        self.assertEqual(terminal_text(b"\x1b[>1uMessage\x1b[<1u"), b"Message")
