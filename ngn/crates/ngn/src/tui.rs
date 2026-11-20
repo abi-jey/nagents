@@ -6,6 +6,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+#[cfg(unix)]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::{
     cursor::{Hide, Show},
     event::{
@@ -18,7 +22,7 @@ use crossterm::{
 use futures_util::StreamExt;
 use ngn_core::{
     ApprovalMode, Host,
-    host::{Approval, InputAdmission},
+    host::{Approval, IdleTurnChanged, InputAdmission},
     queues::{QueueAction, QueueState},
     steering::{SteeringState, SteeringStatus},
     store::Run,
@@ -61,7 +65,8 @@ F6  Input queue (/queue [pause|resume|clear])
 F7  Steering receipts (/steering)
 F8  Focus long code blocks · Left/Right pan · Up/Down select
 Code: Home/End  Pan to edge · Esc or F8  Return to draft
-Enter  Send or queue · Shift+Enter  Newline
+Enter  Send when idle; steer the active turn if supported
+Ctrl+Enter  Queue for a later turn if busy · Shift+Enter  Newline
 /  Show commands · Up/Down select · Tab/Enter fill · Esc close
 /steer TEXT  Steer the active turn explicitly
 Ctrl+Y  Approve once · Ctrl+D  Deny
@@ -74,6 +79,8 @@ const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
 #[derive(Default)]
 struct Restore {
     mouse_reporting: bool,
+    #[cfg(unix)]
+    keyboard_pushed: bool,
 }
 
 impl Restore {
@@ -86,6 +93,17 @@ impl Restore {
         output.write_all(b"\x1b[?1000h\x1b[?1006h")?;
         output.flush()
     }
+
+    #[cfg(unix)]
+    fn enable_modified_keys(&mut self) -> std::io::Result<()> {
+        // Unsupported terminals ignore the push/pop sequences. Don't query
+        // support here: that would require a second reader or block on stdin.
+        self.keyboard_pushed = true;
+        execute!(
+            stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+    }
 }
 
 impl Drop for Restore {
@@ -94,6 +112,11 @@ impl Drop for Restore {
             let mut output = stdout().lock();
             let _ = output.write_all(b"\x1b[?1006l\x1b[?1000l");
             let _ = output.flush();
+        }
+        #[cfg(unix)]
+        if self.keyboard_pushed {
+            // The alternate screen has its own keyboard flags stack.
+            let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
         }
         let _ = disable_raw_mode();
         let _ = execute!(stdout(), DisableBracketedPaste, LeaveAlternateScreen, Show);
@@ -152,6 +175,8 @@ struct App {
     queue_index: usize,
     // Bounded quarantine. Never evict uncertain attempts to make room.
     fifo_submissions: Vec<FifoSubmission>,
+    /// A definite idle-to-active rejection is not permission to steer on retry.
+    idle_rejected_draft: Option<String>,
     steering_submissions: Vec<SteeringSubmission>,
     steering: Vec<SteeringState>,
     steering_runs: BTreeSet<String>,
@@ -731,7 +756,7 @@ fn steering_status(status: SteeringStatus) -> &'static str {
 
 fn steering_text(app: &App) -> String {
     let mut text = String::from(
-        "/steer TEXT explicitly targets the capable active root. Enter remains next-run FIFO.\n",
+        "Enter or /steer TEXT targets the capable active root. Ctrl+Enter uses next-run FIFO.\n",
     );
     if let Some(run) = &app.active {
         let accepting = app.steering.iter().any(|state| {
@@ -775,9 +800,11 @@ fn steering_text(app: &App) -> String {
                 .input
                 .trim()
                 .strip_prefix("/steer ")
-                .is_some_and(|prompt| prompt.trim_start() == binding.prompt)
+                .unwrap_or(app.input.trim())
+                .trim_start()
+                == binding.prompt
         {
-            text.push_str(&format!("\nAdmission unconfirmed · retry /steer in its original session with the SAME text, exact run/UUID retained\nSession {} · Run {} · request {}\n{}\n", binding.session, binding.run, binding.request, binding.prompt));
+            text.push_str(&format!("\nAdmission unconfirmed · retry Enter or /steer in the original session with the SAME text, exact run/UUID retained\nSession {} · Run {} · request {}\n{}\n", binding.session, binding.run, binding.request, binding.prompt));
         }
     }
     view::plain(&text)
@@ -792,7 +819,7 @@ async fn steer(app: &mut App, host: &Host, prompt: &str) -> Result<()> {
         !app.fifo_submissions
             .iter()
             .any(|binding| binding.prompt == prompt),
-        "This text has a FIFO submission binding; retry normal Enter, not steering"
+        "This text has a FIFO submission binding; use Ctrl+Enter to retry without steering"
     );
     ensure!(
         !app.steering_submissions
@@ -809,14 +836,12 @@ async fn steer(app: &mut App, host: &Host, prompt: &str) -> Result<()> {
             .active
             .as_ref()
             .context("No active root; steering draft retained, not queued")?;
-        let state = host.steering(&run.id).await?;
         ensure!(
-            state.run_id == run.id
-                && state.session_id == app.session
-                && state.supported
-                && state.accepting,
-            "Active root unsupported or closing; steering draft retained, not queued"
+            run.session_id == app.session,
+            "Active root belongs to another session; steering draft retained, not queued"
         );
+        // Bind before admission so even a closed/unsupported run cannot make a
+        // later Enter on the retained draft queue or target a different run.
         app.steering_submissions.push(SteeringSubmission {
             session: app.session.clone(),
             run: run.id.clone(),
@@ -832,23 +857,37 @@ async fn steer(app: &mut App, host: &Host, prompt: &str) -> Result<()> {
     app.steering_dirty = true;
     let receipt = host
         .steer(&binding.run, &binding.prompt, &binding.request)
-        .await?;
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}; steering draft retained, not queued"))?;
     app.status = format!(
         "Steering {} · F7 inspect exact run",
         steering_status(receipt.status)
     );
     app.steering_submissions
         .retain(|binding| binding.session != app.session || binding.prompt != prompt);
+    if app.idle_rejected_draft.as_deref() == Some(prompt) {
+        app.idle_rejected_draft = None;
+    }
     app.steering_dirty = true;
     app.input.clear();
     Ok(())
 }
 
-async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubmissionKey {
+    Enter,
+    Queue,
+}
+
+async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<bool> {
     let input = app.input.trim().to_owned();
     if input.is_empty() {
         return Ok(false);
     }
+    ensure!(
+        key != SubmissionKey::Queue || !input.starts_with('/'),
+        "Use Enter to complete or run a slash command"
+    );
     let (name, args) = input
         .split_once(' ')
         .map_or((input.as_str(), None), |(name, args)| (name, Some(args)));
@@ -939,11 +978,25 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
         }
         _ => {
             ensure!(!input.starts_with('/'), "Unknown command; try /help");
+            // A state refresh must not repurpose a rejected idle send as a
+            // steering gesture. Only editing the text or an explicit route can.
             ensure!(
-                !app.steering_submissions
-                    .iter()
-                    .any(|binding| binding.prompt == input),
-                "This text is bound to steering; retry /steer TEXT, never implicitly Queue"
+                key != SubmissionKey::Enter
+                    || app.idle_rejected_draft.as_deref() != Some(input.as_str()),
+                "Draft retained from an idle send · Ctrl+Enter to queue, or edit it before pressing Enter"
+            );
+            let bound_to_steering = app
+                .steering_submissions
+                .iter()
+                .any(|binding| binding.prompt == input);
+            if key == SubmissionKey::Enter && (app.active.is_some() || bound_to_steering) {
+                steer(app, host, &input).await?;
+                app.scroll = None;
+                return Ok(false);
+            }
+            ensure!(
+                !bound_to_steering,
+                "This text is bound to steering; use Enter to retry the original run"
             );
             let saved = app
                 .fifo_submissions
@@ -968,17 +1021,32 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
                     request: Uuid::new_v4().to_string(),
                 }
             };
-            let outcome = host
-                .submit_with_receipt(
-                    &binding.session,
-                    &binding.prompt,
-                    &binding.request,
-                    ApprovalMode::Interactive,
-                )
-                .await;
+            let outcome = match key {
+                SubmissionKey::Enter => {
+                    host.submit_idle_with_receipt(
+                        &binding.session,
+                        &binding.prompt,
+                        &binding.request,
+                        ApprovalMode::Interactive,
+                    )
+                    .await
+                }
+                SubmissionKey::Queue => {
+                    host.submit_with_receipt(
+                        &binding.session,
+                        &binding.prompt,
+                        &binding.request,
+                        ApprovalMode::Interactive,
+                    )
+                    .await
+                }
+            };
             app.scroll = None;
             match outcome {
                 InputAdmission::Accepted { receipt, warning } => {
+                    if app.idle_rejected_draft.as_deref() == Some(binding.prompt.as_str()) {
+                        app.idle_rejected_draft = None;
+                    }
                     if let Some(index) = saved {
                         app.fifo_submissions.remove(index);
                     }
@@ -1002,6 +1070,9 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
                     if let Some(index) = saved {
                         app.fifo_submissions.remove(index);
                     }
+                    if error.is::<IdleTurnChanged>() {
+                        app.idle_rejected_draft = Some(binding.prompt);
+                    }
                     return Err(error);
                 }
                 InputAdmission::Unconfirmed(error) => {
@@ -1021,12 +1092,12 @@ async fn submit(app: &mut App, host: &Arc<Host>) -> Result<bool> {
     Ok(false)
 }
 
-async fn submit_from_enter(app: &mut App, host: &Arc<Host>) -> bool {
+async fn submit_from_enter(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> bool {
     if app.input.trim().is_empty() {
         return false;
     }
     app.failure = None;
-    match submit(app, host).await {
+    match submit(app, host, key).await {
         Ok(quit) => {
             if app.input.is_empty() {
                 app.completion.edited(&app.input);
@@ -1170,6 +1241,10 @@ pub async fn run(
                 app.caret.restart(Instant::now());
                 redraw = true;
             }
+            // Startup owns stdin until here. Do not change the keyboard protocol
+            // while the startup reader is still collecting draft-only input.
+            #[cfg(unix)]
+            restore.enable_modified_keys()?;
         }
         let input = input.get_or_insert_with(EventStream::new);
         if redraw {
@@ -1199,6 +1274,9 @@ pub async fn run(
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if control && key.code == KeyCode::Char('q') { break; }
                         if control && key.code == KeyCode::Char('c') { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } else { break; } continue; }
+                        // The FIFO shortcut belongs only to the composer. In
+                        // particular it is not Enter/confirm in a focused picker.
+                        if control && key.code == KeyCode::Enter && !app.composer_available() { continue; }
                         if app.picker.is_some() {
                             app.picker_key(&host, key).await?;
                             continue;
@@ -1271,8 +1349,12 @@ pub async fn run(
                             // Approval and overlay shortcuts above retain their routing.
                             // Draft edits and submission require the same focus as the caret.
                             _ if !app.composer_available() => (),
-                            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { if app.input.len() < 32_000 { app.input.push('\n'); app.completion.edited(&app.input); } },
-                            KeyCode::Enter => { if submit_from_enter(&mut app, &host).await { break; } app.state(&host).await; },
+                             KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => { if app.input.len() < 32_000 { app.input.push('\n'); app.completion.edited(&app.input); } },
+                             KeyCode::Enter if matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::CONTROL) => {
+                                 let submission = if control { SubmissionKey::Queue } else { SubmissionKey::Enter };
+                                 if submit_from_enter(&mut app, &host, submission).await { break; }
+                                 app.state(&host).await;
+                             },
                             KeyCode::Backspace => { if app.input.pop().is_some() { app.completion.edited(&app.input); } },
                             KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => { app.input.push(character); app.completion.edited(&app.input); },
                             _ => (),
@@ -1373,7 +1455,7 @@ mod tests {
             ..App::default()
         };
         assert!(!app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         let reason = app.failure.as_deref().unwrap();
         assert!(reason.starts_with("Not sent: No provider selected"));
         assert!(reason.contains("providers.json"));
@@ -1399,7 +1481,7 @@ mod tests {
         assert!(transcript.contains("providers.json"), "{transcript}");
         assert!((0..30).any(|y| row(y).contains("keep this draft")));
         app.input = "/help".into();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         assert!(app.failure.is_none() && app.help);
         // Shortcuts are in the help overlay, not the two status rows.
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 32)).unwrap();
@@ -1500,7 +1582,7 @@ mod tests {
              BEGIN SELECT RAISE(ABORT, 'test: enqueue rejected'); END;",
             )
             .unwrap();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         let warning = app.failure.as_deref().unwrap();
         assert!(warning.starts_with("Input accepted"));
         assert!(warning.contains("test: dispatch after durable enqueue"));
@@ -1510,7 +1592,7 @@ mod tests {
             .clone();
 
         app.input = "rejected draft".into();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
         assert_eq!(app.input, "rejected draft");
         assert!(app.fifo_submissions.is_empty());
         assert_eq!(
@@ -1520,7 +1602,7 @@ mod tests {
         assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
 
         app.input = "second draft".into();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
         let queue = host.queue(&app.session).await.unwrap();
         assert_eq!(queue.entries.len(), 2);
@@ -1530,7 +1612,7 @@ mod tests {
 
         // Retyping an already confirmed prompt is a new, deliberate submission.
         app.input = "first draft".into();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
         let queue = host.queue(&app.session).await.unwrap();
         assert_eq!(queue.entries.len(), 3);
         assert_ne!(queue.entries[2].run.request_id, first.request_id);
@@ -1579,17 +1661,17 @@ mod tests {
         inject
             .execute("UPDATE runs SET prompt = X'FF' WHERE id = ?", [&run.id])
             .unwrap();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
         assert!(app.failure.as_deref().unwrap().contains("unconfirmed"));
         assert_eq!(app.input, prompt);
 
         app.input = "different draft".into();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         assert!(app.input.is_empty());
         assert_eq!(app.fifo_submissions[0].request, request);
         app.switch(&host, other.clone()).await.unwrap();
         app.input.clone_from(&prompt);
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
         assert!(
             app.failure
                 .as_deref()
@@ -1598,7 +1680,7 @@ mod tests {
         );
         assert!(host.queue(&other).await.unwrap().entries.is_empty());
         app.input = "healthy conversation".into();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
         assert_eq!(host.queue(&other).await.unwrap().entries.len(), 1);
         assert_eq!(app.fifo_submissions[0].request, request);
 
@@ -1621,10 +1703,10 @@ mod tests {
             .unwrap();
         app.switch(&host, session.clone()).await.unwrap();
         app.input = "/queue retry".into();
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         assert_eq!(app.input, prompt);
         assert_eq!(app.fifo_submissions[0].request, request);
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
         let warning = app.failure.as_deref().unwrap();
         assert!(warning.starts_with("Input accepted") && warning.contains("status is unreadable"));
@@ -1638,17 +1720,104 @@ mod tests {
             request: Uuid::new_v4().to_string(),
         });
         app.input = format!("/queue verify {}", app.fifo_submissions[0].request);
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         assert!(app.status.contains("was not admitted"));
         assert!(app.fifo_submissions.is_empty());
         assert!(host.queue(&session).await.unwrap().entries.is_empty());
 
         app.input = prompt;
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         let queue = host.queue(&session).await.unwrap();
         assert!(queue.paused);
         assert_eq!(queue.entries.len(), 1);
         assert_ne!(queue.entries[0].run.request_id, request);
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn unchanged_idle_rejection_never_steers_the_new_capable_root() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let mut config: Config = serde_json::from_value(serde_json::json!({
+            "runner": ["/bin/sh", "-c", r#"
+                printf '%s\n' '{"protocol_version":1,"run_id":"","message":{"type":"ready","runtime":"composer-fixture","capabilities":["host_tools","cancel","safe_steering"]}}'
+                IFS= read -r start || exit
+                IFS= read -r cancel
+            "#],
+            "provider": "fixture",
+            "providers": {"fixture": {"kind": "openai_compatible", "model": "offline",
+                "api": "chat_completions", "base_url": "http://127.0.0.1:1/v1",
+                "api_key_env": "NGN_COMPOSER_FIXTURE_KEY"}},
+        }))
+        .unwrap();
+        config.workspace = directory.path().into();
+        config.data_dir = directory.path().join("state");
+        let host = Host::open(config.resolve().unwrap()).unwrap();
+        let session = host.store.create_session().await.unwrap().id;
+        let root = host
+            .start(
+                &session,
+                "active fixture",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Interactive,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !host.steering(&root.id).await.unwrap().accepting {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut app = App {
+            session: session.clone(),
+            input: "typed while idle".into(),
+            ..App::default()
+        };
+
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(
+            app.failure
+                .as_deref()
+                .unwrap()
+                .contains("An active turn started")
+        );
+        assert_eq!(app.input, "typed while idle");
+        app.state(&host).await;
+        assert_eq!(app.active.as_ref().unwrap().id, root.id);
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(
+            app.failure
+                .as_deref()
+                .unwrap()
+                .contains("Draft retained from an idle send")
+        );
+        assert_eq!(app.input, "typed while idle");
+        assert!(host.steering(&root.id).await.unwrap().receipts.is_empty());
+        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        assert!(app.input.is_empty());
+        assert!(host.steering(&root.id).await.unwrap().receipts.is_empty());
+        assert_eq!(
+            host.queue(&session).await.unwrap().entries[0].prompt,
+            "typed while idle"
+        );
+
+        // A second stale draft can be deliberately steered, but not by merely
+        // repeating Enter. The explicit command still targets the exact root.
+        app.active = None;
+        app.input = "explicit steering after a race".into();
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        app.state(&host).await;
+        app.input = "/steer explicit steering after a race".into();
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        let receipts = host.steering(&root.id).await.unwrap().receipts;
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].prompt, "explicit steering after a race");
+        assert!(app.idle_rejected_draft.is_none());
+        assert_eq!(host.queue(&session).await.unwrap().entries.len(), 1);
         host.shutdown().await;
     }
 
@@ -1679,53 +1848,87 @@ mod tests {
             .unwrap();
         let mut app = App {
             session: session.clone(),
-            input: "/steer retained text".into(),
+            input: "retained text".into(),
             ..App::default()
         };
         app.state(&host).await;
         assert!(
-            submit(&mut app, &host)
+            submit(&mut app, &host, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("unsupported or closing")
-        );
-        assert_eq!(app.input, "/steer retained text");
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
-        let request = Uuid::new_v4().to_string();
-        app.steering_submissions.push(SteeringSubmission {
-            session: session.clone(),
-            run: "original-exact-run".into(),
-            prompt: "retained text".into(),
-            request: request.clone(),
-        });
-        assert!(submit(&mut app, &host).await.is_err());
-        let binding = &app.steering_submissions[0];
-        assert_eq!(binding.run, "original-exact-run");
-        assert_eq!(binding.request, request);
-        app.input = "retained text".into();
-        assert!(
-            submit(&mut app, &host)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("never implicitly Queue")
+                .contains("has not negotiated safe_steering")
         );
         assert_eq!(app.input, "retained text");
-        assert_eq!(app.active.as_ref().unwrap().id, root.id);
+        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        let request = app.steering_submissions[0].request.clone();
+        assert_eq!(app.steering_submissions[0].run, root.id);
+        host.cancel(&root.id).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while host.active().await.iter().any(|run| run.id == root.id) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        app.state(&host).await;
+        assert!(app.active.is_none());
+        assert!(
+            submit(&mut app, &host, SubmissionKey::Enter)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("exact running root")
+        );
+        host.control_queue(&session, QueueAction::Resume)
+            .await
+            .unwrap();
+        let replacement = host
+            .start(
+                &session,
+                "demo hold",
+                &Uuid::new_v4().to_string(),
+                ApprovalMode::Interactive,
+            )
+            .await
+            .unwrap();
+        app.state(&host).await;
+        app.input = "/steer retained text".into();
+        assert!(
+            submit(&mut app, &host, SubmissionKey::Enter)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("exact running root")
+        );
+        let binding = &app.steering_submissions[0];
+        assert_eq!(binding.run, root.id);
+        assert_eq!(binding.request, request);
+        assert_eq!(app.steering_submissions.len(), 1);
+        app.input = "retained text".into();
+        assert!(
+            submit(&mut app, &host, SubmissionKey::Queue)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("bound to steering")
+        );
+        assert_eq!(app.input, "retained text");
+        assert_eq!(app.active.as_ref().unwrap().id, replacement.id);
         assert!(app.fifo_submissions.is_empty());
         let other = host.store.create_session().await.unwrap().id;
         app.session = other.clone();
         app.input = "/steer retained text".into();
         assert!(
-            submit(&mut app, &host)
+            submit(&mut app, &host, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains("original session/run/UUID")
         );
         assert_eq!(app.input, "/steer retained text");
-        assert!(steering_text(&app).contains("original-exact-run"));
+        assert!(steering_text(&app).contains(&root.id));
+        assert!(host.queue(&session).await.unwrap().entries.is_empty());
         assert!(host.queue(&other).await.unwrap().entries.is_empty());
         host.shutdown().await;
     }
@@ -1803,23 +2006,69 @@ mod tests {
             input: "/queue pause".into(),
             ..App::default()
         };
-        submit(&mut app, &host).await.unwrap();
+        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
         app.input = "demo hold".into();
-        submit(&mut app, &host).await.unwrap();
+        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
         app.input = "queued before resume".into();
-        submit(&mut app, &host).await.unwrap();
+        let request = Uuid::new_v4().to_string();
+        let receipt = host
+            .submit(
+                &app.session,
+                &app.input,
+                &request,
+                ApprovalMode::Interactive,
+            )
+            .await
+            .unwrap();
+        // A retained FIFO draft may retry by Ctrl+Enter without making a duplicate.
+        app.fifo_submissions.push(FifoSubmission {
+            session: app.session.clone(),
+            prompt: app.input.clone(),
+            request,
+        });
+        submit(&mut app, &host, SubmissionKey::Queue).await.unwrap();
         app.state(&host).await;
         assert_eq!(app.queue.entries.len(), 2);
+        assert_eq!(app.queue.entries[1].run.id, receipt.id);
         assert!(app.queue.paused);
         let root = app.queue.entries[0].run.id.clone();
         app.input = "/queue resume".into();
-        submit(&mut app, &host).await.unwrap();
+        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
         app.state(&host).await;
         assert_eq!(app.active.as_ref().unwrap().id, root);
+        app.input = "queued before resume".into();
+        app.fifo_submissions.push(FifoSubmission {
+            session: app.session.clone(),
+            prompt: app.input.clone(),
+            request: receipt.request_id.clone(),
+        });
+        assert!(
+            submit(&mut app, &host, SubmissionKey::Enter)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("FIFO submission binding")
+        );
+        submit(&mut app, &host, SubmissionKey::Queue).await.unwrap();
+        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+        assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
         app.input = "queued while busy".into();
-        submit(&mut app, &host).await.unwrap();
+        // Simulate a stale idle view: the host must not queue this Enter.
+        app.active = None;
+        assert!(
+            submit(&mut app, &host, SubmissionKey::Enter)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("An active turn started")
+        );
+        assert_eq!(app.input, "queued while busy");
+        assert!(app.fifo_submissions.is_empty()); // No receipt existed and no attempt was made.
+        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+        app.state(&host).await;
+        submit(&mut app, &host, SubmissionKey::Queue).await.unwrap();
         app.input = "/queue".into();
-        submit(&mut app, &host).await.unwrap();
+        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
         assert!(app.queue_picker);
         assert_eq!(app.queue.entries.len(), 2);
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(130, 35)).unwrap();
@@ -1836,7 +2085,7 @@ mod tests {
         assert!(contents.contains("Input queue: RUNNING"));
         assert!(contents.contains("queued while busy"));
         app.input = "/queue clear".into();
-        submit(&mut app, &host).await.unwrap();
+        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
         assert!(app.queue.paused && app.queue.entries.is_empty());
         assert!(host.active().await.iter().any(|run| run.id == root));
         host.shutdown().await;
@@ -2081,7 +2330,11 @@ mod tests {
         assert!(app.picker.is_none());
         assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
         assert!(!app.completion_key(key(KeyCode::Enter)));
-        assert!(!submit_from_enter(&mut app, &host).await);
+        assert!(!app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)));
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        assert_eq!(app.input, "/sessions ");
+        assert!(app.picker.is_none());
+        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
         assert!(app.input.is_empty());
         app.picker
             .as_mut()
@@ -2094,16 +2347,16 @@ mod tests {
         assert!(host.active().await.iter().any(|active| active.id == run.id));
 
         app.input = format!("/resume {}", &first.id[..12]);
-        assert!(submit(&mut app, &host).await.is_err());
+        assert!(submit(&mut app, &host, SubmissionKey::Enter).await.is_err());
         assert_eq!(app.session, second.id);
         app.input = format!("/resume {}", first.id);
         assert!(!app.completion_key(key(KeyCode::Enter)));
-        assert!(!submit(&mut app, &host).await.unwrap());
+        assert!(!submit(&mut app, &host, SubmissionKey::Enter).await.unwrap());
         assert_eq!(app.session, first.id);
         assert!(app.picker.is_none());
 
         app.input = "/resume".into();
-        assert!(!submit(&mut app, &host).await.unwrap());
+        assert!(!submit(&mut app, &host, SubmissionKey::Enter).await.unwrap());
         app.picker_key(&host, key(KeyCode::Enter)).await.unwrap(); // explicit New row
         assert_ne!(app.session, first.id);
         assert_ne!(app.session, second.id);

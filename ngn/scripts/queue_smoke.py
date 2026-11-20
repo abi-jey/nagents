@@ -407,7 +407,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path) -> None:
         )
         os.write(master, b"\x1b")
         wait_for(lambda: b"Input queue:" not in visible(), "Queue inspector did not close")
-        os.write(master, b"queued while busy\r")
+        os.write(master, b"queued while busy\x1b[13;5u")  # Ctrl+Enter: explicit FIFO.
         wait_for(
             lambda: statuses().get("queued while busy") == "queued",
             "Busy TUI did not accept a pending input",

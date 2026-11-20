@@ -396,11 +396,12 @@ def runtime_fixture(mode: str) -> None:
     def emit(run: str, message: dict[str, object]) -> None:
         print(json.dumps({"protocol_version": 1, "run_id": run, "message": message}), flush=True)
 
-    capabilities = ["host_tools", "cancel"] + ([] if mode == "legacy" else ["safe_steering"])
+    legacy = mode in {"legacy", "legacy-composer"}
+    capabilities = ["host_tools", "cancel"] + ([] if legacy else ["safe_steering"])
     emit("", {"type": "ready", "runtime": "offline-protocol-fixture", "capabilities": capabilities})
     start = json.loads(sys.stdin.readline())
     activation = start["message"]["run"]
-    if mode == "legacy":
+    if legacy:
         require(
             set(activation)
             == {"session_id", "prompt", "system_prompt", "database", "provider", "tools", "max_tool_rounds"},
@@ -424,6 +425,10 @@ def runtime_fixture(mode: str) -> None:
     )
     result = sys.stdin.readline()
     if not result or json.loads(result)["message"]["type"] == "cancel":
+        return
+    if mode in {"composer", "legacy-composer"}:
+        emit(run, {"type": "notice", "text": "fixture typing window"})
+        sys.stdin.readline()  # Hold this exact root until cancelled.
         return
     if mode == "legacy":
         emit(run, {"type": "finished", "status": "completed", "error": ""})

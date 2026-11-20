@@ -102,7 +102,11 @@ matching published core. The API is **not available in nagents
 
 ## Controls
 
-- **Enter** sends, or queues while busy/paused; **Shift+Enter** inserts a newline.
+- In the terminal, **Enter** sends when idle and steers the active turn if supported.
+  **Ctrl+Enter** explicitly submits to the next-turn FIFO (it can start immediately
+  when idle and unpaused). A paused queue remains paused. **Shift+Enter** inserts a
+  newline. See [terminal keyboard compatibility](docs/steering.md#native-tui).
+- Desktop browser **Enter** still sends or queues; **Shift+Enter** inserts a newline.
 - On touch/coarse-pointer browsers, **Return inserts a newline**; tap Send/Queue
   (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
   Send and Stop preserve composer focus and Stop retains an unsent draft.
@@ -144,11 +148,11 @@ matching published core. The API is **not available in nagents
   conversation, **`/queue verify [REQUEST_ID]`** checks the exact receipt without
   sending anything, and releases the binding only on confirmed admission or
   absence. **`/queue retry [REQUEST_ID]`** restores its text without sending it;
-  submit that text again to retry the original UUID. With no ID, these commands
+  press **Ctrl+Enter** (or **Enter** while idle) to retry the original UUID. With no ID, these commands
   target the newest unconfirmed request in the conversation. This retry state
   lasts only while the TUI is open; after exit, inspect the conversation and
   queue before resending.
-- **`/steer TEXT`** targets the capable active root at its next persisted safe point;
+- Active-turn **Enter** and **`/steer TEXT`** target the capable active root at its next persisted safe point;
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - The mouse wheel scrolls the main conversation when the pointer is over it,
