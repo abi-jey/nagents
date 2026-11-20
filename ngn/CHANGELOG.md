@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.31
+
+- Native updates refuse to switch releases if the active generation changed during staging.
+
 ## 0.100.30
 
 - Hide the successful turn marker in the main native transcript while keeping tool badges and actionable statuses.
