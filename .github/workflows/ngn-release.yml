@@ -124,13 +124,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.93.0
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: ngn
-          shared-key: ngn-${{ matrix.platform }}
-          # Restore what main's Rust harness CI built; a release never writes the cache.
-          save-if: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
@@ -146,11 +139,15 @@ jobs:
         run: |
           git merge-base --is-ancestor HEAD origin/main
           python ngn/scripts/release.py check --tag "$RELEASE_TAG"
-      - name: Rust tests
-        run: cargo test --manifest-path ngn/Cargo.toml --locked
-      - name: Build and package immutable candidate
+      # ci.yml's native-prebuild ran `cargo test` and built this binary from the same
+      # commit while the Python tests ran, so only packaging waits for PyPI.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ngn-prebuilt-${{ matrix.platform }}
+          path: ngn/target/release
+      - name: Package immutable candidate
         run: |
-          cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
+          chmod +x ngn/target/release/ngn
           git diff --exit-code
           python ngn/scripts/release.py package --output artifacts --binary ngn/target/release/ngn --bundle --published-core
       - name: Test packaged binary and adapter wheel
