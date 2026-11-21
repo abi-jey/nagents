@@ -1457,3 +1457,22 @@ async fn compressed_limit_invalid_pins_and_same_version_mutation_are_refused() {
     assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
     assert!(transport.calls.lock().unwrap().is_empty());
 }
+
+#[test]
+fn staged_tree_is_flushed_once_and_honours_cancellation() {
+    let directory = crate::test_support::private_tempdir().unwrap();
+    let root = directory.path().join("ngn");
+    fs::create_dir_all(root.join("runtime/lib")).unwrap();
+    fs::write(root.join("ngn"), b"binary").unwrap();
+    fs::write(root.join("runtime/lib/module.py"), b"pass\n").unwrap();
+    symlink(Path::new("lib/module.py"), &root.join("runtime/alias.py")).unwrap();
+    // A dangling link must be skipped, not opened and followed.
+    symlink(Path::new("missing"), &root.join("runtime/dangling")).unwrap();
+
+    sync_tree(&root, &CancellationToken::new()).unwrap();
+    assert_eq!(fs::read(root.join("runtime/alias.py")).unwrap(), b"pass\n");
+
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    assert!(sync_tree(&root, &cancel).is_err());
+}
