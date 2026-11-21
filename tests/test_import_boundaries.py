@@ -13,7 +13,7 @@ from tests.support.hang_guard import HANG_GUARD
 
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "nagents"
 PACKAGES = {path.name for path in SOURCE.iterdir() if (path / "__init__.py").is_file()}
-HOSTS = ("nagents.harness", "nagents.web", "nagents.tui")
+HOSTS = ("nagents.harness", "nagents.web")
 
 
 def module_name(path: Path) -> str:

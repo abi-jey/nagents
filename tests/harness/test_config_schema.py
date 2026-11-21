@@ -233,8 +233,6 @@ def test_scalar_environment_defaults_and_file_override(tmp_path: Path, monkeypat
 def test_cli_overrides(tmp_path: Path) -> None:
     args = _parser().parse_args(
         [
-            "--theme-background",
-            "theme",
             "run",
             "--provider-id",
             "work",
@@ -247,7 +245,6 @@ def test_cli_overrides(tmp_path: Path) -> None:
             "hello",
         ]
     )
-    assert args.theme_background == "theme"
     assert args.provider_id == "work" and args.max_subagent_depth == 0
     assert args.max_concurrent_subagents == 5 and args.max_subagent_executions == 15
     assert args.prompt == ["hello"]

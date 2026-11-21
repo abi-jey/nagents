@@ -921,7 +921,7 @@ class LiveService:
             media = ChatGPTMediaRelay(source, output)
         except ImportError as error:
             call.fail(
-                "Install nagents[tui,voice] to enable ChatGPT voice audio."
+                "Install nagents[voice] to enable ChatGPT voice audio."
                 if call.duplex is not None
                 else "Install nagents[web] on the server to enable ChatGPT voice audio.",
                 503,

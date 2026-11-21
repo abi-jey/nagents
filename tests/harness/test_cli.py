@@ -1,8 +1,6 @@
 """CLI contracts, without API credentials or a real terminal."""
 
 import json
-import sqlite3
-from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -10,7 +8,6 @@ import pytest
 from nagents.cli import _event_record
 from nagents.cli import _parser
 from nagents.cli import _plain
-from nagents.cli import _session_in_workspace
 from nagents.cli import main
 from nagents.events import TextChunkEvent
 from nagents.harness import TaskMessage
@@ -18,31 +15,6 @@ from nagents.harness.types import ApprovalRequest
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
-
-
-@pytest.mark.parametrize("session_id", ["known", "missing", "broken-schema"])
-def test_session_lookup_closes_its_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, session_id: str) -> None:
-    database = tmp_path / "sessions.db"
-    with closing(sqlite3.connect(database)) as db, db:
-        if session_id != "broken-schema":
-            db.execute("CREATE TABLE harness_sessions (id TEXT)")
-            db.execute("CREATE TABLE v2_sessions (id TEXT)")
-            db.execute("INSERT INTO harness_sessions VALUES ('known')")
-            db.execute("INSERT INTO v2_sessions VALUES ('known')")
-
-    connect = sqlite3.connect
-    opened: list[sqlite3.Connection] = []
-
-    def track_connection(path: Path) -> sqlite3.Connection:
-        connection = connect(path)
-        opened.append(connection)
-        return connection
-
-    monkeypatch.setattr(sqlite3, "connect", track_connection)
-    assert _session_in_workspace(database, session_id) is (session_id == "known")
-    assert len(opened) == 1
-    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-        opened[0].execute("SELECT 1")
 
 
 def test_options_work_before_and_after_subcommand() -> None:
@@ -140,6 +112,21 @@ def test_task_activation_and_notification_wire_contract() -> None:
     assert ApprovalRequest("call", "write", "Create", {}, "", "s1", "Research", 2, 3).activation == 3
 
 
+def test_no_subcommand_points_to_the_native_client(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([]) == 2
+    error = capsys.readouterr().err
+    assert "Python terminal UI was removed" in error
+    assert "install.sh" in error
+
+
+@pytest.mark.parametrize("removed", [["resume"], ["--theme", "dark", "run"], ["--tui-performance", "run"]])
+def test_removed_terminal_ui_options_are_rejected(removed: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as failure:
+        _parser().parse_args(removed)
+    assert failure.value.code == 2
+    capsys.readouterr()
+
+
 def test_invalid_workspace_is_actionable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--workspace", str(tmp_path / "missing"), "doctor"]) == 2
     assert "Workspace is not a directory" in capsys.readouterr().err
@@ -150,11 +137,6 @@ def test_conflicting_resume_flags_across_subcommand(capsys: pytest.CaptureFixtur
     assert "either --continue or --resume" in capsys.readouterr().err
 
 
-def test_resume_parser_accepts_an_optional_session_id() -> None:
-    assert _parser().parse_args(["resume"]).session_id == ""
-    assert _parser().parse_args(["resume", "ngn-abc123"]).session_id == "ngn-abc123"
-
-
 def test_agent_option_help_names_only_assistant_as_default() -> None:
     # argparse wraps help text to the terminal width; normalize before matching.
     help_text = " ".join(_parser().format_help().split())
@@ -163,35 +145,6 @@ def test_agent_option_help_names_only_assistant_as_default() -> None:
     assert "default: build" not in help_text
     assert "default: reviewer" not in help_text
     assert "default: agent" not in help_text
-
-
-def test_resume_command_rejects_session_flags(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["--resume", "other", "resume", "ngn-abc123"]) == 2
-    assert "Pass the session ID to ngn resume" in capsys.readouterr().err
-
-
-@pytest.mark.requires_posix
-def test_resume_without_an_id_needs_a_terminal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    assert main(["resume", "--workspace", str(tmp_path), "--demo"]) == 2
-    assert "ngn resume SESSION_ID" in capsys.readouterr().err
-
-
-@pytest.mark.requires_posix
-def test_resume_unknown_session_id_is_actionable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    assert main(["run", "--workspace", str(tmp_path), "--demo", "hello"]) == 0
-    capsys.readouterr()
-    assert main(["resume", "ngn-missing", "--workspace", str(tmp_path), "--demo"]) == 2
-    captured = capsys.readouterr()
-    assert "does not exist in this workspace" in captured.err
 
 
 @pytest.mark.requires_posix

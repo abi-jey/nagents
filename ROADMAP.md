@@ -54,7 +54,7 @@ checkout, including later changes, rather than a release-specific feature list.
 See [release availability and installation](docs/guide/ngn-installation.md) and
 the [ngn usage guide](docs/guide/ngn.md).
 
-- Interactive TUI and headless JSON events, local sessions, coding tools, approval
+- Headless JSON events, a local web client, local sessions, coding tools, approval
   policies, trusted project configuration, Python plugins, and an offline demo.
 - Local `SKILL.md` discovery and text loading, including skill slash commands.
   Loading a skill does not automatically execute its scripts.

@@ -1,5 +1,9 @@
 # Built-in TUI and web channels: design proposal
 
+!!! note "Historical design"
+    The Python TUI described here, including its `builtin.tui` route, has been removed.
+    The web channel design remains current.
+
 **Status:** packages A–D (#42–#45) merged; package E (#46) accepted for
 implementation.
 **Origin:** [issue #40](https://github.com/abi-jey/nagents/issues/40).

@@ -399,7 +399,7 @@ asyncio.run(codex_models())
 ### Application-owned device authentication
 
 `nagents.provider.device_auth` exposes `OpenAIAuth`, `OpenAIAuthError`, and
-`DeviceAuthorization` without importing the harness, TUI, web host or server.
+`DeviceAuthorization` without importing the harness, web host or server.
 The legacy harness import is a compatibility alias to the same implementation.
 Embeddings such as the Rust runtime adapter must supply their **own explicit
 store path** and credential callback; do not instantiate `OpenAIProvider()` with

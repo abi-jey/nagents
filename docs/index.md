@@ -14,7 +14,7 @@ an existing feature-rich Python client, and a separate native Rust harness.
 | --- | --- |
 | The native Rust CLI/TUI/browser bundle, without installing Python or build tools | [Native installer and usage](guide/native-ngn.md) |
 | Python APIs for providers, agents, tools and sessions | [Python library installation](getting-started/installation.md#install-the-python-library-from-pypi) and [quick start](getting-started/quickstart.md) |
-| The existing Textual/React client, voice, plugins and integrations | [Python ngn client installation](guide/ngn-installation.md) |
+| The existing Python headless/React client, voice, plugins and integrations | [Python ngn client installation](guide/ngn-installation.md) |
 
 !!! tip "Install native ngn"
     `curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh`

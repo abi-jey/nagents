@@ -71,9 +71,6 @@ struct Cli {
         default_missing_value = "true",
     )]
     no_animations: Vec<bool>,
-    /// Enable in-app mouse controls instead of terminal-native mouse selection.
-    #[arg(long)]
-    mouse: bool,
     /// Capture sensitive provider HTTP payloads in a private local log (off by default).
     #[arg(long, global = true, overrides_with_all = ["wire_log", "no_wire_log"])]
     wire_log: bool,
@@ -481,7 +478,6 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
                     cli.resume.as_deref(),
                     cli.continue_session,
                     !cli.no_animations.is_empty(),
-                    cli.mouse,
                 )
                 .await?;
                 Ok(0)
@@ -559,6 +555,14 @@ mod tests {
                 .map(OsString::from)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    #[test]
+    fn mouse_controls_do_not_take_a_cli_flag() {
+        assert!(matches!(
+            parse(&["--mouse"]),
+            Err(error) if error.kind() == ErrorKind::UnknownArgument
+        ));
     }
 
     #[test]

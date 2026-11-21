@@ -73,7 +73,8 @@ Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
  /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
- Mouse  Use terminal selection and copy
+ Mouse  Click tool headers · Wheel scroll
+ For terminal selection, use your terminal's override (often Shift+drag)
  Ctrl+C  Quit";
 
 const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
@@ -1159,7 +1160,6 @@ pub async fn run(
     resume: Option<&str>,
     continue_session: bool,
     no_animations: bool,
-    mouse: bool,
 ) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let animate = animations_enabled(
@@ -1293,9 +1293,7 @@ pub async fn run(
             };
             // Don't request mouse reports while the draft-only startup reader
             // still owns stdin. EventStream will decode them after handoff.
-            if mouse {
-                restore.enable_mouse()?;
-            }
+            restore.enable_mouse()?;
             if draft != app.input {
                 app.input = draft;
                 app.completion.edited(&app.input);
@@ -1457,7 +1455,7 @@ pub async fn run(
                             }
                         }
                     }
-                    TerminalEvent::Mouse(event) if mouse => {
+                    TerminalEvent::Mouse(event) => {
                         let changed = app.transcript_mouse(event);
                         // A motion-reporting terminal emits many positions
                         // while the pointer stays on the same header.
@@ -1607,7 +1605,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(screen.contains("Mouse  Use terminal selection"));
+        assert!(screen.contains("Mouse  Click tool headers · Wheel scroll"));
     }
 
     #[test]

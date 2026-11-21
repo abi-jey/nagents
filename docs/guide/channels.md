@@ -242,38 +242,6 @@ request-local destination context through its normal instructions.
 The web channel host uses this same dispatcher behind its existing approval,
 credential-protection and chat-ownership wrappers.
 
-### Built-in TUI text delivery
-
-The interactive TUI hosts `builtin.tui` for explicit text delivery. Normal
-assistant replies already appear in the conversation; use `channel_send` when
-an explicit delivery is requested. Discover the available route and capabilities
-through `channel_list`; the host supplies the current destination in its model
-instructions. The destination is the executing root session, not a terminal
-process or a separate chat.
-
-An approved send produces a distinct delivery entry while retaining its compact
-tool card as execution evidence. Deliveries are saved separately from model
-messages and restored with the conversation. Separate sends remain separate
-even when their text is identical. After compaction, retained deliveries from
-outside the current context appear in a labeled earlier-context section.
-
-`builtin.tui` accepts only the message's text field. All attachments, including
-`.txt` files, are unsupported: a send containing text and an attachment fails
-as a whole, without delivering the text first. Historical attachments from
-compatible shared storage appear as filename/type/channel notes, without loading
-or rendering their media bytes.
-
-The TUI keeps its existing input queue, Harness execution and approval modal.
-Channel tools remain subject to profiles and approval; reviewer/demo restrictions
-still apply, including to discovery. Subagents gain no channel tools or sending
-permission. The adapter declares host-managed text input, does not advertise
-legacy `receive`, and rejects direct `listen()` calls. It starts no additional
-listener and is not an external connector eligible for automatic replies.
-
-The built-in route is owned by the running TUI. Tool registration detects
-collisions and shutdown removes only its own definitions. The separate browser
-route and its media playback are documented below.
-
 ### Built-in web media delivery
 
 `ngn serve` provides a host-managed `builtin.web` route for explicit text and
@@ -382,8 +350,7 @@ require this local-delivery bridge.
 
 Origins record root and actor session IDs, host run and turn IDs, invocation and
 tool identities, and the exact assistant-row/call-position anchor. A host run
-can include several Agent turns. Web execution uses its existing run ID; the TUI
-binds a generated ID at its owned run/continuation boundary. These scopes reset
+can include several Agent turns. Web execution uses its existing run ID. These scopes reset
 when execution ends. Input events and tool-result rows are not anchor sources.
 
 #### Commit and cancellation
@@ -423,8 +390,8 @@ content separately.
 - Web trash retains the journal but revokes access. Restore exposes the same
   delivery and asset IDs; purge removes the rows and BLOBs.
 - Library session clear/delete and web permanent deletion remove related
-  deliveries and assets in the same content transaction. Switching sessions or
-  clearing TUI widgets does not delete saved deliveries.
+  deliveries and assets in the same content transaction. Switching sessions does
+  not delete saved deliveries.
 - SQLite backups include the attachment bytes. Deliveries survive restart and
   changes to the original workspace file. Purge does not promise physical database
   shrinkage or secure erasure.

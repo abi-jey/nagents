@@ -130,7 +130,7 @@ Common Harness options work before or after `serve`, including `--provider`,
 `--model`, `--agent`, `--config`, `--continue`, and `--resume`. API keys and saved
 OAuth credentials stay on the backend. Configure model-provider credentials through
 the existing CLI/environment. Connector credentials have a separate Channels form
-described below. Textual is not required.
+described below.
 
 ### Your Own Connection
 
@@ -149,7 +149,7 @@ and model together; browsing does not activate the connection. Enter a model ID 
 discovery is unavailable. **Save workspace settings** or **Save global settings**
 saves the provider/model reference, reasoning effort and other defaults separately from connection
 changes. Unsaved settings require an explicit discard before switching connections.
-The same connections appear in the TUI's `/provider` menu. The
+The
 global registry lives in `$XDG_CONFIG_HOME/ngn/providers.json` (normally
 `~/.config/ngn/providers.json`); the workspace registry lives under
 `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json`. Use an API key **environment-variable name**
@@ -1236,7 +1236,7 @@ chains to prevent unbounded self-scheduling.
 on server shutdown, pod restart, or deployment replacement; they are not durable
 cron jobs. Persisted conversations and settings do not restore pending timers.
 Do not schedule a critical reminder here that must survive a restart. Frontends
-without a lifecycle-owned scheduler, including the ordinary CLI/TUI, reject the
+without a lifecycle-owned scheduler, including the ordinary CLI, reject the
 tool rather than falsely acknowledging an unavailable service.
 
 The browser reads session-scoped background activity while idle. Scheduling,
@@ -1952,7 +1952,7 @@ ConfigMap/JSON, CLI, profile and initial authentication/model resolution
 establish startup defaults, followed by global defaults, **before** the saved
 workspace override is applied. Reset deletes the workspace rows and inherits
 current global defaults. The
-CLI/TUI do not load this web-only override.
+The CLI does not load this web-only override.
 
 Current settings rows store workspace differences. Unknown or removed fields
 fail loading. Check the

@@ -1,4 +1,4 @@
-"""The ngn terminal and headless clients. Importing the library never imports Textual."""
+"""The ngn headless, web and service command line."""
 
 from __future__ import annotations
 
@@ -7,18 +7,14 @@ import asyncio
 import getpass
 import json
 import os
-import shlex
-import sqlite3
 import sys
 from contextlib import aclosing
-from contextlib import closing
 from contextlib import suppress
 from dataclasses import asdict
 from dataclasses import replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from time import monotonic
 from typing import TYPE_CHECKING
 
 from ._version import framework_version
@@ -35,9 +31,6 @@ from .events import ToolCallEvent
 from .events import ToolResultEvent
 from .harness import Harness
 from .harness import load_config
-from .harness.config import THEME_BACKGROUNDS
-from .harness.config import THEME_NAMES
-from .harness.config import HarnessConfig
 from .harness.providers import login as provider_login
 from .harness.providers.credentials import ProviderLogin
 from .harness.providers.registry import API_NAMES
@@ -62,8 +55,15 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from collections.abc import Sequence
 
+    from .harness.config import HarnessConfig
     from .harness.providers.auth import DeviceAuthorization
     from .harness.providers.login import LoginMethod
+
+
+NATIVE_HINT = (
+    "The Python terminal UI was removed. For the interactive terminal client, install the native ngn: "
+    "curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh"
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -89,23 +89,9 @@ def _parser() -> argparse.ArgumentParser:
         help="Maximum subagent executions per root run, including follow-ups (1-4096; default: 8)",
     )
     common.add_argument(
-        "--theme", choices=THEME_NAMES, help="Terminal appearance (default: terminal inherits terminal colors)"
-    )
-    common.add_argument("--no-animations", action="store_false", dest="animations", help="Disable activity animation")
-    common.add_argument(
-        "--tui-performance",
-        action=argparse.BooleanOptionalAction,
-        help="Show the TUI performance panel for this invocation (default: disabled)",
-    )
-    common.add_argument(
         "--wire-log",
         action=argparse.BooleanOptionalAction,
         help="Log sensitive provider wire traffic to data_dir/logs/wire-<unique>.jsonl (default: disabled)",
-    )
-    common.add_argument(
-        "--theme-background",
-        choices=THEME_BACKGROUNDS,
-        help="Use preset background (theme), inherited terminal background (terminal), or preset default (auto)",
     )
     common.add_argument(
         "--submit-mode", choices=("queue", "interrupt"), help="New prompts while working: queue or interrupt-and-send"
@@ -124,24 +110,16 @@ def _parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="ngn",
-        description="A Python-extensible agent harness, at home in your terminal.",
-        epilog="Run without a subcommand for the TUI. Try ngn --demo without API credentials.",
+        description="A Python-extensible agent harness: headless runs, the web client and services.",
+        epilog=NATIVE_HINT,
         parents=[common, session_flags],
     )
     parser.add_argument("--version", action="version", version=f"ngn (nagents {framework_version()})")
     commands = parser.add_subparsers(dest="command")
-    run = commands.add_parser(
-        "run", parents=[common, session_flags], help="Run a prompt without the full-screen interface"
-    )
+    run = commands.add_parser("run", parents=[common, session_flags], help="Run a prompt headlessly")
     run.add_argument("--json", action="store_true", help="Emit versioned JSON Lines events; approvals fail closed")
     run.add_argument("prompt", nargs="*", help="Prompt text, or - to read from standard input")
     commands.add_parser("sessions", parents=[common], help="List this workspace's saved sessions")
-    resume = commands.add_parser(
-        "resume",
-        parents=[common],
-        help="Resume a saved session in the full-screen client, choosing when no ID is given",
-    )
-    resume.add_argument("session_id", nargs="?", default="", help="Session ID to resume; omit to choose from a list")
     serve = commands.add_parser(
         "serve", parents=[common, session_flags], help="Serve the local React web client (web extra)"
     )
@@ -198,21 +176,6 @@ def _plain(text: str) -> str:
     return "".join(char for char in text if char in "\n\t" or (ord(char) >= 32 and not 127 <= ord(char) <= 159))
 
 
-def _session_in_workspace(db_path: Path, session_id: str) -> bool:
-    """Read-only session check that never initializes the harness or loads plugins."""
-    if not session_id or not db_path.exists():
-        return False
-    try:
-        with closing(sqlite3.connect(db_path)) as connection:
-            row = connection.execute(
-                "SELECT 1 FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id WHERE h.id = ?",
-                (session_id,),
-            ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
-
-
 def _json_default(value: object) -> object:
     if isinstance(value, Enum):
         return str(value.value)
@@ -267,7 +230,7 @@ async def _approve(request: ApprovalRequest, *, interactive: bool) -> bool:
     try:
         loop.add_reader(sys.stdin.fileno(), read_answer)
     except (NotImplementedError, AttributeError):
-        print("Interactive approval is unavailable here; use the TUI. Denied.", file=sys.stderr)
+        print("Interactive approval is unavailable here; use the native ngn or web client. Denied.", file=sys.stderr)
         return False
     try:
         answer = await ready
@@ -563,14 +526,15 @@ def _record_cli_subagent_limit_overrides(config: HarnessConfig, args: argparse.N
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Start the terminal client or execute a headless command."""
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if not args.command:
+        parser.print_usage(sys.stderr)
+        print(f"ngn: {NATIVE_HINT}", file=sys.stderr)
+        return 2
     try:
         if getattr(args, "continue_session", False) and getattr(args, "resume", ""):
             raise ValueError("Choose either --continue or --resume, not both.")
-        if args.command == "resume" and (getattr(args, "resume", "") or getattr(args, "continue_session", False)):
-            raise ValueError(
-                "Pass the session ID to ngn resume as an argument; --resume and --continue are for ngn and ngn run."
-            )
         workspace = getattr(args, "workspace", Path.cwd()).expanduser().resolve()
         if not workspace.is_dir():
             raise ValueError(f"Workspace is not a directory: {workspace}")
@@ -583,15 +547,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "model",
                 "agent",
                 "demo",
-                "theme",
-                "animations",
-                "tui_performance",
                 "wire_log",
                 "submit_mode",
                 "max_subagent_depth",
                 "max_concurrent_subagents",
                 "max_subagent_executions",
-                "theme_background",
             )
             if hasattr(args, name)
         }
@@ -660,81 +620,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run" and not config.demo and not config.provider:
             raise ValueError("Select a named provider connection before running a prompt.")
         harness = Harness(config)
-        if args.command and args.command != "resume":
-            return asyncio.run(_headless(harness, args))
-        pick_session = False
-        if args.command == "resume":
-            session_id = getattr(args, "session_id", "") or ""
-            if session_id:
-                if not _session_in_workspace(harness.agent.session.db_path, session_id):
-                    raise ValueError(
-                        f"Session {session_id!r} does not exist in this workspace. List sessions with ngn sessions."
-                    )
-            else:
-                pick_session = True
-            resume_session, continue_session = session_id, False
-        else:
-            resume_session = getattr(args, "resume", "")
-            continue_session = getattr(args, "continue_session", False)
-        if not sys.stdin.isatty() or not sys.stdout.isatty():
-            if pick_session:
-                raise ValueError("Choose a session interactively in a terminal, or pass its ID: ngn resume SESSION_ID.")
-            raise ValueError("The TUI needs a terminal. Use ngn run --json PROMPT for scripts and pipes.")
-        try:
-            from .tui import NagentsApp
-        except ModuleNotFoundError as error:
-            if error.name not in {"textual", "rich"}:
-                raise
-            raise ValueError(
-                "The TUI extra is not installed. From this source checkout, run poetry install -E tui "
-                "or uv pip install -e '.[tui]' in the intended environment."
-            ) from error
-
-        # Defer initialization and resuming to the app's event loop; asyncio locks,
-        # plugin clients, and subprocess resources must not cross event loops.
-        app = NagentsApp(
-            harness,
-            resume_session=resume_session,
-            continue_session=continue_session,
-            pick_session=pick_session,
-            startup=False,
-        )
-        from .tui.activity import duration
-        from .tui.diagnostics import RuntimeLog
-        from .tui.diagnostics import logger as tui_logger
-
-        with RuntimeLog(config.data_dir) as runtime_log:
-            tui_logger.info(
-                "TUI starting",
-                extra={"version": framework_version(), "provider": config.provider, "model": config.model},
-            )
-            from .tui.entrance import run_tui
-
-            asyncio.run(run_tui(app))
-            opened = app.startup_opened
-            if not opened:
-                tui_logger.info("Startup cancelled before opening a session")
-        from .tui.exit_summary import print_exit_summary
-
-        resume_command = ""
-        if app.exit_session_saved:
-            resume = ["ngn", "-C", str(harness.workspace), "--resume", app.exit_session_id]
-            if config.demo:
-                resume.append("--demo")
-            if getattr(args, "config", None):
-                resume.extend(("--config", str(args.config)))
-            if config.trust_project:
-                resume.append("--trust-project")
-            resume_command = _plain(shlex.join(resume))
-        print_exit_summary(
-            duration(monotonic() - app.started_at),
-            _plain(app.exit_session_id),
-            resume_command,
-            _plain(str(runtime_log.path)),
-            opened=bool(opened),
-            wire_log=_plain(str(harness.wire_log.path)) if harness.wire_log is not None else "",
-        )
-        return 0
+        return asyncio.run(_headless(harness, args))
     except KeyboardInterrupt:
         print("\nInterrupted. Completed actions are not rolled back.", file=sys.stderr)
         return 130

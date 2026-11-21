@@ -35,7 +35,7 @@ work; new native integrations should use `OPENAI` or `OpenAIProvider`.
 
 ## Sign in from ngn
 
-Use `/provider` in the TUI or **Settings → Global/Workspace → Provider connections**
+Use **Settings → Global/Workspace → Provider connections**
 in `ngn serve` to manage named connections shared across clients. Global ones
 are saved to `$XDG_CONFIG_HOME/ngn/providers.json`; workspace ones are saved to
 workspace-specific JSON under the same config root. Both use environment-variable **references**,
@@ -45,7 +45,7 @@ Entra ID through the optional `azure-identity` package. Voice settings for a
 named connection use the same endpoint and credential reference. See
 [named provider configuration](ngn-configuration.md#shared-named-provider-connections).
 
-Chat model selection is independent: use `/model` in the TUI, `--model` for a
+Chat model selection is independent: use `--model` for a
 single CLI invocation, or the global/workspace chat-model selector in web
 Settings. Connections display their credential source and effective endpoint;
 their JSON entries do not contain a chat model. Voice preferences are stored

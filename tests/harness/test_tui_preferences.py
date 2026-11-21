@@ -7,7 +7,6 @@ from typing import cast
 
 import pytest
 
-from nagents.cli import _parser
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.config import save_tui_performance
@@ -25,10 +24,6 @@ def test_defaults_environment_json_and_cli(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setenv("NGN_TUI_PERFORMANCE", "yes")
     with pytest.raises(ValueError, match="NGN_TUI_PERFORMANCE"):
         load_config(tmp_path)
-    for flag, enabled in (("--tui-performance", True), ("--no-tui-performance", False)):
-        assert _parser().parse_args([flag]).tui_performance is enabled
-        assert _parser().parse_args(["run", "hello", flag]).tui_performance is enabled
-    assert not hasattr(_parser().parse_args([]), "tui_performance")
 
 
 @pytest.mark.parametrize("value", [0, 1, "true", None, [], {}])

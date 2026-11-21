@@ -2,7 +2,8 @@
 
 The [native installer](native-ngn.md) installs a **separate** Rust application,
 not an in-place conversion of the existing Python ngn client. The reusable
-Python nagents library and feature-rich Python CLI/TUI/web client remain intact.
+Python nagents library and the Python CLI/web client remain intact; the Python
+terminal UI has been removed in favor of this native client.
 Their similar command names do not imply matching configuration or HTTP APIs.
 
 ## Separate installation, configuration and state
@@ -51,7 +52,7 @@ subagent supervision, TUI and loopback HTTP/WebSocket serving. The optional
 nagents adapter owns provider/model integration and opaque conversation storage;
 it is not the old Python harness embedded behind the Rust UI.
 
-The existing React/Textual UI, full settings/model editors, agent definitions,
+The existing React UI, full settings/model editors, agent definitions,
 skills/MCP/custom Python plugins, advanced conversation/media actions, voice,
 channels, A2A, remote deployment, and legacy import are **not all migrated**.
 Do not use Python container/Kubernetes or voice recipes with the native binary,

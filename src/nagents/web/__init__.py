@@ -66,8 +66,7 @@ def serve(
             raise
         raise ValueError(
             "The web server dependencies are not installed. From the repository root, in this source checkout's "
-            "virtualenv, run `pip install -e '.[web]'` (or `poetry install -E web`). "
-            "Textual is not required."
+            "virtualenv, run `pip install -e '.[web]'` (or `poetry install -E web`)."
         ) from error
     if dev:
         from .http.dev import serve_dev
