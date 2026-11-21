@@ -308,6 +308,56 @@ jobs:
           path: release-manifest.json
 
   # =============================================================================
+  # NATIVE PREBUILD (release tags only): test and compile the macOS binaries
+  # alongside the Python tests; ngn-release.yml packages them after PyPI.
+  # =============================================================================
+  native-prebuild:
+    name: Prebuild native ${{ matrix.platform }}
+    # Manual runs can dry-run it on any branch; nothing is published from them.
+    if: startsWith(github.ref, 'refs/tags/v0.100.') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: macos-15-intel
+            platform: macos-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ngn
+          shared-key: ngn-${{ matrix.platform }}
+          # Restore what main's Rust harness CI built; a release never writes the cache.
+          save-if: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Isolated test environment
+        run: |
+          python -m venv "$RUNNER_TEMP/ngn-prebuild-venv"
+          "$RUNNER_TEMP/ngn-prebuild-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents
+          echo "$RUNNER_TEMP/ngn-prebuild-venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/ngn-prebuild-venv" >> "$GITHUB_ENV"
+      - name: Rust tests
+        run: cargo test --manifest-path ngn/Cargo.toml --locked
+      - name: Build the release binary from the locked tree
+        run: |
+          cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
+          git diff --exit-code
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ngn-prebuilt-${{ matrix.platform }}
+          path: ngn/target/release/ngn
+          if-no-files-found: error
+
+  # =============================================================================
   # DOCKER BUILD & PUSH
   # =============================================================================
   docker-build:
@@ -449,8 +499,8 @@ jobs:
 
   publish-ngn:
     name: Publish Coordinated Native/Core GitHub Release
-    needs: [publish-stable]
-    if: ${{ !cancelled() && needs.publish-stable.result == 'success' && startsWith(github.ref, 'refs/tags/v0.100.') }}
+    needs: [publish-stable, native-prebuild]
+    if: ${{ !cancelled() && needs.publish-stable.result == 'success' && needs.native-prebuild.result == 'success' && startsWith(github.ref, 'refs/tags/v0.100.') }}
     permissions:
       contents: write
     uses: ./.github/workflows/ngn-release.yml

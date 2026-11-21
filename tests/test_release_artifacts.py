@@ -122,8 +122,15 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
     assert workflow["on"]["push"]["tags"] == ["v*"]
     assert set(native["on"]) == {"workflow_call"}
     caller = workflow["jobs"]["publish-ngn"]
-    assert caller["needs"] == ["publish-stable"]
+    assert caller["needs"] == ["publish-stable", "native-prebuild"]
     assert "!cancelled()" in caller["if"] and "needs.publish-stable.result == 'success'" in caller["if"]
+    assert "needs.native-prebuild.result == 'success'" in caller["if"]
+    prebuild = workflow["jobs"]["native-prebuild"]
+    assert "needs" not in prebuild  # Compiles alongside the Python tests, not after PyPI.
+    assert {entry["platform"] for entry in prebuild["strategy"]["matrix"]["include"]} == {"macos-arm64", "macos-x86_64"}
+    prebuild_runs = "\n".join(step.get("run", "") for step in prebuild["steps"])
+    for gate in ("cargo test", "--release --locked -p ngn", "git diff --exit-code"):
+        assert gate in prebuild_runs
     assert "startsWith(github.ref, 'refs/tags/v0.100.')" in caller["if"]
     assert caller["uses"] == "./.github/workflows/ngn-release.yml" and caller["secrets"] == "inherit"
     assert caller["permissions"] == {"contents": "write"}
@@ -151,9 +158,11 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
         "--bundle --published-core",
         "--require-bundle",
         "install_smoke.py",
-        "cargo test",
     ):
         assert gate in macos_runs
+    downloads = [step for step in macos["steps"] if step.get("uses", "").startswith("actions/download-artifact")]
+    assert [step["with"]["name"] for step in downloads] == ["ngn-prebuilt-${{ matrix.platform }}"]
+    assert "cargo " not in macos_runs
     publish = native["jobs"]["publish"]
     assert publish["needs"] == ["build", "build-macos"]
     publish_run = next(step["run"] for step in publish["steps"] if "gh release create" in step.get("run", ""))
