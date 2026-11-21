@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.41
+
+- Leave selection and copy to the terminal by default; opt into tool clicks and wheel scrolling with --mouse. Ctrl+C quits without taking over the copy shortcut. Tint full user-message rows when the terminal reports its background, and hide the unfocused collapsed Agents context label. Reduce update staging I/O by flushing once rather than once per file.
+
 ## 0.100.40
 
 - Allow mouse selection and Ctrl+C copying throughout the visible native TUI, including the composer, sidebar, footer, and dialogs.

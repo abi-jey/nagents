@@ -32,6 +32,9 @@ def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
     normal_screen: tuple[list[list[str]], int, int, tuple[int, int]] | None = None
     while index < len(text):
         if text[index] == "\x1b":
+            if text.startswith("\x1b]11;?\x1b\\", index):
+                index += len("\x1b]11;?\x1b\\")
+                continue
             if text.startswith("\x1b7", index):
                 saved_cursor = (row, column)
                 index += 2

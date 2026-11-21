@@ -138,7 +138,7 @@ def check(binary: Path, root: Path, *, reduced_motion: bool) -> None:
             )
         require(not (root / "once.txt").exists(), "An Enter bypassed approval")
 
-        os.write(master, b"\x03")  # Ctrl+C stops and pauses the FIFO.
+        os.write(master, b"\x1b")  # Esc stops and pauses the FIFO without quitting.
         wait_for(lambda: runs()[0][2] == "cancelled" and b"Ctrl+Y" not in visible(), "cancelled root")
         if reduced_motion:
             require(
