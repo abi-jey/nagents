@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "ngn"
-version = "0.100.41"
+version = "0.100.42"
 dependencies = [
  "anyhow",
  "axum",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "ngn-core"
-version = "0.100.41"
+version = "0.100.42"
 dependencies = [
  "anyhow",
  "cap-std",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "ngn-protocol"
-version = "0.100.41"
+version = "0.100.42"
 dependencies = [
  "serde",
  "serde_json",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.42
+
+- Show ngn update as a live checklist in terminals: each step settles with a check mark and its time, the download shows size, progress and speed, and the old → new version is shown; piped and --no-animations output is unchanged.
+
 ## 0.100.41
 
 - Leave selection and copy to the terminal by default; opt into tool clicks and wheel scrolling with --mouse. Ctrl+C quits without taking over the copy shortcut. Tint full user-message rows when the terminal reports its background, and hide the unfocused collapsed Agents context label. Reduce update staging I/O by flushing once rather than once per file.

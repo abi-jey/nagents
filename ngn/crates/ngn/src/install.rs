@@ -10,7 +10,8 @@ use std::{
     io::{BufReader, IsTerminal, Read, Seek, Write},
     path::{Component, Path, PathBuf},
     process::Stdio,
-    time::Duration,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -69,9 +70,14 @@ pub(crate) struct Update {
 /// No public test endpoint or trust override. Tests provide this private trait.
 trait Transport {
     async fn fetch(&self, url: &str, output: &mut File, limit: u64) -> Result<()>;
+
+    /// Declared size of the response currently being fetched; progress display only.
+    fn expected_length(&self) -> Option<u64> {
+        None
+    }
 }
 
-struct Https(reqwest::Client);
+struct Https(reqwest::Client, AtomicU64);
 
 fn allowed_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https"
@@ -107,6 +113,7 @@ impl Https {
                 .user_agent(concat!("ngn-installer/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .context("Cannot initialize the Rustls HTTPS installer")?,
+            AtomicU64::new(0),
         ))
     }
 }
@@ -135,6 +142,8 @@ impl Transport for Https {
                 .is_none_or(|length| length <= limit),
             "Release response exceeds its byte limit"
         );
+        self.1
+            .store(response.content_length().unwrap_or(0), Ordering::Relaxed);
         let mut total = 0;
         while let Some(chunk) = response
             .chunk()
@@ -147,6 +156,10 @@ impl Transport for Https {
             output.write_all(&chunk)?;
         }
         Ok(())
+    }
+
+    fn expected_length(&self) -> Option<u64> {
+        Some(self.1.load(Ordering::Relaxed)).filter(|length| *length > 0)
     }
 }
 
@@ -616,7 +629,10 @@ impl Installation {
                 && version.to_string() == env!("CARGO_PKG_VERSION"),
             UNMANAGED
         );
-        progress.phase("Inspecting installed bundle...");
+        progress.phase(
+            "Inspecting installed bundle...",
+            "Inspected installed bundle",
+        );
         // Keep the executable-to-generation binding under the prefix lock.
         // Read and hash that generation once, in installed_bundle before discovery.
         Ok(Self {
@@ -998,11 +1014,34 @@ impl std::fmt::Display for Outcome {
 }
 
 /// Best-effort stderr feedback; a broken progress stream must not affect activation.
+///
+/// Pipes, `TERM=dumb` and `--no-animations` get one stable line per phase.
+/// An animating terminal gets a live checklist instead: the running step is
+/// redrawn in place with a spinner (and a byte meter while downloading), then
+/// settles into a `✓` line with its elapsed time, or `✗` if the update stops.
 #[derive(Default)]
 struct Progress {
     output: Option<Box<dyn Write + Send>>,
     color: bool,
     animate: bool,
+    step: Option<Step>,
+}
+
+struct Step {
+    active: &'static str,
+    done: &'static str,
+    started: Instant,
+    detail: String,
+}
+
+/// Bytes received so far, and the total when the server declared one.
+type Reading = (u64, Option<u64>);
+
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const MIB: f64 = 1024.0 * 1024.0;
+
+fn mebibytes(bytes: u64) -> String {
+    format!("{:.1} MiB", bytes as f64 / MIB)
 }
 
 impl Progress {
@@ -1024,6 +1063,7 @@ impl Progress {
             output: Some(Box::new(output)),
             color: tty && color,
             animate: tty && animate,
+            step: None,
         }
     }
 
@@ -1033,55 +1073,132 @@ impl Progress {
         }
     }
 
-    fn phase(&mut self, text: &str) {
-        let prefix = if self.color {
-            "\x1b[1;36mngn update:\x1b[0m"
+    fn paint(&self, code: &str, text: &str) -> String {
+        if self.color {
+            format!("\x1b[{code}m{text}\x1b[0m")
         } else {
-            "ngn update:"
+            text.to_owned()
+        }
+    }
+
+    /// Starts a step, settling the previous one as done.
+    fn phase(&mut self, active: &'static str, done: &'static str) {
+        self.finish();
+        if self.animate {
+            self.step = Some(Step {
+                active,
+                done,
+                started: Instant::now(),
+                detail: String::new(),
+            });
+            self.draw(SPINNER[0], "");
+        } else {
+            let prefix = self.paint("1;36", "ngn update:");
+            self.write(format_args!("{prefix} {active}\n"));
+        }
+    }
+
+    /// Extra context shown on the current step's `✓` line.
+    fn detail(&mut self, text: &str) {
+        if let Some(step) = &mut self.step {
+            step.detail = text.to_owned();
+        }
+    }
+
+    /// Settles the current step as done.
+    fn finish(&mut self) {
+        let Some(step) = self.step.take() else {
+            return;
         };
-        self.write(format_args!("{prefix} {text}\n"));
+        let mark = self.paint("32", "✓");
+        let mut info = format!("{:.1}s", step.started.elapsed().as_secs_f64());
+        if !step.detail.is_empty() {
+            info = format!("{info}   {}", step.detail);
+        }
+        let info = self.paint("2", &info);
+        self.write(format_args!("\r\x1b[2K  {mark} {:<28}{info}\n", step.done));
+    }
+
+    fn draw(&mut self, frame: char, meter: &str) {
+        let Some(step) = &self.step else {
+            return;
+        };
+        let label = step.active.trim_end_matches("...");
+        let frame = self.paint("36", &frame.to_string());
+        self.write(format_args!("\r\x1b[2K  {frame} {label:<28}{meter}"));
+    }
+
+    fn meter(&self, (received, total): Reading) -> String {
+        let elapsed = self
+            .step
+            .as_ref()
+            .map_or(0.0, |step| step.started.elapsed().as_secs_f64());
+        let rate = if elapsed > 0.0 {
+            format!("  {:.1} MiB/s", received as f64 / MIB / elapsed)
+        } else {
+            String::new()
+        };
+        match total {
+            Some(total) if total > 0 => {
+                let fraction = (received as f64 / total as f64).clamp(0.0, 1.0);
+                let filled = (fraction * 20.0).round() as usize;
+                let narrow = crossterm::terminal::size().is_ok_and(|(columns, _)| columns < 100);
+                let bar = if narrow {
+                    String::new()
+                } else {
+                    format!("{}{} ", "█".repeat(filled), "░".repeat(20 - filled))
+                };
+                format!(
+                    "{bar}{:>3}%  {:.1}/{}{rate}",
+                    (fraction * 100.0).round() as u32,
+                    received as f64 / MIB,
+                    mebibytes(total),
+                )
+            }
+            _ => format!("{}{rate}", mebibytes(received)),
+        }
     }
 
     async fn wait<T>(&mut self, work: impl Future<Output = T>) -> T {
+        self.wait_metered(work, None::<&fn() -> Reading>).await
+    }
+
+    async fn wait_metered<T, M: Fn() -> Reading>(
+        &mut self,
+        work: impl Future<Output = T>,
+        meter: Option<&M>,
+    ) -> T {
         if !self.animate {
             return work.await;
         }
-        let mut spinner = Spinner {
-            progress: self,
-            visible: false,
-        };
         let mut tick = tokio::time::interval_at(
-            tokio::time::Instant::now() + Duration::from_millis(250),
+            tokio::time::Instant::now() + Duration::from_millis(100),
             Duration::from_millis(100),
         );
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tokio::pin!(work);
-        let frames = ['|', '/', '-', '\\'];
-        let mut frame = 0;
+        let mut frame = 1;
         loop {
             tokio::select! {
                 biased;
                 result = &mut work => return result,
                 _ = tick.tick() => {
-                    spinner.visible = true;
-                    spinner.progress.write(format_args!("\r{}", frames[frame]));
-                    frame = (frame + 1) % frames.len();
+                    let text = meter.map(|meter| self.meter(meter())).unwrap_or_default();
+                    self.draw(SPINNER[frame % SPINNER.len()], &text);
+                    frame += 1;
                 }
             }
         }
     }
 }
 
-struct Spinner<'a> {
-    progress: &'a mut Progress,
-    visible: bool,
-}
-
-impl Drop for Spinner<'_> {
+impl Drop for Progress {
     fn drop(&mut self) {
-        // Only the single transient cell below the phase line is redrawn.
-        if self.visible {
-            self.progress.write(format_args!("\r \r"));
+        // A step still running here was interrupted by an error or cancellation.
+        if let Some(step) = self.step.take() {
+            let mark = self.paint("31", "✗");
+            let label = step.active.trim_end_matches("...");
+            self.write(format_args!("\r\x1b[2K  {mark} {label}\n"));
         }
     }
 }
@@ -1127,7 +1244,7 @@ async fn apply<T: Transport, P: Probe>(
         compare(pin, installed.as_ref())?;
     }
     let release = if source.archive.is_none() {
-        progress.phase("Checking release metadata...");
+        progress.phase("Checking release metadata...", "Checked release metadata");
         Some(tokio::select! {
             result = progress.wait(discover(transport, pin)) => result?,
             _ = cancel.cancelled() => bail!("Installation cancelled before activation"),
@@ -1138,6 +1255,13 @@ async fn apply<T: Transport, P: Probe>(
     if let Some(release) = &release {
         let version = ReleaseVersion::parse(&release.ngn_version)?;
         compare(version, installed.as_ref())?;
+        match &installed {
+            Some(old) if old.ngn_version != release.ngn_version => {
+                progress.detail(&format!("{} → {version}", old.ngn_version));
+            }
+            Some(_) => progress.detail("up to date"),
+            None => progress.detail(&format!("→ {version}")),
+        }
         if let Some(old) = &installed
             && old.ngn_version == release.ngn_version
         {
@@ -1147,16 +1271,18 @@ async fn apply<T: Transport, P: Probe>(
                     && old.nagents_version == release.nagents_version,
                 "Installed generation differs from the official release provenance; versions are never overwritten"
             );
+            progress.finish();
             return Ok(Outcome::Current(version));
         }
         if check {
+            progress.finish();
             return Ok(Outcome::Available(version));
         }
     }
     let stage = private_tempdir_in(&installation.identity.prefix, ".stage-")?;
     let mut archive = tempfile::NamedTempFile::new_in(stage.path())?;
     let expected = if let Some(path) = &source.archive {
-        progress.phase("Reading local bundle...");
+        progress.phase("Reading local bundle...", "Read local bundle");
         ensure!(
             File::open(path)?.metadata()?.len() <= MAX_COMPRESSED,
             "Compressed archive exceeds 256 MiB"
@@ -1166,14 +1292,23 @@ async fn apply<T: Transport, P: Probe>(
     } else {
         let release = release.as_ref().context("Missing release")?;
         let url = format!("{DOWNLOAD}/v{}/{}", release.ngn_version, release.bundle);
-        progress.phase("Downloading bundle...");
+        progress.phase("Downloading bundle...", "Downloaded bundle");
+        let downloaded = archive.path().to_path_buf();
+        let meter = || {
+            let received = fs::metadata(&downloaded).map_or(0, |file| file.len());
+            (received, transport.expected_length())
+        };
         tokio::select! {
-            result = progress.wait(transport.fetch(&url, archive.as_file_mut(), MAX_COMPRESSED)) => result?,
+            result = progress.wait_metered(transport.fetch(&url, archive.as_file_mut(), MAX_COMPRESSED), Some(&meter)) => result?,
             _ = cancel.cancelled() => bail!("Installation cancelled before activation"),
         }
+        progress.detail(&mebibytes(archive.as_file().metadata()?.len()));
         release.validate(ReleaseVersion::parse(&release.ngn_version)?)?
     };
-    progress.phase("Verifying and staging bundle...");
+    progress.phase(
+        "Verifying and staging bundle...",
+        "Verified and staged bundle",
+    );
     ensure!(
         archive.as_file().metadata()?.len() <= MAX_COMPRESSED
             && file_hash(archive.path())? == expected,
@@ -1210,9 +1345,11 @@ async fn apply<T: Transport, P: Probe>(
             serde_json::to_value(old)? == serde_json::to_value(&bundle)?,
             "A different bundle already owns this immutable version"
         );
+        progress.finish();
         return Ok(Outcome::Current(version));
     }
     if check {
+        progress.finish();
         return Ok(Outcome::Available(version));
     }
     cancelled(cancel)?;
@@ -1222,7 +1359,7 @@ async fn apply<T: Transport, P: Probe>(
     }
     cancelled(cancel)?;
     sync_tree(&root, cancel)?;
-    progress.phase("Activating release...");
+    progress.phase("Activating release...", "Activated release");
     activate(
         installation,
         &root,
@@ -1231,6 +1368,7 @@ async fn apply<T: Transport, P: Probe>(
         expected_current,
         cancel,
     )?;
+    progress.finish();
     Ok(Outcome::Installed(version))
 }
 
