@@ -1,7 +1,7 @@
 # Native ngn: installer and usage
 
-The native Rust `ngn` (TUI, headless CLI, local browser host and updater) ships as a
-self-contained bundle: CPython 3.13.18, the matching nagents core and adapter, locked
+The native Rust `ngn` (pronounced *"engine"*—TUI, headless CLI, local browser host and updater) ships as a
+self-contained bundle: CPython 3.13.18, the matching `nagents` (pronounced *"N-agents"*) core and adapter, locked
 dependency wheels and CA certificates. No Python, pip, Rust, Node or compiler is needed.
 
 Supported:

@@ -5,8 +5,9 @@
 [![CI](https://github.com/abi-jey/nagents/actions/workflows/ci.yml/badge.svg)](https://github.com/abi-jey/nagents/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A lightweight Python agents library with direct HTTP-based provider integration,
-an existing feature-rich Python client, and a separate native Rust harness.
+`nagents` (pronounced *"N-agents"*) is a lightweight Python agents library with direct
+HTTP-based provider integration, paired with `ngn` (pronounced *"engine"*)—available as a native Rust harness with
+a terminal UI, and as an existing Python headless and web client.
 
 ## Choose your starting point
 

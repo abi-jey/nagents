@@ -1,7 +1,6 @@
 # ngn
 
-Independent Rust harness, TUI and web host. `nagents` is an optional Python agent
-runtime connected over the versioned Agent Runtime Protocol, never a UI dependency.
+Independent Rust harness (`ngn`, pronounced "engine"), TUI and web host. `nagents` (pronounced "N-agents") is an optional Python agent library/runtime connected over the versioned Agent Runtime Protocol, never a UI dependency.
 
 - Keep protocol types independent of core, transports and UI.
 - Execute tools only in the Rust host after validation and approval. The Python
