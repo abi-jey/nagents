@@ -134,8 +134,8 @@ matching published core. The API is **not available in nagents
   **Ctrl+T** focuses it (or opens the catalog at narrower widths). Use **↑/↓**
   or **PageUp/PageDown** to move, **Space** or **←/→** to fold/unfold a branch,
   and **Enter** to inspect the selected run. **Esc** returns to the draft from
-  the sidebar or an inspection opened from it. **Tab/Shift+Tab** moves between
-  the tree and **Workspace & context**, collapsed by default. With the disclosure focused,
+   the sidebar or an inspection opened from it. **Tab/Shift+Tab** moves between
+   the tree and the context panel, hidden until focused or expanded. With the panel focused,
   **Enter/Space** toggles it and **↑/↓**, **PageUp/PageDown**, or **Home/End**
   scroll its details.
 - **F6** inspects pending inputs; **Ctrl+P** pauses/resumes, **Ctrl+X** removes the
@@ -155,15 +155,12 @@ matching published core. The API is **not available in nagents
 - Active-turn **Enter** and **`/steer TEXT`** target the capable active root at its next persisted safe point;
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
-- The mouse wheel scrolls the main conversation when the pointer is over it,
-  without moving focus. Hover a tool header to highlight it; click to toggle
-  its details. Drag over visible text anywhere in the TUI, then press
-  **Ctrl+C** to copy in terminals that accept clipboard writes (OSC 52).
-  Dialogs and focused Agents controls still own their normal actions.
-  If clipboard writes are disabled, use your terminal's own selection override
-  (often **Shift** while dragging).
+- Drag and copy with your terminal's normal shortcuts (often **Ctrl+Shift+C**
+  on Linux). To opt into ngn mouse controls instead, start with `ngn --mouse`;
+  that enables wheel scrolling and tool header hover/click. In that mode,
+  use your terminal's mouse override (often **Shift**) to select text.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
-- **Ctrl+Q** quits and joins runners before restoring the terminal.
+- **Ctrl+C** or **Ctrl+Q** quits; **Esc** cancels active work without quitting.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
@@ -180,10 +177,11 @@ Without `--config`, the native Message editor, caret, and user transcript bubble
 honor saved painted Python themes: `graphite`, `ocean`, and `ember` with
 `theme_background` set to `auto` (the default) or `theme`, and `terminal` with
 `theme_background: "theme"`.
-The default, a `terminal` background override, unsupported values, and
-nonempty `NO_COLOR` keep user transcript rows unshaded and the editor on
-terminal-default colors with a reverse caret. The native client does not query
-terminal colors, so it cannot match the Python bubble shade in terminal-native mode.
+With terminal-default colors, on Unix the client asks the terminal for its
+background and uses that color to tint the full width of user-message rows.
+If the terminal does not report a background, the client leaves those rows
+unpainted rather than guessing. Nonempty `NO_COLOR` disables the tint and painted
+colors. The default editor still uses a reverse caret.
 The rest of the UI is not themed by this setting.
 
 The Agents sidebar shows native run status, the displayed child approval, and

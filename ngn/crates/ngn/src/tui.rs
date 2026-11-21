@@ -47,7 +47,6 @@ mod completion;
 mod composer;
 mod footer;
 mod picker;
-mod selection;
 mod shimmer;
 mod startup;
 mod tool_cards;
@@ -60,7 +59,7 @@ F3  New conversation (/new)
  F4  Focus tool cards · Up/Down select · Enter/Space toggle · Esc back
 F5  Subagents (/tasks)
 Ctrl+T  Focus Agents rail at wide widths; otherwise open inspector
-Agents: Tab/Shift+Tab  Focus Workspace & context · Enter/Space  Toggle
+ Agents: Tab/Shift+Tab  Focus context · Enter/Space  Toggle
 Context: ↑/↓, PgUp/PgDn, Home/End  Scroll · Esc  Return to draft
 F6  Input queue (/queue [pause|resume|clear])
 F7  Steering receipts (/steering)
@@ -74,7 +73,8 @@ Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
  /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
- Mouse  Click tool headers · Drag visible text · Ctrl+C to copy selection";
+ Mouse  Use terminal selection and copy
+ Ctrl+C  Quit";
 
 const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
 
@@ -87,9 +87,7 @@ struct Restore {
 
 impl Restore {
     fn enable_mouse(&mut self) -> io::Result<()> {
-        // Any-motion reporting supplies hover and drag, as well as buttons
-        // and wheel. SGR gives us cell coordinates even in large windows.
-        // Arm cleanup before the write in case enabling succeeds only in part.
+        // Arm cleanup even if writing the enable sequence fails partway.
         self.mouse_reporting = true;
         let mut output = stdout().lock();
         output.write_all(b"\x1b[?1003h\x1b[?1006h")?;
@@ -150,6 +148,7 @@ struct App {
     input: String,
     caret: composer::Caret,
     composer_palette: composer::Palette,
+    terminal_background: Option<[u8; 3]>,
     no_color: bool,
     completion: completion::Completion,
     status: String,
@@ -160,8 +159,6 @@ struct App {
     approval: Option<Approval>,
     scroll: Option<usize>,
     transcript_area: Rect,
-    screen_area: Rect,
-    selection: selection::Selection,
     preview_scroll: u16,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
@@ -270,7 +267,6 @@ impl App {
             != approval.as_ref().map(|approval| &approval.id)
         {
             self.preview_scroll = 0;
-            self.selection.clear();
             // The pending modal and durable transcript have separate sources.
             // Pick up a committed decision before drawing the newly exposed row.
             if self.approval.is_some()
@@ -409,20 +405,15 @@ impl App {
     }
 
     fn transcript_mouse(&mut self, mouse: MouseEvent) -> bool {
-        let changed = if self.tools_available() {
-            let changed = self
-                .tools
-                .mouse(mouse, self.transcript_area, &mut self.scroll);
-            self.transcript_wheel(mouse);
-            changed
-        } else {
+        if !self.tools_available() {
             self.tools.clear_pointer();
-            false
-        };
-        let selected = self
-            .selection
-            .mouse(mouse, self.screen_area, self.tools.top());
-        changed || selected
+            return false;
+        }
+        let changed = self
+            .tools
+            .mouse(mouse, self.transcript_area, &mut self.scroll);
+        self.transcript_wheel(mouse);
+        changed
     }
 
     fn completion_key(&mut self, key: KeyEvent) -> bool {
@@ -454,7 +445,6 @@ impl App {
         self.records.clear();
         self.scroll = None;
         self.tools.reset();
-        self.selection.clear();
         self.picker = None;
         self.tasks.clear();
         self.agents = agents::Rail::default();
@@ -543,7 +533,6 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
     let area = frame.area();
-    app.screen_area = area;
     let footer = footer_area(area);
     let menu = app
         .composer_available()
@@ -578,7 +567,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         Some(&app.tools),
         interactive,
         sweep,
-        app.composer_palette.user_surface(),
+        tool_cards::UserPaint::new(
+            app.composer_palette.user_surface(),
+            app.terminal_background,
+            app.no_color,
+        ),
     );
     if app.shows_overlay() {
         transcript.hide_wipes();
@@ -653,7 +646,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
                 None,
                 false,
                 None,
-                app.composer_palette.user_surface(),
+                tool_cards::UserPaint::new(
+                    app.composer_palette.user_surface(),
+                    app.terminal_background,
+                    app.no_color,
+                ),
             );
             frame.render_widget(block, area);
             transcript.draw_from_bottom(frame, inner, app.task_scroll);
@@ -766,8 +763,6 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     if let Some(picker) = &app.picker {
         picker.draw(frame, accent, muted);
     }
-    app.selection
-        .draw(frame.buffer_mut(), area, app.tools.top());
     if app.no_color {
         strip_color(frame.buffer_mut(), area);
     }
@@ -1164,6 +1159,7 @@ pub async fn run(
     resume: Option<&str>,
     continue_session: bool,
     no_animations: bool,
+    mouse: bool,
 ) -> Result<()> {
     let mut receiver = host.events.subscribe();
     let animate = animations_enabled(
@@ -1172,6 +1168,7 @@ pub async fn run(
         std::env::var("TEXTUAL_ANIMATIONS").ok().as_deref(),
     );
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+    let query_background = !no_color && host.config.legacy_composer_theme.is_none();
     let mut app = App {
         records: Vec::new(),
         after: 0,
@@ -1205,7 +1202,8 @@ pub async fn run(
         app.state(&host).await;
         Ok(())
     };
-    let Some(mut startup_input) = startup::prepare(animate, initialize, signal.as_mut()).await?
+    let Some(mut startup_input) =
+        startup::prepare(animate, query_background, initialize, signal.as_mut()).await?
     else {
         return Ok(());
     };
@@ -1223,6 +1221,7 @@ pub async fn run(
         app.completion.edited(&app.input);
         app.caret.restart(Instant::now());
     }
+    app.terminal_background = startup_input.background();
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut input = None;
     let mut ticks = tokio::time::interval(Duration::from_millis(100));
@@ -1261,9 +1260,6 @@ pub async fn run(
                         app.agents.paint_motion(frame.buffer_mut(), &app.tasks);
                         frame.render_widget(Clear, area);
                         app.activity.draw(frame, area, &app, &host.config, now);
-                        let screen = frame.area();
-                        app.selection
-                            .draw(frame.buffer_mut(), screen, app.tools.top());
                         if app.no_color {
                             let area = frame.area();
                             strip_color(frame.buffer_mut(), area);
@@ -1297,11 +1293,17 @@ pub async fn run(
             };
             // Don't request mouse reports while the draft-only startup reader
             // still owns stdin. EventStream will decode them after handoff.
-            restore.enable_mouse()?;
+            if mouse {
+                restore.enable_mouse()?;
+            }
             if draft != app.input {
                 app.input = draft;
                 app.completion.edited(&app.input);
                 app.caret.restart(Instant::now());
+                redraw = true;
+            }
+            if app.terminal_background != startup_input.background() {
+                app.terminal_background = startup_input.background();
                 redraw = true;
             }
             // Startup owns stdin until here. Do not change the keyboard protocol
@@ -1354,15 +1356,7 @@ pub async fn run(
                         app.tools.cancel_click();
                         if app.composer_available() { app.caret.restart(Instant::now()); }
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
-                        if control && matches!(key.code, KeyCode::Char('c' | 'C'))
-                            && app.selection.copy(stdout().lock())?
-                        {
-                            app.selection.clear();
-                            continue;
-                        }
-                        if app.selection.clear() && key.code == KeyCode::Esc { continue; }
-                        if control && key.code == KeyCode::Char('q') { break; }
-                        if control && key.code == KeyCode::Char('c') { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } else { break; } continue; }
+                        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c' | 'C' | 'q')) { break; }
                         // The FIFO shortcut belongs only to the composer. In
                         // particular it is not Enter/confirm in a focused picker.
                         if control && key.code == KeyCode::Enter && !app.composer_available() { continue; }
@@ -1463,15 +1457,14 @@ pub async fn run(
                             }
                         }
                     }
-                    TerminalEvent::Mouse(mouse) => {
-                        let changed = app.transcript_mouse(mouse);
+                    TerminalEvent::Mouse(event) if mouse => {
+                        let changed = app.transcript_mouse(event);
                         // A motion-reporting terminal emits many positions
                         // while the pointer stays on the same header.
-                        skip_draw = !changed && mouse.kind == MouseEventKind::Moved;
+                        skip_draw = !changed && event.kind == MouseEventKind::Moved;
                     }
                     TerminalEvent::Resize(..) => {
                         app.tools.clear_pointer();
-                        app.selection.clear();
                     }
                     _ => (),
                 }
@@ -1614,97 +1607,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(screen.contains("Mouse  Click tool headers"));
-    }
-
-    #[test]
-    fn mouse_copies_composer_footer_rail_and_modal_without_activating_them() {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        use crossterm::event::MouseButton;
-        use ratatui::backend::TestBackend;
-
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let mut app = App {
-            input: "keep this draft".into(),
-            ..App::default()
-        };
-        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
-        let now = Instant::now();
-        let copy_visible = |app: &mut App, terminal: &mut Terminal<TestBackend>, text: &str| {
-            terminal.draw(|frame| draw(frame, app, &host, now)).unwrap();
-            let target: Vec<String> = text.chars().map(|ch| ch.to_string()).collect();
-            let buffer = terminal.backend().buffer();
-            let (col, row) = (0..buffer.area.height)
-                .find_map(|row| {
-                    let cells: Vec<_> = (0..buffer.area.width)
-                        .map(|col| buffer[(col, row)].symbol())
-                        .collect();
-                    cells
-                        .windows(target.len())
-                        .position(|window| window == target)
-                        .map(|col| (col as u16, row))
-                })
-                .unwrap_or_else(|| panic!("not rendered: {text}"));
-            for (kind, column) in [
-                (MouseEventKind::Down(MouseButton::Left), col),
-                (
-                    MouseEventKind::Drag(MouseButton::Left),
-                    col + text.len() as u16 - 1,
-                ),
-                (
-                    MouseEventKind::Up(MouseButton::Left),
-                    col + text.len() as u16 - 1,
-                ),
-            ] {
-                app.transcript_mouse(MouseEvent {
-                    kind,
-                    column,
-                    row,
-                    modifiers: KeyModifiers::NONE,
-                });
-            }
-            terminal.draw(|frame| draw(frame, app, &host, now)).unwrap();
-            let mut output = Vec::new();
-            assert!(app.selection.copy(&mut output).unwrap());
-            assert_eq!(
-                output,
-                format!("\x1b]52;c;{}\x1b\\", STANDARD.encode(text)).as_bytes()
-            );
-        };
-        copy_visible(&mut app, &mut terminal, "keep this draft");
-        copy_visible(&mut app, &mut terminal, "Provider not configured");
-        copy_visible(&mut app, &mut terminal, "Agents / 0");
-        app.help = true;
-        copy_visible(&mut app, &mut terminal, "F2  Conversations");
-        assert!(app.help);
-        app.help = false;
-        app.approval = Some(Approval {
-            id: "shown".into(),
-            run_id: "run".into(),
-            session_id: "session".into(),
-            root_session_id: "session".into(),
-            agent_title: "assistant".into(),
-            depth: 0,
-            call: ngn_protocol::ToolCall {
-                call_id: "call".into(),
-                name: "write".into(),
-                arguments: serde_json::json!({}),
-            },
-            preview: "visible approval preview".into(),
-        });
-        copy_visible(&mut app, &mut terminal, "visible approval preview");
-        assert!(app.approval.is_some());
-        assert_eq!(app.input, "keep this draft");
+        assert!(screen.contains("Mouse  Use terminal selection"));
     }
 
     #[test]

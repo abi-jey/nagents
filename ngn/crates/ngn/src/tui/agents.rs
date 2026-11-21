@@ -153,15 +153,20 @@ impl Context {
         (config, session): (&Config, &str),
         muted: Color,
     ) -> ContextViewport {
+        if !self.expanded && !active {
+            return ContextViewport {
+                page: 0,
+                max_scroll: 0,
+            };
+        }
         let info = Color::Rgb(129, 199, 190);
         let title_style = if active {
             Style::new().add_modifier(Modifier::REVERSED)
         } else {
             Style::new().fg(info)
         };
-        let marker = if self.expanded { "▾" } else { "▸" };
         frame.render_widget(
-            Line::styled(format!("{marker} Workspace & context"), title_style),
+            Line::styled("Context", title_style),
             Rect { height: 1, ..area },
         );
         let page = area.height.saturating_sub(1);
@@ -981,11 +986,11 @@ mod tests {
                 assert_eq!(buffer[(110, 12)].symbol(), "╯");
                 assert!(row(buffer, 0, 80..111).contains("Agents / Ctrl+T"));
                 assert!(row(buffer, 1, 82..109).starts_with("Agents / 0"));
-                assert!(row(buffer, 11, 80..111).contains("▸ Workspace & context"));
+                assert!(row(buffer, 11, 82..109).trim().is_empty());
                 assert!(!(1..11).any(|y| row(buffer, y, 80..111).contains("WORKSPACE")));
             } else {
                 assert!(!(0..13).any(|y| row(buffer, y, 0..110).contains("Agents /")));
-                assert!(!(0..13).any(|y| row(buffer, y, 0..110).contains("Workspace & context")));
+                assert!(!(0..13).any(|y| row(buffer, y, 0..110).contains("Context")));
             }
         }
     }
@@ -1185,8 +1190,7 @@ mod tests {
         assert!(app.agents_key(focus, 111));
         let buffer = paint_rail(&mut app, &config, 30);
         assert!(buffer[(3, 2)].modifier.contains(Modifier::REVERSED));
-        assert!(row(&buffer, 28, 2..31).contains("▸ Workspace & context"));
-        assert_eq!(buffer[(3, 28)].fg, Color::Rgb(129, 199, 190));
+        assert!(row(&buffer, 28, 2..31).trim().is_empty());
         assert!(app.agents_key(key(KeyCode::Tab), 111));
         assert!(app.agents_key(key(KeyCode::Enter), 111));
         let buffer = paint_rail(&mut app, &config, 30);
@@ -1195,7 +1199,7 @@ mod tests {
         assert!(viewport.max_scroll > 0);
         assert!(buffer[(3, 18)].modifier.contains(Modifier::REVERSED));
         assert!(!buffer[(3, 2)].modifier.contains(Modifier::REVERSED));
-        assert!(row(&buffer, 18, 2..31).contains("▾ Workspace & context"));
+        assert!(row(&buffer, 18, 2..31).contains("Context"));
         let find_row = |buffer: &Buffer, text: &str| {
             (19..29)
                 .find(|&y| row(buffer, y, 3..29).trim_end() == text)
@@ -1310,7 +1314,7 @@ mod tests {
 
         let short = draw(&mut app, 15);
         assert_eq!(app.agents.context.viewport.unwrap().page, 0);
-        assert!(rail_has(&short, "▾ Workspace & context"));
+        assert!(rail_has(&short, "Context"));
         assert!(!rail_has(&short, "AUTHENTICATION"));
         for code in [
             KeyCode::Down,
@@ -1331,7 +1335,7 @@ mod tests {
 
         draw(&mut app, 15);
         assert!(app.agents_key(key(KeyCode::Char(' ')), 111));
-        assert!(rail_has(&draw(&mut app, 15), "▸ Workspace & context"));
+        assert!(rail_has(&draw(&mut app, 15), "Context"));
         assert!(app.agents_key(key(KeyCode::Enter), 111));
         assert_eq!(app.agents.context.scroll, 0);
         assert!(rail_has(&draw(&mut app, 40), "WORKSPACE"));

@@ -285,10 +285,6 @@ impl Cards {
         self.pointer = None;
     }
 
-    pub(super) fn top(&self) -> usize {
-        self.rendered_top
-    }
-
     pub(super) fn mouse(
         &mut self,
         event: MouseEvent,
@@ -536,9 +532,33 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
 // The disclosure glyph and its following space are not part of the Python label.
 const DISCLOSURE_WIDTH: usize = 2;
 
+#[derive(Clone, Copy)]
+pub(super) enum UserPaint {
+    Plain,
+    Surface(Style),
+}
+
+impl UserPaint {
+    pub(super) fn new(surface: Option<Style>, background: Option<[u8; 3]>, no_color: bool) -> Self {
+        if no_color {
+            return Self::Plain;
+        }
+        surface
+            .or_else(|| background.map(terminal_user_surface))
+            .map_or(Self::Plain, Self::Surface)
+    }
+}
+
+fn terminal_user_surface([r, g, b]: [u8; 3]) -> Style {
+    let dark = 299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b) < 128_000;
+    let target = if dark { 255 } else { 0 };
+    let tint = |value: u8| ((9 * u16::from(value) + target) / 10) as u8;
+    Style::new().bg(Color::Rgb(tint(r), tint(g), tint(b)))
+}
+
 pub(super) struct Layout<'a> {
     width: u16,
-    user_surface: Option<Style>,
+    user_paint: UserPaint,
     rows: usize,
     lines: Vec<(usize, Row<'a>)>,
     headers: Vec<(Key, usize)>,
@@ -565,11 +585,11 @@ impl<'a> Layout<'a> {
         cards: Option<&Cards>,
         interactive: bool,
         active: Option<ToolKey<'_>>,
-        user_surface: Option<Style>,
+        user_paint: UserPaint,
     ) -> Self {
         let mut layout = Self {
             width,
-            user_surface,
+            user_paint,
             rows: 0,
             lines: Vec::new(),
             headers: Vec::new(),
@@ -599,7 +619,9 @@ impl<'a> Layout<'a> {
                     }
                     layout.text(text, false);
                 }
-                TranscriptPart::User(text) => layout.text(text, user_surface.is_some()),
+                TranscriptPart::User(text) => {
+                    layout.text(text, !matches!(user_paint, UserPaint::Plain));
+                }
                 TranscriptPart::Code(key, text) => layout.code(*key, text, cards.is_some()),
                 TranscriptPart::Card(card) => {
                     let key = (card.key.0.to_owned(), card.key.1.to_owned());
@@ -786,10 +808,9 @@ impl<'a> Layout<'a> {
     }
 
     fn padding(&self, user: bool) -> u16 {
-        if user && self.width >= USER_PADDING + 2 {
-            USER_PADDING
-        } else {
-            0
+        match self.user_paint {
+            UserPaint::Surface(_) if user && self.width >= USER_PADDING + 2 => USER_PADDING,
+            _ => 0,
         }
     }
 
@@ -879,9 +900,8 @@ impl<'a> Layout<'a> {
                             row_area.height,
                         ),
                     );
-                    if *user && let Some(surface) = self.user_surface {
-                        // Apply after writing wide glyphs: their trailing cells,
-                        // as well as wrap slack and padding, need the same shade.
+                    if *user && let UserPaint::Surface(surface) = self.user_paint {
+                        // Include wide-glyph continuation cells and wrap slack.
                         frame.buffer_mut().set_style(row_area, surface);
                     }
                 }
@@ -989,7 +1009,11 @@ mod tests {
             terminal.backend().buffer().clone()
         };
         let theme = Some(PaintedComposerTheme::Ocean);
-        let shaded = paint(super::super::composer::Palette::new(theme, false).user_surface());
+        let shaded = paint(UserPaint::new(
+            super::super::composer::Palette::new(theme, false).user_surface(),
+            None,
+            false,
+        ));
         for (y, columns) in [
             (1, &[0, 1, 3, 5, 6, 7][..]),
             (2, &[0, 1, 3, 4, 5, 6, 7][..]),
@@ -1006,11 +1030,30 @@ mod tests {
         assert_eq!(shaded[(0, 3)].symbol(), "a");
         assert_eq!(shaded[(0, 3)].bg, Color::Reset);
 
-        let unshaded = paint(super::super::composer::Palette::new(theme, true).user_surface());
-        assert_eq!(unshaded, paint(None));
+        let unshaded = paint(UserPaint::new(
+            super::super::composer::Palette::new(theme, true).user_surface(),
+            Some([0, 0, 0]),
+            true,
+        ));
+        assert_eq!(unshaded, paint(UserPaint::Plain));
         assert_eq!(unshaded[(0, 1)].symbol(), "界");
         assert_eq!(unshaded[(0, 2)].symbol(), "a");
         assert!(unshaded.content.iter().all(|cell| cell.bg == Color::Reset));
+
+        for (base, shade) in [
+            ([0; 3], Color::Rgb(25, 25, 25)),
+            ([255; 3], Color::Rgb(229, 229, 229)),
+        ] {
+            let native = paint(UserPaint::new(None, Some(base), false));
+            assert!(
+                [0, 1, 3, 5, 6, 7]
+                    .into_iter()
+                    .all(|x| native[(x, 1)].bg == shade)
+            );
+            assert_eq!(native[(1, 1)].symbol(), "界");
+            assert_eq!(native[(1, 1)].fg, Color::Reset);
+            assert_eq!(native[(0, 3)].bg, Color::Reset);
+        }
     }
 
     fn render(
@@ -1043,7 +1086,11 @@ mod tests {
                     Some(&app.tools),
                     app.tools_available(),
                     active,
-                    app.composer_palette.user_surface(),
+                    UserPaint::new(
+                        app.composer_palette.user_surface(),
+                        app.terminal_background,
+                        app.no_color,
+                    ),
                 );
                 if app.shows_overlay() {
                     layout.hide_wipes();
@@ -1768,7 +1815,7 @@ mod tests {
         assert_eq!(*age, Duration::from_millis(156));
         let parts = main_transcript(&app.records, None, 1500);
         assert!(
-            Layout::new(&parts, 60, None, false, active, None)
+            Layout::new(&parts, 60, None, false, active, UserPaint::Plain)
                 .sweep
                 .is_none()
         );

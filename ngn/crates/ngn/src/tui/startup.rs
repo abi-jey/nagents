@@ -35,6 +35,14 @@ pub(super) fn shutdown_signal() -> io::Result<impl Future<Output = ()>> {
 pub(super) struct Input(#[cfg(unix)] Option<posix::Input>);
 
 impl Input {
+    pub(super) fn background(&self) -> Option<[u8; 3]> {
+        #[cfg(unix)]
+        if let Some(input) = &self.0 {
+            return input.background();
+        }
+        None
+    }
+
     async fn wait_for_cancel(&mut self) -> io::Result<()> {
         #[cfg(unix)]
         if let Some(input) = &mut self.0 {
@@ -75,19 +83,28 @@ impl Input {
 
 pub(super) async fn prepare(
     animate: bool,
+    query_background: bool,
     initialize: impl Future<Output = Result<()>>,
-    signal: Pin<&mut impl Future<Output = ()>>,
+    mut signal: Pin<&mut impl Future<Output = ()>>,
 ) -> Result<Option<Input>> {
     #[cfg(unix)]
-    let opening = posix::run(animate);
+    let opening = posix::run(animate, query_background);
     #[cfg(not(unix))]
     let opening = async {
-        let _ = animate;
+        let _ = (animate, query_background);
         Ok::<_, io::Error>(Some(Input::default()))
     };
-    let Some(mut input) = handoff(opening, initialize, signal).await? else {
+    let Some(mut input) = handoff(opening, initialize, signal.as_mut()).await? else {
         return Ok(None);
     };
+    #[cfg(unix)]
+    if let Some(input) = &mut input.0 {
+        tokio::select! {
+            biased;
+            _ = &mut signal => return Ok(None),
+            result = input.settle_background() => result?,
+        }
+    }
     // Honor input already queued at readiness without flashing the workspace
     // on cancellation. Stdin remains ours through the first workspace frame.
     Ok(input.drain()?.then_some(input))
@@ -231,6 +248,7 @@ mod posix {
     const POLL: Duration = Duration::from_millis(10);
     const DRAFT_CAP: usize = 4096;
     const UTF8_HANDOFF_GRACE: Duration = Duration::from_millis(50);
+    const BACKGROUND_GRACE: Duration = Duration::from_millis(60);
     const HIDE: &str = "\x1b[?25l";
     const SHOW: &str = "\x1b[?25h";
     const SAVE: &str = "\x1b7";
@@ -368,12 +386,110 @@ mod posix {
         }
     }
 
+    const OSC_BACKGROUND: &[u8] = b"\x1b]11;";
+
+    #[derive(Default)]
+    struct BackgroundProbe {
+        deadline: Option<Instant>,
+        fragment: Vec<u8>,
+        escape_at: Option<Instant>,
+        result: Option<[u8; 3]>,
+    }
+
+    impl BackgroundProbe {
+        fn query(&mut self) {
+            let mut out = io::stdout().lock();
+            if out
+                .write_all(b"\x1b]11;?\x1b\\")
+                .and_then(|()| out.flush())
+                .is_ok()
+            {
+                self.deadline = Some(Instant::now() + BACKGROUND_GRACE);
+            }
+        }
+
+        fn filter(&mut self, bytes: &[u8], ordinary: &mut Vec<u8>) {
+            if self.deadline.is_none() {
+                ordinary.extend_from_slice(bytes);
+                return;
+            }
+            for &byte in bytes {
+                if self.fragment.is_empty() {
+                    if byte == b'\x1b' {
+                        self.escape_at = Some(Instant::now());
+                        self.fragment.push(byte);
+                    } else {
+                        ordinary.push(byte);
+                    }
+                    continue;
+                }
+                if self.fragment.len() < OSC_BACKGROUND.len() {
+                    if byte == OSC_BACKGROUND[self.fragment.len()] {
+                        self.fragment.push(byte);
+                        continue;
+                    }
+                    ordinary.append(&mut self.fragment);
+                } else {
+                    let payload = &self.fragment[OSC_BACKGROUND.len()..];
+                    let st = byte == b'\\' && payload.last() == Some(&b'\x1b');
+                    if byte == b'\x07' || st {
+                        let end = payload.len() - usize::from(st);
+                        self.result = self.result.or_else(|| parse_background(&payload[..end]));
+                        self.fragment.clear();
+                        continue;
+                    }
+                    // Bound malformed input and never consume control keys
+                    // inside a reply, apart from the start of the OSC suffix.
+                    if payload.len() < 19
+                        && payload.last() != Some(&b'\x1b')
+                        && (byte.is_ascii_hexdigit()
+                            || matches!(byte, b'r' | b'g' | b':' | b'/' | b'\x1b'))
+                    {
+                        self.fragment.push(byte);
+                        continue;
+                    }
+                    if payload.last() == Some(&b'\x1b') {
+                        ordinary.push(b'\x1b');
+                    }
+                    self.fragment.clear();
+                }
+                if byte == b'\x1b' {
+                    self.escape_at = Some(Instant::now());
+                    self.fragment.push(byte);
+                } else {
+                    ordinary.push(byte);
+                }
+            }
+            if self.fragment == [b'\x1b'] && self.escape_at.is_some_and(|at| at.elapsed() >= POLL) {
+                ordinary.append(&mut self.fragment);
+            }
+        }
+    }
+
+    fn parse_background(payload: &[u8]) -> Option<[u8; 3]> {
+        let mut values = payload.strip_prefix(b"rgb:")?.split(|&byte| byte == b'/');
+        let mut rgb = [0; 3];
+        for channel in &mut rgb {
+            let value = std::str::from_utf8(values.next()?).ok()?;
+            if !(1..=4).contains(&value.len())
+                || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return None;
+            }
+            let scale = (1 << (value.len() * 4)) - 1;
+            let value = u32::from_str_radix(value, 16).ok()?;
+            *channel = ((value * 255 + scale / 2) / scale) as u8;
+        }
+        values.next().is_none().then_some(rgb)
+    }
+
     #[derive(Default)]
     struct Keys {
         first: Option<char>,
         draft: String,
         pending: Vec<u8>,
         cancelled: bool,
+        background: BackgroundProbe,
     }
 
     impl Keys {
@@ -421,7 +537,13 @@ mod posix {
             let mut bytes = [0; 4096];
             match read(io::stdin().as_raw_fd(), &mut bytes) {
                 Ok(count) => {
-                    self.push(&bytes[..count], prelude);
+                    if self.background.deadline.is_some() {
+                        let mut ordinary = Vec::new();
+                        self.background.filter(&bytes[..count], &mut ordinary);
+                        self.push(&ordinary, prelude);
+                    } else {
+                        self.push(&bytes[..count], prelude);
+                    }
                     Ok(count)
                 }
                 Err(Errno::EAGAIN) => Ok(0),
@@ -450,6 +572,30 @@ mod posix {
     }
 
     impl Input {
+        pub(super) fn background(&self) -> Option<[u8; 3]> {
+            self.keys.background.result
+        }
+
+        pub(super) async fn settle_background(&mut self) -> io::Result<()> {
+            let Some(deadline) = self.keys.background.deadline else {
+                return Ok(());
+            };
+            while self.keys.background.result.is_none() && !self.keys.cancelled {
+                match self.keys.read(false) {
+                    Ok(_) | Err(Errno::EINTR) => (),
+                    Err(error) => return Err(error.into()),
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                if self.keys.background.result.is_none() && !self.keys.cancelled {
+                    sleep_until((now + POLL).min(deadline)).await;
+                }
+            }
+            Ok(())
+        }
+
         pub(super) async fn wait_for_cancel(&mut self) -> io::Result<()> {
             while !self.keys.cancelled {
                 match self.keys.read(false) {
@@ -467,6 +613,11 @@ mod posix {
             // The final drain may run in raw mode (VMIN=1), so poll before
             // reading. Bound the work even if input arrives continuously.
             let stdin = io::stdin();
+            if !self.keys.background.fragment.is_empty() {
+                let mut ordinary = Vec::new();
+                self.keys.background.filter(&[], &mut ordinary);
+                self.keys.push(&ordinary, false);
+            }
             let mut fd = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];
             for _ in 0..4 {
                 match poll(&mut fd, 0u8) {
@@ -499,7 +650,9 @@ mod posix {
                 // Keep the same decoder through the frame. If the last read
                 // ended mid-character, allow a bounded time for its suffix.
                 let now = Instant::now();
-                if self.keys.pending.is_empty() || now >= deadline {
+                if (self.keys.pending.is_empty() && self.keys.background.fragment.is_empty())
+                    || now >= deadline
+                {
                     break;
                 }
                 sleep_until((now + POLL).min(deadline)).await;
@@ -510,7 +663,10 @@ mod posix {
         }
     }
 
-    pub(super) async fn run(animate: bool) -> io::Result<Option<super::Input>> {
+    pub(super) async fn run(
+        animate: bool,
+        query_background: bool,
+    ) -> io::Result<Option<super::Input>> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Ok(Some(super::Input::default()));
         }
@@ -518,6 +674,9 @@ mod posix {
             mode: TerminalMode::cbreak()?,
             keys: Keys::default(),
         };
+        if query_background && std::env::var_os("TERM").is_some_and(|term| term != "dumb") {
+            input.keys.background.query();
+        }
         let opened = !animate || animate_box(&mut input).await?;
         Ok(opened.then_some(super::Input(Some(input))))
     }
@@ -576,6 +735,24 @@ mod posix {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn background_reply_does_not_enter_the_startup_draft() {
+            let mut probe = BackgroundProbe {
+                deadline: Some(Instant::now() + BACKGROUND_GRACE),
+                ..BackgroundProbe::default()
+            };
+            let mut ordinary = Vec::new();
+            probe.filter(b"before\x1b]11;r", &mut ordinary);
+            probe.filter(b"gb:ab/0000/ffff\x1b", &mut ordinary);
+            probe.filter(b"\\after\x03", &mut ordinary);
+            assert_eq!(probe.result, Some([171, 0, 255]));
+            assert_eq!(ordinary, b"beforeafter\x03");
+            probe.filter(b"\x1b", &mut ordinary);
+            probe.escape_at = Some(Instant::now() - POLL);
+            probe.filter(b"", &mut ordinary);
+            assert_eq!(ordinary, b"beforeafter\x03\x1b");
+        }
 
         #[test]
         fn normal_screen_storyboard_at_fixed_offsets() {
