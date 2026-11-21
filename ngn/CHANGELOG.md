@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.43
+
+- Remove the Python terminal UI; the native ngn is the interactive terminal client. The Python ngn keeps run, serve, sessions, a2a, login, logout and doctor, and the tui extra and Textual dependency are gone. Docs explain how ngn and nagents are pronounced.
+
 ## 0.100.42
 
 - Show ngn update as a live checklist in terminals: each step settles with a check mark and its time, the download shows size, progress and speed, and the old → new version is shown; piped and --no-animations output is unchanged.

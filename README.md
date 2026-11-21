@@ -7,11 +7,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://abi-jey.github.io/nagents/)
 
-A lightweight LLM agent framework with direct HTTP-based provider integration.
+`nagents` (pronounced *"N-agents"*) is a lightweight LLM agent library with direct HTTP-based provider integration.
 
 ## Rust harness migration
 
-This repository also contains **[ngn, the Rust harness, TUI and web host](ngn/README.md)**
+This repository also contains **[`ngn` (pronounced *"engine"*), the Rust harness, TUI and web host](ngn/README.md)**
 under `ngn/`. The Python `nagents` library remains under `src/nagents/`, with its
 existing interfaces and independently usable APIs. The two communicate through a private,
 versioned runtime protocol; Python does not own Rust tool execution or approvals.

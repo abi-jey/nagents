@@ -1,5 +1,5 @@
 ### Description
-Nagents (this Repository) is provider agnosetic agent framework built to be simple in dependencies and usage and to support different providers and tools and their features.
+`nagents` (pronounced "N-agents") is the provider-agnostic Python agent library in this repository, built to be simple in dependencies and usage and to support different providers, tools, and features. `ngn` (pronounced "engine") is the agent harness.
 
 ### Providers
 - OpenAI (https://developers.openai.com/api/reference/overview)

@@ -1,8 +1,8 @@
 # ngn
 
-A standalone **Rust harness, TUI and local web server**, with a versioned agent
-runtime protocol. The optional **nagents** adapter runs the Python agent/model
-loop; **all workspace tools and approvals execute in Rust**.
+`ngn` (pronounced *"engine"*) is a standalone **Rust harness, TUI and local web server**,
+with a versioned agent runtime protocol. The optional **`nagents`** (pronounced *"N-agents"*)
+adapter runs the Python agent/model loop; **all workspace tools and approvals execute in Rust**.
 
 The Rust application lives under `ngn/` in the **same repository** as the Python
 `nagents` library (`../src/nagents/`). The first official monorepo release,
