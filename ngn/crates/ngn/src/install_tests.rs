@@ -270,6 +270,29 @@ fn drain_pty(master: &mut File, transcript: &mut Vec<u8>) {
     }
 }
 
+/// What a terminal finally shows for each line: colours stripped and only the
+/// last carriage-return redraw kept.
+fn screen(transcript: &[u8]) -> Vec<String> {
+    let mut text = String::new();
+    let raw = String::from_utf8_lossy(transcript);
+    let mut iter = raw.chars().peekable();
+    while let Some(c) = iter.next() {
+        if c == '\x1b' && iter.peek() == Some(&'[') {
+            iter.next();
+            for end in iter.by_ref() {
+                if end.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            text.push(c);
+        }
+    }
+    text.split('\n')
+        .map(|line| line.rsplit('\r').next().unwrap_or("").trim_end().to_owned())
+        .collect()
+}
+
 #[tokio::test]
 async fn delayed_download_reports_live_progress_and_cleans_pty_on_success_or_error() {
     for fail in [false, true] {
@@ -301,44 +324,47 @@ async fn delayed_download_reports_live_progress_and_cleans_pty_on_success_or_err
                 &install, &source, false, &transport, &probe, &cancel, progress
             ),
             async {
-                // The transfer cannot finish until we have read live frames from
-                // the PTY. This asserts visibility, not a guessed timing budget.
+                // The transfer cannot finish until we have read a live, redrawn
+                // download meter from the PTY. This asserts visibility, not timing.
                 tokio::time::timeout(Duration::from_secs(5), async {
-                    while !transcript.windows(4).any(|bytes| bytes == b"\r|\r/") {
+                    loop {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         drain_pty(&mut master, &mut transcript);
+                        let lines = screen(&transcript);
+                        if lines.last().is_some_and(|line| {
+                            line.contains("Downloading bundle") && line.contains("MiB")
+                        }) {
+                            break;
+                        }
                     }
                 })
                 .await
                 .unwrap();
-                let prefix = if fail {
-                    "ngn update:"
-                } else {
-                    "\x1b[1;36mngn update:\x1b[0m"
-                };
+                let lines = screen(&transcript);
                 assert!(
-                    transcript.starts_with(format!(
-                        "{prefix} Checking release metadata...\n{prefix} Downloading bundle...\n\r|\r/"
-                    )
-                    .as_bytes()),
-                    "{transcript:?}"
+                    lines[0].starts_with("  ✓ Checked release metadata")
+                        && lines[0].ends_with("→ 0.100.3"),
+                    "{lines:?}"
+                );
+                assert!(lines[1].starts_with("  ⠙ Downloading bundle"), "{lines:?}");
+                assert_eq!(
+                    transcript.windows(5).any(|bytes| bytes == b"\x1b[32m"),
+                    !fail,
+                    "colour follows the colour flag"
                 );
                 assert!(current(&install.identity).unwrap().is_none());
                 transport.payload_gate.as_ref().unwrap().notify_one();
             }
         );
         drain_pty(&mut master, &mut transcript);
-        let offset = transcript
-            .windows(3)
-            .position(|bytes| bytes == b"\r \r")
-            .unwrap();
-        let tail = &transcript[offset + 3..];
+        let lines = screen(&transcript);
         if fail {
             assert_eq!(
                 result.unwrap_err().to_string(),
                 "Synthetic truncated download"
             );
-            assert!(tail.is_empty());
+            assert_eq!(lines[1], "  ✗ Downloading bundle", "{lines:?}");
+            assert_eq!(lines.len(), 3, "{lines:?}");
             assert!(current(&install.identity).unwrap().is_none());
             assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
         } else {
@@ -346,12 +372,23 @@ async fn delayed_download_reports_live_progress_and_cleans_pty_on_success_or_err
                 result.unwrap(),
                 Outcome::Installed(ReleaseVersion::parse("0.100.3").unwrap())
             );
-            let tail = String::from_utf8_lossy(tail);
-            assert!(
-                tail.contains("Verifying and staging bundle...\n"),
-                "{tail:?}"
+            let marks: Vec<&str> = lines
+                .iter()
+                .filter_map(|line| line.strip_prefix("  ✓ "))
+                .map(|line| line.split("  ").next().unwrap_or("").trim())
+                .collect();
+            assert_eq!(
+                marks,
+                [
+                    "Checked release metadata",
+                    "Downloaded bundle",
+                    "Verified and staged bundle",
+                    "Activated release"
+                ],
+                "{lines:?}"
             );
-            assert!(tail.ends_with("Activating release...\n"), "{tail:?}");
+            assert!(lines[1].ends_with(" MiB"), "{lines:?}");
+            assert_eq!(lines.last().map(String::as_str), Some(""), "{lines:?}");
             assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         }
     }
