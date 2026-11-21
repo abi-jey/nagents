@@ -811,8 +811,9 @@ fn unpack(
                     .custom_flags(nix::libc::O_NOFOLLOW);
             }
             let mut file = options.open(&path).context("Archive file collision")?;
+            // Durability is established once for the whole tree by `sync_tree`
+            // before activation; a device flush per member costs minutes.
             std::io::copy(&mut entry, &mut file)?;
-            file.sync_all()?;
         } else {
             ensure!(kind.is_symlink(), "Unsupported interpreted archive member");
             let target = entry.link_name_bytes().context("Missing symlink target")?;
@@ -1233,24 +1234,74 @@ async fn apply<T: Transport, P: Probe>(
     Ok(Outcome::Installed(version))
 }
 
+/// Makes an unpacked generation durable before it can be activated.
+///
+/// Verification reads the page cache, so it cannot prove that bytes reached
+/// storage. Every member must be durable before `current` names the generation,
+/// but one batched flush gives the same guarantee as a flush per member: a
+/// per-file `fsync` costs a journal commit and a device cache flush each, which
+/// turned a 4,000-file bundle into ~40 seconds of serial waits.
 fn sync_tree(root: &Path, cancel: &CancellationToken) -> Result<()> {
+    cancelled(cancel)?;
+    flush_tree(root, cancel).context("Cannot make the staged release durable")
+}
+
+/// Linux: `syncfs` writes back the staged tree's whole filesystem with one
+/// journal commit and device flush, and reports any writeback error.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn flush_tree(root: &Path, _cancel: &CancellationToken) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let directory = File::open(root)?;
+    nix::unistd::syncfs(directory.as_raw_fd())?;
+    Ok(())
+}
+
+/// Apple: plain `fsync` hands each member to the drive without flushing its
+/// cache (cheap), then a single `F_FULLFSYNC` flushes the drive cache once.
+#[cfg(target_vendor = "apple")]
+fn flush_tree(root: &Path, cancel: &CancellationToken) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    for path in tree_members(root, cancel)? {
+        nix::unistd::fsync(File::open(&path)?.as_raw_fd())?;
+    }
+    nix::fcntl::fcntl(
+        File::open(root)?.as_raw_fd(),
+        nix::fcntl::FcntlArg::F_FULLFSYNC,
+    )?;
+    Ok(())
+}
+
+/// Elsewhere there is no batched primitive; sync every member individually.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+fn flush_tree(root: &Path, cancel: &CancellationToken) -> Result<()> {
+    for path in tree_members(root, cancel)? {
+        File::open(&path)?.sync_all()?;
+    }
+    Ok(())
+}
+
+/// Regular files, then directories deepest first (each after its entries).
+/// Symlinks are skipped: opening one would sync its target, not the link.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn tree_members(root: &Path, cancel: &CancellationToken) -> Result<Vec<PathBuf>> {
     let mut directories = vec![root.to_path_buf()];
+    let mut files = Vec::new();
     let mut index = 0;
     while index < directories.len() {
         cancelled(cancel)?;
         for entry in fs::read_dir(&directories[index])? {
             let entry = entry?;
-            if entry.file_type()?.is_dir() {
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
                 directories.push(entry.path());
+            } else if kind.is_file() {
+                files.push(entry.path());
             }
         }
         index += 1;
     }
-    for directory in directories.into_iter().rev() {
-        cancelled(cancel)?;
-        sync_directory(&directory)?;
-    }
-    Ok(())
+    files.extend(directories.into_iter().rev());
+    Ok(files)
 }
 
 fn activate(
