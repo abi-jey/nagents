@@ -1,40 +1,37 @@
 # Install the Python ngn client
 
 !!! info "Python client, not the native installer"
-    This page installs the existing Python CLI/Textual/React client from the
-    `nagents` package. For the separate Rust application, bundled Python runtime,
+    This page installs the Python headless CLI and React web client from the
+    `nagents` package. The Python terminal UI has been removed. For the separate Rust application, bundled Python runtime,
     `ngn install` and `ngn update`, use [native installer and usage](native-ngn.md).
     Both commands are named `ngn`; keep their environments/paths distinct.
 
-`ngn` is the terminal and headless client for nagents. Choose a published
+The Python `ngn` is the headless and web client for nagents. Choose a published
 distribution for a release snapshot, or an editable checkout for current
 development. Do not let Poetry and uv independently manage the same virtualenv.
 
 ## Release availability
 
-Published distributions provide the `ngn` console entry point, terminal client,
-coding harness, and headless commands. The verified
+Published distributions provide the `ngn` console entry point, coding harness,
+and headless commands. The verified
 [v0.15.0 wheel](https://pypi.org/project/nagents/0.15.0/) historically demonstrated `ngn serve`,
 the `web` extra, and built React assets under `nagents/web/static/`, alongside the
-`tui` and `voice` extras. That is historical packaging evidence, **not the latest
+`voice` extra. That is historical packaging evidence, **not the latest
 version recommendation**. The web client is not source-only; current package
 extras and bundled assets remain defined by the source/package metadata.
 
-Install the terminal client into your chosen, activated virtual environment
+Install the client into your chosen, activated virtual environment
 (see [environment setup](../getting-started/installation.md#install-the-python-library-from-pypi)
 if you need a new one):
 
 ```bash
-python -m pip install 'nagents[tui]'
-ngn --demo
+python -m pip install nagents
+ngn run --demo "Hello"
 ```
 
-For [terminal Live voice](ngn.md#live-voice), install
-`python -m pip install 'nagents[tui,voice]'`, launch without `--demo`, and open
-`/voice settings`. The optional `voice` extra includes sounddevice/PortAudio
-bindings, the shared Voice configuration dependencies, and aiortc/PyAV for
-ChatGPT/Codex media. It does not start a web server. The ordinary `tui` extra
-and headless/core installs do not require these voice dependencies.
+The optional `voice` extra includes sounddevice/PortAudio bindings, the shared
+Voice configuration dependencies, and aiortc/PyAV for ChatGPT/Codex media.
+Headless/core installs do not require these voice dependencies.
 
 For the browser client, install `nagents[web]` and run `ngn serve`. Published
 wheels serve bundled frontend assets without requiring Node. Omit these extras
@@ -55,15 +52,11 @@ well as `ngn --version` when verifying feature availability.
 - Python 3.12–3.15; Python 3.13 is used in the uv examples below.
 - A POSIX host for the guarded coding tools and shell process-group cleanup.
   Windows is not yet a supported coding-tool host.
-- An interactive terminal for the full-screen TUI. Use `ngn run` for pipes,
-  scripts, and environments without a terminal.
-- The `tui` extra for Textual. Headless use and importing the nagents library do
-  not require it.
 - A provider account/API key for live model requests, or eligible ChatGPT/Codex
   device login for the default OpenAI route. Neither is needed for `--demo`.
 
 The base runtime dependencies are `aiohttp>=3.14.4`, `aiosqlite>=0.20.0`, and
-`pyyaml>=6.0`; the TUI adds `textual>=8.2.8` and its dependencies. The project uses minimum
+`pyyaml>=6.0`. The project uses minimum
 version constraints, not a promise that one frozen dependency set is always the
 latest. A fresh uv pip install resolves versions satisfying those constraints;
 Poetry uses its lockfile. The CLI does not require the OpenAI or Anthropic SDK,
@@ -81,11 +74,6 @@ mapping, or access to a paid provider account.
 
 - Use a supported Python installation and a UTF-8 terminal. The Poetry and uv
   commands on this page also apply to macOS.
-- Shift+Enter requires the terminal to send a distinct key sequence. If it does
-  not, use Ctrl+J for a newline. Alt/Option+Enter also works when the terminal is
-  configured to send Option as Meta. Most shortcuts use Ctrl rather than Command;
-  copying also accepts Command+C when the terminal forwards it. Mouse selections
-  copy on release, and local macOS copying uses `pbcopy`, including in Terminal.
 - macOS configuration stays at `~/.config/ngn/config.json` and state at
   `~/.local/share/ngn`, unless XDG settings override them; ngn does not switch to
   `~/Library/Application Support` on this platform.
@@ -104,12 +92,12 @@ mapping, or access to a paid provider account.
 From the repository root, keep the project's existing local workflow:
 
 ```bash
-poetry install -E dev -E tui
-poetry run ngn --demo
+poetry install -E dev
+poetry run ngn run --demo "Hello"
 ```
 
-For a terminal-only environment without development tools, use
-`poetry install -E tui` instead. Continue using `poetry run` for that environment:
+For an environment without development tools, use `poetry install` instead.
+Continue using `poetry run` for that environment:
 
 ```bash
 poetry run ngn --help
@@ -125,7 +113,7 @@ If the Poetry shell plugin is installed, your existing shell workflow also works
 
 ```bash
 poetry shell
-ngn --demo
+ngn run --demo "Hello"
 ```
 
 This uses the editable checkout in Poetry's environment, not a separate global
@@ -137,13 +125,14 @@ For a new local environment, run these commands **from the repository root**:
 
 ```bash
 uv venv --python 3.13
-uv pip install --python .venv/bin/python -e '.[tui]'
-uv run --no-project --python .venv/bin/python ngn --demo
+uv pip install --python .venv/bin/python -e .
+uv run --no-project --python .venv/bin/python ngn run --demo "Hello"
 ```
 
 `-e` installs this checkout editably: Python source changes are reflected on the
 next launch without reinstalling. Re-run the install after changing dependency
-metadata or extras. Quote `'.[tui]'` so the shell does not expand the brackets.
+metadata or extras. Quote extras such as `'.[web]'` so the shell does not expand
+the brackets.
 
 The explicit interpreter selects the local environment without activation.
 `--no-project` prevents `uv run` from treating this as a uv-managed project and
@@ -156,15 +145,15 @@ use that workflow or choose a different local environment explicitly:
 
 ```bash
 uv venv --python 3.13 .venv-ngn
-uv pip install --python .venv-ngn/bin/python -e '.[tui]'
-uv run --no-project --python .venv-ngn/bin/python ngn --demo
+uv pip install --python .venv-ngn/bin/python -e .
+uv run --no-project --python .venv-ngn/bin/python ngn run --demo "Hello"
 ```
 
 The relative interpreter path is relative to the shell's current directory.
 From another directory, use the absolute path instead:
 
 ```bash
-uv run --no-project --python /absolute/path/nagents/.venv/bin/python ngn --workspace /path/to/project --demo
+uv run --no-project --python /absolute/path/nagents/.venv/bin/python ngn run --workspace /path/to/project --demo "Hello"
 ```
 
 ### Optional activation
@@ -175,8 +164,8 @@ environment**:
 
 ```bash
 source .venv/bin/activate
-ngn --demo
-uv run --no-project --active ngn --demo
+ngn run --demo "Hello"
+uv run --no-project --active ngn run --demo "Hello"
 ```
 
 Without activation, prefer the explicit `--python .venv/bin/python` form.
@@ -188,25 +177,13 @@ ngn does not load `.env` automatically. If you intentionally keep provider
 credentials in a local environment file, uv can load it for the launched process:
 
 ```bash
-uv run --no-project --python .venv/bin/python --env-file .env ngn --provider-id my-openrouter --model openai/gpt-6-luna
+uv run --no-project --python .venv/bin/python --env-file .env ngn run --provider-id my-openrouter --model openai/gpt-6-luna "Hello"
 ```
 
 Use only a file you trust. Keep it out of version control and do not include its
 contents in logs, screenshots, or bug reports. Configure `my-openrouter` in
 `providers.json` with `"api_key_env": "OPENROUTER_API_KEY"`. The filename is a launcher option;
 the secret value is never a CLI argument or YAML field.
-
-### Headless-only install
-
-Omit the extra if you do not need the full-screen interface:
-
-```bash
-uv venv --python 3.13
-uv pip install --python .venv/bin/python -e .
-uv run --no-project --python .venv/bin/python ngn run --demo --json "Hello"
-```
-
-As above, only create `.venv` if it is not already managed by another workflow.
 
 ## Optional isolated tools
 
@@ -215,7 +192,7 @@ useful when you intentionally want uv to manage a separate tool environment.
 Replace `/absolute/path/nagents` with a local checkout containing this CLI:
 
 ```bash
-uvx --from '/absolute/path/nagents[tui]' ngn --demo
+uvx --from /absolute/path/nagents ngn run --demo "Hello"
 ```
 
 This is a non-editable, built installation in uv's tool cache, not a live link to
@@ -224,7 +201,7 @@ cached invocation. For a fresh, disposable build after source changes, bypass
 both the cache and previously installed tool environments:
 
 ```bash
-uvx --no-cache --isolated --from '/absolute/path/nagents[tui]' ngn --demo
+uvx --no-cache --isolated --from /absolute/path/nagents ngn run --demo "Hello"
 ```
 
 This rebuilds and installs dependencies again; prefer the local editable workflow
@@ -234,8 +211,8 @@ building a non-editable snapshot.
 For an explicitly installed, isolated tool that *does* track local Python source:
 
 ```bash
-uv tool install --editable '/absolute/path/nagents[tui]'
-ngn --demo
+uv tool install --editable /absolute/path/nagents
+ngn run --demo "Hello"
 ```
 
 The checkout must remain at that path. Follow uv's PATH instructions if `ngn` is
@@ -282,19 +259,19 @@ no workspace edits, and skips Python plugins. It can list visible workspace path
 and saves demo conversations in local state storage. It is not a no-filesystem-I/O
 mode. JSON parsing and validation still happen in demo mode.
 
-For an interactive check, start `ngn --demo` through your selected environment,
-then try `demo approval`, `demo subagents`, `/help`, and session resume. The
-approval is a preview only; approving it does not edit a file.
+For an interactive check, start `ngn serve --demo` through your selected
+environment, then try `demo approval`, `demo subagents`, `/help`, and session
+resume in the browser. The approval is a preview only; approving it does not
+edit a file.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
 | `ngn` is missing or has different flags | Check the selected environment, `ngn --version`, and [release availability](#release-availability). Upgrade or choose an editable checkout if the needed command postdates the installed release. |
-| TUI extra is missing | Install `nagents[tui]` (or an editable checkout with `[tui]`), or use the headless `run` subcommand. |
-| TUI needs a terminal | Use a real interactive terminal, or `ngn run --json "prompt"` in a script. |
+| `ngn` alone prints a native-client notice | The Python terminal UI was removed. Use `ngn run`, `ngn serve`, or install the [native ngn](native-ngn.md). |
 | uv tries to synchronize the project or use `uv.lock` | Use `uv pip install --python ...` and `uv run --no-project --python ...`; do not substitute `uv sync` or bare project-managed `uv run`. |
-| Changes do not appear in an isolated `uvx` run | It is non-editable. Use the local editable workflow for development, or `uvx --no-cache --isolated --from '/absolute/path/nagents[tui]' ngn --demo` for a fresh build. |
+| Changes do not appear in an isolated `uvx` run | It is non-editable. Use the local editable workflow for development, or `uvx --no-cache --isolated --from /absolute/path/nagents ngn run --demo "Hello"` for a fresh build. |
 | Missing API key | Configure an environment-variable **name** with `api_key_env`, set its value outside JSON, or use eligible OpenAI device login. `--demo` needs neither. |
 | A setting in the environment seems ignored | JSON has higher priority than `NGN_*` defaults. Check [precedence](ngn-configuration.md#precedence). |
 | New fields or extras are unavailable | Compare the installed distribution with its release notes and the current source. The v0.15.0 packaging check is historical evidence, not a current version recommendation; newer fields can require a later release or checkout. |

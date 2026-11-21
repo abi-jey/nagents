@@ -38,7 +38,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Remote A2A agents and authentication discovery | `RemoteAgentConfig`, `discover_remote`, `RemoteConversation`, `remote_agent_configure` | `a2a/client/configuration.py`, `a2a/client/discovery.py`, `harness/remote/store.py` |
 | Delayed continuations | `schedule_wakeup`, `WakeupHandler`, `Harness.wakeup_handler` | `harness/types.py`, `web/execution/wakeups.py` |
 | External transports and routing | `Channel`, `ChannelPlugin`, `Agent.add_channel`, `listen` | `channels/`, `web/channels/host.py`, `web/http/routing.py` |
-| Client-specific settings and presentation | TUI commands/themes; web settings/subscriptions; CLI events | `tui/`, `web/`, `cli.py` |
+| Client-specific settings and presentation | Web settings/subscriptions; CLI events | `web/`, `cli.py` |
 
 ## Configure the Harness
 
@@ -94,7 +94,7 @@ Named provider connections may set `session_id_header` (default `""`) to a
 custom HTTP header such as `x-opencode-session`. This sends the current
 conversation's ID on text generation requests, stable across turns and tool
 rounds, rather than a static provider-wide value. The web editor exposes it
-under Advanced; JSON and TUI use the same field. Header names are bounded ASCII
+under Advanced; JSON uses the same field. Header names are bounded ASCII
 HTTP tokens, excluding authentication/routing/protocol headers. Values are
 1–1024 visible ASCII characters without spaces. Direct library callers use
 `Provider(..., session_id_header=...)` with `set_session_id()` or
@@ -322,12 +322,12 @@ Newly available tools produce one short line, such as `Tool added: weather_forec
 or `Tools added: weather_forecast, weather_units`. The same line is saved as a
 named user-role message for model compatibility, not a human-authored prompt.
 Initial local and MCP tools are saved when the session is initialized, before
-its first user message. The TUI renders these as distinct Tools capability notices,
-including restored history. Runtime additions are announced at the next safe model
+its first user message. Clients may render these as distinct Tools capability
+notices, including restored history. Runtime additions are announced at the next safe model
 generation boundary. Unchanged reloads do not repeat it; helpers, failed exports
 and unavailable tools are not announced.
 Already issued calls keep their accepted definition. These rules cover the
-TUI, web UI and headless Harness. Offline demo mode does not import tool files;
+web UI and headless Harness. Offline demo mode does not import tool files;
 existing reviewer and child-runtime permission restrictions still apply.
 
 A malformed module does not stop ngn or other modules from updating. Its last
@@ -409,7 +409,7 @@ either a local `message` or a `prompt` for `Harness.run`. Built-in names and
 the `skill:` namespace are reserved. Command metadata does not execute handlers.
 Handlers are trusted Python, not automatically tool-mediated actions.
 
-For `ngn serve` and the TUI, configure stdio MCP servers through `mcp_servers`
+For `ngn serve` and `ngn run`, configure stdio MCP servers through `mcp_servers`
 in a trusted JSON configuration. Example declaration (merge, do not overwrite
 other existing settings):
 
@@ -567,7 +567,7 @@ message, preserving existing user/tool order. Loaded bodies remain user/task
 context or tool results. `MAX_SKILL_MANIFEST_TOKENS = 10_000` caps only the model
 preview: complete name-sorted entries plus an omission notice. `Agent.skills`,
 named loads, and explicit references retain access to the full catalog.
-`$ngn-customize` in incoming user text explicitly activates it; the TUI also
+`$ngn-customize` in incoming user text explicitly activates it; the web UI also
 supports `/skill:ngn-customize [task]`. These syntaxes are host choices, not the
 Agent Skills standard.
 
@@ -624,8 +624,7 @@ global defaults. Accepted work keeps its captured connection. Parent plugins/cus
 tools are not automatically inherited. Execution handles are process-local.
 
 The web host supplies `Harness.wakeup_handler` for
-`schedule_wakeup(minutes=5, reason="Check the result.")`. The TUI also owns
-process-local timers and displays them in the agent pane. A custom host must own
+`schedule_wakeup(minutes=5, reason="Check the result.")`. A custom host must own
 timer lifecycle, serialization, and cleanup before acknowledging timers.
 Headless CLI runs reject unavailable timers.
 Wakeups target the original root or retained child, wait for an idle boundary,
@@ -646,7 +645,7 @@ depth in the workspace database with revision checks and idle-only writes.
 Reusable assistant/agent properties and Voice settings use the scoped native
 Markdown documents above and are shared with terminal clients. Provider
 connections, credentials, trusted Python plugins, and paths have their own
-configuration stores. CLI/TUI do not load the remaining web-only runtime overrides.
+configuration stores. The CLI does not load the remaining web-only runtime overrides.
 The Channels panel owns connector configuration and refresh; it is distinct from
 automatic skill discovery. Command registry entries are available to clients
 that implement command dispatch; registration alone does not add browser routes

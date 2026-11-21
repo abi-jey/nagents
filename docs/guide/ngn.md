@@ -1,93 +1,28 @@
-# Python ngn: the terminal harness
+# Python ngn: the headless harness
 
-!!! info "Existing Python client"
-    This guide describes the Python harness/Textual TUI and its React web client,
-    not the separate Rust application. Its plugins, login, voice, settings and
-    CLI recipes are not native-bundle instructions. See [native installer and usage](native-ngn.md).
+!!! info "Python command line, not the terminal app"
+    This guide describes the Python harness's headless command line and its React
+    web client. The Python full-screen terminal UI has been removed; for an
+    interactive terminal client use the [native ngn](native-ngn.md). Python plugins,
+    login, settings and CLI recipes here are not native-bundle instructions.
 
-`ngn` puts a terminal interface on top of the nagents library. The same assistant
-harness powers interactive and headless use. Python extensions change the agent's
-behavior, not just its appearance.
+The Python `ngn` command runs the nagents harness headlessly (`ngn run`), serves
+the [local web client](ngn-web.md) (`ngn serve`), exports agents over A2A, and
+manages provider sign-in. Python extensions change the agent's behavior.
+Running `ngn` without a subcommand prints a pointer to the native client.
 
-The terminal and headless CLI are included in published distributions.
-This guide describes the current checkout, which may include newer fixes; it is
-not an OpenCode feature-parity claim. Read the limitations and trust model below before
-using it on important workspaces, and check
-[release availability](ngn-installation.md#release-availability).
+This guide describes the current checkout, which may include newer fixes. Read
+the limitations and trust model below before using it on important workspaces,
+and check [release availability](ngn-installation.md#release-availability).
 
 Related pages: [installation and environment choices](ngn-installation.md),
 [complete configuration schema and recipes](ngn-configuration.md), and the
 [local web client](ngn-web.md), available with the `web` extra and bundled assets.
 
-## Opening conversation links
-
-Web links in assistant responses use native terminal hyperlinks (OSC 8). Use
-your terminal's open-link gesture, commonly Ctrl+click on Linux or Cmd+click on
-macOS, or its Open Link context-menu action. The terminal, rather than ngn,
-launches the browser; this preserves the terminal's desktop integration and can
-bring the browser forward where an application-level opener does not. Browser
-focus is still controlled by the terminal, browser, and operating system.
-
-A plain click does not launch a browser. Only validated HTTP/HTTPS targets are
-linked; no links open automatically while responses stream or history loads.
-Terminal support and gestures vary, including through tmux or SSH. If native
-hyperlinks are unavailable, copy the URL and open it manually. Login dialog
-Open Browser buttons and `/dashboard` retain their existing launch behavior.
-
-## Usage dashboard
-
-Run `/dashboard` in the terminal or web client to open the React usage dashboard
-in a browser tab. In the TUI, this starts a read-only loopback server on an
-available port; repeat invocations reuse it, and exiting the TUI stops it. Install
-the `web` extra and build the frontend assets when using an editable checkout.
-In the web client, the dashboard opens at `/dashboard` on the existing server.
-If a browser cannot be launched, the TUI shows the local URL to open manually.
-
-This first dashboard is a skeleton: workspace/global scope controls and sections
-for tokens, skills, agents, models, and workspaces are present, but usage
-collection and aggregation are not connected. Empty values are not measured
-zeros. No historical scanning, telemetry upload, or model requests are performed.
-
-## Performance diagnostics
-
-The optional performance panel belongs to the terminal client, not the core
-Agent library. `/perf on` enables collection and remembers it for the current
-workspace; `/perf on global` sets a global default. `/perf off [local|global]`
-disables and saves the chosen scope. Workspace preferences override global ones.
-`/perf hide` hides the panel without stopping collection (session-only), and
-`/perf detail` opens a snapshot, useful when the right rail is hidden on narrow
-terminals. These commands work during active runs. Use `/perf on` to reveal a
-hidden panel again.
-
-Sampling runs every 250 ms with bounded recent samples; the right-hand display
-refreshes once a second. It shows event-loop scheduling lag, synchronous task
-refresh cost, process CPU, process-lifetime **peak** RSS where supported, and
-runtime counters for running tools/agents, queued prompts, and pending streamed
-characters. CPU is scoped to this process, not remote agents or shell children.
-Slow tools or asynchronous provider waits are not treated as blocked UI callbacks.
-Sustained lag/callback warnings and recovery transitions enter the private runtime
-JSONL log, with periodic numeric summaries and no conversation payloads. A fully
-blocked event loop can report a stall only after it resumes. This is a lightweight
-health monitor, not a stack profiler or measurement of actual terminal frame rate.
-
-Runtime JSONL diagnostics use a closed metadata schema: timestamps, fixed severity
-and phase/status/metric categories, bounded finite numeric timings and resource
-measurements, and bounded integer counters. Session IDs and provider, model, tool,
-and version labels are omitted rather than redacted or hashed. Messages, arguments,
-tracebacks, arbitrary logger names, and exception text are never rendered. Only
-explicitly allowlisted built-in exception identities retain their fixed type label;
-other exception classes are recorded as `other`. Unknown extras and invalid values
-are dropped. While the interactive CLI runs, framework/provider/tool warnings and
-errors use this same metadata-only log instead of propagating to root terminal
-handlers, which can otherwise paint tracebacks over Textual's interface. Tool
-failures remain inspectable in their tool cards. Root and third-party loggers are
-not reconfigured. This policy applies to the runtime JSONL file, not the richer
-on-screen performance snapshot or separately enabled wire logging.
-
 ## Shared provider connections
 
 Use `/provider` to create or edit named provider connections, activate one, or
-fetch its model IDs. The TUI and web UI share
+fetch its model IDs. The command line and web UI share
 `$XDG_CONFIG_HOME/ngn/providers.json` (default
 `~/.config/ngn/providers.json`). Enter an environment-variable **name** such as
 `OPENAI_API_KEY` or `${OPENAI_API_KEY}`; ngn reads the value when it makes a
@@ -102,16 +37,16 @@ backend settings belong to each connection. See the
 From the repository root, retain the existing Poetry workflow:
 
 ```bash
-poetry install -E dev -E tui
-poetry run ngn --demo
+poetry install -E dev
+poetry run ngn run --demo "Hello"
 ```
 
 Alternatively, for a **new** local uv environment:
 
 ```bash
 uv venv --python 3.13
-uv pip install --python .venv/bin/python -e '.[tui]'
-uv run --no-project --python .venv/bin/python ngn --demo
+uv pip install --python .venv/bin/python -e .
+uv run --no-project --python .venv/bin/python ngn run --demo "Hello"
 ```
 
 Do not overwrite a Poetry-managed `.venv`. Use Poetry or another explicitly
@@ -121,71 +56,19 @@ explains activation and optional isolated tool installations. Commands written
 as bare `ngn` below assume the intended environment is activated; otherwise use
 `poetry run ngn` or `uv run --no-project --python .venv/bin/python ngn`.
 
-Install the **local source** with the `tui` extra for the behavior documented
-here, or select a published CLI release as described in the installation guide.
-Textual is optional: importing `nagents`, using `Agent`, or running the headless
-client does not import Textual.
-
-### Terminal activity and launch
-
-With animation enabled, ngn first shows a compact versioned introduction in the
-existing terminal, then sweeps into the interface. Enter skips the introduction.
-The same particle field changes its gradient and motion for model work, tool
-calls, delegation, approvals, responses and completion. Direct child agents and
-the nearest scheduled wake-up have independent activity rows in the agent pane.
-The assistant activity and colored provider/model lines stay below the message
-box. Native themes retain the terminal's background. When a POSIX terminal
-reports its default colors, user messages and the composer use a subtle shade
-of that background; otherwise they retain the native default. No terminal
-palette is changed. Multiplexers such as tmux may not forward color reports.
-Painted presets remain available through `--theme-background theme`.
-
-Assistant Markdown links and plain web URLs are clickable. Clicking opens
-HTTP(S) links in your normal browser; streaming or displaying a link never
-opens it automatically.
-
-When reopening a conversation, saved agent and wake-up context is folded into
-an expandable row. The original text remains available for inspection and is
-kept out of the message box's prompt history.
-
-`--no-animations` skips the introduction and sweep and keeps activity fields
-static. Ctrl+Q and `/quit` gather the field and close the interface; pressing
-Ctrl+Q again skips the closing animation. Ctrl+C still copies selected text or
-cancels active work first, and a second idle Ctrl+C exits. Closing always awaits
-the backend and its owned tasks before restoring the terminal.
-
-After exit, ngn prints the selected session, a resume command when the session
-was saved, and its runtime-log path. Runtime logs are private JSON Lines files
-under the configured data directory's `logs/` folder (normally
-`~/.local/share/ngn/logs/`), with UTC timestamps and elapsed milliseconds. They
-record allowlisted TUI lifecycle/performance metadata, framework warning/error
-metadata, and exception types, not rendered messages, exception text, tracebacks,
-or third-party warnings. The
-terminal client does not enable request/response payload logging by default;
-wire logging requires an explicit opt-in.
-
-The TUI owns process-local `schedule_wakeup` timers. A due timer waits for its
-originating conversation to be selected and idle, after queued user prompts.
-Its reason and countdown remain visible while pending, and execution uses the
-harness's wake-up path with ordinary tools and approvals. Timers disappear on
-exit. There are at most 32 pending timers and eight automatic activations per
-human-turn chain. Cancelling active work also cancels that chain's pending
-timers.
-
 The offline demo needs no API key and does not execute shell commands, change
 workspace files, or contact a model. It also skips Python plugins, since even
 trusted setup code could perform I/O. It does save demo conversations locally.
-Send `demo approval` to inspect an approval dialog with a sample change preview.
-Demo actions are explicitly labeled as previews, not completed real work.
+Send `demo approval` to inspect an approval request with a sample change preview.
 
-For a real model, create a named connection in `providers.json` or the Provider
-connections UI, set its referenced key in your shell environment, and launch:
+For a real model, create a named connection in `providers.json` or the web
+client's Provider connections UI, set its referenced key in your shell
+environment, and run:
 
 ```bash
-poetry run ngn --provider-id my-openai --model gpt-6-luna
-poetry run ngn --provider-id my-anthropic --model YOUR_MODEL_ID
-poetry run ngn --workspace /path/to/project
-poetry run ngn --continue
+poetry run ngn run --provider-id my-openai --model gpt-6-luna "Explain this project"
+poetry run ngn serve --workspace /path/to/project
+poetry run ngn run --continue "Continue with the next step"
 ```
 
 Use a model ID your provider account actually supports. Set `base_url` and
@@ -198,305 +81,6 @@ Use `api: auto` for provider-native defaults, or choose `chat_completions`,
 LiteLLM requires an explicit `base_url` and an API-key reference such as
 `api_key_env: LITELLM_API_KEY`; it does not use ChatGPT OAuth or require a
 gateway SDK in ngn. See [provider recipes](ngn-configuration.md#provider-recipes).
-
-## Live voice
-
-The interactive terminal supports the same GPT-Live connections and inherited
-Voice preferences as the web client. Install the optional local audio support:
-
-```bash
-python -m pip install 'nagents[tui,voice]'
-# In an existing source/Poetry environment instead:
-poetry install -E tui -E voice
-```
-
-Run `ngn` without `--demo`, open `/voice settings`, enable Voice, and choose a
-Live-capable provider connection. Use `/provider` and `/login` to configure the
-connection first. API-key/Entra GPT-Live and eligible ChatGPT/Codex subscription
-connections use their existing, distinct authentication and media transports;
-ngn never falls back from a failed subscription login to an API key.
-
-| Control | Purpose |
-| --- | --- |
-| **Ctrl+G**, `/voice start` | Start Voice; Ctrl+G again ends it. |
-| `/voice stop` | Stop audio and finalize the provider call, leaving assistant work running. |
-| `/voice mute` | Mute/unmute speech sent to the provider; output continues. |
-| `/voice devices` | Choose a microphone and speaker for this ngn process; end Voice before changing them. |
-| `/voice settings [agent\|workspace\|global]` | Edit the same canonical Markdown preferences as the web UI. |
-| `/voice status` | Inspect bounded captions, delegation status, and the actual startup instructions/context. |
-| `/voice` | Open the Voice menu. |
-
-The default **Main assistant** backend retains the selected conversation's
-provider, tools, agent restrictions and approval dialogs. Voice can join work
-already running: spoken requests enter the next complete response/tool boundary
-without cancelling the current run. Speech is input data, never a terminal slash
-command. Requests and assistant answers use normal session persistence. Ending
-Voice detaches speech delivery, not accepted assistant work; use **Esc** to cancel
-assistant work separately. Switching sessions, agents or provider connections
-requires ending Voice first. Quitting ngn closes audio and joins managed work.
-
-Global → workspace → authored agent → saved agent settings inherit field by field.
-The editor overrides only changed fields and preserves `live.prompt`; **Reset**
-restores inherited settings without deleting that prompt. Edit `live.prompt` in
-the corresponding agent Markdown document to change voice instructions. Settings
-saved during a call apply to the next call. **Hosted Responses** is an advanced
-API-key option without workspace tools; ChatGPT voice requires Main assistant.
-
-Startup context can be recent text, a read-only generated summary with recent
-text, or none. It is bounded background context, not new caller speech. Tool
-output, attachments and private reasoning are excluded. Only the parent's
-verified text replies and task/tool status reach Voice; child streams and private
-reasoning do not. The compact caption preview and retained call inspectors are
-bounded, process-local views; they are not durable copies of all spoken dialogue.
-No raw audio is saved by this client. Provider retention policies still apply.
-
-Local audio uses PortAudio, mono PCM16 at 24 kHz. Install the system PortAudio
-library if your platform needs it (for example `libportaudio2` on Debian/Ubuntu
-or `brew install portaudio` on macOS), and grant microphone access to the terminal.
-Devices must support this format. Use **headphones**: the terminal does not
-provide browser-style acoustic echo cancellation. Muting drops queued input and
-sends silence, while the local device stays open. An audio-device failure ends
-the call; reconnect after fixing permissions or device selection. On SSH/remote
-terminals, devices are on the machine running ngn, not the client laptop. Voice
-is unavailable in the offline demo and headless `ngn run`.
-
-Automated coverage uses local provider/media fixtures and fake devices; it does
-not establish microphone acoustics or paid-provider account eligibility.
-
-## Subagent conversations
-
-Open an agent from the Agents tree (Ctrl+T focuses it on wide terminals, or opens
-the agent view on narrow terminals). The child conversation uses the same
-full-screen Markdown turns, compact selectable tool cards, themes and composer
-as the main conversation, rather than a plain-text transcript dialog.
-
-Click **← Back**, press **Esc**, or **Alt+Left** to return to the parent without
-closing its work. The parent conversation and draft remain mounted. **F6** moves
-between the child message editor and conversation. Enter sends a follow-up to the
-selected finished agent; Shift+Enter inserts a newline. Running agents allow
-per-agent drafts but cannot accept a follow-up until finished. The usual
-continuation and parent-notification rules still apply. History refreshes while
-the view is open; saved tool results use the same expandable output widgets.
-
-## Explicit text deliveries
-
-The interactive TUI exposes the `builtin.tui` channel for explicitly requested
-text sends. Ordinary assistant replies already appear in the conversation.
-An approved `channel_send` appears as a separate saved delivery alongside its
-compact tool card; it does not create another assistant message or another
-execution loop. Deliveries survive session reload.
-
-The route is text-only: attachments, including text files, cause the entire send
-to be rejected. Existing profile restrictions and terminal approvals apply.
-See [built-in TUI text delivery](channels.md#built-in-tui-text-delivery) for
-discovery, history and lifecycle behavior.
-
-## Composer and commands
-
-Typing `/` at the start of the composer opens suggestions immediately. Use
-Up/Down or the mouse to select a command. Enter prefills its name; edit or add
-arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
-`/help` all use the same live harness registry, including:
-
-- Built-in actions such as `/new`, `/model`, `/agent`, `/tasks`, and `/queue`.
-- Discovered skills as `/<name> [task]` or `/skill:<name> [task]`, loaded on demand through the Agent's
-  skill loader. Workspace reads remain guarded; bundled skills load from package
-  resources. Suggestions refresh metadata without activating skills or running scripts.
-- Trusted Python-plugin commands, labeled with their plugin source.
-
-| Command | Purpose |
-| --- | --- |
-| `/help` | Show the live command registry. |
-| `/new` | Start a new local conversation. |
-| `/fork [title]` | In the TUI, copy the idle conversation into a new independent root and select it. Omit the title for `<chat title> · fork 1`, `fork 2`, etc. Saved context and attachments are copied; active work and approvals are not. |
-| `/rename [title]` | In the TUI, save an explicit name of 1–80 printable characters, or omit it to generate a title from the latest 10 user messages using a small model on the same provider connection. |
-| `/sessions` | List and resume this workspace's saved conversations. |
-| `/compact` | Compact active context with the configured strategy. |
-| `/model [model]` | Show or change the runtime conversation model. |
-| `/agent [name]` | Show or switch the built-in/custom profile. |
-| `/context` | Inspect effective context and configuration. |
-| `/plugins` | Inspect configured and loaded Python extensions. |
-| `/skills [filter]` | Browse discovered skills and prefill a command without executing it. |
-| `/tasks` | Open the agent tree, inspect conversations, and send follow-ups. |
-| `/voice [start\|stop\|mute\|settings\|devices\|status]` | Interactive TUI Live voice and shared Voice preferences. |
-| `/queue [resume\|clear]` | Inspect, resume, or explicitly discard queued input. |
-| `/login`, `/logout` | Manage ngn's local OpenAI device login. |
-| `/quit` | Close the client and clean up managed work. |
-
-`/help` is the source of truth for commands available in the particular source build you installed.
-
-Title generation reads saved user messages, including those before compaction,
-and caps each of the latest ten at 2,000 characters. Assistant replies, tool
-results, background agent updates, wake-ups, and attachment bytes are excluded.
-The separate request advertises no tools and leaves the conversation model and
-history unchanged. If the connection cannot list a recognized small text model,
-supply an explicit title; ngn does not substitute a larger model or another connection.
-
-Shift+Enter inserts a newline. Ctrl+J and Alt+Enter remain fallbacks for terminals
-that do not transmit Shift+Enter distinctly. Pasted multiline text is never
-submitted automatically. Use `/agent` to select a profile; switching waits until
-the current run is finished or stopped. Tab/Shift+Tab use ordinary widget navigation.
-
-New prompts and plugin/skill commands submitted during work queue in FIFO order
-by default. `--submit-mode interrupt` instead cancels and awaits the current run
-and its children before starting the new input. Ordinary configuration commands
-are not deferred behind an active run.
-
-When messages are queued, **Ctrl+S** confirms they should run next without stopping
-current work. Press **Ctrl+S again** during that same run to interrupt streaming
-output or tool execution, await cancellation and cleanup, then send the queue in
-FIFO order. The queue shows a hint for the next shortcut action. Adding another
-queued message, pausing or clearing the queue, or starting the next turn resets
-the shortcut to its first step. It never submits an unsent composer draft or acts
-through a modal dialog. Completed file or shell actions are not rolled back.
-
-Escape stops current work and pauses the queue without discarding it. Empty Enter
-or `/queue resume` resumes queued input; `/queue` inspects it and `/queue clear`
-explicitly discards it. The queue is bounded to 20 inputs and is not persisted
-across application exit. Completed file or shell actions are never rolled back.
-
-```bash
-ngn --submit-mode queue
-ngn --submit-mode interrupt
-```
-
-The equivalent JSON setting is `"submit_mode": "queue"`; `NGN_SUBMIT_MODE`
-sets its environment default. Tab and Shift+Tab use ordinary widget navigation.
-They do not select agents or complete commands. Use `/agent` to select a profile
-and arrows plus Enter to choose a command.
-
-`/resume` is a synonym for `/sessions` and opens the session picker. Aliases are
-resolved by the command registry before native dispatch, so they appear in
-completion and help without being sent to the model. Extensions can register
-synonyms with `harness.commands.register_alias(alias, target)`.
-
-### Selection and clipboard
-
-Drag to highlight text and release the mouse button to copy it automatically.
-This works for responses, tool output, code, and mouse selections in text fields;
-code indentation and line breaks are preserved. Double-click selections copy too.
-Choosing an agent or slash-command row is navigation, not text copying.
-
-Ctrl+C copies selected text instead of cancelling work. Without selected text,
-it retains the normal cancel/exit behavior. Ctrl+Shift+C explicitly copies without
-cancelling; Command+C also works if the terminal forwards it to ngn. Keyboard
-selection in an editable field does not automatically replace the clipboard, so
-select-all followed by paste still works normally. Use Ctrl+C to copy that selection.
-
-ngn sends the terminal's OSC 52 clipboard request and also uses a local clipboard
-helper when available: `pbcopy` on macOS, `wl-copy` on Wayland, `xclip` or `xsel`
-on X11, or PowerShell on Windows. This makes copying work in macOS Terminal,
-which does not support Textual's OSC 52-only clipboard path. Helpers receive text
-on stdin, not as a shell command or command-line argument. ngn never reads your
-desktop clipboard automatically.
-
-Over SSH, only terminal clipboard forwarding is used, not the remote desktop's
-clipboard. OSC 52 writing must be allowed by your terminal and, if applicable,
-tmux. If the terminal blocks it, configure its clipboard permissions or use the
-terminal's own selection/copy mechanism. Usual terminal paste shortcuts continue
-to work; pasted multiline text is never submitted automatically.
-
-### Compact tool activity
-
-Tool cards start collapsed, including restored history and failed tools. Their
-single-line header shows the tool name, a short command or target hint when
-available, and a running, complete, failed, or cancelled label. Completed calls
-show their reported duration when available. Long names and hints are shortened
-to keep the outcome visible on narrow terminals. Status and timer columns reserve
-space so normal duration updates do not shift the target. Rows have no painted
-background or state-dependent border. Hover makes the entire header **bold**
-immediately, including completed and restored calls, without a background tint.
-Keyboard focus retains an underline. Preparing, ready, and running tool headers
-carry a smooth teal/lavender foreground shimmer across the entire line, including
-the target, status, and timing text, without shifting their positions. The shimmer
-continues between streamed argument updates; execution timing starts only when
-the tool runs. The shimmer stops on completion/cancellation. Successful completion runs one
-1.25-second left-to-right green pass and leaves the header muted green. Failure,
-nonzero-exit, timeout and cancelled headers do not receive the success tint.
-With `--no-animations`, success applies its final tint immediately; elapsed time
-still updates when motion is disabled. Tool execution and approval semantics are
-unchanged; this does not simulate queue or argument-streaming phases.
-
-Native shell results with a nonzero exit code or timeout show **exit 7** (with
-the actual code) or **timed out** in the card and headless text output. This
-process outcome does not change the enclosing task's status or CLI exit code;
-the agent may recover and finish the requested work. Saved result strings are
-not parsed to infer a process outcome, and JSON events retain their original
-structured result and framework error fields.
-
-Press **F6** to switch from the composer to the conversation without changing
-your scroll position, or back to your draft. In the conversation, PageUp/PageDown
-scroll and Tab/Shift+Tab navigate tool headers and other controls. Tab in the
-composer retains its configured agent/completion/focus behavior. The conversation
-border and `/help` show the pane-focus shortcut.
-
-Click a tool header, or focus it and press Enter or Space, to inspect the tool
-name, arguments, output, error, and diff. Press Enter, Space, or click again to
-collapse. Output and
-lifecycle updates never change your choice; failures stay visibly labeled without
-opening their details. While an expanded card's header is focused and visible,
-incoming details pause bottom-follow so the header stays available. Scrolling
-away does not pull the header back into view. Expansion choices last for the mounted card, not across
-session reloads. Details retain the existing 16,000-character output/argument
-preview limit with an explicit truncation marker; approval dialogs still show
-the exact proposal separately. In approval dialogs, PageUp/PageDown scroll the
-full proposal even with Deny or Allow once focused; paging does not change the
-decision focus. Deny remains the initial choice, and Escape denies.
-Closing an approval restores the previously focused control without scrolling;
-if that control is no longer available, focus returns to the composer.
-
-## Themes and motion
-
-The message editor and its status footer share one borderless, filled surface.
-User messages use the same background, with paired foreground colors for contrast
-even when the surrounding terminal uses its native background.
-
-```bash
-ngn --theme terminal
-ngn --theme graphite
-ngn --theme ocean
-ngn --theme ember
-ngn --theme terminal --no-animations
-```
-
-`terminal` is the default. It uses ANSI default foreground/background resets, so
-your terminal supplies those colors; it does not sample RGB values or rewrite
-your terminal's palette. `graphite` is cool neutral, `ocean` uses blue/cyan, and
-`ember` provides the warm palette. Graphite combines lilac/mint/rose, ocean uses
-turquoise/blue/orchid, and ember uses terracotta/gold/mauve. User and assistant
-turns, tools, task states, notices, headings, code, and diffs have distinct
-semantic colors instead of sharing one accent. `theme_background` separately selects
-`"auto"`, `"terminal"`, or `"theme"`: follow the preset's automatic behavior,
-retain the terminal background, or use the theme background. For example:
-
-```json
-{"theme": "ocean", "theme_background": "terminal", "animations": false}
-```
-
-The equivalent CLI choices make background variants easy to compare:
-
-```bash
-ngn --theme ocean --theme-background theme
-ngn --theme ocean --theme-background terminal
-ngn --theme graphite --theme-background theme
-ngn --theme ember --theme-background terminal
-```
-
-Native backgrounds use terminal defaults rather than attempting to sample the
-terminal's actual RGB color. Painted semantic text is tested for 4.5:1 contrast;
-native ANSI accent contrast depends on the terminal's own palette. Native
-selection uses reverse video, so arrow-key navigation remains visible without
-guessing whether the inherited background is light or dark.
-
-Each preset has a subtle three-column ASCII activity animation at eight frames
-per second; idle/error status states remain still. In the current checkout,
-`--no-animations`, `"animations": false` in JSON, or `NGN_ANIMATIONS=false`
-disables the indicator, animated scrolling, and input cursor blinking.
-`TEXTUAL_ANIMATIONS=none` also disables these motions. Brief button-press feedback
-remains. Theme selection also accepts JSON `theme` and `NGN_THEME`; background
-selection has the `NGN_THEME_BACKGROUND` environment default. JSON overrides
-`NGN_*` environment defaults. These are color/motion presets, not a graphical
-Bot avatar or a separate team-view implementation.
 
 ## Native agent sessions
 
@@ -549,7 +133,7 @@ Omitting `session_id` starts a new child. Supplying an existing idle child ID
 continues that conversation and preserves its history and identity. A busy,
 foreign, deleted, cancelled, or unavailable child is rejected explicitly; a
 model call does not queue work onto a running child or silently start a
-replacement. The human follow-up controls in the TUI and web UI keep their
+replacement. The human follow-up controls in the web UI keep their
 separately documented queue behavior. Permission ceilings, approval policy,
 subtree ownership, and shared quotas apply to both new and existing children.
 
@@ -644,7 +228,7 @@ state; an uncertain operation is never automatically replayed.
 
 ### Tree, history, and follow-ups
 
-The TUI and web client show the short session ID and optional title in the agent
+The web client shows the short session ID and optional title in the agent
 tree. Without a title, the short ID is the display fallback; no generated
 random display names are used. Select a child to inspect its conversation and
 activity. Selection alone never starts a session or sends a message.
@@ -689,7 +273,7 @@ behavior is separate from model-facing `to_agent`, which rejects a busy target.
 For external A2A integrations, protocol `task_id` values keep their A2A meaning;
 this session-ID change applies to native agent conversations.
 
-Try `demo subagents` in `ngn --demo` for three genuine concurrent asyncio jobs
+Try `ngn run --demo "demo subagents"` for three genuine concurrent asyncio jobs
 using clearly labeled, scripted offline responses. A live prompt example is:
 
 > Start three independent read-only agent sessions to review the README, test
@@ -759,17 +343,13 @@ sign-in yourself. The default model is `openrouter/auto`; change it with
 
 ### OpenAI device login
 
-Start `ngn` without `--demo`, then enter `/login`. Select ChatGPT device login,
-open the displayed OpenAI link, and enter the one-time code in your browser.
-Only approve a code you requested yourself. Escape or Cancel stops waiting.
-The terminal never asks for your ChatGPT password.
-
-You can also use the headless login command:
+Run the login command, open the displayed OpenAI link, and enter the one-time
+code in your browser. Only approve a code you requested yourself. ngn never asks
+for your ChatGPT password.
 
 ```bash
 ngn login --device-auth
 ngn login --status
-ngn
 ```
 
 OpenAI currently documents device authentication as **beta**. You may need to
@@ -829,7 +409,7 @@ uv run --no-project --python .venv/bin/python ngn run --demo --json "Hello"
 
 `ngn run -` reads a prompt from standard input. JSON mode emits one event per
 line with `schema_version: 1` and an `event` discriminator. It uses the same
-tools, hooks, and permission checks as the TUI. Non-interactive approvals are
+tools, hooks, and permission checks as the web client. Non-interactive approvals are
 denied, never silently granted. An interactive `ngn run` asks for approval on
 standard error. Control sequences in human-readable tool output are sanitized.
 
@@ -862,16 +442,14 @@ inspect tool-result events when automating a workflow.
 
 ### CLI reference
 
-Run without a subcommand for the TUI. Common options are accepted before or
+Running `ngn` without a subcommand prints a pointer to the native terminal client. Common options are accepted before or
 after the subcommand; prefer supplying each option only once.
 
 | Command | Purpose |
 | --- | --- |
-| `ngn` | Full-screen terminal client. Requires the `tui` extra and a terminal. |
 | `ngn run [--json] [prompt ...]` | Headless prompt execution. `-`, or no prompt with piped stdin, reads stdin. |
 | `ngn serve` | React client and HTTP API for the harness. Install `[web]` with bundled assets, or build an editable checkout; see [Local Web Client](ngn-web.md). |
 | `ngn sessions` | List saved sessions for the selected workspace. |
-| `ngn resume [SESSION_ID]` | Resume a saved session in the full-screen client. With no ID, choose from an interactive list. Requires a terminal; errors on an ID from another workspace. |
 | `ngn doctor` | Initialize the harness and show configuration/extension diagnostics without an LLM request. Trusted plugins still execute. Use `--demo` to skip them. |
 | `ngn login [METHOD]` | Start provider sign-in. Methods: `chatgpt`, `openrouter`, `openai`, `anthropic`, `gemini`, `custom`, or an advanced `--provider` name. Interactive menu in a terminal; ChatGPT device login when none is chosen non-interactively. |
 | `ngn login --status` | Show ChatGPT and provider login status without a network request. |
@@ -890,9 +468,6 @@ after the subcommand; prefer supplying each option only once.
 | `--max-subagent-depth N` | Integer `0..8`; default `2`, with the root at depth `0`. |
 | `--max-concurrent-subagents N` | Concurrent slots shared by the tree: integer `1..64`, default `3`. |
 | `--max-subagent-executions N` | Shared executions per root run: integer `1..4096`, default `8`; includes follow-ups and reactivations. |
-| `--theme NAME` | Select `terminal`, `graphite`, `ocean`, or `ember`. |
-| `--theme-background auto\|terminal\|theme` | Choose preset-default, terminal-native, or preset background behavior. |
-| `--no-animations` | Disable the busy indicator's motion, animated scrolling, and cursor blinking; brief button feedback remains. |
 | `--submit-mode queue\|interrupt` | Control prompts submitted while work is active. |
 | `--plugin REFERENCE` | Explicitly trust and append a Python extension; repeatable. |
 | `--demo` | Use the offline demo. |
@@ -913,11 +488,8 @@ hashed subdirectory containing `sessions.db`. Set `data_dir` to change the
 session-state root. Moving a workspace or changing its resolved path can select
 a different scope; `--resume` does not search unrelated workspaces.
 
-`ngn resume` opens the full-screen client on a saved session. Pass a session ID
-to resume it directly, or omit the ID to pick from an interactive list. Listing
-and choosing are read-only: they never register an empty session, so the picker
-shows only real conversations. `--continue`/`--resume` on `ngn` and `ngn run`
-remain available for scripts and one-shot runs.
+`ngn sessions` lists saved sessions without registering an empty one.
+`--continue`/`--resume` on `ngn run` and `ngn serve` reopen a saved session.
 
 Demo conversations persist too. Queued prompts and running subagent jobs do not
 survive application exit. Resuming history does not replay completed or uncertain
@@ -999,7 +571,7 @@ and calls `skill(name)` to load relevant instructions as tool-result task contex
 The preview has a separate 10,000-estimated-token cap, complete sorted entries,
 and an omission notice; omitted names remain in the full catalog for named loads.
 Explicitly select one as user-level task context with `$ngn-customize` or
-`$ngn-channels`, including ordinary web/Telegram messages. The web UI and TUI also
+`$ngn-channels`, including ordinary web/Telegram messages. The web UI also
 provide `/skills [filter]`, `/ngn-customize [task]`, and `/skill:ngn-customize [task]`.
 Short names yield to built-in or registered commands; the `skill:` form resolves
 collisions. Arguments retain their whitespace, replace literal `$ARGUMENTS` in the
@@ -1107,7 +679,7 @@ See `examples/harness/runtime/commands.py` in the checkout, or launch it with
 ### Change agent behavior
 
 The supported interfaces live in `nagents.extensions` and are also exported
-from `nagents`. They do not depend on the coding harness or TUI.
+from `nagents`. They do not depend on the coding harness or a client.
 
 | Interface | Purpose |
 | --- | --- |
@@ -1195,23 +767,21 @@ the diff and run appropriate checks before accepting generated changes.
 
 ## Customer test loop
 
-1. Start with `ngn --demo`; try streaming, `demo approval`, denial, cancellation,
-   a new session, and session resume.
-2. Resize to a small terminal and confirm the composer and approval controls
-   remain usable. Exercise multiline input and command discovery.
-3. Configure a real provider and ask for a read-only explanation of a disposable
+1. Start with `ngn run --demo "Hello"` and `ngn serve --demo`; try streaming,
+   `demo approval`, denial, cancellation, a new session, and session resume.
+2. Configure a real provider and ask for a read-only explanation of a disposable
    project. Check which tools and context were used.
-4. Ask for a small edit. Inspect the exact preview before approving, then review
+3. Ask for a small edit. Inspect the exact preview before approving, then review
    the resulting Git diff and run a relevant test.
-5. Load `examples/harness/custom_behavior.py:setup` and inspect the active
+4. Load `examples/harness/custom_behavior.py:setup` and inspect the active
    extension/compaction behavior. Try your own context transform or compactor.
-6. Report the command, terminal size/emulator, provider/model, expected behavior,
-   and the observed failure. Do not include API keys or secret file contents.
+5. Report the command, provider/model, expected behavior, and the observed
+   failure. Do not include API keys or secret file contents.
 
 ## Scope
 
 The first version focuses on a local coordinating agent with bounded subagents, Python behavior extensions,
-coding tools, sessions, and a terminal/headless interface. It does not yet offer
+coding tools, sessions, and headless and web interfaces. It does not yet offer
 remote attachment, persistent peer-agent groups, worktree isolation, LSP integration,
 extension marketplaces, cross-process exactly-once tool execution, or a secure
 sandbox for arbitrary plugins and shell commands. Realtime speech remains a

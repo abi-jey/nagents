@@ -6,7 +6,7 @@ There are three related products. Choose the one you want before installing:
 | --- | --- | --- |
 | **Native Rust ngn bundle** | [Native installer and usage](../guide/native-ngn.md) | Rust CLI, Ratatui TUI, local browser host, and an embedded Python agent runtime. No end-user Python/pip, Rust, Node or compiler installation. Linux x86_64 (glibc 2.39+) and macOS 11+ (arm64, x86_64). |
 | **Python nagents library** | Instructions below | Reusable `Agent`, providers, tools and session APIs; Python 3.12–3.15. |
-| **Existing Python ngn client** | [Python client installation](../guide/ngn-installation.md) | Feature-rich Textual TUI, React web client, plugins, voice, channels and other Python harness integrations through optional extras. |
+| **Existing Python ngn client** | [Python client installation](../guide/ngn-installation.md) | Headless CLI, React web client, plugins, voice, channels and other Python harness integrations through optional extras. The Python terminal UI was removed; use the native ngn for a terminal client. |
 
 !!! warning "Native release availability"
     The self-contained installer starts at **0.100.2**. Its download URLs require
@@ -47,14 +47,13 @@ Install only what you need in the selected Python environment. Quote extras so
 the shell does not expand brackets:
 
 ```sh
-python -m pip install 'nagents[tui]'
+python -m pip install 'nagents[web]'
 # For multiple features, for example:
-python -m pip install 'nagents[tui,voice,web]'
+python -m pip install 'nagents[voice,web]'
 ```
 
 | Extra | Purpose |
 | --- | --- |
-| `tui` | Textual terminal client. Not required for the library or headless CLI. |
 | `web` | Python web server and media dependencies; published wheels include the React assets. |
 | `voice` | Local audio/voice dependencies, including sounddevice and aiortc; may need host PortAudio/audio support. |
 | `a2a` | Optional A2A SDK/server/authentication integration. |

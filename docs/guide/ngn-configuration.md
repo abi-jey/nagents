@@ -114,20 +114,19 @@ contain prompts, model output, tool arguments/results, workspace contents, and
 other private information. Enable only when needed; protect the files and review
 them before sharing. The log location is `logs/wire-<unique>.jsonl` under
 `data_dir` (by default `$XDG_DATA_HOME/ngn`, or `~/.local/share/ngn`). Files are
-created with owner-only permissions (`0600`), and the TUI exit summary shows the
-path when enabled. Transport authentication/cookie headers are redacted, but
+created with owner-only permissions (`0600`). Transport authentication/cookie headers are redacted, but
 application payloads are not. This captures traced provider HTTP traffic during
 agent turns, including streaming responses; it is not an MCP protocol, realtime
 WebSocket, or approval-decision log. There is no automatic rotation or retention
 cleanup: disable logging and remove sensitive logs when no longer needed.
 
-## TUI performance preference
+## Legacy terminal performance preference
 
 `tui_performance` is a strict boolean (default `false`) in harness JSON. It is
-also available as `NGN_TUI_PERFORMANCE=true|false|1|0`. The CLI flags
-`--tui-performance` and `--no-tui-performance` override the loaded value for one
-invocation without saving anything. This is a terminal-client preference; it
-adds no telemetry or configuration to the core Agent library.
+also available as `NGN_TUI_PERFORMANCE=true|false|1|0`. It controlled the
+performance panel of the removed Python terminal UI and is retained so existing
+configuration and preference files stay valid; nothing in the Python client
+displays it now. It adds no telemetry or configuration to the core Agent library.
 
 Terminal integrations can persist the user's explicit global/local selection:
 
@@ -145,7 +144,7 @@ Global preferences live in `$XDG_CONFIG_HOME/ngn/tui.json`; local preferences
 live in `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/tui.json`, using the
 same workspace identity as the other scoped settings. With no `XDG_CONFIG_HOME`,
 `~/.config` is used. Local preferences override global preferences; both override
-JSON/environment defaults, and explicit CLI flags remain highest priority.
+JSON/environment defaults.
 A saved global change updates the current config immediately, but an existing
 local preference still wins on the next load.
 
@@ -200,7 +199,7 @@ Provider connections** manages connections and a selection for this workspace;
 its JSON lives at `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json`.
 The workspace list includes global connections, which can be selected without
 changing the global default. **Use global default** clears a workspace selection.
-The TUI `/provider` menu also offers both scopes. Without an active connection,
+Without an active connection,
 `ngn serve` starts for setup, but chat waits until one is selected. You can edit either JSON while
 ngn is stopped. A revision prevents an older UI from overwriting another
 process's edits. A separate connection can be selected for a trusted agent profile using
@@ -210,7 +209,7 @@ Provider connections contain kind, authentication source, endpoint where needed,
 HTTP API and **environment variable names**. Chat models are chosen separately:
 the `model` field in global `$XDG_CONFIG_HOME/ngn/assistant.md` or workspace
 `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/assistant.md` provides shared
-defaults for the CLI, TUI and web UI. Explicit trusted JSON model selections, agent-profile models,
+defaults for the CLI and web UI. Explicit trusted JSON model selections, agent-profile models,
 `NGN_MODEL` and explicit `--model` overrides retain their precedence. Switching
 connections does not change the chat model. Voice duplex preferences are edited
 separately in **GPT-Live → Voice settings**: Global supplies defaults, and the
@@ -311,14 +310,13 @@ execution timeout.
 Existing retries remain unchanged; retries and backoff can make a generation
 last longer than one request deadline. There is no top-level Harness JSON field
 or `NGN_REQUEST_TIMEOUT` environment alias. Use the named connection's JSON,
-web provider editor, or TUI `/provider` editor.
+or web provider editor.
 
 An optional `session_id_header` on the named connection sends the current
 conversation ID in that HTTP header on model generation requests. For example,
 add `"session_id_header": "x-opencode-session"` to a LiteLLM connection when its
 upstream needs conversation correlation. The default `""` disables it. Configure
-this in the web connection editor under **Advanced**, the TUI provider editor,
-or the connection's JSON. Global and workspace scopes use the same field.
+this in the web connection editor under **Advanced** or the connection's JSON. Global and workspace scopes use the same field.
 
 ngn uses each conversation's actual ID, stable across turns and tool rounds;
 it never saves a shared static ID in the provider profile. Catalog and
@@ -354,7 +352,7 @@ an existing installation needs operator-managed conversion of prior settings.
 It does not import Voice SQLite records or separate prompt files. Provider
 connections contain no chat or Voice model and no API-key values.
 
-Create a named connection in the web UI or TUI and set its environment variable;
+Create a named connection in the web UI and set its environment variable;
 the provider editor does not offer an API-key-value field.
 
 ## File locations and trust
@@ -362,7 +360,7 @@ the provider editor does not offer an API-key-value field.
 | Item | Location or selection | Behavior |
 | --- | --- | --- |
 | Global/user JSON | `$XDG_CONFIG_HOME/ngn/config.json`; defaults to `~/.config/ngn/config.json` when `XDG_CONFIG_HOME` is unset or empty | Automatically trusted and loaded if present. |
-| Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.json`; defaults to `~/.config/ngn/providers.json` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
+| Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.json`; defaults to `~/.config/ngn/providers.json` | Shared across workspaces by web and headless ngn; no API key values. |
 | Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json` | Workspace-only connections and selection; inherits global connections and default. |
 | Global assistant defaults | `$XDG_CONFIG_HOME/ngn/assistant.md` | Native Markdown containing the assistant prompt, model/tool selections, and `live` settings; created from the packaged asset on startup if absent. |
 | Workspace assistant defaults | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/assistant.md` | Supplied fields override global defaults; missing fields and missing files inherit. |
@@ -532,21 +530,20 @@ snapshot of the whole file. Invalid arguments and limit failures return tool
 errors for the model to correct; they do not automatically relax limits or retry
 the operation.
 
-### Terminal behavior
+### Terminal and submission behavior
 
 | Field | JSON type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
 | `theme` | string | `"terminal"` | `"terminal"`, `"graphite"`, `"ocean"`, or `"ember"`. |
 | `theme_background` | string | `"auto"` | `"auto"`, `"terminal"`, or `"theme"`. Automatic preset behavior, terminal-native background, or the theme's background. Separate from palette selection. |
-| `animations` | boolean | `true` | Enable motion; `false` disables the busy animation, animated scrolling, and cursor blinking. `TEXTUAL_ANIMATIONS=none` also disables them; brief button feedback remains. |
+| `animations` | boolean | `true` | Legacy terminal motion preference; retained for compatibility. |
 | `submit_mode` | string | `"queue"` | `"queue"` or `"interrupt"`: queue new prompts during work, or cancel/await current work before sending the new prompt. |
 
-These are ngn settings, not arbitrary Textual theme names or CSS tables. Preset
-colors can evolve; there is no user-defined palette table in this schema.
-With `theme_background: auto`, `terminal` uses native terminal surfaces and
-the other presets use painted surfaces. `"terminal"` retains native surfaces for
-any preset, with preset-specific ANSI accents. `"theme"` paints the background;
-the `terminal` preset then uses a dark graphite-based surface fallback.
+`theme`, `theme_background` and `animations` configured the removed Python
+terminal UI. They remain valid fields so existing files keep loading, and the
+native ngn reads `theme` and `theme_background` when importing legacy Python
+settings. `submit_mode` still controls prompts submitted while the web client is
+working.
 
 Browser GPT-Live preferences are configured in **GPT-Live → Voice settings**
 at either scope. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
@@ -698,7 +695,7 @@ instructions cannot bypass approvals, depth limits, or the permission ceiling.
 
 ## MCP servers and live reload
 
-Both `ngn serve` and the TUI load MCP tools through the same harness. Configure
+Both `ngn serve` and `ngn run` load MCP tools through the same harness. Configure
 stdio servers in the user config or an explicitly trusted project config:
 
 ```json

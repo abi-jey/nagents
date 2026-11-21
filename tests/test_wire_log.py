@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from io import StringIO
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -13,14 +12,12 @@ from aiohttp import ClientSession
 from aiohttp import TraceRequestStartParams
 from aiohttp import web
 from multidict import CIMultiDict
-from rich.console import Console
 from yarl import URL
 
 from nagents.harness.wire_log import WireLog
 from nagents.observation import observe
 from nagents.observation import observer
 from nagents.observation import trace_config
-from nagents.tui.exit_summary import print_exit_summary
 
 pytestmark = pytest.mark.requires_posix
 
@@ -203,19 +200,3 @@ def test_wire_file_replacement_fails_closed(tmp_path: Path) -> None:
             assert not wire.path.exists()
         elif replacement == "file":
             assert wire.path.read_text() == "replacement"
-
-
-def test_exit_summary_reports_wire_log() -> None:
-    output = StringIO()
-    print_exit_summary(
-        "1:00",
-        "session",
-        "ngn --resume session",
-        "runtime.jsonl",
-        opened=True,
-        wire_log="wire.jsonl",
-        console=Console(file=output, color_system=None),
-    )
-    assert "wire.jsonl" in output.getvalue()
-    assert "Sensitive request/response" in output.getvalue()
-    assert "Wire log off" not in output.getvalue()

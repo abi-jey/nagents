@@ -257,7 +257,7 @@ See [runtime settings](ngn-web.md#runtime-settings) for the API and conflict rul
    restart, scale, delete, or prune those resources while preparing the new UI.
 3. Use the administrator-managed `nagents/ghcr-pull-secret`. No registry credential
    is included in the template.
-4. Stop use of the local TUI/other clients with the authorized source credential
+4. Stop use of other local clients with the authorized source credential
    before copying the **ngn OpenAIAuth stored JSON**, not another client's
    auth format, into `nagents/ngn-web-codex-seed`, key `openai.json`. Do not inspect
    or print the JSON. Use file-based secret creation outside Git, without a

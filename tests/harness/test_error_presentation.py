@@ -11,7 +11,6 @@ from unittest.mock import Mock
 
 import aiohttp
 import pytest
-from textual.widgets import Static
 
 from nagents import cli
 from nagents.error_presentation import transport_error_message
@@ -23,10 +22,8 @@ from nagents.harness.providers.registry import ProviderRegistry
 from nagents.harness.providers.registry import ScopedProviderRegistryStore
 from nagents.harness.tools.coding import CodingTools
 from nagents.provider.codex.openai import CodexCredentials
-from nagents.tui import NagentsApp
 from nagents.web.settings.provider_setup import provider_error
 from tests.support.config import connection
-from tests.support.tui import idle
 from tests.support.web import client_app
 from tests.support.web import submit_and_wait
 
@@ -217,21 +214,3 @@ async def test_actual_harness_web_uses_safe_explanation_without_extra_or_egress_
         assert not any(record.get("event") == "tool_call" for record in records)
         assert "egress" not in json.dumps(records) and ORIGINAL_TIMEOUT not in json.dumps(records)
     assert native_timeout.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_actual_harness_tui_displays_timeout_and_retains_original_event(
-    tmp_path: Path, native_timeout: Mock
-) -> None:
-    harness = Harness(native_config(tmp_path))
-    app = NagentsApp(harness)
-    async with app.run_test(size=(90, 25)) as pilot:
-        await idle(app, pilot)
-        errors = [event async for event in harness.run("offline fixture") if isinstance(event, ErrorEvent)]
-        assert len(errors) == 1
-        before = cli._event_record(errors[0])
-        await app._event(errors[0])
-        notices = [str(widget.content) for widget in app.query(".notice.error").results(Static)]
-        assert notices == [f"Error: {RESPONSE_TIMEOUT}"]
-        assert cli._event_record(errors[0]) == before and errors[0].message == ORIGINAL_TIMEOUT
-    assert harness._closed and native_timeout.call_count == 1

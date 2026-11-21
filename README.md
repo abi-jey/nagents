@@ -51,10 +51,11 @@ existing Poetry project. Do not replace an existing environment:
 python -m pip install nagents
 ```
 
-## Python ngn terminal client
+## Python ngn headless client
 
-`ngn` is an optional terminal and headless coding harness, available in published
-distributions with the `tui` extra. Published wheels also include `ngn serve`,
+The Python `ngn` is a headless and web coding harness. Its full-screen terminal
+UI was removed; use the [native ngn](ngn/README.md) for an interactive terminal
+client. Published wheels also include `ngn serve`,
 the `web` extra, and built frontend assets, verified in
 [v0.15.0](https://github.com/abi-jey/nagents/releases/tag/v0.15.0). This README
 describes the **current source checkout**, which may include newer changes. See
@@ -64,51 +65,37 @@ checking the commands and fixes in an installed distribution.
 Keep the existing Poetry workflow from the repository root:
 
 ```bash
-poetry install -E dev -E tui
-poetry run ngn --demo
+poetry install -E dev
+poetry run ngn run --demo "Hello"
 ```
 
 For a new local editable environment with uv, from the repository root:
 
 ```bash
 uv venv --python 3.13
-uv pip install --python .venv/bin/python -e '.[tui]'
-uv run --no-project --python .venv/bin/python ngn --demo
+uv pip install --python .venv/bin/python -e .
+uv run --no-project --python .venv/bin/python ngn run --demo "Hello"
 ```
 
 Do not recreate an existing Poetry-managed `.venv`; keep using Poetry or choose
 a separate local environment. This uv workflow does not require `uv sync`,
 `uv lock`, or changes to the existing `uv.lock`. The explicit interpreter needs
 no activation. See [ngn installation](docs/guide/ngn-installation.md) for optional
-activation, headless-only installation, and isolated `uvx`/`uv tool` alternatives.
+activation and isolated `uvx`/`uv tool` alternatives.
 
 The offline demo needs no API key, makes no model requests, skips Python plugins,
 and performs no workspace edits or shell commands. It does save demo
-conversations locally. Send `demo approval` to try a change-preview dialog or
+conversations locally. Send `demo approval` to try a change preview or
 `demo subagents` to exercise three native async jobs without provider calls.
 
 For a real model, select a named connection in `providers.json`, set its referenced
-environment variable, and launch through the same environment, for example
-`poetry run ngn --provider-id my-connection --model MODEL_ID`.
-With the environment activated, use `ngn run --json "your prompt"` for headless
-integration. Non-interactive approvals fail closed.
-
-Type `/` for selectable commands from the harness, skills, and trusted plugins.
-Shift+Enter inserts a newline; Tab navigates widgets. Use `/agent` or `--agent`
-to select a configured profile; `assistant` is the default. Input queues while work
-is active, or use `--submit-mode interrupt`. The default `terminal` theme inherits
-terminal colors; try `--theme graphite`, `ocean`, or `ember`, and disable motion
-with `--no-animations`. Delegation never exceeds the parent's permissions and defaults to depth two
-(root 0, child 1, grandchild 2).
-
-For local Live voice, install `nagents[tui,voice]` (or
-`poetry install -E tui -E voice`). Open `/voice settings` to enable it and choose
-an API-key, Foundry, or eligible ChatGPT/Codex connection, then use **Ctrl+G** or
-`/voice start`. `/voice mute` toggles the microphone, `/voice devices` selects
-local audio devices, and `/voice stop` ends the call without stopping assistant
-work. Voice shares the web UI's settings and uses the current assistant's tools
-and approvals; no browser or web server is needed. Use headphones to avoid echo.
-See [terminal Voice](docs/guide/ngn.md#live-voice) for setup and limitations.
+environment variable, and run through the same environment, for example
+`poetry run ngn run --provider-id my-connection --model MODEL_ID "your prompt"`.
+Use `ngn run --json "your prompt"` for headless integration, or `ngn serve` for
+the browser client. Non-interactive approvals fail closed. Use `--agent` to
+select a configured profile; `assistant` is the default. Delegation never
+exceeds the parent's permissions and defaults to depth two (root 0, child 1,
+grandchild 2).
 
 For ChatGPT/Codex subscription access, select a named OpenAI connection with
 `"auth": "chatgpt"` or `"auth": "codex"` in `providers.json`. Use `/login`
@@ -131,8 +118,8 @@ See the [full schema and recipes](docs/guide/ngn-configuration.md) for types,
 defaults, ranges, profile replacement, relative paths, and LiteLLM endpoints.
 
 Python plugins can change how the agent builds context, compacts history, and
-executes tools. The TUI uses the same harness as the headless client; Textual
-remains an optional dependency. See the [ngn usage guide](docs/guide/ngn.md),
+executes tools. The headless and web clients share the same harness. See the
+[ngn usage guide](docs/guide/ngn.md),
 [custom Python behavior example](examples/harness/custom_behavior.py), and
 [upstream research](docs/development/harness-research.md).
 

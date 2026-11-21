@@ -213,7 +213,7 @@ Agent budget. Configure it in JSON:
 Or supply `NGN_SKILL_TOKEN_LIMIT=10000` as an environment default. Both accept
 integers from 1 through 100,000; JSON takes precedence over the environment
 default under the normal configuration rules. This one allowance controls each
-load and the aggregate content of explicit activations, across CLI, TUI, and web
+load and the aggregate content of explicit activations, across CLI and web
 Harness execution. It is distinct from `max_output` and `max_file_bytes`.
 
 Explicit context is per-turn, not a permanent policy change. A model's skill tool
@@ -358,7 +358,7 @@ describes catalog disclosure followed by model-driven or explicit activation.
 | Optional `license`, `compatibility`, string-map `metadata`, and experimental `allowed-tools` | Extra keys are ignored consistently by the shared metadata parser. They do not grant permissions or imply full YAML support. |
 | Catalog first, selected instructions later | Dynamic manifest and `skill(name)` tool. |
 | Optional supporting resources loaded as needed | Separate permitted resource access; the two builtin bodies are self-contained. |
-| Client-defined discovery scopes and activation UI | Guarded workspace roots plus packaged builtins in Harness; `$skill-name` in text and `/skills`, `/name`, or `/skill:<name>` in the web UI and TUI. |
+| Client-defined discovery scopes and activation UI | Guarded workspace roots plus packaged builtins in Harness; `$skill-name` in text and `/skills`, `/name`, or `/skill:<name>` in the web UI. |
 | Recommended concise bodies (under 5,000 tokens and 500 lines) | A recommendation distinct from ngn's 10,000-token approximate load budget. |
 
 Neither `$skill-name`, `/skill-name`, `/skill:<name>`, a particular prompt role,

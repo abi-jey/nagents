@@ -341,32 +341,6 @@ async def test_serve_exposes_mcp_tools_and_reloads_after_final_response(
 
 @pytest.mark.requires_posix
 @pytest.mark.asyncio
-async def test_tui_loads_and_reloads_same_mcp_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from nagents.tui import NagentsApp
-    from tests.support.tui import idle
-    from tests.support.tui import send
-
-    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-        assert "mcp__fixture__echo" in provider.schemas[-1]
-        revise_server(tmp_path, "tui")
-        yield TextDoneEvent(text="tui response")
-
-    harness, _ = setup_harness(tmp_path, monkeypatch, script)
-    harness.config.mcp_servers = (server(tmp_path),)
-    app = NagentsApp(harness)
-    async with app.run_test(size=(100, 32)) as pilot:
-        await idle(app, pilot)
-        await send(app, pilot, "check MCP")
-        await idle(app, pilot)
-        definition = harness.agent.tool_registry.get("mcp__fixture__echo")
-        assert definition is not None and definition.description == "tui"
-    assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
-        (tmp_path / "stops").read_text().splitlines()
-    )
-
-
-@pytest.mark.requires_posix
-@pytest.mark.asyncio
 async def test_mcp_handshake_cancellation_reaps_process(tmp_path: Path) -> None:
     from nagents.mcp.client import MCPClient
 

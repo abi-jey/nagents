@@ -1,4 +1,4 @@
-"""Provider sign-in helpers shared by the terminal client and the TUI.
+"""Provider sign-in helpers shared by the command line and the web client.
 
 OpenRouter supports headless PKCE: the browser shows a single-use code, the
 user pastes it, and ngn exchanges it for a user-controlled API key. The key is

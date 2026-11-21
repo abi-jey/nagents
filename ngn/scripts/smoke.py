@@ -359,7 +359,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
     import subprocess
     import termios
 
-    from subagent_smoke import terminal_text
+    from subagent_smoke import terminal_rows, terminal_text
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
@@ -390,6 +390,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
             ready.observe(output, COMPOSER_TITLE in visible()),
             "Native TUI did not render and repaint at the resized PTY dimensions",
         )
+        require(b"\x1b[?1003h\x1b[?1006h" in output, "Plain TUI launch did not enable mouse reporting")
         destination = workspace / "changed.txt"
         require(not destination.exists(), "Approval fixture destination already exists")
         os.write(master, b"write a file\r")
@@ -427,19 +428,46 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
             destination.read_text() == "written by an approved Rust host tool\n",
             "TUI did not execute its approved native Rust tool",
         )
+        # Use visible terminal coordinates and real SGR press/release reports,
+        # rather than invoking the tool-card handler directly.
+        card = " write · changed.txt · complete"
+
+        def disclosed(rows: list[str], marker: str) -> bool:
+            has_details = any(line.lstrip().startswith("Arguments:") for line in rows)
+            return any(line.startswith(marker + card) for line in rows) and has_details == (marker == "v")
+
+        rows = terminal_rows(output, ready.rows, ready.columns)
+        for before, after in ((">", "v"), ("v", ">")):
+            row = next((index for index, line in enumerate(rows, 1) if line.startswith(before + card)), 0)
+            require(row > 0, f"Missing tool card before mouse click: {before + card}")
+            os.write(master, f"\x1b[<0;1;{row}M\x1b[<0;1;{row}m".encode())
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if select.select([master], [], [], 0.05)[0]:
+                    output += os.read(master, 65536)
+                    rows = terminal_rows(output, ready.rows, ready.columns)
+                    if disclosed(rows, after):
+                        break
+            require(disclosed(rows, after), f"Mouse click did not toggle {before + card}")
         if external_shutdown:
             process.send_signal(signal.SIGTERM)  # External shutdown must restore terminal state too.
         else:
             os.write(master, b"\x11")  # Ctrl+Q: cleanup and terminal restoration.
         deadline = time.monotonic() + 10
-        while process.poll() is None and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
             if select.select([master], [], [], 0.05)[0]:
                 try:
-                    os.read(master, 65536)
+                    chunk = os.read(master, 65536)
                 except OSError:
                     break
+                if not chunk:
+                    break
+                output += chunk
+            elif process.poll() is not None:
+                break
         process.wait(timeout=2)
         require(process.returncode == 0, "TUI did not exit cleanly")
+        require(b"\x1b[?1006l\x1b[?1003l" in output, "TUI did not disable mouse reporting on exit")
         restored_mode = termios.tcgetattr(master)
         mask = termios.ICANON | termios.ECHO | termios.ISIG
         require(
@@ -575,7 +603,7 @@ async def main() -> None:
                         external_shutdown=external_shutdown,
                     )
                 print(
-                    "PASS: real-PTY TUI → nagents Agent.run → approved native Rust write; Ctrl+Q/SIGTERM restore terminal mode"
+                    "PASS: real-PTY TUI approved native Rust write, mouse tool disclosure and Ctrl+Q/SIGTERM restoration"
                 )
                 await asyncio.to_thread(
                     subagent_tui_check,

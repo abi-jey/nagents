@@ -50,7 +50,7 @@ summary prompt. Old transcript rows remain available in storage.
 
 The coding harness supplies workspace discovery, instructions/skills, guarded
 file tools, managed shell execution, approval requests, and session selection.
-The TUI and headless CLI use that same harness. Neither contains the LLM loop.
+The web client and headless CLI use that same harness. Neither contains the LLM loop.
 
 Executable project configuration is opt-in. Even a project-controlled API endpoint
 could expose a user's provider credential, so trust applies to more than `.py`

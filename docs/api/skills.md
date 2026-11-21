@@ -172,6 +172,6 @@ tools, or execute scripts. Supporting resource files require a separate access
 mechanism. Loaded tool results use ordinary history/compaction behavior.
 
 These contracts apply to text `run()`. Skill-enabled batch, realtime voice, and
-`run_simple()` reject unsupported extension execution. The TUI's
+`run_simple()` reject unsupported extension execution. The web client's
 `/skill:<name> [task]` is a client convenience, not a protocol method or universal
 slash syntax.

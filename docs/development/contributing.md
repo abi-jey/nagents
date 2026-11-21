@@ -27,7 +27,7 @@ all hooks requires the Rust/C toolchain and Node even for a documentation edit.
     cd nagents
 
     # Install dependencies
-    poetry install -E dev -E tui -E voice -E web
+    poetry install -E dev -E voice -E web
 
     # Install pre-commit hooks
     poetry run pre-commit install
@@ -44,7 +44,7 @@ all hooks requires the Rust/C toolchain and Node even for a documentation edit.
     cd nagents
 
     # Create virtual environment and install all dependencies
-    poetry install -E dev -E docs -E tui -E voice -E web  # (1)!
+    poetry install -E dev -E docs -E voice -E web  # (1)!
 
     # Install pre-commit hooks
     poetry run pre-commit install
@@ -59,11 +59,11 @@ all hooks requires the Rust/C toolchain and Node even for a documentation edit.
     poetry run mkdocs build --strict
     ```
 
-    1. These are package extras from `[project.optional-dependencies]`, not Poetry dependency groups. `dev`, `tui`, `voice`, and `web` match the test installation in CI; `docs` adds MkDocs and mkdocstrings.
+    1. These are package extras from `[project.optional-dependencies]`, not Poetry dependency groups. `dev`, `voice`, and `web` match the test installation in CI; `docs` adds MkDocs and mkdocstrings.
 
 If you already use a local `.venv`, keep that environment rather than letting
 multiple tools manage it. The equivalent editable install is
-`.venv/bin/python -m pip install -e '.[dev,docs,tui,voice,web]'`; use `.venv/bin/pytest`,
+`.venv/bin/python -m pip install -e '.[dev,docs,voice,web]'`; use `.venv/bin/pytest`,
 `.venv/bin/mypy`, and `.venv/bin/mkdocs` in place of `poetry run` below.
 The build backend is Hatchling, regardless of the environment manager.
 

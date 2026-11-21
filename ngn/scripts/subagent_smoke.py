@@ -22,7 +22,7 @@ def require(condition: object, message: str) -> None:
         raise AssertionError(message)
 
 
-def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
+def terminal_rows(output: bytes, rows: int, columns: int) -> list[str]:
     """Replay the VT subset used by the native startup prelude and Ratatui."""
     screen = [[" " for _ in range(columns)] for _ in range(rows)]
     text = output.decode("utf-8", errors="replace")
@@ -87,7 +87,11 @@ def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
             if not unicodedata.combining(character):
                 screen[row][column] = character
                 column += 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
-    return " ".join("".join("".join(line) for line in screen).split()).encode()
+    return ["".join(line) for line in screen]
+
+
+def terminal_text(output: bytes, rows: int = 40, columns: int = 140) -> bytes:
+    return " ".join("".join(terminal_rows(output, rows, columns)).split()).encode()
 
 
 async def http_checks(binary: Path, config: Path, workspace: Path) -> None:

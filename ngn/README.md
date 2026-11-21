@@ -155,10 +155,9 @@ matching published core. The API is **not available in nagents
 - Active-turn **Enter** and **`/steer TEXT`** target the capable active root at its next persisted safe point;
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
-- Drag and copy with your terminal's normal shortcuts (often **Ctrl+Shift+C**
-  on Linux). To opt into ngn mouse controls instead, start with `ngn --mouse`;
-  that enables wheel scrolling and tool header hover/click. In that mode,
-  use your terminal's mouse override (often **Shift**) to select text.
+- Click a tool header to expand or collapse its details, and use the mouse wheel
+  to scroll the conversation. To select and copy text, use your terminal's
+  mouse override (often **Shift+drag**) and its usual copy shortcut.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+C** or **Ctrl+Q** quits; **Esc** cancels active work without quitting.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
@@ -334,7 +333,7 @@ From the repository root, on Linux x86_64 with Python 3.13, Rust 1.93+ and a C
 compiler:
 
 ```sh
-./ngn/dev                                  # Launch with existing provider settings
+./ngn/dev                                  # Launch the mouse-enabled TUI
 ./ngn/dev --config /path/to/rust-config.json  # Or use an explicit Rust config
 ./ngn/dev --config /path/to/rust-config.json serve --port 18768
 ./ngn/dev --test                  # Build + actual CLI/HTTP/WebSocket/PTY acceptance

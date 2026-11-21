@@ -178,28 +178,22 @@ class HarnessExecutor(ToolExecutor):
             or not isinstance(tool.func, MethodType)
         ):
             return False
-        from nagents.channels.dispatcher import ChannelDispatcher
         from nagents.web.channels.host import ChannelHost
 
         function = tool.func
         owner = function.__self__
-        if type(owner) is ChannelHost:
-            run = owner.state.active
-            return (
-                function.__func__ is ChannelHost.channel_send
-                and owner.state.running_harness is self.harness
-                and owner.dispatcher is not None
-                and any(saved is tool for saved in owner.tools)
-                and run is not None
-                and not run.background
-                and not run.source
-                and (not run.server_owned or owner.state.bus.listening(run.session_id))
-            )
+        if type(owner) is not ChannelHost:
+            return False
+        run = owner.state.active
         return (
-            type(owner) is ChannelDispatcher
-            and function.__func__ is ChannelDispatcher.channel_send
-            and call.arguments.get("channel") == "builtin.tui"
-            and call.arguments.get("destination") == self.harness.session_id
+            function.__func__ is ChannelHost.channel_send
+            and owner.state.running_harness is self.harness
+            and owner.dispatcher is not None
+            and any(saved is tool for saved in owner.tools)
+            and run is not None
+            and not run.background
+            and not run.source
+            and (not run.server_owned or owner.state.bus.listening(run.session_id))
         )
 
     def _host_channel_list(self, tool: ToolDefinition, call: ToolCall) -> bool:
