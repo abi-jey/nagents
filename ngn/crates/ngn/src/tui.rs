@@ -74,7 +74,7 @@ Ctrl+Y  Approve once · Ctrl+D  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
  /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
- Mouse  Click tool headers · Drag transcript text · Ctrl+C to copy selection";
+ Mouse  Click tool headers · Drag visible text · Ctrl+C to copy selection";
 
 const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
 
@@ -160,6 +160,7 @@ struct App {
     approval: Option<Approval>,
     scroll: Option<usize>,
     transcript_area: Rect,
+    screen_area: Rect,
     selection: selection::Selection,
     preview_scroll: u16,
     tools: tool_cards::Cards,
@@ -269,6 +270,7 @@ impl App {
             != approval.as_ref().map(|approval| &approval.id)
         {
             self.preview_scroll = 0;
+            self.selection.clear();
             // The pending modal and durable transcript have separate sources.
             // Pick up a committed decision before drawing the newly exposed row.
             if self.approval.is_some()
@@ -407,17 +409,19 @@ impl App {
     }
 
     fn transcript_mouse(&mut self, mouse: MouseEvent) -> bool {
-        if !self.tools_available() {
+        let changed = if self.tools_available() {
+            let changed = self
+                .tools
+                .mouse(mouse, self.transcript_area, &mut self.scroll);
+            self.transcript_wheel(mouse);
+            changed
+        } else {
             self.tools.clear_pointer();
-            return self.selection.clear();
-        }
-        let changed = self
-            .tools
-            .mouse(mouse, self.transcript_area, &mut self.scroll);
+            false
+        };
         let selected = self
             .selection
-            .mouse(mouse, self.transcript_area, self.tools.top());
-        self.transcript_wheel(mouse);
+            .mouse(mouse, self.screen_area, self.tools.top());
         changed || selected
     }
 
@@ -539,6 +543,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let accent = Color::Rgb(190, 224, 163);
     let muted = Color::Rgb(148, 158, 144);
     let area = frame.area();
+    app.screen_area = area;
     let footer = footer_area(area);
     let menu = app
         .composer_available()
@@ -601,12 +606,6 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         now,
         Some(Style::new().fg(muted)),
     );
-    if interactive {
-        app.selection
-            .draw(frame.buffer_mut(), app.transcript_area, app.tools.top());
-    } else {
-        app.selection.clear();
-    }
     if let Some(menu) = menu {
         menu.draw(
             frame,
@@ -767,6 +766,8 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     if let Some(picker) = &app.picker {
         picker.draw(frame, accent, muted);
     }
+    app.selection
+        .draw(frame.buffer_mut(), area, app.tools.top());
     if app.no_color {
         strip_color(frame.buffer_mut(), area);
     }
@@ -1260,6 +1261,9 @@ pub async fn run(
                         app.agents.paint_motion(frame.buffer_mut(), &app.tasks);
                         frame.render_widget(Clear, area);
                         app.activity.draw(frame, area, &app, &host.config, now);
+                        let screen = frame.area();
+                        app.selection
+                            .draw(frame.buffer_mut(), screen, app.tools.top());
                         if app.no_color {
                             let area = frame.area();
                             strip_color(frame.buffer_mut(), area);
@@ -1351,7 +1355,7 @@ pub async fn run(
                         if app.composer_available() { app.caret.restart(Instant::now()); }
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if control && matches!(key.code, KeyCode::Char('c' | 'C'))
-                            && app.tools_available() && app.selection.copy(stdout().lock())?
+                            && app.selection.copy(stdout().lock())?
                         {
                             app.selection.clear();
                             continue;
@@ -1611,6 +1615,96 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(screen.contains("Mouse  Click tool headers"));
+    }
+
+    #[test]
+    fn mouse_copies_composer_footer_rail_and_modal_without_activating_them() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use crossterm::event::MouseButton;
+        use ratatui::backend::TestBackend;
+
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: dir.path().into(),
+                data_dir: dir.path().join("state"),
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = App {
+            input: "keep this draft".into(),
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        let now = Instant::now();
+        let copy_visible = |app: &mut App, terminal: &mut Terminal<TestBackend>, text: &str| {
+            terminal.draw(|frame| draw(frame, app, &host, now)).unwrap();
+            let target: Vec<String> = text.chars().map(|ch| ch.to_string()).collect();
+            let buffer = terminal.backend().buffer();
+            let (col, row) = (0..buffer.area.height)
+                .find_map(|row| {
+                    let cells: Vec<_> = (0..buffer.area.width)
+                        .map(|col| buffer[(col, row)].symbol())
+                        .collect();
+                    cells
+                        .windows(target.len())
+                        .position(|window| window == target)
+                        .map(|col| (col as u16, row))
+                })
+                .unwrap_or_else(|| panic!("not rendered: {text}"));
+            for (kind, column) in [
+                (MouseEventKind::Down(MouseButton::Left), col),
+                (
+                    MouseEventKind::Drag(MouseButton::Left),
+                    col + text.len() as u16 - 1,
+                ),
+                (
+                    MouseEventKind::Up(MouseButton::Left),
+                    col + text.len() as u16 - 1,
+                ),
+            ] {
+                app.transcript_mouse(MouseEvent {
+                    kind,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                });
+            }
+            terminal.draw(|frame| draw(frame, app, &host, now)).unwrap();
+            let mut output = Vec::new();
+            assert!(app.selection.copy(&mut output).unwrap());
+            assert_eq!(
+                output,
+                format!("\x1b]52;c;{}\x1b\\", STANDARD.encode(text)).as_bytes()
+            );
+        };
+        copy_visible(&mut app, &mut terminal, "keep this draft");
+        copy_visible(&mut app, &mut terminal, "Provider not configured");
+        copy_visible(&mut app, &mut terminal, "Agents / 0");
+        app.help = true;
+        copy_visible(&mut app, &mut terminal, "F2  Conversations");
+        assert!(app.help);
+        app.help = false;
+        app.approval = Some(Approval {
+            id: "shown".into(),
+            run_id: "run".into(),
+            session_id: "session".into(),
+            root_session_id: "session".into(),
+            agent_title: "assistant".into(),
+            depth: 0,
+            call: ngn_protocol::ToolCall {
+                call_id: "call".into(),
+                name: "write".into(),
+                arguments: serde_json::json!({}),
+            },
+            preview: "visible approval preview".into(),
+        });
+        copy_visible(&mut app, &mut terminal, "visible approval preview");
+        assert!(app.approval.is_some());
+        assert_eq!(app.input, "keep this draft");
     }
 
     #[test]

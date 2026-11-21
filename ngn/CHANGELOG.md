@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.40
+
+- Allow mouse selection and Ctrl+C copying throughout the visible native TUI, including the composer, sidebar, footer, and dialogs.
+
 ## 0.100.39
 
 - Give native user messages a subtle background in saved painted themes, with cell-safe wrapping and unchanged terminal-default and NO_COLOR behavior.

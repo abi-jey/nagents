@@ -157,11 +157,11 @@ matching published core. The API is **not available in nagents
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - The mouse wheel scrolls the main conversation when the pointer is over it,
   without moving focus. Hover a tool header to highlight it; click to toggle
-  its details. Drag over transcript text to select visible rows, then press
+  its details. Drag over visible text anywhere in the TUI, then press
   **Ctrl+C** to copy in terminals that accept clipboard writes (OSC 52).
-  Dialogs and focused Agents controls take precedence. For selection outside the
-  transcript, or if clipboard writes are disabled, use your terminal's own
-  selection override (often **Shift** while dragging).
+  Dialogs and focused Agents controls still own their normal actions.
+  If clipboard writes are disabled, use your terminal's own selection override
+  (often **Shift** while dragging).
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+Q** quits and joins runners before restoring the terminal.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
