@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.45
+
+- Copy anything on screen, keep tool headers still when they expand or finish, and edit the draft anywhere with arrow keys.
+
 ## 0.100.44
 
 - Native TUI UX overhaul: Markdown replies, unified-diff approvals with y/n keys and typing-safe guards, status-icon tool cards, a welcome screen, grouped help, a full slash menu, plain-language outcomes, and provider errors that stop promptly with a specific reason.
