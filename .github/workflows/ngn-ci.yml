@@ -29,7 +29,12 @@ jobs:
           shared-key: ngn-linux-x86_64
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: src/nagents/web-ui/package-lock.json
+      - name: Install web dependencies
+        working-directory: src/nagents/web-ui
+        run: npm ci
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
@@ -124,6 +129,14 @@ jobs:
         with:
           workspaces: ngn
           shared-key: ngn-${{ matrix.platform }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: src/nagents/web-ui/package-lock.json
+      - name: Install web dependencies
+        working-directory: src/nagents/web-ui
+        run: npm ci
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'

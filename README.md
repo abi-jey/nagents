@@ -9,16 +9,18 @@
 
 `nagents` (pronounced *"N-agents"*) is a lightweight LLM agent library with direct HTTP-based provider integration.
 
-## Rust harness migration
+## Native ngn and the engine migration
 
-This repository also contains **[`ngn` (pronounced *"engine"*), the Rust harness, TUI and web host](ngn/README.md)**
-under `ngn/`. The Python `nagents` library remains under `src/nagents/`, with its
-existing interfaces and independently usable APIs. The two communicate through a private,
-versioned runtime protocol; Python does not own Rust tool execution or approvals.
+This repository also contains **[`ngn` (pronounced *"engine"*), the native TUI and
+browser host](ngn/README.md)** under `ngn/`. Today the Rust host owns tools and
+approvals and invokes `nagents` for the model loop through a private runtime
+protocol. The Python library remains independently usable from `src/nagents/`.
 
 The library, native application and adapter share one version and one GitHub
-release. The Rust client is **not yet a feature-complete replacement** for the Python
-client below; see the [migration checklist](ngn/docs/migration.md).
+release. [ADR 0001](docs/adr/0001-python-core-rust-tui.md) proposes replacing the
+split host with one long-lived Python engine, keeping Rust for the terminal and
+selected native tools. See the [migration plan](ngn/docs/migration.md) for the
+phases and what the current release supports.
 
 ## Install native ngn
 

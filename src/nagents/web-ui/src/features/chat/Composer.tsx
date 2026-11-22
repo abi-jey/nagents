@@ -68,6 +68,8 @@ export function Composer({
   commandsEnabled = true,
   maxLength = 32000,
   deliveryEnabled = true,
+  sendLabel = "Send",
+  alternateAction,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -97,6 +99,8 @@ export function Composer({
   commandsEnabled?: boolean;
   maxLength?: number;
   deliveryEnabled?: boolean;
+  sendLabel?: string;
+  alternateAction?: ReactNode;
 }) {
   const form = useRef<HTMLFormElement>(null);
   const [touch, setTouch] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
@@ -236,7 +240,10 @@ export function Composer({
         <div className="composer-voice-controls" ref={voiceRefs?.controls} hidden={!voiceLayout} />
         </div>
         {status}
-        <span id="composer-help" className="sr-only">{touch ? "Return adds a new line. Use Send, or Steer after current tools and Queue after current work." : "Enter to send. Shift+Enter for a new line."}{commandsEnabled && " Type / for commands; use arrows and Tab to choose. Escape closes suggestions."}</span>
+        <span id="composer-help" className="sr-only">{touch ? deliveryEnabled
+          ? "Return adds a new line. Use Send, or Steer after current tools and Queue after current work."
+          : `Return adds a new line. Use ${sendLabel} to submit.`
+          : "Enter to submit. Shift+Enter for a new line."}{commandsEnabled && " Type / for commands; use arrows and Tab to choose. Escape closes suggestions."}</span>
         {running && (
           <button type="button" className="cancel" onMouseDown={touch ? keepFocus : undefined} onClick={cancel} disabled={stopping} aria-label="Stop run">
             {stopping ? "Stopping…" : "Stop run"}
@@ -244,14 +251,15 @@ export function Composer({
         )}
         {deliveryChoices && <button type="button" className="composer-queue" disabled={!ready}
           title="Wait until current work finishes" onMouseDown={keepFocus} onClick={() => { if (ready) submit("queue"); }}>Queue</button>}
+        {alternateAction}
         <button
           type="submit"
           className="primary"
           disabled={!ready}
           onMouseDown={touch ? keepFocus : undefined}
-          title={deliveryChoices ? "Steer after current tools finish, without interrupting" : "Send message"}
+          title={deliveryChoices ? "Steer after current tools finish, without interrupting" : sendLabel === "Queue" ? "Queue message" : "Send message"}
         >
-          {submitting ? "Sending…" : deliveryChoices ? "Steer" : "Send"}
+          {submitting ? "Sending…" : deliveryChoices ? "Steer" : sendLabel}
         </button>
         {deliveryChoices && <span className="composer-delivery-help">Steer after current tools · Queue after current work</span>}
       </div>

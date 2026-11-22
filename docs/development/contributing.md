@@ -12,10 +12,11 @@ Thank you for your interest in contributing to nagents! This guide will help you
 
 These are the Python library/client prerequisites. Native harness development
 also requires **Rust 1.93+, a C compiler** (bundled SQLite), and **Python 3.13**
-for the installed-source launcher. The native browser assets need no Node build.
-The separate React frontend uses Node **24.20.0** to match the distribution-build
-workflow. Root pre-commit also runs native Rust and browser checks, so running
-all hooks requires the Rust/C toolchain and Node even for a documentation edit.
+for the installed-source launcher. The shared React frontend uses Node
+**24.20.0** to match the distribution-build workflow. Run
+`npm ci --prefix src/nagents/web-ui` before building the Rust binary or running
+all pre-commit hooks. The Rust binary embeds the built assets and doesn't need
+Node at runtime.
 
 ### Development Setup
 
@@ -77,9 +78,10 @@ The build backend is Hatchling, regardless of the environment manager.
 
 ### Web Client Development
 
-The React/TypeScript frontend lives in `src/nagents/web-ui/`; the Python backend
-is `src/nagents/web/`. With the checkout installed in `.venv`, run from the
-repository root:
+The React/TypeScript frontend lives in `src/nagents/web-ui/` and is used by both
+the [Rust host](https://github.com/abi-jey/nagents/blob/main/ngn/README.md#build-and-inspect-from-source) and the Python
+backend (`src/nagents/web/`). To develop against Python with the checkout installed
+in `.venv`, run from the repository root:
 
 ```bash
 .venv/bin/python -m pip install -e '.[web]'

@@ -179,6 +179,10 @@ impl Cards {
         self.scroll_rows(scroll, up, 10);
     }
 
+    pub(super) fn scroll_position(&self) -> (usize, usize) {
+        (self.rendered_top, self.bottom)
+    }
+
     // None follows the tail. Otherwise keep the same top row as new rows arrive
     // rather than maintaining a fixed distance from the moving tail.
     pub(super) fn scroll_rows(&self, scroll: &mut Option<usize>, up: bool, rows: usize) {
@@ -280,8 +284,8 @@ impl Cards {
         self.pointer = None;
     }
 
-    pub(super) fn hover(&mut self, area: Rect, position: Position) -> bool {
-        let pointer = area.contains(position).then_some(position);
+    pub(super) fn hover(&mut self, area: Rect, position: Option<Position>) -> bool {
+        let pointer = position.filter(|&position| area.contains(position));
         let hover_changed = self.pointer.and_then(|p| self.header_at(area, p))
             != pointer.and_then(|p| self.header_at(area, p));
         self.pointer = pointer;
@@ -1346,7 +1350,7 @@ mod tests {
             assert_eq!(left[0].trim(), "Tools · F4 focus");
             // The plain F4 hint is chrome, not a scrollable transcript cell.
             assert_eq!(app.transcript_area.y, 1);
-            assert_eq!(app.transcript_area.width, left_width);
+            assert_eq!(app.transcript_area.width + 1, left_width); // Leave the scrollbar gutter.
             let screen = left.join("\n");
             let mut previous = 0;
             for &item in &ordered {

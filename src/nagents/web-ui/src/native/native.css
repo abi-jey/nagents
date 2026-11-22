@@ -1,0 +1,16 @@
+/* Rust-host controls use the workspace's existing palette and chat layout. */
+.native-connection[data-connected="false"] { color: var(--text-secondary); }
+.native-controls { margin-bottom: 6px; font-size: 12px; color: var(--text-secondary); }
+.native-controls > summary { cursor: pointer; padding: 3px 4px; width: fit-content; }
+.native-controls-body { max-height: min(22dvh, 14rem); overflow: auto; padding: 6px 8px; border: 1px solid var(--border-group); border-radius: 6px; }
+.native-controls-actions, .native-queue-items li { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.native-controls-actions small, .native-queue-items pre { flex: 1; min-width: 10ch; }
+.native-queue-items { margin: 6px 0 0; padding: 0; }
+.native-queue-items li, .native-receipt { border-top: 1px solid var(--border-group); padding-block: 6px; }
+.native-receipt small { display: block; overflow-wrap: anywhere; }
+.native-controls pre { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.native-appearance .appearance-settings { margin-top: 12px; }
+
+@media (max-width: 760px) {
+  .native-connection { font-size: 10px; }
+}

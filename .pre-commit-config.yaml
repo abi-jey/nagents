@@ -74,13 +74,13 @@ repos:
         pass_filenames: false
         always_run: true
       - id: ngn-browser-syntax
-        name: Rust browser syntax
+        name: Web frontend typecheck
         entry: bash ngn/scripts/check.sh browser-syntax
         language: system
         pass_filenames: false
         always_run: true
       - id: ngn-browser-tests
-        name: Rust browser regressions
+        name: Web frontend regressions
         entry: bash ngn/scripts/check.sh browser-tests
         language: system
         pass_filenames: false

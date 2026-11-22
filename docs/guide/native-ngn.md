@@ -111,9 +111,10 @@ feature gaps.
 ## From source
 
 ```sh
+npm ci --prefix src/nagents/web-ui
 ./ngn/dev            # build and launch with existing provider settings
 ./ngn/dev --test     # build and run the installed-candidate acceptance suite
 ```
 
-Requires Python 3.13, Rust 1.93+ and a C compiler. See
+Requires Python 3.13, Rust 1.93+, a C compiler and Node.js (24 in CI). See
 [native development](https://github.com/abi-jey/nagents/blob/main/ngn/README.md#development).

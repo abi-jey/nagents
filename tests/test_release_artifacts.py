@@ -117,7 +117,6 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
     assert tomllib.loads((ROOT / "ngn/Cargo.toml").read_text())["workspace"]["package"]["version"] == version
     adapter = tomllib.loads((ROOT / "ngn/integrations/nagents/pyproject.toml").read_text())["project"]
     assert adapter["version"] == version and adapter["dependencies"] == [f"nagents>={version},<0.101"]
-    assert json.loads((ROOT / "ngn/package.json").read_text())["version"] == version
     assert json.loads((ROOT / "ngn/runtime-lock.json").read_text())["core"]["version"] == version
     assert workflow["on"]["push"]["tags"] == ["v*"]
     assert set(native["on"]) == {"workflow_call"}
@@ -129,7 +128,7 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
     assert "needs" not in prebuild  # Compiles alongside the Python tests, not after PyPI.
     assert {entry["platform"] for entry in prebuild["strategy"]["matrix"]["include"]} == {"macos-arm64", "macos-x86_64"}
     prebuild_runs = "\n".join(step.get("run", "") for step in prebuild["steps"])
-    for gate in ("cargo test", "--release --locked -p ngn", "git diff --exit-code"):
+    for gate in ("npm ci", "cargo test", "--release --locked -p ngn", "git diff --exit-code"):
         assert gate in prebuild_runs
     assert "startsWith(github.ref, 'refs/tags/v0.100.')" in caller["if"]
     assert caller["uses"] == "./.github/workflows/ngn-release.yml" and caller["secrets"] == "inherit"

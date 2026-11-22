@@ -5,7 +5,7 @@ import { SessionMenu } from "./SessionMenu.js";
 
 export function SessionRow({ session, selected, disabled, canDelete, canFork, select, remove, permanent, rename, fork, move }: {
   session: Session; selected: boolean; disabled: boolean; canDelete: boolean; canFork: boolean;
-  select: (id: string) => void; remove: (session: Session) => void; permanent: (session: Session) => void;
+  select: (id: string) => void; remove?: (session: Session) => void; permanent?: (session: Session) => void;
   rename?: (session: Session) => void; fork?: (session: Session) => void; move?: () => void;
 }) {
   const row = useRef<HTMLDivElement>(null);
@@ -19,9 +19,9 @@ export function SessionRow({ session, selected, disabled, canDelete, canFork, se
       {session.active_run_id && <span className="session-working" title="Working"><span className="sr-only">Working</span></span>}
       <small className="sr-only">Updated {session.updated_at.slice(0, 10)}</small>
     </button>
-    <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
+    {remove && <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
       title="Move to Trash and stop this chat’s agents" disabled={!canDelete}
-      onClick={() => remove(session)}><Icon name="trash" size={15} /></button>
+      onClick={() => remove(session)}><Icon name="trash" size={15} /></button>}
     <SessionMenu session={session} disabled={!canDelete} permanent={permanent} move={move}
       rename={!disabled && rename ? () => rename(session) : undefined}
       fork={fork ? () => fork(session) : undefined} forkDisabled={disabled || !canFork} contextTarget={row} />

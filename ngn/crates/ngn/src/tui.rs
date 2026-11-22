@@ -50,6 +50,7 @@ mod composer;
 mod footer;
 mod markdown;
 mod picker;
+mod scrollbar;
 mod selection;
 mod shimmer;
 mod startup;
@@ -83,6 +84,7 @@ Conversations
 
 Reading
   PgUp/PgDn      Scroll · the mouse wheel also scrolls
+  Scrollbar      Click the track or drag the thumb
   Click a tool   Show or hide its details
   F4             Tool cards by keyboard · ↑/↓ select · Enter toggle
   F8             Pan wide code blocks · ←/→ · Home/End · Esc back
@@ -242,6 +244,7 @@ struct App {
     approval: Option<Approval>,
     scroll: Option<usize>,
     transcript_area: Rect,
+    scrollbar: scrollbar::Scrollbar,
     selection: selection::Selection,
     preview_scroll: u16,
     /// Where typing goes in the draft.
@@ -487,10 +490,11 @@ impl App {
             _ => return false,
         };
         let previous = self.scroll;
+        let position = Position::new(mouse.column, mouse.row);
         if self.tools_available()
             // Textual interprets Shift/Ctrl+wheel as horizontal scrolling.
             && !mouse.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
-            && self.transcript_area.contains(Position::new(mouse.column, mouse.row))
+            && (self.transcript_area.contains(position) || self.scrollbar.contains(position))
         {
             self.tools.scroll_rows(&mut self.scroll, up, 2);
         }
@@ -502,6 +506,7 @@ impl App {
             // Panels and overlays have no cards to click, but their text
             // can still be selected and copied.
             self.tools.clear_pointer();
+            self.scrollbar.cancel_drag();
             let effect = self.selection.mouse(mouse, None);
             return MouseUpdate {
                 redraw: effect.redraw,
@@ -509,7 +514,17 @@ impl App {
             };
         }
         let position = Position::new(mouse.column, mouse.row);
-        let hover = self.tools.hover(self.transcript_area, position);
+        let previous = self.scroll;
+        let scrollbar = self.scrollbar.mouse(mouse, &mut self.scroll);
+        let pointer = (!scrollbar).then_some(position);
+        let hover = self.tools.hover(self.transcript_area, pointer);
+        if scrollbar {
+            let cleared = self.selection.clear();
+            return MouseUpdate {
+                redraw: hover || cleared || self.scroll != previous,
+                selection_released: false,
+            };
+        }
         let target = self.tools.header_at(self.transcript_area, position);
         let effect = self.selection.mouse(mouse, target);
         let clicked = effect.click.is_some();
@@ -567,6 +582,7 @@ impl App {
         self.records.clear();
         self.scroll = None;
         self.tools.reset();
+        self.scrollbar = scrollbar::Scrollbar::default();
         self.selection = selection::Selection::default();
         self.picker = None;
         self.tasks.clear();
@@ -696,9 +712,17 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let sweep = (!app.shows_overlay())
         .then(|| app.activity.shimmering_tool())
         .flatten();
+    // Keep the wrapping width stable while a conversation grows. On very
+    // narrow terminals, give both cells to the text so wide glyphs still fit.
+    let gutter =
+        u16::from(transcript_area.width > 2 && (!app.records.is_empty() || app.failure.is_some()));
+    let text_area = Rect {
+        width: transcript_area.width - gutter,
+        ..transcript_area
+    };
     let mut transcript = tool_cards::Layout::new(
         &parts,
-        transcript_area.width,
+        text_area.width,
         Some(&app.tools),
         interactive,
         sweep,
@@ -715,7 +739,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         transcript.mask_wipes(area);
     }
     if app.records.is_empty() {
-        for line in welcome(&host.config.workspace, transcript_area.width) {
+        for line in welcome(&host.config.workspace, text_area.width) {
             transcript.push_decoration(line);
         }
     }
@@ -726,13 +750,22 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     }
     let (drawn_area, transcript_text) = app.tools.draw(
         frame,
-        transcript_area,
+        text_area,
         transcript,
         &mut app.scroll,
         now,
         Some(Style::new().fg(muted)),
     );
     app.transcript_area = drawn_area;
+    app.scrollbar.update(
+        Rect::new(
+            drawn_area.right(),
+            drawn_area.y,
+            if interactive { gutter } else { 0 },
+            drawn_area.height,
+        ),
+        app.tools.scroll_position(),
+    );
     if let Some(menu) = menu {
         menu.draw(
             frame,
@@ -905,14 +938,15 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     if let Some(picker) = &app.picker {
         picker.draw(frame, accent, muted);
     }
-    if app.no_color {
-        strip_color(frame.buffer_mut(), area);
-    }
-    // Last, so borders, status rows and overlays are selectable as painted.
+    // Capture borders, status rows and overlays as painted, but not the scrollbar control.
     let screen = selection::Pane::screen(frame.buffer_mut());
     app.selection
         .frame(transcript_text, draft_text.unwrap_or_default(), screen);
     app.selection.paint(frame.buffer_mut());
+    app.scrollbar.paint(frame.buffer_mut(), muted);
+    if app.no_color {
+        strip_color(frame.buffer_mut(), area);
+    }
 }
 
 fn strip_color(buffer: &mut Buffer, area: Rect) {
@@ -1631,6 +1665,7 @@ pub async fn run(
                     }
                     TerminalEvent::Resize(..) => {
                         app.tools.clear_pointer();
+                        app.scrollbar.cancel_drag();
                         app.selection.clear();
                     }
                     _ => (),
@@ -2505,10 +2540,10 @@ mod tests {
         let up = wheel(wide.x, wide.y, MouseEventKind::ScrollUp);
 
         for event in [
-            wheel(wide.right(), wide.y, MouseEventKind::ScrollUp), // Agents rail
-            wheel(wide.x, wide.bottom(), MouseEventKind::ScrollUp), // Command suggestions
-            wheel(0, 12, MouseEventKind::ScrollUp),                // Composer
-            wheel(0, 15, MouseEventKind::ScrollUp),                // Footer
+            wheel(wide.right() + 1, wide.y, MouseEventKind::ScrollUp), // Agents rail
+            wheel(wide.x, wide.bottom(), MouseEventKind::ScrollUp),    // Command suggestions
+            wheel(0, 12, MouseEventKind::ScrollUp),                    // Composer
+            wheel(0, 15, MouseEventKind::ScrollUp),                    // Footer
             wheel(wide.x, wide.y, MouseEventKind::ScrollLeft),
             wheel(
                 wide.x,
@@ -2550,8 +2585,11 @@ mod tests {
         assert!(app.approval.is_some() && app.scroll.is_none() && app.preview_scroll == 0);
         app.approval = None;
 
-        app.transcript_wheel(up);
-        let anchored = app.scroll.expect("wheel moved up from the tail");
+        let over_bar = wheel(wide.right(), wide.y, MouseEventKind::ScrollUp);
+        assert!(app.transcript_mouse(over_bar).redraw);
+        let anchored = app
+            .scroll
+            .expect("wheel over the scrollbar moved up from the tail");
         assert!(app.composer_available());
         assert_eq!(app.input, "/");
         app.records.push(lines(2, "streamed\n".repeat(40)));
@@ -2567,6 +2605,95 @@ mod tests {
             app.transcript_wheel(up);
         }
         assert_eq!(app.scroll, Some(0));
+    }
+
+    #[test]
+    fn transcript_scrollbar_shows_overflow_and_can_scroll_back_to_the_live_tail() {
+        use crossterm::event::MouseButton::Left;
+        use ratatui::backend::TestBackend;
+
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let record = |sequence, text| EventRecord {
+            schema_version: 1,
+            sequence,
+            session_id: "session".into(),
+            run_id: "run".into(),
+            timestamp_ms: 0,
+            event: ngn_protocol::Event::TextDelta { text },
+        };
+        let mut app = App {
+            records: vec![record(1, "short reply".into())],
+            no_color: true,
+            ..App::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(24, 19)).unwrap();
+        let redraw = |terminal: &mut Terminal<TestBackend>, app: &mut App| {
+            terminal
+                .draw(|frame| draw(frame, app, &host, Instant::now()))
+                .unwrap();
+            let text = app.transcript_area;
+            let buffer = terminal.backend().buffer();
+            (text.top()..text.bottom())
+                .map(|y| buffer[(text.right(), y)].symbol())
+                .collect::<String>()
+        };
+        assert!(redraw(&mut terminal, &mut app).trim().is_empty());
+
+        app.records[0] = record(1, "history\n\n".repeat(20));
+        let bar = redraw(&mut terminal, &mut app);
+        assert!(bar.starts_with('│') && bar.ends_with('█'), "{bar:?}");
+        app.tools.page(&mut app.scroll, true);
+        let bar = redraw(&mut terminal, &mut app);
+        assert!(bar.contains('█') && bar.ends_with('│'), "{bar:?}");
+
+        let area = app.transcript_area;
+        let mouse = |kind, column, row| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(
+            app.transcript_mouse(mouse(MouseEventKind::Down(Left), area.right(), area.top()))
+                .redraw
+        );
+        app.transcript_mouse(mouse(MouseEventKind::Up(Left), area.right(), area.top()));
+        assert_eq!(app.scroll, Some(0));
+        assert!(redraw(&mut terminal, &mut app).starts_with("██"));
+
+        // Grab inside the thumb, then drag down even if the pointer leaves the track.
+        let press = app.transcript_mouse(mouse(
+            MouseEventKind::Down(Left),
+            area.right(),
+            area.top() + 1,
+        ));
+        assert!(!press.redraw);
+        assert_eq!(app.scroll, Some(0));
+        let drag = app.transcript_mouse(mouse(MouseEventKind::Drag(Left), area.x, area.bottom()));
+        assert!(drag.redraw && !drag.selection_released);
+        let release = app.transcript_mouse(mouse(MouseEventKind::Up(Left), area.x, area.bottom()));
+        assert!(!release.selection_released && app.selection.copy_text().is_none());
+        assert_eq!(app.scroll, None);
+        assert!(redraw(&mut terminal, &mut app).ends_with('█'));
+
+        app.records.push(record(2, "new live output".into()));
+        redraw(&mut terminal, &mut app);
+        let buffer = terminal.backend().buffer();
+        let last: String = (area.left()..area.right())
+            .map(|x| buffer[(x, area.bottom() - 1)].symbol())
+            .collect();
+        assert_eq!(last.trim_end(), "new live output");
     }
 
     #[tokio::test]

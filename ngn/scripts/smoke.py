@@ -227,10 +227,20 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
                     return payload
 
             async with client.get(url + "/") as response:
+                html = await response.text()
                 require(
-                    response.status == 200 and bootstrap["version"] in await response.text(),
-                    "Bundled client missing",
+                    response.status == 200 and '<div id="root"></div>' in html,
+                    "Embedded React workspace missing",
                 )
+            assets = re.findall(r'(?:src|href)="(/assets/[^"]+\.(?:js|css))"', html)
+            require(
+                {Path(path).suffix for path in assets} == {".js", ".css"}, "No bundled workspace script or stylesheet"
+            )
+            for path in assets:
+                async with client.get(url + path) as response:
+                    require(
+                        response.status == 200 and await response.read(), f"Embedded workspace asset missing: {path}"
+                    )
             async with client.get(url + "/api/sessions", headers={"x-ngn-token": "invalid"}) as response:
                 require(response.status == 403, "Invalid token accepted")
             async with client.post(
@@ -566,6 +576,9 @@ async def main() -> None:
     await site.start()
     port = runner.addresses[0][1]
     os.environ["NGN_FIXTURE_KEY"] = "fixture-only-not-a-real-credential"
+    # Protocol fixtures intentionally omit optional provider capture support.
+    # A developer's wire-log preference must not change these offline tests.
+    os.environ["NGN_WIRE_LOG"] = "false"
     try:
         with tempfile.TemporaryDirectory(prefix="ngn-smoke-") as temporary:
             root = Path(temporary)

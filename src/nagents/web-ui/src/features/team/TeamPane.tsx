@@ -9,8 +9,9 @@ import { contextSummary, contextUsageLabel, contextWindowSource } from "../conte
 import { ReasoningEffort, effortLabel } from "../settings/ReasoningEffort.js";
 import { ModelBindingPicker } from "../settings/ModelBindingPicker.js";
 
-export function TeamPane({ team, agents, arrivals, open, close, configure }: {
-  team: TeamController; agents: TeamAgent[]; arrivals: ArrivalTimes; open: boolean; close: () => void; configure: (id: string) => void;
+export function TeamPane({ team, agents, arrivals, open, close, configure, limits }: {
+  team: Pick<TeamController, "subagentUsage" | "profiles" | "selected" | "select" | "error" | "refresh">;
+  agents: TeamAgent[]; arrivals: ArrivalTimes; open: boolean; close: () => void; configure?: (id: string) => void; limits?: string;
 }) {
   const [narrow, setNarrow] = useState(() => typeof matchMedia !== "undefined" && matchMedia("(max-width: 1100px)").matches);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -28,6 +29,7 @@ export function TeamPane({ team, agents, arrivals, open, close, configure }: {
     {usage && <p className="team-usage" aria-label="Subagent limits and usage" title={usageTitle}>
       {usage.occupied_slots}/{usage.limits.max_concurrent_subagents} slots · {usage.used_executions}/{usage.limits.max_subagent_executions} executions
     </p>}
+    {limits && <p className="team-usage">{limits}</p>}
     <TeamTree agents={agents} profiles={team.profiles} selected={team.selected} inspect={id => { team.select(id); if (narrow) close(); }} configure={configure} arrivals={arrivals} error={team.error} refresh={team.refresh} /></>;
   if (narrow) return open ? <dialog ref={dialog} id="team-navigation" className="team-drawer" aria-label="Team conversations" onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === event.currentTarget) close(); }}>{body}</dialog> : null;
   return open ? <aside id="team-navigation" className="team-pane" aria-label="Team conversations">{body}</aside> : null;

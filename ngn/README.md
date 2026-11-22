@@ -1,15 +1,17 @@
 # ngn
 
-`ngn` (pronounced *"engine"*) is a standalone **Rust harness, TUI and local web server**,
-with a versioned agent runtime protocol. The optional **`nagents`** (pronounced *"N-agents"*)
-adapter runs the Python agent/model loop; **all workspace tools and approvals execute in Rust**.
+`ngn` (pronounced *"engine"*) is the native **terminal client and local browser
+host**. In the current implementation, the Rust host owns workspace tools and
+approvals and the **`nagents`** (pronounced *"N-agents"*) runtime adapter runs
+the Python model loop through a private, versioned protocol.
 
 The Rust application lives under `ngn/` in the **same repository** as the Python
 `nagents` library (`../src/nagents/`). The first official monorepo release,
 `v0.100.0`, includes the tested local prototype and its subagent/tool-result fixes.
 The earlier standalone local tags/artifacts were never published and remain
 untouched in their original checkout. This is **not yet full legacy feature
-parity**. See [migration status](docs/migration.md) and [release notes](docs/releases/).
+parity**. See the [migration plan](docs/migration.md) for the proposed unified
+Python engine, and [release notes](docs/releases/) for what has shipped.
 
 `0.100.1` adds durable Rust-owned FIFO input queues with matching TUI/web controls.
 See the [patch notes](docs/releases/0.100.1.md) before upgrading important state.
@@ -26,10 +28,12 @@ See [installation](docs/installation.md).
 
 ## Build and inspect from source
 
-Requires Rust 1.93+ and a C compiler for bundled SQLite. No Node build is needed.
+Requires Rust 1.93+, a C compiler for bundled SQLite, and Node.js (24 in CI) to
+build the embedded web assets. Installed binaries don't need Node.js.
 
 ```sh
 # From the repository root:
+npm ci --prefix src/nagents/web-ui
 cd ngn
 cargo build -p ngn
 ./target/debug/ngn --version
@@ -42,6 +46,13 @@ making model requests. Configure a provider and runtime before submitting prompt
 The web client is at `http://127.0.0.1:8765`. Web serving is **loopback-only**;
 use the exact printed address. It is a trusted local operator application, not a
 multi-user service or sandbox.
+
+`ngn serve` uses the React workspace from the Python release: the resizable
+Sessions and Team panels, Markdown and code rendering, tool inspection, and
+one-time approval review. It uses Rust's API and session store, not a Python
+web server. Browser appearance settings are supported; Python-only features
+such as voice, channels, attachments, agent profiles, and session
+rename/fork/trash are not. See [migration status](docs/migration.md).
 
 ## Source/small-native integration only
 
@@ -175,11 +186,12 @@ The [UX review](docs/ux-review.md) explains the design principles and roadmap.
   queue before resending.
 - Active-turn **Enter** and **`/steer TEXT`** target the capable active root at its next persisted safe point;
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
-- **PageUp/PageDown** scroll the conversation or approval preview.
-- Click a tool header to expand or collapse its details, and use the mouse wheel
-  to scroll the conversation. Drag within the conversation (including visible
-  tool details and code) or the Message draft to select text. A drag from a tool
-  header selects text instead of toggling it. Selection does not edit a draft.
+- **PageUp/PageDown** scroll the conversation or approval preview. You can also
+  use the mouse wheel in the conversation, or click the scrollbar track or drag
+  its thumb when the conversation overflows.
+- Click a tool header to expand or collapse its details. Drag within the conversation
+  (including visible tool details and code) or the Message draft to select text. A drag
+  from a tool header selects text instead of toggling it. Selection does not edit a draft.
   Everything else on screen (borders, the status rows, the approval panel,
   help and pickers) can be dragged too and copies as painted, one line per
   row without trailing padding.
@@ -312,6 +324,9 @@ attempt the automatic copy.
 
 ## Boundaries
 
+These boundaries describe the split host that ships today, not the end state
+in the [migration plan](docs/migration.md).
+
 - Rust owns admission, idempotency, run/session lifecycle, event persistence,
   filesystem/shell tools, approval decisions, TUI, HTTP and WebSocket transport.
 - An agent runtime owns its model integration and opaque conversation storage.
@@ -363,7 +378,7 @@ rotation or retention cleanup.
 ### Build and run exactly the installed application
 
 From the repository root, on Linux x86_64 with Python 3.13, Rust 1.93+ and a C
-compiler:
+compiler (install the frontend dependencies once with `npm ci --prefix src/nagents/web-ui`):
 
 ```sh
 ./ngn/dev                                  # Launch the mouse-enabled TUI
@@ -436,10 +451,10 @@ python ngn/scripts/browser_smoke.py --binary CANDIDATE/app/ngn \
 # Add --browser /path/to/chromium to use an existing browser executable.
 ```
 
-This runs the actual embedded client in Chromium at desktop and touch viewport
-sizes against an owned local fixture. It tests Return/focus, conversation creation,
-native approvals, long preview scrolling and child attribution without paid requests
-or legacy state. It is separate from the dependency-free DOM regression tests.
+This runs the embedded React workspace in Chromium at desktop and touch viewport
+sizes against a local fixture. It checks conversation creation, native tools and
+approval review, touch controls, and child attribution without paid requests or
+legacy state.
 
 ## Repository layout
 
@@ -448,7 +463,7 @@ or legacy state. It is separate from the dependency-free DOM regression tests.
 | `crates/ngn-protocol` | Agent wire types and client event schema; no UI dependency |
 | `crates/ngn-core` | Rust harness lifecycle, durable journal, native tools, runtime supervision |
 | `crates/ngn` | Clap CLI, Ratatui TUI, Axum HTTP/WebSocket host |
-| `web` | Embedded, dependency-free initial browser client |
+| `../src/nagents/web-ui` | Shared React workspace and the native browser entry point, built into the Rust binary |
 | `integrations/nagents` | Optional Python adapter using only the agents library |
 | `docs` | Protocol, trust model, architecture and migration inventory |
 
