@@ -93,7 +93,7 @@ PLATFORM = host_platform() or "linux-x86_64"
 RUNNER = ["runtime/bin/python3", "-I", "-B", "-m", "ngn_nagents"]
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
-DOCUMENTS = ("LICENSE", "README.md", "CHANGELOG.md", "config.example.json", "config.chatgpt.example.json", "docs")
+DOCUMENTS = ("LICENSE", "README.md", "CHANGELOG.md", "docs")
 
 
 @dataclass(frozen=True)

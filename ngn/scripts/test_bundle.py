@@ -556,8 +556,8 @@ class BundleTests(unittest.TestCase):
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=bundle.ROOT, text=True).strip()
         bundle._documents(self.extracted, commit)
         self.assertEqual(
-            (self.extracted / "config.example.json").read_bytes(),
-            subprocess.check_output(["git", "show", f"{commit}:ngn/config.example.json"], cwd=bundle.ROOT),
+            (self.extracted / "README.md").read_bytes(),
+            subprocess.check_output(["git", "show", f"{commit}:ngn/README.md"], cwd=bundle.ROOT),
         )
         self.assertFalse((self.extracted / "config.local.json").exists())
         self.assertFalse((self.extracted / "auth").exists())

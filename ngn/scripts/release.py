@@ -144,8 +144,6 @@ def binary_archive(destination: Path, binary: Path, source: Path) -> None:
             "LICENSE",
             "README.md",
             "CHANGELOG.md",
-            "config.example.json",
-            "config.chatgpt.example.json",
             "docs",
         ):
             target.add(source / name, arcname=name)
@@ -402,8 +400,8 @@ def verify_bundled_install(output: Path, manifest: dict[str, object], *, require
             text=True,
             timeout=30,
         )
-        assert "runtime/bin/python3" in doctor.stdout, "Installed default runner did not select bundled Python"
-    print("PASS: native installation and bundled default runner with no Python/pip/Rust/Node on PATH")
+        assert "runtime/bin/python3" in doctor.stdout, "Installed ngn did not select the bundled engine Python"
+    print("PASS: native installation and bundled engine Python with no Python/pip/Rust/Node on PATH")
 
 
 def verify_extracted_binary(extracted: Path, version: str) -> None:
@@ -488,14 +486,13 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
         extracted = Path(temporary)
         with tarfile.open(output / f"ngn-v{version}-{platform_name}.tar.gz") as archive:
             archive.extractall(extracted, filter="data")
-        for name in ("config.example.json", "config.chatgpt.example.json"):
-            assert (extracted / name).read_bytes() == (NGN / name).read_bytes(), (
-                "Packaged configuration example is not the tested source"
-            )
+        assert (extracted / "README.md").read_bytes() == (NGN / "README.md").read_bytes(), (
+            "Packaged README is not the tested source"
+        )
         verify_extracted_binary(extracted, version)
     print(
-        f"PASS: ngn {version} artifacts bound to {manifest['commit']}; checksums, native doctor and offline "
-        "fixture subagent execution verified with no Python on PATH"
+        f"PASS: ngn {version} artifacts bound to {manifest['commit']}; checksums, installed doctor and "
+        "client binary verified with no Python on PATH"
     )
 
 

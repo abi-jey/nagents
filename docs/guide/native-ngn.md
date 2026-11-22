@@ -1,7 +1,7 @@
 # Native ngn: installer and usage
 
-The native Rust `ngn` (pronounced *"engine"*—TUI, headless CLI, local browser host and updater) ships as a
-self-contained bundle: CPython 3.13.18, the matching `nagents` (pronounced *"N-agents"*) core and adapter, locked
+The native Rust `ngn` (pronounced *"engine"*—TUI, headless CLI, local browser client and updater) ships as a
+self-contained bundle: CPython 3.13.18, the matching `nagents` (pronounced *"N-agents"*) engine, locked
 dependency wheels and CA certificates. No Python, pip, Rust, Node or compiler is needed.
 
 Supported:
@@ -22,7 +22,7 @@ release's `SHA256SUMS` before running it. To pin a version, replace `latest/down
 with `download/vX.Y.Z`.
 
 ```sh
-ngn doctor          # paths and bundled runtime; no network or model request
+ngn doctor          # the engine's Python and diagnostics; no model request
 ```
 
 The installer checks the destination `~/.local/bin/ngn` (or `DIR/ngn` with
@@ -55,35 +55,22 @@ chmod +x "ngn-installer-$platform" && "./ngn-installer-$platform" install
 
 For an offline bundle, add `--bundle FILE --sha256 HASH --version X.Y.Z`.
 
-## Configure the bundled agent runtime
+## Sign in and run
 
-Copy `~/.local/share/ngn-harness/current/config.example.json` (or
-`config.chatgpt.example.json`) to a private location and set `model`. Omit `runner`:
-the bundled Python is used automatically. Keep keys in the environment variable
-named by `api_key_env`, never in the file.
-
-```json
-{
-  "config_version": 1,
-  "backend": "nagents",
-  "provider": "my-provider",
-  "providers": {
-    "my-provider": {
-      "kind": "openai_compatible",
-      "model": "YOUR_MODEL_ID",
-      "api": "auto",
-      "base_url": "",
-      "api_key_env": "OPENAI_API_KEY"
-    }
-  }
-}
-```
+ngn runs the bundled Python engine for you and uses the same provider settings as
+the Python client (`~/.config/ngn/providers.json`). Sign in once, then start ngn in
+a workspace:
 
 ```sh
-ngn --config ~/.config/ngn-native.json -C /path/to/workspace          # TUI
-ngn --config ~/.config/ngn-native.json -C /path/to/workspace serve    # browser
-ngn --config ~/.config/ngn-chatgpt.json auth login                    # ChatGPT subscription
+ngn auth login                          # choose ChatGPT, OpenAI, Anthropic, OpenRouter, Gemini or custom
+ngn auth status
+ngn -C /path/to/workspace               # TUI
+ngn -C /path/to/workspace serve         # browser
 ```
+
+API keys stay in the environment or the login store, never in a config file.
+`--config FILE` selects an explicit engine configuration; see
+[configuration](ngn-configuration.md).
 
 ## Update
 
@@ -93,7 +80,7 @@ ngn update           # verify, stage and atomically switch; previous versions ar
 ```
 
 Updates never touch configuration, credentials, workspaces or conversations, and never
-restart a running host. Stop the host before starting a newer version on important state.
+restart a running engine. Stop running ngn clients before updating.
 
 ## Paths
 
@@ -101,11 +88,11 @@ restart a running host. Stop the host before starting a newer version on importa
 | --- | --- |
 | Installation | `$XDG_DATA_HOME/ngn-harness` or `~/.local/share/ngn-harness` |
 | Command | `~/.local/bin/ngn` |
-| Native state | `~/.local/share/ngn-rust/workspaces/<hash>/` |
-| Python client state | `~/.local/share/ngn` (never imported) |
+| Sessions and engine state | `~/.local/share/ngn` (shared with the Python client) |
+| Rust host history from 0.100.46 and earlier | `~/.local/share/ngn-rust/` (read once, never changed) |
 
-The native and [Python ngn client](ngn-installation.md) share the command name but not
-configuration or state. See [native migration and safety](native-ngn-migration.md) for
+The native and [Python ngn client](ngn-installation.md) share configuration, sign-in and
+sessions, because both run the same engine. See [native migration and safety](native-ngn-migration.md) for
 feature gaps.
 
 ## From source

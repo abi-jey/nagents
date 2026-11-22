@@ -3,7 +3,8 @@
 > **Since 0.100.47** `ngn auth login|status|logout` runs the Python engine's own
 > sign-in (`nagents.cli login`/`logout`) in the engine's Python; the Rust host
 > and adapter paths described below were removed. Saved logins are the same ones
-> the Python client uses.
+> the Python client uses. The `config.chatgpt.example.json` file mentioned below
+> is no longer shipped; `ngn auth login chatgpt` sets up the connection.
 
 **Official subscription release requires the matching published Python core.**
 The adapter now requires `nagents>=0.100.2,<0.101`; that core must be published and
