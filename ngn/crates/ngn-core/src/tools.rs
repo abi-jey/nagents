@@ -1,5 +1,6 @@
 //! Native, bounded tools. Capability-relative files are not an OS sandbox.
 
+mod diff;
 mod discovery;
 
 use std::{
@@ -490,14 +491,12 @@ impl Tools {
                     }
                     Err(error) => return Err(error.into()),
                 };
-                let old = String::from_utf8(original.clone().unwrap_or_default())
+                let old = original
+                    .clone()
+                    .map(String::from_utf8)
+                    .transpose()
                     .context("Existing file is not UTF-8")?;
-                prepared.preview = bounded(
-                    &format!(
-                        "--- {path} (before)\n+++ {path} (after)\n\nBEFORE:\n{old}\n\nAFTER:\n{content}"
-                    ),
-                    48_000,
-                );
+                prepared.preview = bounded(&diff::change(&path, old.as_deref(), &content), 48_000);
                 // Never approve hidden portions of a large write.
                 ensure!(
                     prepared.preview.len() < 48_000,
@@ -518,10 +517,10 @@ impl Tools {
                     "Invalid shell command"
                 );
                 prepared.preview = format!(
-                    "NOT SANDBOXED — full access as your user.\nWorkspace: {}\nTimeout: {}s\n\n{}",
-                    self.workspace.display(),
+                    "$ {}\n\nRuns unsandboxed as your user · timeout {}s\nWorkspace: {}",
+                    args.command,
                     self.shell_timeout.as_secs(),
-                    args.command
+                    self.workspace.display()
                 );
                 prepared.needs_approval = true;
                 Action::Shell(args.command)
@@ -824,6 +823,47 @@ mod tests {
         );
         let (files, _) = tools.walk(".").unwrap();
         assert!(!files.iter().any(|path| path.contains(".env")));
+    }
+
+    #[test]
+    fn previews_are_unified_diffs_and_oversized_changes_are_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("a.txt"), "hello\nworld\n").unwrap();
+        let tools = tools(directory.path(), false);
+        let sha = digest(b"hello\nworld\n");
+        let edit = tools
+            .prepare(&call(
+                "edit",
+                json!({"path":"a.txt", "old":"world", "new":"Rust", "expected_sha256":sha}),
+            ))
+            .unwrap();
+        assert_eq!(
+            edit.preview,
+            "--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n hello\n-world\n+Rust\n"
+        );
+        let fresh = tools
+            .prepare(&call("write", json!({"path":"b.txt", "content":"x\n"})))
+            .unwrap();
+        assert!(
+            fresh
+                .preview
+                .starts_with("--- /dev/null\n+++ b/b.txt (new file)\n")
+        );
+        // Hidden portions are never approved: a diff over the cap is rejected.
+        let huge: String = (0..20_000).map(|n| format!("line {n}\n")).collect();
+        let error = tools
+            .prepare(&call("write", json!({"path":"c.txt", "content":huge})))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("48 KiB"), "{error}");
+        let shell = tools
+            .prepare(&call("shell", json!({"command":"ls -la"})))
+            .unwrap();
+        assert!(
+            shell
+                .preview
+                .starts_with("$ ls -la\n\nRuns unsandboxed as your user · timeout ")
+        );
     }
 
     #[cfg(unix)]
