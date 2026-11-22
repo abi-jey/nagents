@@ -1,8 +1,7 @@
 # Bounded active-run steering · 0.100.2
 
-This is an explicit host/API/client boundary, **not legacy UI parity**. The browser
-has a separate **Steer active turn** button; its Send/Queue remains next-run FIFO.
-The TUI steers on active-turn **Enter**, with **Ctrl+Enter** for the FIFO. `run --json`
+This is an explicit host/API/client boundary, **not legacy UI parity**. Both the
+browser and the TUI steer on active-turn **Enter**, with **Ctrl+Enter** for the FIFO. `run --json`
 still starts one activation; it does not consume additional steering from stdin.
 
 ## Operator API
@@ -59,8 +58,10 @@ sensitive local conversation data, never bootstrap/provider credentials.
 
 ### Browser
 
-**Steer active turn** uses the composer text but is distinct from **Send / Queue**.
-It is enabled only after an exact active-root snapshot says `supported` and
+While a turn runs, **Enter** (or **Steer**) steers it with the composer text and
+**Ctrl+Enter** (⌘+Enter on macOS) queues the text for a separate next-run turn.
+On touch, Return inserts a newline and the composer shows **Steer** and **Queue**.
+When idle, Enter sends as usual. Steering is offered only after an exact active-root snapshot says `supported` and
 `accepting`; the host still makes the authoritative admission decision. A child
 inspector never becomes the steering target. Open **Active-turn steering · receipts**
 to inspect original text, exact run/input identities and host-position ordering.
@@ -102,8 +103,8 @@ off input, then restores the terminal's previous mode on exit. Compatible
 terminals or multiplexers report Ctrl+Enter separately (for example, `CSI 13;5u`).
 Legacy terminals that send the same byte as Enter cannot distinguish the two:
 don't press Ctrl+Enter there to queue while busy. Wait until the turn is idle
-before sending a new draft, or use the browser's **Send / Queue** control when
-working in the browser. The TUI does not alias another control key or enable
+before sending a new draft, or use the browser's Ctrl+Enter or **Queue** control
+when working in the browser. The TUI does not alias another control key or enable
 xterm `modifyOtherKeys`.
 
 ### Durable updates and reconnect

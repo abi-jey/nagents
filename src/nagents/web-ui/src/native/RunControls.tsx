@@ -36,7 +36,7 @@ export function RunControls({ client, view }: { client: NativeClient; view: View
     {(!!steeringTarget(view) || !!receipts.length || !!attempts.length) && <details className="native-controls native-receipts">
       <summary>Input receipts{receipts.length ? ` · ${receipts.length} steering` : ""}{attempts.length ? " · Check submission" : ""}</summary>
       <div className="native-controls-body">
-        {!attempts.length && !receipts.length && <p>Steering targets the active turn at its next persisted safe point. Send and Enter still use the input queue.</p>}
+        {!attempts.length && !receipts.length && <p>Enter steers the active turn at its next persisted safe point. Ctrl+Enter queues the message for after it.</p>}
         {attempts.map(binding => <article className="native-receipt" key={binding.id}>
           <strong>{binding.state === "confirmed" ? "Host confirmed admission" : binding.state === "rejected" ? "Exact turn closed without admitting this input" : "Admission unconfirmed"}</strong>
           <small>{binding.run ? `Steering run ${binding.run}` : "Next-turn input"} · Request {binding.id}</small>

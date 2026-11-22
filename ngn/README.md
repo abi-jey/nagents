@@ -247,11 +247,12 @@ or interrupted work is never requeued/retried. `run --json` remains immediate an
 fails rather than jumping a paused/pending queue. This is FIFO, not model steering.
 
 ngn also has a separate, explicit
-[active-run steering boundary](docs/steering.md): browser **Steer active turn**,
-TUI **`/steer TEXT`**, and durable receipt inspection. It requires both the runtime's
+[active-run steering boundary](docs/steering.md): **Enter** steers a running turn in
+the browser and TUI (**Ctrl+Enter** queues instead), TUI **`/steer TEXT`**, and
+durable receipt inspection. It requires both the runtime's
 `safe_steering` capability and the host's explicit acknowledgment. Inputs apply
 only after a complete persisted tool batch or final response, never between tools
-or by interrupting model generation. Existing Enter/Send/FIFO controls are unchanged.
+or by interrupting model generation. Idle Enter/Send and FIFO ordering are unchanged.
 Pending/offered/applied/uncertain/undelivered receipts report persistence state,
 not proof of model consumption. Stop/restart never replays steering or tool work.
 

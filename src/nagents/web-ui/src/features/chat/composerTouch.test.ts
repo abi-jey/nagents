@@ -25,7 +25,7 @@ for (const touch of [true, false]) test(`composer delivery actions on ${touch ? 
     const enter = new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     await act(async () => { input.focus(); input.dispatchEvent(enter); });
     assert.equal(enter.defaultPrevented, !touch);
-    assert.deepEqual(sent, touch ? [] : [undefined]);
+    assert.deepEqual(sent, touch ? [] : ["steer"], "Enter steers the active turn by default");
     assert.equal(input.getAttribute("enterkeyhint"), touch ? "enter" : "send");
     if (touch) {
       const queue = container.querySelector<HTMLButtonElement>(".composer-queue")!;
@@ -53,7 +53,20 @@ for (const touch of [true, false]) test(`composer delivery actions on ${touch ? 
       assert.deepEqual(sent, ["queue", "steer"]);
       assert.equal(container.querySelector(".composer-queue"), null, "Commands use their existing dispatch path");
       assert.ok(container.querySelector("form")!.style.getPropertyValue("--composer-menu-space"), "Touch suggestions are constrained above the keyboard");
-    } else assert.equal(container.querySelector(".composer-queue"), null);
+    } else {
+      assert.equal(container.querySelector(".composer-queue"), null, "Desktop has no extra delivery buttons");
+      assert.equal(container.querySelector('button[type="submit"]')!.textContent, "Steer");
+      const queue = new dom.window.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true });
+      await act(async () => { input.dispatchEvent(queue); });
+      assert.equal(queue.defaultPrevented, true);
+      assert.deepEqual(sent, ["steer", "queue"], "Ctrl+Enter queues after current work");
+      props.running = false; await render();
+      const idle = new dom.window.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true });
+      await act(async () => { input.dispatchEvent(idle); });
+      assert.deepEqual(sent, ["steer", "queue", undefined], "Idle Enter keeps the ordinary send path");
+      assert.equal(container.querySelector('button[type="submit"]')!.textContent, "Send");
+      assert.equal(stopped, 0);
+    }
   } finally {
     await act(async () => root.unmount()); dom.window.close();
     for (const name of ["window", "document", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"]) {

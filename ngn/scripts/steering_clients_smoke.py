@@ -130,11 +130,11 @@ async def defer_browser_approval(page: Page, *, touch: bool = False) -> None:
 async def steer_browser(page: Page, text: str, *, touch: bool = False) -> None:
     composer = page.locator("#composer")
     await composer.fill(text)
-    steer = page.get_by_role("button", name="Steer active turn", exact=True)
     if touch:
-        await steer.tap()
+        await page.locator(".chat-composer").get_by_role("button", name="Steer", exact=True).tap()
     else:
-        await steer.click()
+        # While a turn runs, Enter steers it by default; Ctrl+Enter queues instead.
+        await composer.press("Enter")
     await expect(composer).to_have_value("")
     if touch:
         await expect(composer).to_be_focused()
@@ -158,7 +158,7 @@ async def browser_checks(
         await page.goto(url)
         await connected(page)
         composer = page.locator("#composer")
-        steer = page.get_by_role("button", name="Steer active turn", exact=True)
+        steer = page.locator(".chat-composer").get_by_role("button", name="Steer", exact=True)
         await expect(steer).to_have_count(0)
         await composer.fill("browser batch")
         await expect(page.get_by_role("button", name="Send", exact=True)).to_be_enabled()
@@ -188,7 +188,7 @@ async def browser_checks(
         require((workspace / "browser-batch-1.txt").read_text() == "tool 1\n", "Second persisted native result missing")
         await expect(receipts).to_contain_text("not proof of model consumption")
         await composer.fill("ordinary next-run FIFO")
-        await page.get_by_role("button", name="Queue", exact=True).click()
+        await composer.press("Control+Enter")
         queue = page.locator(".native-queue")
         summary = queue.locator("summary")
         await expect(summary).to_contain_text("1 pending")
