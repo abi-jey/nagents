@@ -15,7 +15,7 @@ use ratatui::{
 use crate::view::{FenceKey, ToolCard, ToolKey, TranscriptPart, duration};
 
 use super::{
-    code_fences,
+    code_fences, markdown,
     selection::Pane,
     shimmer::{COMPLETE, COMPLETION_DURATION, Sweep, Wipe},
     text_layout::{Wrapped, glyph},
@@ -558,6 +558,7 @@ struct PlainRow<'a> {
     visual: Wrapped<'a>,
     user: bool,
     copy_from: Option<u16>,
+    joins_next: bool,
 }
 
 impl PlainRow<'_> {
@@ -575,7 +576,7 @@ impl PlainRow<'_> {
         let left = area.x + if padding > 0 { USER_TEXT_INSET } else { 0 };
         let mut column = 0;
         if self.copy_from.is_some() {
-            pane.line(area.y, row + 1 < self.visual.height());
+            pane.line(area.y, row + 1 < self.visual.height() || self.joins_next);
         }
         'spans: for span in self.visual.spans(row) {
             for styled in span.styled_graphemes(Style::default()) {
@@ -667,7 +668,7 @@ impl<'a> Layout<'a> {
                         // calls. Keep other text and expanded-detail boundaries.
                         continue;
                     }
-                    layout.text(text, false);
+                    layout.prose(text);
                 }
                 TranscriptPart::User(text) => {
                     layout.text(text, true);
@@ -771,6 +772,36 @@ impl<'a> Layout<'a> {
         }
     }
 
+    /// Assistant and notice text: Markdown, wrapped here so list and quote
+    /// prefixes hang correctly. Surrounding blank rows are kept verbatim
+    /// because they separate cards and user messages.
+    fn prose(&mut self, text: &'a str) {
+        let lines: Vec<&str> = text.lines().collect();
+        let lead = lines
+            .iter()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        if lead == lines.len() || self.width == 0 {
+            self.text(text, false);
+            return;
+        }
+        let trail = lines
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        for _ in 0..lead {
+            self.push(Line::raw(""));
+        }
+        let body = lines[lead..lines.len() - trail].join("\n");
+        for row in markdown::render_cached(&body, self.width).iter() {
+            self.push_rendered(row);
+        }
+        for _ in 0..trail {
+            self.push(Line::raw(""));
+        }
+    }
+
     fn text(&mut self, text: &'a str, user: bool) {
         for line in text.lines() {
             self.push_plain(Line::raw(line), user, Some(0));
@@ -819,6 +850,16 @@ impl<'a> Layout<'a> {
     }
 
     fn push_plain(&mut self, line: Line<'a>, user: bool, copy_from: Option<u16>) {
+        self.push_row(line, user, copy_from, false);
+    }
+
+    /// A Markdown row is already wrapped. Keep its paragraph joined and its
+    /// gutter out of copied text.
+    fn push_rendered(&mut self, row: &markdown::Row) {
+        self.push_row(row.line.clone(), false, Some(row.copy_from), row.joins_next);
+    }
+
+    fn push_row(&mut self, line: Line<'a>, user: bool, copy_from: Option<u16>, joins_next: bool) {
         let width = self.width - self.padding(user);
         if width == 0 {
             return;
@@ -832,6 +873,7 @@ impl<'a> Layout<'a> {
                 visual,
                 user,
                 copy_from,
+                joins_next,
             }),
         ));
     }
@@ -993,6 +1035,37 @@ mod tests {
             );
         }
         assert!(matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == reason));
+    }
+
+    #[test]
+    fn assistant_markdown_is_rendered_but_user_text_stays_verbatim() {
+        let parts = [
+            TranscriptPart::User("# mine\n".into()),
+            TranscriptPart::Text("\n# Title\n\n- **one** two three four five six\n".into()),
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(16, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let layout = Layout::new(&parts, area.width, None, false, None, UserPaint::Plain);
+                assert_eq!(layout.rows, 6);
+                layout.render(frame, area, 0, None, false);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| {
+            (0..16)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        assert_eq!(row(0), "▎ # mine");
+        assert_eq!(row(1), "");
+        assert_eq!(row(2), "Title");
+        assert_eq!(row(3), "");
+        assert_eq!(row(4), "• one two three");
+        assert_eq!(row(5), "  four five six");
     }
 
     #[test]

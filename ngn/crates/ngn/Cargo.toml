@@ -28,6 +28,7 @@ tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
+pulldown-cmark = { version = "0.13.6", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["fs", "user", "signal", "process", "term", "poll"] }

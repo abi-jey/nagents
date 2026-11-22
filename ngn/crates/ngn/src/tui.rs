@@ -47,12 +47,17 @@ mod code_fences;
 mod completion;
 mod composer;
 mod footer;
+mod markdown;
 mod picker;
 mod selection;
 mod shimmer;
 mod startup;
 mod text_layout;
 mod tool_cards;
+
+// Shared by the draw pass and Markdown rendering.
+const ACCENT: Color = Color::Rgb(190, 224, 163);
+const MUTED: Color = Color::Rgb(148, 158, 144);
 
 use completion::Command;
 
@@ -571,8 +576,8 @@ fn main_transcript<'a>(
 
 fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let wall_ms = ngn_core::store::now_ms();
-    let accent = Color::Rgb(190, 224, 163);
-    let muted = Color::Rgb(148, 158, 144);
+    let accent = ACCENT;
+    let muted = MUTED;
     let area = frame.area();
     let footer = footer_area(area);
     let menu = app
