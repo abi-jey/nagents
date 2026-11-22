@@ -42,13 +42,16 @@ use uuid::Uuid;
 use crate::{animations_enabled, view};
 
 mod agents;
+mod clipboard;
 mod code_fences;
 mod completion;
 mod composer;
 mod footer;
 mod picker;
+mod selection;
 mod shimmer;
 mod startup;
+mod text_layout;
 mod tool_cards;
 
 use completion::Command;
@@ -74,7 +77,8 @@ Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
  /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
  Mouse  Click tool headers · Wheel scroll
- For terminal selection, use your terminal's override (often Shift+drag)
+ Drag  Select conversation or draft text · Release to copy · Esc  Clear selection
+ For terminal-native selection, use your terminal's override (often Shift+drag)
  Ctrl+C  Quit";
 
 const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
@@ -142,6 +146,12 @@ struct FifoSubmission {
 }
 
 #[derive(Default)]
+struct MouseUpdate {
+    redraw: bool,
+    selection_released: bool,
+}
+
+#[derive(Default)]
 struct App {
     session: String,
     records: Vec<EventRecord>,
@@ -160,6 +170,7 @@ struct App {
     approval: Option<Approval>,
     scroll: Option<usize>,
     transcript_area: Rect,
+    selection: selection::Selection,
     preview_scroll: u16,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
@@ -390,12 +401,13 @@ impl App {
         }
     }
 
-    fn transcript_wheel(&mut self, mouse: MouseEvent) {
+    fn transcript_wheel(&mut self, mouse: MouseEvent) -> bool {
         let up = match mouse.kind {
             MouseEventKind::ScrollUp => true,
             MouseEventKind::ScrollDown => false,
-            _ => return,
+            _ => return false,
         };
+        let previous = self.scroll;
         if self.tools_available()
             // Textual interprets Shift/Ctrl+wheel as horizontal scrolling.
             && !mouse.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
@@ -403,18 +415,45 @@ impl App {
         {
             self.tools.scroll_rows(&mut self.scroll, up, 2);
         }
+        self.scroll != previous
     }
 
-    fn transcript_mouse(&mut self, mouse: MouseEvent) -> bool {
+    fn transcript_mouse(&mut self, mouse: MouseEvent) -> MouseUpdate {
         if !self.tools_available() {
             self.tools.clear_pointer();
-            return false;
+            return MouseUpdate {
+                redraw: self.selection.clear(),
+                ..MouseUpdate::default()
+            };
         }
-        let changed = self
-            .tools
-            .mouse(mouse, self.transcript_area, &mut self.scroll);
-        self.transcript_wheel(mouse);
-        changed
+        let position = Position::new(mouse.column, mouse.row);
+        let hover = self.tools.hover(self.transcript_area, position);
+        let target = self.tools.header_at(self.transcript_area, position);
+        let effect = self.selection.mouse(mouse, target);
+        let clicked = effect.click.is_some();
+        if let Some(key) = effect.click {
+            self.tools.click(key, &mut self.scroll);
+        }
+        if effect.hold_transcript {
+            self.tools.hold_view(&mut self.scroll);
+        }
+        let scrolled = self.transcript_wheel(mouse);
+        MouseUpdate {
+            redraw: hover || effect.redraw || clicked || scrolled,
+            selection_released: effect.selection_released,
+        }
+    }
+
+    fn copy_selection(&mut self) {
+        let feedback = match self.selection.copy_text() {
+            None => return,
+            Some(selection::CopyText::TooLarge) => " Selection exceeds 64 KiB ",
+            Some(selection::CopyText::Text(text)) => match clipboard::request_copy(text) {
+                Ok(()) => " Copy requested ",
+                Err(_) => " Copy failed ",
+            },
+        };
+        self.selection.feedback(feedback);
     }
 
     fn completion_key(&mut self, key: KeyEvent) -> bool {
@@ -446,6 +485,7 @@ impl App {
         self.records.clear();
         self.scroll = None;
         self.tools.reset();
+        self.selection = selection::Selection::default();
         self.picker = None;
         self.tasks.clear();
         self.agents = agents::Rail::default();
@@ -582,17 +622,15 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     if app.records.is_empty() {
         let tip = Line::styled(EMPTY_TIP, Style::new().add_modifier(Modifier::DIM));
         if tip.width() <= usize::from(transcript_area.width) {
-            transcript.push(tip);
+            transcript.push_decoration(tip);
         }
     }
     if let Some(reason) = &app.failure {
         // Keep the complete rejection in the scrollable conversation as well
         // as the one-line footer. It remains visible without submitting again.
-        for line in footer::failure_lines(reason, transcript_area.width) {
-            transcript.push(line);
-        }
+        transcript.push(footer::failure_text(reason));
     }
-    app.transcript_area = app.tools.draw(
+    let (drawn_area, transcript_text) = app.tools.draw(
         frame,
         transcript_area,
         transcript,
@@ -600,6 +638,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         now,
         Some(Style::new().fg(muted)),
     );
+    app.transcript_area = drawn_area;
     if let Some(menu) = menu {
         menu.draw(
             frame,
@@ -611,16 +650,28 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             muted,
         );
     }
-    let composer = composer::border(draft.width, app.queue.entries.len(), accent, muted);
+    let mut composer = composer::border(draft.width, app.queue.entries.len(), accent, muted);
     let input_area = composer.inner(draft);
-    frame.render_widget(composer, draft);
+    let mut draft_text = interactive.then(|| selection::Pane::new(input_area));
     let _ = composer::draw(
         frame.buffer_mut(),
         input_area,
         &app.input,
         app.caret_visible(now),
         app.composer_palette,
+        draft_text.as_mut(),
     );
+    app.selection
+        .frame(transcript_text, draft_text.unwrap_or_default());
+    if let Some(hint) = app.selection.hint()
+        && draft.width > 2
+    {
+        let width = usize::from(draft.width - 2);
+        let title = Line::styled(hint, Style::new().fg(muted));
+        composer = composer.title_bottom(footer::fit(title, width).right_aligned());
+    }
+    frame.render_widget(composer, draft);
+    app.selection.paint(frame.buffer_mut());
     app.activity.draw(frame, footer, app, &host.config, now);
     if app.task_picker {
         let area = center(frame.area(), 110, 30);
@@ -1351,10 +1402,12 @@ pub async fn run(
                 let Some(event) = event else { break; };
                 match event? {
                     TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
-                        app.tools.cancel_click();
-                        if app.composer_available() { app.caret.restart(Instant::now()); }
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c' | 'C' | 'q')) { break; }
+                        if app.selection.clear() && key.code == KeyCode::Esc && key.modifiers.is_empty() {
+                            continue;
+                        }
+                        if app.composer_available() { app.caret.restart(Instant::now()); }
                         // The FIFO shortcut belongs only to the composer. In
                         // particular it is not Enter/confirm in a focused picker.
                         if control && key.code == KeyCode::Enter && !app.composer_available() { continue; }
@@ -1442,6 +1495,7 @@ pub async fn run(
                         }
                     }
                     TerminalEvent::Paste(text) => {
+                        app.selection.clear();
                         if let Some(picker) = &mut app.picker {
                             picker.paste(&text);
                         } else if app.composer_available() {
@@ -1456,13 +1510,16 @@ pub async fn run(
                         }
                     }
                     TerminalEvent::Mouse(event) => {
-                        let changed = app.transcript_mouse(event);
-                        // A motion-reporting terminal emits many positions
-                        // while the pointer stays on the same header.
-                        skip_draw = !changed && event.kind == MouseEventKind::Moved;
+                        let update = app.transcript_mouse(event);
+                        if update.selection_released {
+                            app.copy_selection();
+                        }
+                        // No redraw for a steady press or unchanged hover.
+                        skip_draw = !update.redraw;
                     }
                     TerminalEvent::Resize(..) => {
                         app.tools.clear_pointer();
+                        app.selection.clear();
                     }
                     _ => (),
                 }

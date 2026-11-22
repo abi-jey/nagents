@@ -10,6 +10,8 @@ use ratatui::{
 
 use crate::view::FenceKey;
 
+use super::selection::Pane;
+
 pub(super) struct Fence {
     pub key: FenceKey,
     pub rows: Range<usize>,
@@ -188,8 +190,12 @@ pub(super) fn draw(
     text: &str,
     offset: usize,
     selected: bool,
+    mut pane: Option<&mut Pane>,
 ) {
     let y = area.y + row;
+    if let Some(pane) = pane.as_deref_mut() {
+        pane.line(y, false);
+    }
     // ANSI defaults for panel/text and ANSI green for the code role.
     let panel = Style::new().bg(Color::Reset).fg(Color::Reset);
     buffer.set_style(Rect::new(area.x, y, area.width, 1), panel);
@@ -202,7 +208,7 @@ pub(super) fn draw(
         return;
     }
     let right = offset + usize::from(area.width - 1);
-    if text.is_ascii() && !text.contains('\t') {
+    if pane.is_none() && text.is_ascii() && !text.contains('\t') {
         if offset < text.len() {
             buffer.set_string(area.x + 1, y, &text[offset..right.min(text.len())], panel);
         }
@@ -214,14 +220,14 @@ pub(super) fn draw(
         }
         // A glyph straddling either edge is left blank, not split or shifted.
         // Tabs occupy their original columns (including a clipped tab).
-        if column >= offset && width != 0 && symbol != "\t" {
-            buffer.set_stringn(
-                area.x + 1 + (column - offset) as u16,
-                y,
-                symbol,
-                width,
-                panel,
-            );
+        if column >= offset && width != 0 {
+            let x = area.x + 1 + (column - offset) as u16;
+            if symbol != "\t" {
+                buffer.set_stringn(x, y, symbol, width, panel);
+            }
+            if let Some(pane) = pane.as_deref_mut() {
+                pane.glyph(x, y, width as u16, symbol);
+            }
         }
     }
 }
@@ -237,7 +243,7 @@ mod tests {
         let area = Rect::new(3, 2, 7, 1);
         let render = |offset| {
             let mut buffer = Buffer::empty(area);
-            draw(&mut buffer, area, 0, text, offset, false);
+            draw(&mut buffer, area, 0, text, offset, false, None);
             buffer
                 .content
                 .iter()

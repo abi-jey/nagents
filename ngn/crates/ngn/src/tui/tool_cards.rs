@@ -3,30 +3,30 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     buffer::Buffer,
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
 };
 
 use crate::view::{FenceKey, ToolCard, ToolKey, TranscriptPart, duration};
 
 use super::{
     code_fences,
+    selection::Pane,
     shimmer::{COMPLETE, COMPLETION_DURATION, Sweep, Wipe},
+    text_layout::{Wrapped, glyph},
 };
 
-type Key = (String, String);
+pub(super) type Key = (String, String);
 
 #[derive(Default)]
 pub(super) struct Cards {
     expanded: HashSet<Key>,
     selected: Option<Key>,
-    pressed: Option<(Position, Key)>,
     pointer: Option<Position>,
     focused: bool,
     reveal: bool,
@@ -265,11 +265,7 @@ impl Cards {
         *scroll = Some(self.rendered_top);
     }
 
-    pub(super) fn cancel_click(&mut self) {
-        self.pressed = None;
-    }
-
-    fn header_at(&self, area: Rect, position: Position) -> Option<&Key> {
+    pub(super) fn header_at(&self, area: Rect, position: Position) -> Option<&Key> {
         if !area.contains(position) {
             return None;
         }
@@ -281,47 +277,29 @@ impl Cards {
     }
 
     pub(super) fn clear_pointer(&mut self) {
-        self.cancel_click();
         self.pointer = None;
     }
 
-    pub(super) fn mouse(
-        &mut self,
-        event: MouseEvent,
-        area: Rect,
-        scroll: &mut Option<usize>,
-    ) -> bool {
-        let pressed = self.pressed.take();
-        let position = Position::new(event.column, event.row);
+    pub(super) fn hover(&mut self, area: Rect, position: Position) -> bool {
         let pointer = area.contains(position).then_some(position);
         let hover_changed = self.pointer.and_then(|p| self.header_at(area, p))
             != pointer.and_then(|p| self.header_at(area, p));
         self.pointer = pointer;
-        if !matches!(
-            event.kind,
-            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-        ) || !event.modifiers.is_empty()
-        {
-            return hover_changed;
-        }
-        let Some(key) = self.header_at(area, position) else {
-            return hover_changed;
-        };
-        if event.kind == MouseEventKind::Down(MouseButton::Left) {
-            self.pressed = Some((position, key.clone()));
-        } else if let Some((origin, pressed_key)) = pressed
-            && origin == position
-            && &pressed_key == key
-        {
-            // Mouse disclosure keeps the current focus. If F4 already owns
-            // input, its selection follows the card that was clicked.
-            if self.focused {
-                self.selected = Some(pressed_key.clone());
-            }
-            self.toggle(pressed_key, scroll);
-            return true;
-        }
         hover_changed
+    }
+
+    pub(super) fn click(&mut self, key: Key, scroll: &mut Option<usize>) {
+        // Mouse disclosure keeps the current focus. If F4 already owns input,
+        // its selection follows the card that was clicked.
+        if self.focused {
+            self.selected = Some(key.clone());
+        }
+        self.toggle(key, scroll);
+    }
+
+    pub(super) fn hold_view(&self, scroll: &mut Option<usize>) {
+        // Do not let a streaming tail slide out from under an active selection.
+        scroll.get_or_insert(self.rendered_top);
     }
 
     fn nearest(&self) -> Option<usize> {
@@ -340,7 +318,7 @@ impl Cards {
         scroll: &mut Option<usize>,
         now: Instant,
         hint_style: Option<Style>,
-    ) -> Rect {
+    ) -> (Rect, Pane) {
         if !layout.interactive {
             self.clear_pointer();
         }
@@ -392,7 +370,7 @@ impl Cards {
         }
         self.rendered_top = top;
         self.height = height;
-        layout.render(frame, area, top, Some(&self.code), layout.interactive);
+        let pane = layout.render(frame, area, top, Some(&self.code), layout.interactive);
         if let Some(pointer) = self.pointer.filter(|&pointer| area.contains(pointer))
             && layout
                 .headers
@@ -428,7 +406,7 @@ impl Cards {
             self.expanded.retain(|key| retained.contains(key));
         }
         self.headers = layout.headers;
-        area
+        (area, pane)
     }
 
     pub(super) fn paint_motion(&mut self, buffer: &mut Buffer, now: Instant) {
@@ -570,8 +548,61 @@ pub(super) struct Layout<'a> {
 }
 
 enum Row<'a> {
-    Plain(Line<'a>, bool),
+    Plain(PlainRow<'a>),
     Code(FenceKey, &'a str),
+}
+
+struct PlainRow<'a> {
+    visual: Wrapped<'a>,
+    user: bool,
+    copy_from: Option<u16>,
+}
+
+impl PlainRow<'_> {
+    fn draw(
+        &self,
+        buffer: &mut Buffer,
+        area: Rect,
+        row: usize,
+        pane: &mut Pane,
+        padding: u16,
+        paint: UserPaint,
+    ) {
+        let width = area.width - padding;
+        let left = area.x + u16::from(padding > 0);
+        let mut column = 0;
+        if self.copy_from.is_some() {
+            pane.line(area.y, row + 1 < self.visual.height());
+        }
+        'spans: for span in self.visual.spans(row) {
+            for styled in span.styled_graphemes(Style::default()) {
+                let glyph = glyph(styled.symbol, width);
+                if glyph.width == 0 {
+                    continue;
+                }
+                if glyph.width > width - column {
+                    break 'spans;
+                }
+                let x = left + column;
+                buffer[(x, area.y)]
+                    .set_symbol(glyph.drawn)
+                    .set_style(styled.style);
+                if self
+                    .copy_from
+                    .is_some_and(|start| row > 0 || column >= start)
+                {
+                    pane.glyph(x, area.y, glyph.width, glyph.copied);
+                }
+                column += glyph.width;
+            }
+        }
+        if self.user
+            && let UserPaint::Surface(surface) = paint
+        {
+            // Include wide-glyph continuation cells and wrap slack.
+            buffer.set_style(area, surface);
+        }
+    }
 }
 
 // Match the Python user bubble's horizontal padding, but drop the inset if
@@ -680,7 +711,15 @@ impl<'a> Layout<'a> {
                     if cards.is_some() {
                         layout.headers.push((key, layout.rows));
                     }
-                    layout.push(line.style(style));
+                    layout.push_plain(
+                        line.style(style),
+                        false,
+                        Some(if marker.is_empty() {
+                            0
+                        } else {
+                            DISCLOSURE_WIDTH as u16
+                        }),
+                    );
                     if expanded {
                         for detail in card.details() {
                             layout.detail(&detail);
@@ -714,67 +753,8 @@ impl<'a> Layout<'a> {
     }
 
     fn text(&mut self, text: &'a str, user: bool) {
-        for mut line in text.lines() {
-            if user {
-                self.user_line(line);
-                continue;
-            }
-            // Keep any one logical line below Paragraph's u16 offset even in
-            // a one-column viewport. Ordinary prose uses native word wrapping.
-            while line.len() > 24_000 {
-                let mut end = 24_000;
-                while !line.is_char_boundary(end) {
-                    end -= 1;
-                }
-                let (chunk, rest) = line.split_at(end);
-                self.push(Line::raw(chunk));
-                line = rest;
-            }
-            self.push(Line::raw(line));
-        }
-    }
-
-    fn user_line(&mut self, mut line: &'a str) {
-        let width = usize::from(self.width - self.padding(true));
-        if width == 0 {
-            return;
-        }
-        // Wrap before rendering so an overlong word cannot paint a wide
-        // glyph into the inset. Prefer word boundaries when possible.
-        loop {
-            let span = Span::raw(line);
-            let mut end = 0;
-            let mut cells = 0;
-            let mut word_end = 0;
-            let mut overflow = None;
-            for grapheme in span.styled_graphemes(Style::default()) {
-                let columns = Span::raw(grapheme.symbol).width();
-                if cells + columns > width {
-                    overflow = Some(grapheme.symbol.len());
-                    break;
-                }
-                cells += columns;
-                end += grapheme.symbol.len();
-                if grapheme.symbol.chars().all(char::is_whitespace) {
-                    word_end = end;
-                }
-            }
-            let Some(glyph_bytes) = overflow else {
-                self.push_plain(Line::raw(line), true);
-                break;
-            };
-            if end == 0 {
-                // One cell cannot display a two-cell symbol.
-                self.push_plain(Line::raw("�"), true);
-                line = &line[glyph_bytes..];
-            } else {
-                let split = if word_end > 0 { word_end } else { end };
-                self.push_plain(Line::raw(&line[..split]), true);
-                line = &line[split..];
-            }
-            if line.is_empty() {
-                break;
-            }
+        for line in text.lines() {
+            self.push_plain(Line::raw(line), user, Some(0));
         }
     }
 
@@ -804,7 +784,11 @@ impl<'a> Layout<'a> {
     }
 
     pub(super) fn push(&mut self, line: Line<'a>) {
-        self.push_plain(line, false);
+        self.push_plain(line, false, Some(0));
+    }
+
+    pub(super) fn push_decoration(&mut self, line: Line<'a>) {
+        self.push_plain(line, false, None);
     }
 
     fn padding(&self, user: bool) -> u16 {
@@ -814,18 +798,22 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn push_plain(&mut self, line: Line<'a>, user: bool) {
+    fn push_plain(&mut self, line: Line<'a>, user: bool, copy_from: Option<u16>) {
         let width = self.width - self.padding(user);
         if width == 0 {
             return;
         }
-        let height = if line.width() <= usize::from(width) {
-            1
-        } else {
-            paragraph(line.clone()).line_count(width)
-        };
-        self.lines.push((self.rows, Row::Plain(line, user)));
-        self.rows += height;
+        let visual = Wrapped::new(line, width);
+        let start = self.rows;
+        self.rows += visual.height();
+        self.lines.push((
+            start,
+            Row::Plain(PlainRow {
+                visual,
+                user,
+                copy_from,
+            }),
+        ));
     }
 
     pub(super) fn draw_from_bottom(&self, frame: &mut Frame, area: Rect, scroll: u16) {
@@ -846,9 +834,14 @@ impl<'a> Layout<'a> {
         top: usize,
         pan: Option<&code_fences::Pan>,
         interactive: bool,
-    ) {
+    ) -> Pane {
+        let mut pane = if interactive {
+            Pane::new(area)
+        } else {
+            Pane::default()
+        };
         if area.is_empty() || self.lines.is_empty() {
-            return;
+            return pane;
         }
         let start = self
             .lines
@@ -858,83 +851,44 @@ impl<'a> Layout<'a> {
             .lines
             .partition_point(|(row, _)| *row < top + usize::from(area.height));
         let bottom = top + usize::from(area.height);
-        let mut first = start;
-        // Keep native word wrapping for plain runs; code has one row per line.
-        for group in self.lines[start..end].chunk_by(|(_, a), (_, b)| match (a, b) {
-            (Row::Plain(_, a), Row::Plain(_, b)) => a == b,
-            (Row::Code(..), Row::Code(..)) => true,
-            _ => false,
-        }) {
-            match &group[0].1 {
-                Row::Plain(_, user) => {
-                    let first_row = group[0].0;
-                    let visible_start = first_row.max(top);
-                    let skip = (visible_start - first_row) as u16;
-                    let last = first + group.len();
-                    let visible_end = self
-                        .lines
-                        .get(last)
-                        .map_or(self.rows, |line| line.0)
-                        .min(bottom);
-                    let height = ((visible_end - visible_start) as u16).min(u16::MAX - skip);
-                    let lines = group
-                        .iter()
-                        .filter_map(|(_, row)| match row {
-                            Row::Plain(line, _) => Some(line.clone()),
-                            Row::Code(..) => None,
-                        })
-                        .collect::<Vec<_>>();
-                    let row_area = Rect::new(
-                        area.x,
-                        area.y + (visible_start - top) as u16,
-                        area.width,
-                        height,
-                    );
-                    let padding = self.padding(*user);
-                    frame.render_widget(
-                        paragraph(lines).scroll((skip, 0)),
-                        Rect::new(
-                            row_area.x + u16::from(padding > 0),
-                            row_area.y,
-                            row_area.width - padding,
-                            row_area.height,
-                        ),
-                    );
-                    if *user && let UserPaint::Surface(surface) = self.user_paint {
-                        // Include wide-glyph continuation cells and wrap slack.
-                        frame.buffer_mut().set_style(row_area, surface);
+        for (first, row) in &self.lines[start..end] {
+            match row {
+                Row::Plain(plain) => {
+                    for index in (*first).max(top)..(*first + plain.visual.height()).min(bottom) {
+                        plain.draw(
+                            frame.buffer_mut(),
+                            Rect::new(area.x, area.y + (index - top) as u16, area.width, 1),
+                            index - first,
+                            &mut pane,
+                            self.padding(plain.user),
+                            self.user_paint,
+                        );
                     }
                 }
-                Row::Code(..) => {
-                    for (index, row) in group {
-                        if let Row::Code(key, text) = row {
-                            code_fences::draw(
-                                frame.buffer_mut(),
-                                area,
-                                (*index - top) as u16,
-                                text,
-                                pan.map_or(0, |pan| pan.offset(*key)),
-                                interactive && pan.is_some_and(|pan| pan.selected(*key)),
-                            );
-                        }
-                    }
+                Row::Code(key, text) if *first >= top => {
+                    code_fences::draw(
+                        frame.buffer_mut(),
+                        area,
+                        (*first - top) as u16,
+                        text,
+                        pan.map_or(0, |pan| pan.offset(*key)),
+                        interactive && pan.is_some_and(|pan| pan.selected(*key)),
+                        interactive.then_some(&mut pane),
+                    );
                 }
+                Row::Code(..) => (),
             }
-            first += group.len();
         }
+        pane
     }
-}
-
-fn paragraph<'a>(text: impl Into<ratatui::text::Text<'a>>) -> Paragraph<'a> {
-    Paragraph::new(text).wrap(Wrap { trim: false })
 }
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ngn_core::host::Approval;
     use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
     use serde_json::json;
 
     use super::*;
@@ -986,6 +940,39 @@ mod tests {
 
     fn key(app: &mut App, code: KeyCode) -> bool {
         app.transcript_key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn copying_a_wrapped_failure_keeps_the_path_on_one_logical_line() {
+        use crate::tui::selection::{CopyText, Selection};
+
+        let reason = "Cannot open /very/long/providers.json";
+        let area = Rect::new(0, 0, 10, 8);
+        let mut layout = Layout::new(&[], area.width, None, true, None, UserPaint::Plain);
+        layout.push(crate::tui::footer::failure_text(reason));
+        assert!(layout.rows > 1);
+        let mut pane = Pane::default();
+        Terminal::new(TestBackend::new(area.width, area.height))
+            .unwrap()
+            .draw(|frame| pane = layout.render(frame, area, 0, None, true))
+            .unwrap();
+        let mut selection = Selection::default();
+        selection.frame(pane, Pane::default());
+        for (kind, column, row) in [
+            (MouseEventKind::Down(MouseButton::Left), 0, 0),
+            (MouseEventKind::Up(MouseButton::Left), 9, 7),
+        ] {
+            selection.mouse(
+                MouseEvent {
+                    kind,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                None,
+            );
+        }
+        assert!(matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == reason));
     }
 
     #[test]
@@ -1097,9 +1084,12 @@ mod tests {
                 } else if let Some(area) = dialog {
                     layout.mask_wipes(area);
                 }
-                app.transcript_area =
+                let (transcript_area, pane) =
                     app.tools
                         .draw(frame, area, layout, &mut app.scroll, now, None);
+                app.transcript_area = transcript_area;
+                app.selection.frame(pane, Pane::default());
+                app.selection.paint(frame.buffer_mut());
                 if let Some(area) = dialog {
                     frame.render_widget(ratatui::widgets::Clear, area);
                     frame.render_widget(
@@ -1971,14 +1961,14 @@ mod tests {
             kind,
         };
         let left = MouseButton::Left;
-        assert!(app.transcript_mouse(mouse(MouseEventKind::Moved)));
+        assert!(app.transcript_mouse(mouse(MouseEventKind::Moved)).redraw);
         draw(&mut app, &mut terminal);
         assert!(
             terminal.backend().buffer()[(0, row)]
                 .modifier
                 .contains(Modifier::BOLD)
         );
-        assert!(!app.transcript_mouse(mouse(MouseEventKind::Moved)));
+        assert!(!app.transcript_mouse(mouse(MouseEventKind::Moved)).redraw);
         app.transcript_mouse(mouse(MouseEventKind::Down(left)));
         app.transcript_mouse(MouseEvent {
             column: 5,

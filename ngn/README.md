@@ -156,8 +156,17 @@ matching published core. The API is **not available in nagents
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - Click a tool header to expand or collapse its details, and use the mouse wheel
-  to scroll the conversation. To select and copy text, use your terminal's
-  mouse override (often **Shift+drag**) and its usual copy shortcut.
+  to scroll the conversation. Drag within the conversation (including visible
+  tool details and code) or the Message draft to select text. A drag from a tool
+  header selects text instead of toggling it. Selection does not edit a draft.
+- Release to copy the selection automatically. This sends an OSC 52 request
+  that replaces the clipboard contents when the terminal accepts it.
+  **Copy requested** does not confirm acceptance. For terminal-native selection,
+  use your terminal's mouse override (often **Shift+drag**) and usual Copy shortcut.
+- **Esc** clears the highlight without changing the clipboard. Selecting
+  conversation text holds the current view; scroll to the bottom to follow
+  new output again. If the selected text moves or changes before release,
+  select it again.
 - **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
 - **Ctrl+C** or **Ctrl+Q** quits; **Esc** cancels active work without quitting.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.

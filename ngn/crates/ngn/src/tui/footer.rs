@@ -523,34 +523,10 @@ pub(super) fn fit(line: Line<'static>, width: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-pub(super) fn failure_lines(reason: &str, width: u16) -> Vec<Line<'static>> {
-    // Paragraph's word wrapper can skip words wider than the viewport.
-    // Hard-wrap this notice by cell so a long config path is never dropped.
-    let reason = Span::raw(inline(reason));
-    let style = Style::new().fg(ERROR);
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    let mut used = 0;
-    let limit = usize::from(width);
-    if limit == 0 {
-        return lines;
-    }
-    for grapheme in reason.styled_graphemes(style) {
-        let mut symbol = grapheme.symbol;
-        let mut cells = Span::raw(symbol).width();
-        if cells > limit {
-            symbol = "�";
-            cells = 1;
-        }
-        if used + cells > limit {
-            lines.push(Line::styled(std::mem::take(&mut line), style));
-            used = 0;
-        }
-        line.push_str(symbol);
-        used += cells;
-    }
-    lines.push(Line::styled(line, style));
-    lines
+pub(super) fn failure_text(reason: &str) -> Line<'static> {
+    // The transcript layout splits long logical lines without treating those
+    // display breaks as line breaks in the copied text.
+    Line::styled(inline(reason), Style::new().fg(ERROR))
 }
 
 impl Activity {

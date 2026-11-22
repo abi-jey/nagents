@@ -14,6 +14,8 @@ use ratatui::{
 
 use crate::view;
 
+use super::selection::Pane;
+
 const BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(super) fn border(width: u16, pending: usize, accent: Color, muted: Color) -> Block<'static> {
@@ -131,6 +133,7 @@ pub(super) fn draw(
     input: &str,
     caret_visible: bool,
     palette: Palette,
+    mut pane: Option<&mut Pane>,
 ) -> Option<Position> {
     let area = area.intersection(buffer.area);
     if area.is_empty() {
@@ -147,20 +150,20 @@ pub(super) fn draw(
     let mut rows = VecDeque::new();
     let mut row = Vec::new();
     let mut column = 0;
-    let mut finish_row = |row: &mut Vec<_>| {
+    let mut finish_row = |row: &mut Vec<_>, soft_wrap| {
         let mut next = if rows.len() == height {
-            rows.pop_front().unwrap_or_default()
+            rows.pop_front().map(|(row, _)| row).unwrap_or_default()
         } else {
             Vec::new()
         };
         next.clear();
         std::mem::swap(row, &mut next);
-        rows.push_back(next);
+        rows.push_back((next, soft_wrap));
     };
     let mut glyphs = Vec::new();
     for (index, span) in lines.iter().enumerate() {
         if index > 0 {
-            finish_row(&mut row);
+            finish_row(&mut row, false);
             column = 0;
         }
         glyphs.clear();
@@ -169,13 +172,10 @@ pub(super) fn draw(
             let symbol = grapheme.symbol;
             if symbol == "\t" {
                 let spaces = tab_stop - logical_column % tab_stop;
-                glyphs.extend(std::iter::repeat_n(
-                    Glyph {
-                        symbol: " ",
-                        width: 1,
-                    },
-                    spaces,
-                ));
+                glyphs.push(Glyph {
+                    symbol,
+                    width: spaces,
+                });
                 logical_column += spaces;
                 continue;
             }
@@ -196,12 +196,12 @@ pub(super) fn draw(
             if column > 0
                 && column + word.iter().map(|glyph| glyph.width).sum::<usize>() > wrap_width
             {
-                finish_row(&mut row);
+                finish_row(&mut row, true);
                 column = 0;
             }
             for &glyph in word {
                 if column > 0 && column + glyph.width > wrap_width {
-                    finish_row(&mut row);
+                    finish_row(&mut row, true);
                     column = 0;
                 }
                 row.push(glyph);
@@ -209,17 +209,25 @@ pub(super) fn draw(
             }
         }
     }
-    finish_row(&mut row);
+    finish_row(&mut row, false);
     // At tiny widths the text can use every cell, leaving the caret on the next row.
     if column == available {
-        finish_row(&mut row);
+        finish_row(&mut row, false);
         column = 0;
     }
     let mut y = area.y;
-    for row in rows {
+    for (row, soft_wrap) in rows {
+        if let Some(pane) = pane.as_deref_mut() {
+            pane.line(y, soft_wrap);
+        }
         let mut x = area.x;
         for glyph in row {
-            buffer[(x, y)].set_symbol(glyph.symbol);
+            if glyph.symbol != "\t" {
+                buffer[(x, y)].set_symbol(glyph.symbol);
+            }
+            if let Some(pane) = pane.as_deref_mut() {
+                pane.glyph(x, y, glyph.width as u16, glyph.symbol);
+            }
             x += glyph.width as u16;
         }
         y += 1;
@@ -241,7 +249,7 @@ mod tests {
             let mut buffer = Buffer::empty(Rect::new(0, 0, width + 5, height + 4));
             let position = Position::new(area.x + cursor.0, area.y + cursor.1);
             assert_eq!(
-                draw(&mut buffer, area, input, visible, Palette::default()),
+                draw(&mut buffer, area, input, visible, Palette::default(), None),
                 Some(position)
             );
             assert_eq!(buffer[position].symbol(), " ");
@@ -289,17 +297,54 @@ mod tests {
     }
 
     #[test]
+    fn visible_draft_selection_keeps_tabs_and_hard_line_breaks() {
+        use crate::tui::selection::{CopyText, Selection};
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let area = Rect::new(2, 1, 8, 2);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 3));
+        let mut pane = Pane::new(area);
+        draw(
+            &mut buffer,
+            area,
+            "ab\t界e\u{301}\nend",
+            false,
+            Palette::default(),
+            Some(&mut pane),
+        );
+        let mut selection = Selection::default();
+        selection.frame(Pane::default(), pane);
+        for (kind, column, row) in [
+            (MouseEventKind::Down(MouseButton::Left), 3, 1),
+            (MouseEventKind::Up(MouseButton::Left), 4, 2),
+        ] {
+            selection.mouse(
+                MouseEvent {
+                    kind,
+                    row,
+                    column,
+                    modifiers: KeyModifiers::NONE,
+                },
+                None,
+            );
+        }
+        assert!(
+            matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == "b\t界e\u{301}\nend")
+        );
+    }
+
+    #[test]
     fn tiny_or_clipped_areas_never_paint_the_caret_outside_the_composer() {
         assert_draft("界", 2, 2, &["界", ""], (0, 1));
         assert_draft("界", 1, 2, &["�", ""], (0, 1));
         let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 2));
         let palette = Palette::default();
         assert_eq!(
-            draw(&mut buffer, Rect::new(2, 0, 3, 1), "a", true, palette),
+            draw(&mut buffer, Rect::new(2, 0, 3, 1), "a", true, palette, None),
             None
         );
         assert_eq!(
-            draw(&mut buffer, Rect::new(1, 1, 3, 3), "a", true, palette),
+            draw(&mut buffer, Rect::new(1, 1, 3, 3), "a", true, palette, None),
             Some(Position::new(1, 1))
         );
     }
@@ -355,7 +400,7 @@ mod tests {
                 caret.focus(focused, now);
                 assert_eq!(caret.visible(now), visible);
                 assert_eq!(
-                    draw(&mut buffer, area, draft, caret.visible(now), palette),
+                    draw(&mut buffer, area, draft, caret.visible(now), palette, None),
                     Some(Position::new(3, 2))
                 );
                 assert_eq!(buffer[(1, 1)].symbol(), "a");

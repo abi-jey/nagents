@@ -24,3 +24,11 @@ class TerminalReplayTest(unittest.TestCase):
 
     def test_keyboard_mode_controls_do_not_affect_cells(self) -> None:
         self.assertEqual(terminal_text(b"\x1b[>1uMessage\x1b[<1u"), b"Message")
+
+    def test_clipboard_osc_payload_is_never_painted(self) -> None:
+        output = b"\x1b]11;?\x1b\\\x1b[?1049hbefore"
+        osc = b"\x1b]52;c;Y2xpcGJvYXJk"
+        self.assertEqual(terminal_text(output + osc[:8]), b"before")
+        self.assertEqual(terminal_text(output + osc + b"\x1b"), b"before")
+        self.assertEqual(terminal_text(output + osc + b"\x1b\\after"), b"beforeafter")
+        self.assertEqual(terminal_text(output + osc + b"\x07after"), b"beforeafter")
