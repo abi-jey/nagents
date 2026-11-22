@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { openDashboard } from "../features/dashboard/dashboard.js";
+import { openDashboard } from "../features/dashboard/dashboardClient.js";
 import { useChatRun } from "../features/chat/useChatRun";
 import { useSessions } from "../features/sessions/useSessions";
 import { useSettings } from "../features/settings/useSettings";

@@ -1,7 +1,7 @@
 import { agentUpdates } from "./backgroundUpdates.js";
 import { appendEvent, type Entry, type ResponseReference } from "./transcript.js";
 import type { ArtifactImageRef } from "../../types.js";
-import { artifactState } from "./artifactImages.js";
+import { artifactState } from "./artifactImageData.js";
 import { profileDescription, profileLabel, type AgentPhase, type TaskActivity, type TeamAgent, type TeamProfile } from "../team/model.js";
 
 export type DelegationPresentation = {

@@ -132,9 +132,7 @@ class ReleaseTests(unittest.TestCase):
             "pyproject.toml",
             "ngn/Cargo.toml",
             "ngn/Cargo.lock",
-            "ngn/package.json",
             "ngn/install.sh",
-            "ngn/web/index.html",
             "ngn/runtime-lock.json",
             "ngn/runtime-lock.macos-arm64.json",
             "ngn/runtime-lock.macos-x86_64.json",
@@ -159,7 +157,7 @@ class ReleaseTests(unittest.TestCase):
             (root / "ngn/CHANGELOG.md").read_text().startswith(f"# Changelog\n\n## {target}\n\n- Fix the thing.\n")
         )
 
-    def test_root_core_version_cannot_diverge_from_native_adapter_and_browser(self) -> None:
+    def test_root_core_version_cannot_diverge_from_native_and_adapter(self) -> None:
         (self.output / "pyproject.toml").write_text('[project]\nversion = "0.100.1"\n')
         with (
             patch.object(release, "ROOT", self.output),

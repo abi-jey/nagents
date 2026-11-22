@@ -53,7 +53,7 @@ def version_check(tag: str = "") -> str:
     if tag and tag != f"v{version}":
         raise ValueError("Release tag does not match Rust version")
     core = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-    assert core == version, "Core, native application, adapter and browser must share the same version"
+    assert core == version, "Core, native application and adapter must share the same version"
     for spec in bundle.PLATFORMS.values():
         runtime_lock = json.loads(spec.lock_path(ROOT).read_text())["core"]
         assert (
@@ -65,11 +65,9 @@ def version_check(tag: str = "") -> str:
     assert f"nagents>={version},<0.101" in adapter["project"]["dependencies"], (
         "Bundle requires the public-auth core dependency"
     )
-    assert json.loads((NGN / "package.json").read_text())["version"] == version, "Browser version mismatch"
     assert f'__version__ = "{version}"' in (NGN / "integrations/nagents/src/ngn_nagents/__init__.py").read_text()
     bootstrap = re.search(r"(?m)^NGN_BOOTSTRAP_VERSION=([0-9.]+)$", (NGN / "install.sh").read_text())
     assert bootstrap is not None and bootstrap[1] == version, "Installer bootstrap version mismatch"
-    assert f'<span id="version">{version}</span>' in (NGN / "web/index.html").read_text(), "Web client version mismatch"
     lock = tomllib.loads((NGN / "Cargo.lock").read_text())
     for package in lock["package"]:
         if package["name"] in {"ngn", "ngn-core", "ngn-protocol"}:
@@ -88,10 +86,10 @@ def bump(version: str, notes: str, root: Path = ROOT) -> None:
     if tuple(map(int, version.split("."))) <= tuple(map(int, current.split("."))):
         raise ValueError(f"New version must be greater than {current}")
     old = re.escape(current)
+    # The embedded browser reads the native version from /api/bootstrap.
     replacements: list[tuple[Path, str, str]] = [
         (root / "pyproject.toml", rf'(?m)^version = "{old}"$', f'version = "{version}"'),
         (ngn / "Cargo.toml", rf'(?m)^version = "{old}"$', f'version = "{version}"'),
-        (ngn / "package.json", rf'"version": "{old}"', f'"version": "{version}"'),
         (ngn / "integrations/nagents/pyproject.toml", rf'(?m)^version = "{old}"$', f'version = "{version}"'),
         (ngn / "integrations/nagents/pyproject.toml", rf'"nagents>={old},<0\.101"', f'"nagents>={version},<0.101"'),
         (
@@ -108,7 +106,6 @@ def bump(version: str, notes: str, root: Path = ROOT) -> None:
                 (spec.lock_path(root), rf"pypi/nagents/{old}/json", f"pypi/nagents/{version}/json"),
             )
         ),
-        (ngn / "web/index.html", rf'<span id="version">{old}</span>', f'<span id="version">{version}</span>'),
     ]
     for crate in ("ngn", "ngn-core", "ngn-protocol"):
         replacements.append(

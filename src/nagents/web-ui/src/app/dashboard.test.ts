@@ -4,7 +4,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { Dashboard } from "../features/dashboard/Dashboard.js";
-import { isDashboardPath, openDashboard, readDashboard } from "../features/dashboard/dashboard.js";
+import { isDashboardPath, openDashboard, readDashboard } from "../features/dashboard/dashboardClient.js";
 import { commandIntent, commandMatches } from "../features/chat/commands.js";
 
 const bootstrap = { token: "local-dashboard-token", workspace: "/work/project", capabilities: { chat: true } };

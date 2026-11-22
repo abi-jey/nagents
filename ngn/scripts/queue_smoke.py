@@ -251,12 +251,12 @@ async def http_checks(binary: Path, config: Path, workspace: Path, data: Path, c
             await launch("crash fixture launch", crash_config)
             interrupted = await submit(session, CRASH_PROMPT)
             async with asyncio.timeout(10):
-                while not any(
-                    record["run_id"] == interrupted["id"]
-                    and record["event"] == "notice"
-                    and record["text"] == CRASH_NOTICE
-                    for record in await history(session)
-                ):
+                while True:
+                    records = [record for record in await history(session) if record["run_id"] == interrupted["id"]]
+                    if any(record["event"] == "notice" and record["text"] == CRASH_NOTICE for record in records):
+                        break
+                    finished = next((record for record in records if record["event"] == "run_finished"), None)
+                    require(finished is None, f"Crash fixture stopped before host loss: {finished}")
                     await asyncio.sleep(0.03)
             saved = await submit(session, "read hello.txt persisted")
             require(

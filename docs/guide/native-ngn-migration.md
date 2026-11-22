@@ -47,19 +47,23 @@ credentials, configuration or workspace files.
 
 ## Native scope and remaining gaps
 
-Rust owns native tools, approvals, host lifecycle, event persistence, FIFO queues,
-subagent supervision, TUI and loopback HTTP/WebSocket serving. The optional
+The current Rust host owns native tools, approvals, lifecycle, event persistence,
+FIFO queues, subagent supervision, TUI and loopback HTTP/WebSocket serving. The optional
 nagents adapter owns provider/model integration and opaque conversation storage;
 it is not the old Python harness embedded behind the Rust UI.
 
-The existing React UI, full settings/model editors, agent definitions,
-skills/MCP/custom Python plugins, advanced conversation/media actions, voice,
-channels, A2A, remote deployment, and legacy import are **not all migrated**.
+`ngn serve` embeds the shared React workspace, but its transport still uses the
+Rust host. Sharing the frontend does not add full settings/model editors,
+agent definitions, skills/MCP/custom Python plugins, advanced conversation/media
+actions, voice, channels, A2A or remote deployment to that host.
 Do not use Python container/Kubernetes or voice recipes with the native binary,
 and do not replace an existing production installation on a parity assumption.
-Read the maintained source documents for exact implemented features and gaps:
 
-- [Native migration inventory](https://github.com/abi-jey/nagents/blob/main/ngn/docs/migration.md)
+[ADR 0001](../adr/0001-python-core-rust-tui.md) proposes a single Python engine,
+with Rust clients attached over a generated API. The installation and data
+rules above still apply to the current release; the ADR does not change them.
+
+- [Engine migration plan](https://github.com/abi-jey/nagents/blob/main/ngn/docs/migration.md)
 - [Native installation/update contract](https://github.com/abi-jey/nagents/blob/main/ngn/docs/installation.md)
 - [Native 0.100.2 release notes](https://github.com/abi-jey/nagents/blob/main/ngn/docs/releases/0.100.2.md)
 - [Protocol and ownership](https://github.com/abi-jey/nagents/blob/main/ngn/docs/agent-runtime-protocol.md)

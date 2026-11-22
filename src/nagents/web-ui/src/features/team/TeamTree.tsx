@@ -35,7 +35,7 @@ export function AgentState({ agent }: { agent: TeamAgent }) {
 }
 
 export function AgentRow({ agent, selected, inspect, settings, connection, arrivalAt = 0, grouped = false, connectionInGroup = false, definitionName = "" }: {
-  agent: TeamAgent; selected: boolean; inspect: () => void; settings: () => void; connection?: () => void; arrivalAt?: number;
+  agent: TeamAgent; selected: boolean; inspect: () => void; settings?: () => void; connection?: () => void; arrivalAt?: number;
   grouped?: boolean; connectionInGroup?: boolean; definitionName?: string;
 }) {
   const remote = agent.providerKind === "a2a";
@@ -59,13 +59,13 @@ export function AgentRow({ agent, selected, inspect, settings, connection, arriv
       </span> : null}
       {warning && <span className="team-context-warning">{warning}</span>}</>}
     </button>
-    {remote && !connectionInGroup && <div className="team-agent-connection"><RemoteConnectionChip authentication={agent.authentication} name={definition || agent.name} activate={connection || settings} /></div>}
-    <button type="button" className="team-agent-settings" aria-label={`Settings for ${agent.name}`} onClick={settings}><Icon name="settings" size={14} /></button>
+    {remote && !connectionInGroup && (connection || settings) && <div className="team-agent-connection"><RemoteConnectionChip authentication={agent.authentication} name={definition || agent.name} activate={connection || settings!} /></div>}
+    {settings && <button type="button" className="team-agent-settings" aria-label={`Settings for ${agent.name}`} onClick={settings}><Icon name="settings" size={14} /></button>}
   </article>;
 }
 
 export function TeamTree({ agents, profiles, selected, inspect, configure, arrivals, error, refresh }: {
-  agents: TeamAgent[]; profiles: TeamProfile[]; selected: string; inspect: (id: string) => void; configure: (id: string) => void;
+  agents: TeamAgent[]; profiles: TeamProfile[]; selected: string; inspect: (id: string) => void; configure?: (id: string) => void;
   arrivals: ArrivalTimes; error: string; refresh: () => void;
 }) {
   const treeId = useId();
@@ -188,7 +188,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     return <li key={`run:${agent.id || "main"}`} className="team-tree-branch" data-run-id={agent.id || "main"} data-bucket={bucket} hidden={hidden}>
       <div className="team-tree-row"><span className="team-tree-toggle-slot">{!!direct.length && <button type="button" className="team-tree-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${agent.name}'s agents`} aria-expanded={open}
         onClick={() => toggle(agent.id, open)}><Icon name="chevron" size={12} /></button>}</span>
-        <AgentRow agent={agent} definitionName={agent.providerKind === "a2a" ? profileLabel(catalog.get(agent.profile), "Remote agent") : agent.profile} grouped={!!agent.id} connectionInGroup={sharedConnection} selected={selected === agent.id} inspect={() => inspect(agent.id)} settings={() => configure(agent.id)} connection={showConnection ? () => configure(profileTarget(agent.profile)) : undefined} arrivalAt={arrivals[agent.id]} />
+        <AgentRow agent={agent} definitionName={agent.providerKind === "a2a" ? profileLabel(catalog.get(agent.profile), "Remote agent") : agent.profile} grouped={!!agent.id} connectionInGroup={sharedConnection} selected={selected === agent.id} inspect={() => inspect(agent.id)} settings={configure && (() => configure(agent.id))} connection={showConnection && configure ? () => configure(profileTarget(agent.profile)) : undefined} arrivalAt={arrivals[agent.id]} />
       </div>
       {!!direct.length && <ol className="team-tree-children team-grouped-children" aria-label={`${agent.name}'s child agents`} hidden={!open}>{(groups.get(agent.id) || []).flatMap(group => groupItems(agent, group, depth + 1, open && !hidden))}</ol>}
     </li>;
@@ -196,21 +196,21 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
 
   function groupItems(parent: TeamAgent, group: DefinitionGroup, depth: number, parentOpen: boolean): ReactNode[] {
     const all = [...group.running, ...group.past], definition = catalog.get(group.profile);
-    const name = profileLabel(definition, all.some(agent => agent.providerKind === "a2a") ? "Remote agent" : group.profile || "Definition unavailable");
+    const name = profileLabel(definition, all.some(agent => agent.providerKind === "a2a") ? "Remote agent" : group.profile || (configure ? "Definition unavailable" : "Delegated agents"));
     const open = isOpen(group.key, group.running.length > 0 || all.some(agent => focusedPath.has(agent.id)),
       all.some(agent => keyboardPath.has(agent.id)));
     if (parentOpen && open) nextOpened.add(group.key);
     const domId = `${treeId}-${encodeURIComponent(group.key)}`;
     const remote = definition?.provider === "a2a" || !definition && all.every(agent => agent.providerKind === "a2a");
-    const connection = remote ? () => configure(definition ? profileTarget(group.profile) : all[0].id) : undefined;
+    const connection = remote && configure ? () => configure(definition ? profileTarget(group.profile) : all[0].id) : undefined;
     const allowed = permission(parent, group.profile);
     const fresh = Math.max(0, ...all.map(agent => arrivals[agent.id] || 0));
     const count = group.running.length + group.past.length;
     const result: ReactNode[] = [<li key={`group:${group.key}`} className={`team-definition-group${fresh ? " is-arriving" : ""}`} data-parent-id={parent.id} data-profile={group.profile}>
       <div className="team-definition-heading"><button type="button" className="team-definition-toggle" aria-expanded={open} aria-controls={(["running", "past"] as const).filter(bucket => group[bucket].length).map(bucket => `${domId}-${bucket}`).join(" ")} onClick={() => toggle(group.key, open)}>
         <Icon name="chevron" size={11} /><strong title={profileDescription(definition) || undefined}>{name}</strong>{!open && <span title={`${group.running.length} running · ${group.past.length} past`}>{count}</span>}
-      </button>{remote && <RemoteConnectionChip authentication={definition?.authentication || all[0].authentication} name={name} activate={connection!} />}
-        <button type="button" className="team-definition-start" aria-label={`Start ${name} under ${parent.name}`} title={allowed.allowed ? `Start ${name} under ${parent.name}` : allowed.reason} disabled={!allowed.allowed} onClick={() => inspect(profileTarget(group.profile, parent.id))}><Icon name="plus" size={13} /></button>
+      </button>{connection && <RemoteConnectionChip authentication={definition?.authentication || all[0].authentication} name={name} activate={connection} />}
+        {configure && <button type="button" className="team-definition-start" aria-label={`Start ${name} under ${parent.name}`} title={allowed.allowed ? `Start ${name} under ${parent.name}` : allowed.reason} disabled={!allowed.allowed} onClick={() => inspect(profileTarget(group.profile, parent.id))}><Icon name="plus" size={13} /></button>}
       </div>
     </li>];
     for (const bucket of ["running", "past"] as const) {
@@ -256,8 +256,8 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
             <small>{profileDescription(profile) || [profile.provider, profile.model].filter(Boolean).join(" · ")}</small>
             {!allowed.allowed && <small className="team-profile-unavailable">{allowed.reason}</small>}
           </button>
-          {profile.provider === "a2a" && <RemoteConnectionChip authentication={profile.authentication} name={profileLabel(profile)} activate={() => configure(profileTarget(profile.id))} />}
-          <button type="button" className="team-profile-settings" aria-label={`Settings for ${profileLabel(profile)} definition`} onClick={() => configure(profileTarget(profile.id))}><Icon name="settings" size={14} /></button>
+          {profile.provider === "a2a" && configure && <RemoteConnectionChip authentication={profile.authentication} name={profileLabel(profile)} activate={() => configure(profileTarget(profile.id))} />}
+          {configure && <button type="button" className="team-profile-settings" aria-label={`Settings for ${profileLabel(profile)} definition`} onClick={() => configure(profileTarget(profile.id))}><Icon name="settings" size={14} /></button>}
         </div>;
       })}</div>
     </section>}

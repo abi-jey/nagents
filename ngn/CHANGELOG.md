@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.46
+
+- Restore the React workspace in native ngn, add a terminal transcript scrollbar, and plan the migration to one Python engine.
+
 ## 0.100.45
 
 - Copy anything on screen, keep tool headers still when they expand or finish, and edit the draft anywhere with arrow keys.

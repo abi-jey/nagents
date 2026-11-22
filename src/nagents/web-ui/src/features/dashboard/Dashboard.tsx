@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { readDashboard, type DashboardSnapshot } from "./dashboard.js";
+import { readDashboard, type DashboardSnapshot } from "./dashboardClient.js";
 
 type Scope = "workspace" | "global";
 type Connection = { state: "loading" } | { state: "ready"; snapshot: DashboardSnapshot } | { state: "error" };

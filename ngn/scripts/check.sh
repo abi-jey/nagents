@@ -7,8 +7,8 @@ case "${1:-all}" in
   rust-format) cargo fmt --all --check ;;
   rust-clippy) cargo clippy --workspace --all-targets --locked -- -D warnings ;;
   rust-tests) cargo test --workspace --locked ;;
-  browser-syntax) node --check web/app.js ;;
-  browser-tests) node --test web/app.test.js ;;
+  browser-syntax) npm --prefix "$root/src/nagents/web-ui" run typecheck ;;
+  browser-tests) npm --prefix "$root/src/nagents/web-ui" test ;;
   python-*)
     test -n "${VIRTUAL_ENV:-}" || { echo 'Activate an explicit Python virtual environment first.' >&2; exit 1; }
     case "$1" in

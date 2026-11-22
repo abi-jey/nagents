@@ -8,9 +8,9 @@ use axum::{
         DefaultBodyLimit, Path, Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header::CONTENT_TYPE},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use futures_util::SinkExt;
@@ -195,28 +195,8 @@ async fn boundary(State(state): State<WebState>, request: Request<Body>, next: N
 
 fn router(state: WebState) -> Router {
     Router::new()
-        .route(
-            "/",
-            get(|| async { Html(include_str!("../../../web/index.html")) }),
-        )
-        .route(
-            "/app.js",
-            get(|| async {
-                (
-                    [("content-type", "application/javascript; charset=utf-8")],
-                    include_str!("../../../web/app.js"),
-                )
-            }),
-        )
-        .route(
-            "/style.css",
-            get(|| async {
-                (
-                    [("content-type", "text/css; charset=utf-8")],
-                    include_str!("../../../web/style.css"),
-                )
-            }),
-        )
+        .route("/", get(static_file))
+        .route("/assets/{*path}", get(static_file))
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/state", get(snapshot))
         .route("/api/sessions", get(sessions).post(create_session))
@@ -231,6 +211,15 @@ fn router(state: WebState) -> Router {
         .layer(DefaultBodyLimit::max(64 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state)
+}
+
+include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
+
+async fn static_file(uri: Uri) -> Response {
+    match embedded_asset(uri.path()) {
+        Some((content_type, bytes)) => ([(CONTENT_TYPE, content_type)], bytes).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn bootstrap(State(state): State<WebState>) -> ApiResult {
@@ -465,6 +454,108 @@ mod tests {
     use super::*;
     use ngn_core::{Config, config::Backend};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn serves_only_embedded_frontend_paths_with_security_headers() {
+        let directory = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: directory.path().into(),
+                data_dir: directory.path().join("state"),
+                backend: Backend::Demo,
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let state = WebState {
+            host,
+            authority: "127.0.0.1:8765".into(),
+            token: "test-token".into(),
+            shutdown: CancellationToken::new(),
+        };
+        let app = router(state.clone());
+        let request = |method, path: &str, host: &str, origin: &str| {
+            app.clone().oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("host", host)
+                    .header("origin", origin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        };
+        let origin = format!("http://{}", state.authority);
+        let root = request("GET", "/", &state.authority, &origin)
+            .await
+            .unwrap();
+        assert_eq!(root.status(), StatusCode::OK);
+        assert_eq!(root.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+        assert!(
+            root.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("default-src 'none'; script-src 'self'; style-src 'self'")
+        );
+        let html = axum::body::to_bytes(root.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let html = std::str::from_utf8(&html).unwrap();
+        assert!(html.contains("<div id=\"root\"></div>"));
+        assert!(!html.contains("/src/native/main.tsx"));
+
+        for (suffix, mime) in [
+            (".js", "application/javascript; charset=utf-8"),
+            (".css", "text/css; charset=utf-8"),
+            (".svg", "image/svg+xml"),
+        ] {
+            let path = html
+                .split('"')
+                .find(|part| part.starts_with("/assets/") && part.ends_with(suffix))
+                .unwrap_or_else(|| panic!("Missing {suffix} asset in built HTML"));
+            for method in ["GET", "HEAD"] {
+                let response = request(method, path, &state.authority, &origin)
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{method} {path}");
+                assert_eq!(response.headers()[CONTENT_TYPE], mime);
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                assert_eq!(bytes.is_empty(), method == "HEAD", "{method} {path}");
+            }
+        }
+
+        for path in [
+            "/assets/not-built.js",
+            "/assets/live-capture.js",
+            "/assets/provider-logos/README.md",
+            "/assets/./ngn.svg",
+            "/assets/ngn%2Esvg",
+            "/index.native.html",
+            "/app.js",
+            "/style.css",
+        ] {
+            let response = request("GET", path, &state.authority, &origin)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        for (host, origin) in [
+            ("evil.example", origin.as_str()),
+            (state.authority.as_str(), "http://evil.example"),
+        ] {
+            let response = request("GET", "/assets/ngn.svg", host, origin)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        state.host.shutdown().await;
+    }
 
     #[tokio::test]
     async fn host_origin_token_and_security_headers_are_enforced() {

@@ -3,7 +3,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
-import { INBOUND_PREFIX, channelMessage, channelMeta } from "./channelMessage.js";
+import { INBOUND_PREFIX, channelMessage, channelMeta } from "./channelMessageData.js";
 
 const source = {
   version: 1,

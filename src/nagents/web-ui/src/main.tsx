@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { Dashboard } from "./features/dashboard/Dashboard";
-import { isDashboardPath } from "./features/dashboard/dashboard";
+import { isDashboardPath } from "./features/dashboard/dashboardClient";
 import "./features/dashboard/dashboard.css";
 import "./app/styles.css";
 import "./components/codeBlock.css";

@@ -18,7 +18,7 @@ export function SessionSidebar({
   open,
   select,
   remove,
-  canDelete,
+  canDelete = () => false,
   permanent,
   rename,
   fork,
@@ -28,7 +28,7 @@ export function SessionSidebar({
   notice,
   settings,
   settingsDisabled,
-  tools = () => {},
+  tools,
   toolsDisabled = settingsDisabled,
   channels,
   channelsDisabled,
@@ -44,21 +44,21 @@ export function SessionSidebar({
   newDisabled?: boolean;
   open: boolean;
   select: (id?: string) => void;
-  remove: (session: Session) => void;
-  canDelete: (id: string) => boolean;
-  permanent: (session: Session) => void;
+  remove?: (session: Session) => void;
+  canDelete?: (id: string) => boolean;
+  permanent?: (session: Session) => void;
   rename?: (session: Session) => void;
   fork?: (session: Session) => void;
   canFork?: (id: string) => boolean;
-  trash: () => void;
-  trashDisabled: boolean;
+  trash?: () => void;
+  trashDisabled?: boolean;
   notice?: ReactNode;
   settings: () => void;
   tools?: () => void;
   toolsDisabled?: boolean;
   settingsDisabled: boolean;
-  channels: () => void;
-  channelsDisabled: boolean;
+  channels?: () => void;
+  channelsDisabled?: boolean;
   demo: boolean;
   close: () => void;
 }) {
@@ -140,18 +140,18 @@ export function SessionSidebar({
       <div className="sidebar-footer">
         {notice}
         <nav className="sidebar-utilities" aria-label="Workspace controls">
-          <button className="sidebar-utility trash-trigger" title="Trash" aria-label="Trash" disabled={trashDisabled} onClick={trash} aria-haspopup="dialog">
-            <Icon name="trash" /><span>Trash</span><Icon name="chevron" size={13} />
-          </button>
+           {trash && <button className="sidebar-utility trash-trigger" title="Trash" aria-label="Trash" disabled={trashDisabled} onClick={trash} aria-haspopup="dialog">
+             <Icon name="trash" /><span>Trash</span><Icon name="chevron" size={13} />
+           </button>}
           <button className="sidebar-utility settings-trigger" title="Settings" aria-label="Settings" disabled={settingsDisabled} onClick={settings} aria-haspopup="dialog">
             <Icon name="settings" /><span>Settings</span><Icon name="chevron" size={13} />
           </button>
-          <button className="sidebar-utility channels-trigger" title="Channels" aria-label="Channels" disabled={channelsDisabled} onClick={channels} aria-haspopup="dialog">
-            <Icon name="channels" /><span>Channels</span><Icon name="chevron" size={13} />
-          </button>
-          <button className="sidebar-utility tools-trigger" title="Tools" aria-label="Tools" disabled={toolsDisabled} onClick={tools} aria-haspopup="dialog">
-            <Icon name="tools" /><span>Tools</span><Icon name="chevron" size={13} />
-          </button>
+           {channels && <button className="sidebar-utility channels-trigger" title="Channels" aria-label="Channels" disabled={channelsDisabled} onClick={channels} aria-haspopup="dialog">
+             <Icon name="channels" /><span>Channels</span><Icon name="chevron" size={13} />
+           </button>}
+           {tools && <button className="sidebar-utility tools-trigger" title="Tools" aria-label="Tools" disabled={toolsDisabled} onClick={tools} aria-haspopup="dialog">
+             <Icon name="tools" /><span>Tools</span><Icon name="chevron" size={13} />
+           </button>}
         </nav>
         <div className="workspace-info">
           <button type="button" className="workspace-trigger" title={workspace || "Workspace information"}

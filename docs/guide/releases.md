@@ -9,9 +9,11 @@ The nagents core (PyPI), native ngn, runtime adapter and browser UI share one ve
 python ngn/scripts/release.py bump 0.100.N --notes "One-line summary of the release."
 ```
 
-This updates every version field (`pyproject.toml`, Cargo, adapter, `package.json`,
-`install.sh`, every `runtime-lock*.json`, `Cargo.lock`), writes `ngn/docs/releases/0.100.N.md`
-and adds a CHANGELOG entry. Then open a PR, merge it when green, and tag the merge commit:
+This updates the core and adapter Python versions, Cargo workspace and lock,
+`install.sh`, and the runtime locks. The embedded UI reads the native version
+from `/api/bootstrap`; there is no separate native browser version to stamp.
+The bump writes `ngn/docs/releases/0.100.N.md` and adds a CHANGELOG entry.
+Then open a PR, merge it when green, and tag the merge commit:
 
 ```sh
 git tag -a v0.100.N -m v0.100.N && git push origin v0.100.N

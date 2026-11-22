@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Snapshot, WireEvent } from "../../types.js";
 import { LiveSessions, applySnapshot, pendingApprovals, type LiveTranscript } from "./liveTranscript.js";
-import { INBOUND_PREFIX, channelMessage } from "./channelMessage.js";
+import { INBOUND_PREFIX, channelMessage } from "./channelMessageData.js";
 import { appendEvent, fromHistory } from "./transcript.js";
 import { Conversation } from "./Conversation.js";
 

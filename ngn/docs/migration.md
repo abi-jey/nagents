@@ -1,134 +1,90 @@
-# Rust migration status · 0.100.2
+# Migration to one Python engine and a Rust client
 
-## Decision
+[ADR 0001: Python core, Rust TUI client](https://github.com/abi-jey/nagents/blob/main/docs/adr/0001-python-core-rust-tui.md)
+is **Proposed**. This is the rollout plan for that architecture, not a claim
+that the new engine has shipped. The Rust host stays supported until the
+replacement passes the cutover gates below.
 
-`ngn` is an independent application **in the same repository** as the Python core.
-Its Cargo workspace lives under `ngn/`; the Python package stays at `src/nagents/`.
-Rust owns the harness, interfaces and
-native tool bindings; `nagents` remains a reusable Python agents/integration
-library. The first live runtime is an optional adapter, **not** a Python ngn worker.
-Native Rust agent/model backends can implement the same protocol later without
-changing the TUI or web host.
+## Shipped baseline and target
 
-Repository inspection found approximately **15,750 Python harness lines, 21,615
-web lines, and 7,958 TUI lines** in the originating checkout. That checkout also
-contained uncommitted provider, runtime, UI and test work. It was left intact.
-This release establishes the architectural boundary rather than deleting or
-silently superseding that existing implementation.
+| Concern | Shipped split host | ADR target |
+| --- | --- | --- |
+| Agent runtime | Rust `ngn-core` owns admission, queues, steering, subagents, tools and approvals. `ngn_nagents` runs the Python model loop and provider integration in a subprocess per run. | One long-lived `nagents engine`, built on `src/nagents/harness` and the headless FastAPI API in `src/nagents/web`, owns the whole run. |
+| Sessions and events | `host.sqlite3` holds the Rust host's sessions, runs and journal; `nagents.sqlite3` holds runtime conversation history. The Python web application has its own state. | One engine-owned SQLite database. Clients cache projections and persist only client preferences. |
+| Terminal | Ratatui calls `Host` in-process. | Rust still owns terminal rendering, input, selection, copy, navigation and themes, but calls a generated API client and renders event-fed state. |
+| Browser | `ngn serve` embeds the shared React workspace and its native transport calls the Rust host's API. | `ngn serve` starts or attaches to the engine, serves the embedded UI, and proxies its same-origin API and event WebSocket. It doesn't own sessions or runs. |
+| Tools and approvals | Rust validates and executes workspace tools and waits for decisions. | Python owns policy, execution and approval state. Heavy primitives such as discovery and diff previews run in-process through `nagents-native` (PyO3, maturin, `abi3`). |
 
-## Ownership and implementation
+The restored browser UI uses the shared Sessions, Conversation and Team
+components, including Markdown, tool cards, approval review and resizable
+panels. Its [native transport](https://github.com/abi-jey/nagents/tree/main/src/nagents/web-ui/src/native)
+is a compatibility layer, not a new engine or a promise of Python feature
+parity. Settings/model editors, unsupported session actions, voice and channels
+do not become native features just because the components are shared.
 
-| Concern | Owner in the new application |
-| --- | --- |
-| CLI, terminal rendering, HTTP and WebSockets | Rust `crates/ngn` |
-| Session lifecycle, admission/idempotency, run state, durable event journal | Rust `ngn-core` |
-| Native file/shell tools, validation and human approvals | Rust `ngn-core` |
-| Runtime supervision, cancellation and process cleanup | Rust `ngn-core` |
-| Agent/model/tool loop, provider authentication/API transport | Optional runtime (`nagents` initially) |
-| Conversation/model context storage and repair | Runtime-owned private database |
-| Browser rendering | Embedded plain HTML/CSS/ES modules, no Node server |
+## The interface to migrate to
 
-The old React frontend is **not claimed to be ported**. Its large existing API
-contract must be deliberately reconciled with the new host before reuse; the
-initial browser client proves the new shared lifecycle and tool boundary.
+- **One contract.** `nagents.protocol` depends only on Pydantic and defines
+  requests, responses and events. Commit the OpenAPI and event JSON Schema
+  exports and the Rust `ngn-api` generated from them. CI and pre-commit reject
+  stale generated code. Version the API under `/api/v1` and try new endpoints
+  under `/api/v1/experimental/` first. Clients reject an incompatible major
+  version, ignore unknown fields, preserve unknown variants and distinguish
+  absent values from explicit `null` where they differ.
+- **One connection per client for events.** Use authenticated HTTP requests and
+  a WebSocket that subscribes before replay, sequences events monotonically and
+  resumes with `?after=<sequence>`. Durable events can replay; transient deltas
+  cannot. Keep client queues bounded and reconnect and resynchronize on overflow.
+- **Engine lifecycle.** Bind locally to `127.0.0.1`, use a per-engine bearer token
+  and a private registration file, and allow explicit attach with `--engine
+  <url>`. A private `--standalone` engine has a stdin lifetime lease. A client
+  never shuts down an engine it did not start. `ngn serve` keeps the engine token
+  on its side of the proxy and preserves same-origin, `no-store` and frame-deny
+  protections.
+- **Exact approval decisions.** The engine emits `approval.requested`; any
+  attached client can decide the exact pending approval, and the first valid
+  decision wins. Time actual tool execution, not the wait for a human. Replaying
+  a journal must never execute a tool or revive a past approval.
 
-## Implemented baseline
+## Release sequence and exit gates
 
-- [x] Independent Cargo workspace and binary, application version `0.100.0`.
-- [x] Strict versioned agent protocol, tool schema catalog and exact call binding.
-- [x] Public-library nagents adapter, with no Python UI/harness/server imports.
-- [x] Native CLI/headless client and Ratatui terminal client.
-- [x] Native Axum web server, embedded browser client, authenticated same-origin API.
-- [x] Durable cursor-based events, session listing/resume and restart interruption.
-- [x] Independent sessions, bounded run admission and submission idempotency.
-- [x] Native bounded read/list/search/write/edit/shell tools and one-time approvals.
-- [x] Read-only mode, non-interactive fail-closed behavior, stale file detection.
-- [x] Cancellation, shutdown joins and Unix child-process-group cleanup.
-- [x] Rust-owned foreground/background subagent supervision with isolated sessions,
-  immutable ancestry, permission ceilings, shared budgets and child deadlines.
-- [x] Direct-parent result/control tools, subtree cancellation and fail-closed
-  cleanup of unjoined active children.
-- [x] TUI/web task catalogs, independent child inspectors, child-only cancellation
-  and root-operator approval of correctly attributed child calls.
-- [x] Rust-owned durable per-session FIFO queues, transactional ordering/admission,
-  bounded backlog, stable request IDs and matching TUI/HTTP/WebSocket controls.
-- [x] Pending-input removal, clear/pause/resume and paused restart recovery without
-  replaying interrupted runs or transferring a prior tool approval.
-- [x] Call-owned active tool clocks, approval-wait exclusion and compact target/time
-  summaries in both native clients.
-- [x] Touch Return/focus behavior, mobile conversation navigation and independently
-  scrollable approval previews, with real desktop/touch Chromium acceptance.
-- [x] Bounded workspace-root/nested `.gitignore` discovery and ancestor-aware search,
-  retaining non-negatable protected paths and instruction-payload isolation.
-- [x] Explicit ChatGPT subscription configuration, capability-gated
-  runtime credentials callback and bounded native `auth login|status|logout`.
-  Shared host/runtime identity guards exclude concurrent identity mutations.
-- [x] Bounded explicit active-root [steering API](steering.md), two-sided runtime
-  negotiation, complete persisted tool-batch/final safe points and durable
-  pending/offered/applied/uncertain/undelivered receipts without automatic replay.
-- [x] Separate browser Steer active turn and TUI `/steer TEXT`/F7 receipt controls,
-  exact-run retry bindings and terminal receipt snapshots. Enter/Send remains FIFO.
+Ship each phase separately. Keep both interfaces working during the
+transition; switch defaults only after conformance, acceptance and recovery
+checks pass.
 
-Host storage uses **schema 5** for read-only archives in addition to schema 4's
-steering receipts. Stop the host and back up important state before upgrading.
-Older binaries refuse newer schemas: downgrade with a separate state directory
-or restore the backup, never edit `user_version`. The runtime database remains
-opaque. Without `--config`, the host reads Python ngn provider settings without
-modifying them. Normal workspace startup can make a one-time copy of supported
-Python display history into native state; the Python source is not modified.
-See [Python session history](../README.md#python-session-history) for path
-selection, safety limits and the explicit backup fallback.
+| Phase | Work | Exit gate |
+| --- | --- | --- |
+| **0. Clean up and inventory** | Land the shared React build in `ngn serve`, remove the duplicate `ngn/web/` frontend, and keep the Rust-host transport until the engine API is available. Use the [route and TUI inventory](engine-inventory.md) to decide what to keep, merge or drop before fixing the v1 surface. | The restored browser passes desktop and touch acceptance against the current host, and the inventory records a disposition for each existing route and TUI operation. |
+| **1. Publish the contract** | Define sessions and history, run start/cancel/steer, queue, approvals, subagent tasks, provider/model and config reads, and the event union. Export schemas and generate `ngn-api`. | The crate builds, golden fixtures round-trip in Python and Rust, and stale generation fails CI. |
+| **2. Decouple the TUI** | Wrap today's `Host` behind an `Engine` trait and an `InProcess` implementation; add `Remote` over `ngn-api`. Feed a bounded client store from events instead of handing host objects to views. | No direct `Host` calls remain in `tui.rs`, `tui/` or `view.rs`. The existing TUI tests and terminal smoke pass with `InProcess`. |
+| **3. Offer the Python engine** | Serve `/api/v1` from the existing Python runtime, with token, discovery and private lease mode. Implement durable event replay, queue/steering and approval semantics. Opt in via `ngn --engine=python` and `ngn serve --engine=python`; switch the browser transport to the engine through the proxy. | Public-API conformance, terminal and browser acceptance pass on the Python engine. Restart and reconnect recover the session and its history without repeating an interrupted tool or replaying an approval. |
+| **4. Move tools** | Keep light tools in Python. Move heavy workspace discovery and diff previews first to `nagents-native`; follow with search and large reads where benchmarks justify it. Retain workspace path restrictions and approval behavior. | Parity fixtures agree, discovery/search on a large workspace are within 10% of the Rust host, and tool timing and approvals pass end-to-end. |
+| **5. Switch and retire** | Make the Python engine the default for one release with an explicit `--engine=legacy` escape hatch. Import Rust host state once into the engine store. After the transition, remove the Rust host, per-run adapter, handwritten `ngn-protocol` and direct `Host` web handlers. | A release ships without the legacy engine path. Dependency tests prevent `ngn` from reaching tool/provider code and prevent Python protocol/engine modules from depending on clients. |
+| **6. Package and lay out** | Ship the client, CPython, engine wheel and platform-specific native tool wheel. Move the Rust workspace to root `crates/` when release and development tooling are ready. | Clean Linux and macOS installs and `ngn update` verify and run the packaged engine and clients. |
 
-## Explicitly not migrated yet
+Use a fixture provider for repeatable terminal and browser flows: session
+history, copy and scrolling, Markdown and tool inspection, one-time approvals,
+queue controls, steering, and child inspection and cancellation. Test engine
+restart mid-run, disconnect/reconnect, queue overflow, and an approval resolved
+from another client. Fixture tests do not establish paid-provider eligibility or
+feature parity for features left out of the first contract.
 
-These are **gaps**, not features hidden behind a compatibility fallback:
+## Data and rollback
 
-- Original animated Textual design, full-app themes and theme controls (only
-  [painted Message editor/caret colors](../README.md#controls) are inherited),
-  startup/exit motion, advanced editor,
-  Markdown/link rendering, tool cards, diagnostics/performance dashboard.
-- Original React application, full settings navigator and provider/model editors.
-- Global/workspace/agent preference inheritance and optimistic configuration revisions.
-- Agent Markdown definitions/profiles, hot reload and provider connection registry.
-- Full legacy delegation UX, agent profiles/model overrides, child follow-ups,
-  automatic completion notifications at model boundaries and wake-up timers.
-  Basic Rust supervision, inspection, budgets and explicit `agent_wait` delivery
-  exist in the official 0.100.0 rollup; they are not the full old orchestration feature set.
-- Interrupt delivery during active model generation, queue reordering/editing,
-  attachments and scheduled/follow-up delivery. Explicit safe-point steering exists
-  in the API and native clients; plain FIFO remains separate.
-- Skills, nested instruction loading, MCP and custom Python plugins. Native discovery
-  supports workspace `.gitignore` only; user/global Git sources are not imported.
-- Model context accounting, compaction controls, usage UI and model discovery UI.
-- Browser auth UI/HTTP mutations, live ChatGPT login/entitlement validation,
-  Foundry Entra integration and OS keyring storage. Explicit native CLI device
-  auth/subscription development is [bounded separately](chatgpt-auth.md); its
-  official release is blocked until the public core auth API is published.
-- Attachments, image/artifact delivery, session forks/rename/trash/grouping.
-- Voice, realtime/WebRTC, local audio devices, speech-driven delegation.
-- Channels/connectors (Telegram/Twilio/etc.), durable external inbox/routing ownership.
-- A2A client/server/authentication and remote agent management.
-- Docker/Kubernetes migration, remote multi-user authentication, signed release assets.
-- Full legacy configuration/database parity, complete platform compatibility and benchmarks.
+**Today**, the native host can copy supported Python display history into a
+separate read-only archive. Host schema 5 adds archives alongside schema 4
+steering receipts. See [Python session history](../README.md#python-session-history)
+and [installation and update safety](installation.md) before opening important
+state. Stop the host and back up both stores; downgrade with a compatible state
+directory or backup, never by editing SQLite `user_version`.
 
-Provider API support inherited through nagents is separate from host integration:
-the adapter accepts environment API-key connections and an opt-in, capability-gated
-ChatGPT subscription extension, not every legacy authentication or media mode.
-Local fixture coverage is not paid-provider validation.
+**At the cutover**, the import runs in the other direction: copy supported
+`host.sqlite3` state into the Python engine's store, once, leaving the source
+unchanged. Prove interruption and rerun safety on snapshots before enabling it.
+Do not import credentials or treat old approvals or failed runs as work to
+execute. Keep the original store for legacy rollback; changes written to the
+engine after cutover do not automatically flow back.
 
-## Iteration order
-
-1. **0.100.x:** validate the protocol boundary and first TUI/server with real user
-   workflows; improve parity tests, logs, error presentation and keyboard behavior.
-2. Port trusted config/provider definitions and per-agent immutable run snapshots.
-3. Extend supervised delegation with queues/follow-ups/automatic result delivery,
-   preserving the original ownership and approval invariants.
-4. Reconcile or port the full web experience, settings, artifacts and session actions.
-5. Port MCP/skills/extensions using explicit capability contracts, not Python imports
-   inside the Rust host. Expose trusted Python behavior only as an optional runtime.
-6. Migrate authenticated integrations, channels, A2A and voice as separately tested
-    services/transports. Keep any legacy migration beyond display history separate.
-
-Do not remove the existing Python ngn entry point, change published nagents extras,
-overwrite its databases, or switch installed defaults until the relevant parity
-and recovery tests pass and an operator explicitly chooses the new application.
+The generator choice, headless engine dependencies, default shared versus
+standalone lifecycle, and the final native-tool and workspace scope remain
+open in the ADR. The React restoration does not decide them.

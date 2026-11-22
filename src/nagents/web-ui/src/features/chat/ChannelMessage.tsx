@@ -1,5 +1,5 @@
 import type { MessagePart } from "../../types.js";
-import type { ChannelMeta } from "./channelMessage.js";
+import type { ChannelMeta } from "./channelMessageData.js";
 
 // Channel messages render as their own card: a trusted header line built from the
 // verified backend source annotation, the message text, and attachment previews.

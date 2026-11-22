@@ -1,7 +1,0 @@
-{
-  "name": "ngn-web",
-  "version": "0.100.45",
-  "private": true,
-  "type": "module",
-  "scripts": { "check": "node --check web/app.js", "test": "node --test web/app.test.js" }
-}
