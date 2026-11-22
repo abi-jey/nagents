@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.44
+
+- Native TUI UX overhaul: Markdown replies, unified-diff approvals with y/n keys and typing-safe guards, status-icon tool cards, a welcome screen, grouped help, a full slash menu, plain-language outcomes, and provider errors that stop promptly with a specific reason.
+
 ## 0.100.43
 
 - Remove the Python terminal UI; the native ngn is the interactive terminal client. The Python ngn keeps run, serve, sessions, a2a, login, logout and doctor, and the tui extra and Textual dependency are gone. Docs explain how ngn and nagents are pronounced.
