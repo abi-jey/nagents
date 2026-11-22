@@ -130,13 +130,19 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
     assert runtime_info["auth_available"] and runtime_info["dont_write_bytecode"]
     assert not any(runtime_info["editable"])
     assert Path(runtime_info["ca"]).resolve().is_relative_to(runtime.resolve()) and runtime_info["ca_count"] > 0
-    doctor = execute([str(command), "doctor"], environment=environment, directory=workspace)
+    # Doctor and the engine are normal use (the engine opens its session store), so
+    # they keep data in their own directory; the protected state proves only that
+    # install and update leave existing data alone.
+    engine_data = output / "engine-data"
+    engine_data.mkdir(mode=0o700)
+    application = {**environment, "XDG_DATA_HOME": str(engine_data)}
+    doctor = execute([str(command), "doctor"], environment=application, directory=workspace)
     assert str(generation) in doctor.stdout and "runtime/bin/python3" in doctor.stdout
     (output / "doctor.log").write_text(doctor.stdout + doctor.stderr)
     # The installed client starts its bundled Python engine; the demo makes no model request.
     checks = execute(
         [str(command), "--standalone", "--engine-demo", "run", "--json", "hello offline"],
-        environment=environment,
+        environment=application,
         directory=workspace,
         timeout=180,
     )

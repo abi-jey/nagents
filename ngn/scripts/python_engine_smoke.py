@@ -398,10 +398,28 @@ def pty_phase(
         until(lambda: b"pty-batch-1.txt" in clean(at), "second tool")
         assert (workspace / "pty-batch-0.txt").read_text() == "tool 0\n"
         assert not (workspace / "pty-batch-1.txt").exists()
-        until(lambda: b"Allow write to pty-batch-1.txt?" in clean(at), "second approval prompt")
-        # The TUI ignores keys for 300 ms after a prompt appears so typing cannot approve.
-        time.sleep(0.6)
-        os.write(master, b"\x19")  # Ctrl+Y, not a direct API decision this time.
+        second = until(
+            lambda: [entry for entry in call("/state")["approvals"] if entry["id"] != approved["id"]],
+            "second approval",
+        )[0]
+
+        def second_pending() -> bool:
+            return any(entry["id"] == second["id"] for entry in call("/state")["approvals"])
+
+        # Ctrl+Y, not a direct API decision this time. The TUI ignores keys for
+        # 300 ms after a prompt appears (so typing cannot approve), and the screen
+        # diff may not repaint the whole prompt, so press it until the engine
+        # reports the decision. Ctrl+Y does nothing without a prompt.
+        for _ in range(10):
+            time.sleep(0.5)
+            os.write(master, b"\x19")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and second_pending():
+                drain()
+            if not second_pending():
+                break
+        else:
+            raise AssertionError("Ctrl+Y never approved the second tool")
         until(
             lambda: [entry for entry in call(steering)["receipts"] if entry["status"] == "applied"][1:],
             "persistent steering at the model boundary",
