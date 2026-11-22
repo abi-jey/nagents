@@ -437,6 +437,8 @@ async def main(binary: Path, runtime_python: Path, executable: str, output: Path
                     "data_dir": str(data),
                     "runner": [
                         str(runtime_python),
+                        "-I",
+                        "-B",
                         str(REPO / "ngn/scripts/steering_smoke.py"),
                         "--runtime-fixture",
                         "wrong-ack",

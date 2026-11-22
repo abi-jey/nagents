@@ -13,7 +13,7 @@ import { Conversation } from "./Conversation.js";
 import { DelegationFlow } from "./delegationFlow.js";
 import { appendEvent, fromHistory, type Entry } from "./transcript.js";
 import { applySnapshot } from "./liveTranscript.js";
-import { artifactState } from "./artifactImages.js";
+import { artifactState } from "./artifactImageData.js";
 
 const image = (history = "8", index = 0, values: Partial<ArtifactImageRef> = {}): ArtifactImageRef => ({
   type: "artifact_image", artifact_id: "thumbnail", artifact_part: 0, filename: "thumbnail.png", media_type: "image/png",

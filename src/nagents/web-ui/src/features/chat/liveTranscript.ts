@@ -3,7 +3,7 @@ import type { Position, SessionFrame } from "../../api/subscription.js";
 import type { QueuedMessage } from "../../api/messages.js";
 import { appendEvent, fromHistory, sameLiveCaption, sameTranscriptUser, type Entry } from "./transcript.js";
 import { latestResponseMetadata } from "./responseMetadata.js";
-import { artifactState } from "./artifactImages.js";
+import { artifactState } from "./artifactImageData.js";
 
 export type LiveTranscript = {
   entries: Entry[];

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { assetInventory, buildFrontend, sourceInventory } from "./build.mjs";
 
 async function fixture(t) {
@@ -45,6 +46,20 @@ test("source inventory skips symbolic links", { skip: process.platform === "win3
   await symlink(path.join(sourceRoot, "src/app.ts"), path.join(sourceRoot, "linked.ts"));
   await symlink(path.join(sourceRoot, "src"), path.join(sourceRoot, "src/linked"));
   assert.deepEqual(await sourceInventory(sourceRoot), before);
+});
+
+test("web module names are unique on case-insensitive filesystems", async () => {
+  const sources = await sourceInventory(fileURLToPath(new URL("..", import.meta.url)));
+  const stems = new Map();
+  const collisions = [];
+  for (const file of Object.keys(sources)) {
+    if (!file.startsWith("src/") || !/\.[jt]sx?$/.test(file)) continue;
+    // Vite resolves .js imports against either TS or TSX source.
+    const key = file.replace(/\.[jt]sx?$/, "").toLowerCase();
+    if (stems.has(key)) collisions.push([stems.get(key), file]);
+    else stems.set(key, file);
+  }
+  assert.deepEqual(collisions, []);
 });
 
 test("successful build records deterministic source and asset hashes", async (t) => {

@@ -1,12 +1,12 @@
 import { agentUpdates, savedWakeup } from "./backgroundUpdates.js";
 import { preview, text } from "../../api/events.js";
 import type { ActivityReply, ArtifactImageRef, MessagePart, Snapshot, WireEvent } from "../../types.js";
-import type { ChannelMeta } from "./channelMessage.js";
+import type { ChannelMeta } from "./channelMessageData.js";
 import type { LocalDelivery } from "./deliveries.js";
 import { uploadedAttachments } from "./uploads.js";
-import { channelMessage, sameUserMessage } from "./channelMessage.js";
+import { channelMessage, sameUserMessage } from "./channelMessageData.js";
 import { responseMetadata, sameResponse, type ResponseMetadata } from "./responseMetadata.js";
-import { artifactImages, artifactParts, artifactState } from "./artifactImages.js";
+import { artifactImages, artifactParts, artifactState } from "./artifactImageData.js";
 
 export type LiveCaption = {
   sessionId: string;

@@ -21,11 +21,13 @@ class SteeringSmokeTests(unittest.TestCase):
                 patch.dict(os.environ, {"PYTHONPATH": "/untrusted/source", "PYTHONHOME": "/old"}),
                 patch("steering_smoke.subprocess.run") as probe,
             ):
-                self.assertEqual(adapter_runner(runtime, installed=True), [str(runtime), "-I", "-m", "ngn_nagents"])
+                self.assertEqual(
+                    adapter_runner(runtime, installed=True), [str(runtime), "-I", "-B", "-m", "ngn_nagents"]
+                )
                 self.assertNotIn("PYTHONPATH", os.environ)
                 self.assertNotIn("PYTHONHOME", os.environ)
                 probe.assert_called_once()
-                self.assertEqual(probe.call_args.args[0][:3], [str(runtime), "-I", "-c"])
+                self.assertEqual(probe.call_args.args[0][:4], [str(runtime), "-I", "-B", "-c"])
                 self.assertTrue(probe.call_args.kwargs["check"])
 
     def test_installed_import_failure_is_fatal_without_source_fallback(self) -> None:

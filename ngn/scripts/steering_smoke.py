@@ -38,12 +38,13 @@ def adapter_runner(runtime_python: Path, *, installed: bool) -> list[str]:
             [
                 python,
                 "-I",
+                "-B",
                 "-c",
-                "import pathlib,sys,nagents,ngn_nagents; root=pathlib.Path(sys.prefix).resolve(); assert all(pathlib.Path(m.__file__).resolve().is_relative_to(root) for m in (nagents,ngn_nagents)), 'Editable or external runtime imports detected'",
+                "import pathlib,sys,nagents,ngn_nagents; root=pathlib.Path(sys.prefix).resolve(); assert sys.dont_write_bytecode and all(pathlib.Path(m.__file__).resolve().is_relative_to(root) for m in (nagents,ngn_nagents)), 'Editable, external or writable runtime imports detected'",
             ],
             check=True,
         )
-        return [python, "-I", "-m", "ngn_nagents"]
+        return [python, "-I", "-B", "-m", "ngn_nagents"]
     os.environ["PYTHONPATH"] = f"{REPO / 'src'}:{REPO / 'ngn/integrations/nagents/src'}"
     return [python, "-m", "ngn_nagents"]
 

@@ -2,7 +2,7 @@ import { useContext } from "react";
 import type { ArtifactImageRef } from "../../types.js";
 import { ChatMedia } from "./ChatMedia.js";
 import { MediaToken } from "./LocalDelivery.js";
-import { artifactState } from "./artifactImages.js";
+import { artifactState } from "./artifactImageData.js";
 
 export function ArtifactImages({ artifacts, error }: { artifacts?: ArtifactImageRef[]; error?: string }) {
   const token = useContext(MediaToken), checked = artifactState(artifacts);
