@@ -167,7 +167,7 @@ matching published core. The API is **not available in nagents
   conversation text holds the current view; scroll to the bottom to follow
   new output again. If the selected text moves or changes before release,
   select it again.
-- **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
+- When a tool asks permission, press **y** (or **Enter**) to allow it once and **n** to deny it. **Ctrl+Y** and **Ctrl+D** still work. Keys pressed in the first moment after the prompt appears are ignored so typing cannot approve by accident.
 - **Ctrl+C** or **Ctrl+Q** quits; **Esc** cancels active work without quitting.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.

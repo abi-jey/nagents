@@ -42,6 +42,7 @@ use uuid::Uuid;
 use crate::{animations_enabled, view};
 
 mod agents;
+mod approval;
 mod clipboard;
 mod code_fences;
 mod completion;
@@ -77,7 +78,7 @@ Enter  Send when idle; steer the active turn if supported
 Ctrl+Enter  Queue for a later turn if busy · Shift+Enter  Newline
 /  Show commands · Up/Down select · Tab/Enter fill · Esc close
 /steer TEXT  Steer the active turn explicitly
-Ctrl+Y  Approve once · Ctrl+D  Deny
+y or Enter  Allow a pending tool call once · n  Deny
 Esc  Cancel active work (completed actions are not rolled back)
 PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
  /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
@@ -177,6 +178,8 @@ struct App {
     transcript_area: Rect,
     selection: selection::Selection,
     preview_scroll: u16,
+    /// When the visible approval first appeared (guards against early keys).
+    approval_since: approval::Since,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
@@ -284,6 +287,7 @@ impl App {
             != approval.as_ref().map(|approval| &approval.id)
         {
             self.preview_scroll = 0;
+            self.approval_since.reset();
             // The pending modal and durable transcript have separate sources.
             // Pick up a committed decision before drawing the newly exposed row.
             if self.approval.is_some()
@@ -600,10 +604,10 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
     app.agents.observe_context(context);
     // Keep the exact waiting child visible next to its approval prompt.
-    let approval_dialog = app
-        .approval
-        .as_ref()
-        .map(|approval| (approval, center(transcript_area, 110, 32)));
+    let approval_dialog = app.approval.as_ref().map(|approval| {
+        let body = approval::content(approval, app.no_color);
+        (approval, approval::panel(transcript_area, &body), body)
+    });
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
@@ -624,7 +628,8 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     );
     if app.shows_overlay() {
         transcript.hide_wipes();
-    } else if let Some((_, area)) = approval_dialog {
+    } else if let Some((_, area, _)) = &approval_dialog {
+        let area = *area;
         transcript.mask_wipes(area);
     }
     if app.records.is_empty() {
@@ -781,28 +786,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             area,
         );
     }
-    if let Some((approval, area)) = approval_dialog {
+    if let Some((approval, area, body)) = approval_dialog {
         frame.render_widget(Clear, area);
-        let title = format!(
-            " Approval: depth {} · {} / {} ",
-            approval.depth,
-            view::plain(&approval.agent_title),
-            view::plain(&approval.call.name)
-        );
-        const KEYS: &str = "Ctrl+Y allow once · Ctrl+D deny · Esc cancel";
-        let block = Block::bordered().border_style(Style::new().fg(Color::Yellow));
-        let block = if rail.is_some() {
-            // The dialog is narrower alongside the rail. Keep the controls
-            // visible even when a long agent title fills the top border.
-            block.title(title).title_bottom(format!(" {KEYS} "))
-        } else {
-            block.title(format!("{title}· {KEYS} "))
-        };
         frame.render_widget(
-            Paragraph::new(view::plain(&approval.preview))
-                .wrap(Wrap { trim: false })
-                .scroll((app.preview_scroll, 0))
-                .block(block),
+            body.scroll((app.preview_scroll, 0))
+                .block(approval::block(approval)),
             area,
         );
     }
@@ -1240,6 +1228,7 @@ pub async fn run(
         active: None,
         approval: None,
         preview_scroll: 0,
+        approval_since: approval::Since::default(),
         tasks: Vec::new(),
         task_picker: false,
         task_index: 0,
@@ -1434,12 +1423,17 @@ pub async fn run(
                             continue;
                         }
                         if let Some(approval) = &app.approval {
-                            let handled = match key.code {
-                                KeyCode::Char('y') | KeyCode::Char('d') if control => { let result = host.decide(&approval.run_id, &approval.id, key.code == KeyCode::Char('y')).await; if let Err(error) = result { app.status = error.to_string(); } true },
-                                KeyCode::Esc => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = host.cancel(id).await; true },
-                                KeyCode::PageUp => { app.preview_scroll = app.preview_scroll.saturating_sub(10); true },
-                                KeyCode::PageDown => { app.preview_scroll = app.preview_scroll.saturating_add(10); true },
-                                _ => false,
+                            let handled = match approval::action(key, app.approval_since.elapsed()) {
+                                approval::Action::Allow | approval::Action::Deny => {
+                                    let allow = approval::action(key, Duration::MAX) == approval::Action::Allow;
+                                    if let Err(error) = host.decide(&approval.run_id, &approval.id, allow).await { app.status = error.to_string(); }
+                                    true
+                                },
+                                approval::Action::Cancel => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = host.cancel(id).await; true },
+                                approval::Action::ScrollUp => { app.preview_scroll = app.preview_scroll.saturating_sub(10); true },
+                                approval::Action::ScrollDown => { app.preview_scroll = app.preview_scroll.saturating_add(10); true },
+                                approval::Action::Ignore => true,
+                                approval::Action::Pass => false,
                             };
                             if handled { app.state(&host).await; continue; }
                         }
@@ -1655,7 +1649,7 @@ mod tests {
             "F8  Focus long code blocks",
             "Enter  Send when idle; steer the active turn if supported",
             "Ctrl+Enter  Queue for a later turn if busy",
-            "Ctrl+Y  Approve once",
+            "y or Enter  Allow a pending tool call once",
         ] {
             assert!(screen.contains(expected), "missing help entry: {expected}");
         }
@@ -2669,6 +2663,7 @@ mod tests {
             active: None,
             approval: None,
             preview_scroll: 0,
+            approval_since: approval::Since::default(),
             tasks: Vec::new(),
             task_picker: false,
             task_index: 0,

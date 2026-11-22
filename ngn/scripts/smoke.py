@@ -412,7 +412,7 @@ def tui_check(
         destination = workspace / "changed.txt"
         require(not destination.exists(), "Approval fixture destination already exists")
         os.write(master, TUI_WRITE_PROMPT.encode() + b"\r")
-        wait_for(lambda: b"Approval:" in visible(), "TUI approval preview did not render")
+        wait_for(lambda: b"Allow write" in visible(), "TUI approval preview did not render")
         require(not destination.exists(), "TUI wrote before approval")
         os.write(master, b"\x19")  # Ctrl+Y: explicit one-time approval.
         database = next(data.rglob("host.sqlite3"))

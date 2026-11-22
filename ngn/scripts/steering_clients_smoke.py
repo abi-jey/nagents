@@ -301,7 +301,7 @@ def pty_check(binary: Path, config: Path, workspace: Path, data: Path, output: P
             "Steering TUI did not render and repaint at the resized PTY dimensions",
         )
         os.write(master, b"pty batch\r")
-        wait(b"Approval:")
+        wait(b"y allow")
         root = str(rows("SELECT id FROM runs WHERE status = 'running'", 1)[0][0])
         for prompt in ["pty first steering", "pty second steering"]:
             os.write(master, f"/steer {prompt}\r".encode())

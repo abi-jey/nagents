@@ -110,12 +110,12 @@ def check(binary: Path, root: Path, *, reduced_motion: bool) -> None:
             require(b"startup draft" in visible() and not runs(), "Startup Enter submitted instead of buffering")
             os.write(master, b"\x7f" * len("startup draft") + b"idle Ctrl+Enter" + QUEUE)
             prompt = "idle Ctrl+Enter"
-        wait_for(lambda: b"Ctrl+Y" in visible() and bool(runs()), "root reached native approval")
+        wait_for(lambda: b"y allow" in visible() and bool(runs()), "root reached native approval")
         run = runs()[0][0]
         require(runs() == [(run, prompt, "running")], "Idle submission did not start exactly one root")
-        os.write(master, b"approval focus" + ENTER + QUEUE + b"\x04")  # Ctrl+D denies the tool.
+        os.write(master, b"approval focus" + QUEUE + b"\x04")  # Ctrl+Enter is blocked; Ctrl+D denies the tool.
         wait_for(
-            lambda: b"fixture typing window" in visible() and b"Ctrl+Y" not in visible(),
+            lambda: b"fixture typing window" in visible() and b"y allow" not in visible(),
             "approval held focus and Ctrl+D left the root active",
         )
         require(len(runs()) == 1 and not receipts() and b"approval focus" not in visible(), "Enter bypassed approval")
@@ -139,7 +139,7 @@ def check(binary: Path, root: Path, *, reduced_motion: bool) -> None:
         require(not (root / "once.txt").exists(), "An Enter bypassed approval")
 
         os.write(master, b"\x1b")  # Esc stops and pauses the FIFO without quitting.
-        wait_for(lambda: runs()[0][2] == "cancelled" and b"Ctrl+Y" not in visible(), "cancelled root")
+        wait_for(lambda: runs()[0][2] == "cancelled" and b"y allow" not in visible(), "cancelled root")
         if reduced_motion:
             require(
                 receipts() == [(run, "active Enter", "undelivered"), (run, "explicit steering", "undelivered")],
