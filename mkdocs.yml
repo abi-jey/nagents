@@ -133,6 +133,9 @@ nav:
       - Harness Research: development/harness-research.md
       - A2A Interoperability: development/a2a-conformance.md
       - Built-in UI Channels Design: development/builtin-ui-channels.md
+      - Architecture Decisions:
+          - Overview: adr/README.md
+          - "0001: Python core, Rust TUI client": adr/0001-python-core-rust-tui.md
 
 extra:
   social:
