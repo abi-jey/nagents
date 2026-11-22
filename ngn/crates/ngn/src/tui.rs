@@ -34,7 +34,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Text},
+    text::{Line, Span, Text},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use uuid::Uuid;
@@ -109,7 +109,37 @@ fn help_text() -> Text<'static> {
 
 const PLACEHOLDER: &str = "Ask anything · / for commands · F1 for shortcuts";
 
-const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
+const WELCOME_HINT: &str = "Describe a task or ask a question · / for commands";
+const WELCOME_KEYS: &str = "F1 shortcuts · F2 past conversations · Esc stops a turn";
+
+/// The first screen of a new conversation. Rows that do not fit are left out
+/// rather than wrapped, so a narrow terminal stays uncluttered.
+fn welcome(workspace: &std::path::Path, width: u16) -> Vec<Line<'static>> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let place = match home
+        .as_deref()
+        .and_then(|home| workspace.strip_prefix(home).ok())
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => workspace.display().to_string(),
+    };
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    [
+        Line::from(vec![
+            Span::styled(
+                format!("ngn {}", env!("CARGO_PKG_VERSION")),
+                Style::new().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" · {place}"), dim),
+        ]),
+        Line::styled(WELCOME_HINT, dim),
+        Line::styled(WELCOME_KEYS, dim),
+    ]
+    .into_iter()
+    .filter(|line| line.width() <= usize::from(width))
+    .collect()
+}
 
 #[derive(Default)]
 struct Restore {
@@ -655,9 +685,8 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         transcript.mask_wipes(area);
     }
     if app.records.is_empty() {
-        let tip = Line::styled(EMPTY_TIP, Style::new().add_modifier(Modifier::DIM));
-        if tip.width() <= usize::from(transcript_area.width) {
-            transcript.push_decoration(tip);
+        for line in welcome(&host.config.workspace, transcript_area.width) {
+            transcript.push_decoration(line);
         }
     }
     if let Some(reason) = &app.failure {
@@ -1733,7 +1762,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_transcript_tip_uses_at_most_one_dim_row_and_does_not_touch_the_draft() {
+    fn empty_transcript_welcome_fits_its_rows_and_does_not_touch_the_draft() {
         let dir = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
@@ -1761,10 +1790,23 @@ mod tests {
             let [transcript, _, composer] = content_rows(buffer.area, 0);
             let (main, _) = agents::split(transcript, false);
             let row = |y| -> String { (0..main.width).map(|x| buffer[(x, y)].symbol()).collect() };
-            let fits = width >= 43;
-            assert_eq!(row(0).trim_end(), if fits { EMPTY_TIP } else { "" });
-            assert_eq!(buffer[(0, 0)].modifier.contains(Modifier::DIM), fits);
-            assert!((1..transcript.height).all(|y| row(y).trim().is_empty()));
+            let expected = welcome(&host.config.workspace, main.width);
+            for (y, line) in (0..).zip(&expected) {
+                assert_eq!(row(y).trim_end(), line.to_string());
+            }
+            if width >= 80 {
+                assert_eq!(expected.len(), 3);
+                assert!(row(0).starts_with("ngn "));
+                assert_eq!(row(1).trim_end(), WELCOME_HINT);
+                assert!(buffer[(0, 1)].modifier.contains(Modifier::DIM));
+            }
+            if width <= 20 {
+                assert!(expected.is_empty());
+            }
+            assert!(
+                (u16::try_from(expected.len()).unwrap()..transcript.height)
+                    .all(|y| row(y).trim().is_empty())
+            );
             if width >= 20 {
                 assert!(row(composer.y + 1).contains("draft"));
                 assert!(
@@ -2622,7 +2664,7 @@ mod tests {
                 ); // slash suggestions keep composer focus
                 let status = row(height - 2);
                 assert!(status.contains("Esc"), "{width} columns: {status}");
-                let menu_rows = height - 12..height - 7;
+                let menu_rows = 0..height - 7;
                 assert!(menu_rows.clone().any(|y| row(y).contains(hint)));
                 if !suggestion.is_empty() {
                     assert!(menu_rows.clone().any(|y| row(y).contains(suggestion)));

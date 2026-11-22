@@ -668,9 +668,9 @@ pub fn transcript(
         }
         match &record.event {
             Event::QueueUpdated { paused } => output.push_str(if *paused {
-                "\n[Input queue paused · resume explicitly]\n"
+                "\n⏸ Queued messages are paused · /queue resume sends them\n"
             } else {
-                "\n[Input queue resumed]\n"
+                "\n▶ Queued messages resumed\n"
             }),
             Event::RunStarted { prompt } => {
                 // Preserve the existing separators, but mark only the prompt
