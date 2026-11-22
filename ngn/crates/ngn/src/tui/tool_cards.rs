@@ -1045,7 +1045,7 @@ mod tests {
             .draw(|frame| pane = layout.render(frame, area, 0, None, true))
             .unwrap();
         let mut selection = Selection::default();
-        selection.frame(pane, Pane::default());
+        selection.frame(pane, Pane::default(), Pane::default());
         for (kind, column, row) in [
             (MouseEventKind::Down(MouseButton::Left), 0, 0),
             (MouseEventKind::Up(MouseButton::Left), 9, 7),
@@ -1217,7 +1217,7 @@ mod tests {
                     app.tools
                         .draw(frame, area, layout, &mut app.scroll, now, None);
                 app.transcript_area = transcript_area;
-                app.selection.frame(pane, Pane::default());
+                app.selection.frame(pane, Pane::default(), Pane::default());
                 app.selection.paint(frame.buffer_mut());
                 if let Some(area) = dialog {
                     frame.render_widget(ratatui::widgets::Clear, area);

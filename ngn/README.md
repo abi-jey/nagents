@@ -174,6 +174,9 @@ The [UX review](docs/ux-review.md) explains the design principles and roadmap.
   to scroll the conversation. Drag within the conversation (including visible
   tool details and code) or the Message draft to select text. A drag from a tool
   header selects text instead of toggling it. Selection does not edit a draft.
+  Everything else on screen (borders, the status rows, the approval panel,
+  help and pickers) can be dragged too and copies as painted, one line per
+  row without trailing padding.
 - Release to copy the selection automatically. This sends an OSC 52 request
   that replaces the clipboard contents when the terminal accepts it.
   **Copy requested** does not confirm acceptance. For terminal-native selection,

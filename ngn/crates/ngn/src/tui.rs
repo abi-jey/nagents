@@ -495,10 +495,13 @@ impl App {
 
     fn transcript_mouse(&mut self, mouse: MouseEvent) -> MouseUpdate {
         if !self.tools_available() {
+            // Panels and overlays have no cards to click, but their text
+            // can still be selected and copied.
             self.tools.clear_pointer();
+            let effect = self.selection.mouse(mouse, None);
             return MouseUpdate {
-                redraw: self.selection.clear(),
-                ..MouseUpdate::default()
+                redraw: effect.redraw,
+                selection_released: effect.selection_released,
             };
         }
         let position = Position::new(mouse.column, mouse.row);
@@ -759,8 +762,6 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             .buffer_mut()
             .set_line(input_area.x + 1, input_area.y, &hint, input_area.width - 1);
     }
-    app.selection
-        .frame(transcript_text, draft_text.unwrap_or_default());
     if let Some(hint) = app.selection.hint()
         && draft.width > 2
     {
@@ -769,7 +770,6 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         composer = composer.title_bottom(footer::fit(title, width).right_aligned());
     }
     frame.render_widget(composer, draft);
-    app.selection.paint(frame.buffer_mut());
     app.activity.draw(frame, footer, app, &host.config, now);
     if app.task_picker {
         let area = center(frame.area(), 110, 30);
@@ -903,6 +903,11 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     if app.no_color {
         strip_color(frame.buffer_mut(), area);
     }
+    // Last, so borders, status rows and overlays are selectable as painted.
+    let screen = selection::Pane::screen(frame.buffer_mut());
+    app.selection
+        .frame(transcript_text, draft_text.unwrap_or_default(), screen);
+    app.selection.paint(frame.buffer_mut());
 }
 
 fn strip_color(buffer: &mut Buffer, area: Rect) {

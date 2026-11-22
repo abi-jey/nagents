@@ -1,4 +1,6 @@
-//! Selection belongs to the last drawn text layout, not to the terminal buffer.
+//! Selection belongs to the last drawn text layout. Conversation and draft
+//! text copy as logical lines; everything else on screen (borders, status
+//! rows, panels and overlays) copies as the painted cells.
 
 use std::sync::Arc;
 
@@ -7,6 +9,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
     style::{Modifier, Style},
+    text::Span,
 };
 
 use super::{clipboard::MAX_COPY_BYTES, tool_cards::Key};
@@ -81,6 +84,34 @@ impl Pane {
                 end: row.text.len(),
             });
         }
+    }
+
+    /// Every painted cell of a finished frame, one hard line per terminal row.
+    /// Trailing blank cells are left out so copies do not end in padding.
+    pub(super) fn screen(buffer: &Buffer) -> Self {
+        let area = buffer.area;
+        let mut pane = Self::new(area);
+        for y in area.top()..area.bottom() {
+            pane.line(y, false);
+            let mut cells = Vec::new();
+            let mut x = area.left();
+            while x < area.right() {
+                let symbol = buffer[(x, y)].symbol();
+                let width = u16::try_from(Span::raw(symbol).width()).unwrap_or(1);
+                if width > 0 {
+                    cells.push((x, width.min(area.right() - x), symbol));
+                }
+                x = x.saturating_add(width.max(1));
+            }
+            let used = cells
+                .iter()
+                .rposition(|(_, _, symbol)| !symbol.trim().is_empty())
+                .map_or(0, |last| last + 1);
+            for &(x, width, symbol) in &cells[..used] {
+                pane.glyph(x, y, width, symbol);
+            }
+        }
+        pane
     }
 
     fn row_mut(&mut self, y: u16) -> Option<&mut Row> {
@@ -188,12 +219,14 @@ fn append(buffer: &mut Option<String>, text: &str) {
 enum Part {
     Transcript,
     Draft,
+    Screen,
 }
 
 #[derive(Default)]
 struct FrameText {
     transcript: Arc<Pane>,
     draft: Arc<Pane>,
+    screen: Arc<Pane>,
 }
 
 impl FrameText {
@@ -201,20 +234,23 @@ impl FrameText {
         match part {
             Part::Transcript => &self.transcript,
             Part::Draft => &self.draft,
+            Part::Screen => &self.screen,
         }
     }
 
     fn anchor(&self, position: Position) -> Option<Anchor> {
-        [Part::Transcript, Part::Draft]
+        // Text panes own their whole area, blank cells included, so a press
+        // there keeps logical copying. Anything else falls back to the screen.
+        let part = [Part::Transcript, Part::Draft]
             .into_iter()
-            .find_map(|part| {
-                let pane = self.pane(part);
-                Some(Anchor {
-                    part,
-                    pane: Arc::clone(pane),
-                    point: pane.hit(position)?,
-                })
-            })
+            .find(|&part| self.pane(part).area.contains(position))
+            .unwrap_or(Part::Screen);
+        let pane = self.pane(part);
+        Some(Anchor {
+            part,
+            pane: Arc::clone(pane),
+            point: pane.hit(position)?,
+        })
     }
 }
 
@@ -268,11 +304,13 @@ pub(super) struct Selection {
 }
 
 impl Selection {
-    pub(super) fn frame(&mut self, transcript: Pane, draft: Pane) {
-        let interactive = !transcript.area.is_empty() || !draft.area.is_empty();
+    pub(super) fn frame(&mut self, transcript: Pane, draft: Pane, screen: Pane) {
+        let interactive =
+            !transcript.area.is_empty() || !draft.area.is_empty() || !screen.area.is_empty();
         self.frame = FrameText {
             transcript: Arc::new(transcript),
             draft: Arc::new(draft),
+            screen: Arc::new(screen),
         };
         if !interactive {
             self.clear();
@@ -344,7 +382,15 @@ impl Selection {
             ..anchor.clone()
         };
         let end = anchor.pane.clamped_hit(anchor.point, position);
-        let (ink, text) = anchor.pane.extract(anchor.point, end);
+        let (ink, mut text) = anchor.pane.extract(anchor.point, end);
+        if let (Part::Screen, CopyText::Text(copied)) = (anchor.part, &mut text) {
+            // Painted rows end in padding up to the drag column; terminals drop it.
+            *copied = copied
+                .lines()
+                .map(str::trim_end)
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         let hold_transcript = matches!(anchor.part, Part::Transcript);
         self.mark = Some(Mark {
             anchor,
@@ -459,7 +505,7 @@ mod tests {
     fn drag_copies_whole_glyphs_and_only_logical_breaks() {
         let left = MouseButton::Left;
         let mut selection = Selection::default();
-        selection.frame(paragraph("old"), Pane::default());
+        selection.frame(paragraph("old"), Pane::default(), Pane::default());
         selection.mouse(send(MouseEventKind::Down(left), 2, 0), None);
         let drag = selection.mouse(send(MouseEventKind::Drag(left), 5, 2), None);
         assert!(!drag.selection_released);
@@ -474,14 +520,14 @@ mod tests {
         assert_eq!(text, "界 e\u{301}\n\tx");
         let mut appended = paragraph("new");
         appended.glyph(6, 2, 1, "y");
-        selection.frame(appended, Pane::default());
+        selection.frame(appended, Pane::default(), Pane::default());
         assert!(
             matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == "界 e\u{301}\n\tx")
         );
         let mut changed = paragraph("new");
         changed.rows[1] = None;
         changed.glyph(1, 1, 1, "z");
-        selection.frame(changed, Pane::default());
+        selection.frame(changed, Pane::default(), Pane::default());
         assert!(selection.copy_text().is_none());
     }
 
@@ -489,7 +535,7 @@ mod tests {
     fn same_cell_report_is_a_click_but_dragging_back_never_toggles() {
         let left = MouseButton::Left;
         let mut selection = Selection::default();
-        selection.frame(paragraph("tail"), Pane::default());
+        selection.frame(paragraph("tail"), Pane::default(), Pane::default());
         let card = ("run".into(), "call".into());
         selection.mouse(send(MouseEventKind::Down(left), 1, 0), Some(&card));
         selection.mouse(send(MouseEventKind::Drag(left), 1, 0), Some(&card));
@@ -509,15 +555,15 @@ mod tests {
         let left = MouseButton::Left;
         let card = ("run".into(), "call".into());
         let mut selection = Selection::default();
-        selection.frame(paragraph("1"), Pane::default());
+        selection.frame(paragraph("1"), Pane::default(), Pane::default());
         selection.mouse(send(MouseEventKind::Down(left), 1, 3), Some(&card));
-        selection.frame(paragraph("2"), Pane::default());
+        selection.frame(paragraph("2"), Pane::default(), Pane::default());
         let click = selection.mouse(send(MouseEventKind::Up(left), 1, 3), Some(&card));
         assert_eq!(click.click, Some(card.clone()));
 
         selection.mouse(send(MouseEventKind::Down(left), 1, 3), Some(&card));
-        selection.frame(Pane::default(), Pane::default());
-        selection.frame(paragraph("2"), Pane::default());
+        selection.frame(Pane::default(), Pane::default(), Pane::default());
+        selection.frame(paragraph("2"), Pane::default(), Pane::default());
         let click = selection.mouse(send(MouseEventKind::Up(left), 1, 3), Some(&card));
         assert!(click.click.is_none());
     }
@@ -528,7 +574,7 @@ mod tests {
         let mut draft = Pane::new(Rect::new(0, 4, 12, 1));
         draft.glyph(1, 4, 1, "private draft");
         let mut selection = Selection::default();
-        selection.frame(paragraph("b"), draft);
+        selection.frame(paragraph("b"), draft, Pane::default());
         selection.mouse(send(MouseEventKind::Down(left), 5, 2), None);
         selection.mouse(send(MouseEventKind::Up(left), 1, 4), None);
         assert!(matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == "x\nb"));
@@ -541,10 +587,59 @@ mod tests {
         pane.glyph(0, 0, 1, &"a".repeat(MAX_COPY_BYTES));
         pane.glyph(1, 0, 1, "b");
         let mut selection = Selection::default();
-        selection.frame(pane, Pane::default());
+        selection.frame(pane, Pane::default(), Pane::default());
         selection.mouse(send(MouseEventKind::Down(left), 0, 0), None);
         selection.mouse(send(MouseEventKind::Up(left), 1, 0), None);
         assert!(matches!(selection.copy_text(), Some(CopyText::TooLarge)));
         assert!(selection.clear());
+    }
+
+    #[test]
+    fn chrome_outside_text_panes_copies_as_painted_rows() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 4));
+        buffer.set_string(0, 0, "transcript", Style::new());
+        buffer.set_string(0, 2, "┌ Message ┐", Style::new());
+        buffer.set_string(0, 3, " 漢 status", Style::new());
+        // The transcript pane owns row 0-1, including its blank row.
+        let mut transcript = Pane::new(Rect::new(0, 0, 12, 2));
+        for (x, letter) in (0..).zip(["t", "r"]) {
+            transcript.glyph(x, 0, 1, letter);
+        }
+        let mut selection = Selection::default();
+        selection.frame(transcript, Pane::default(), Pane::screen(&buffer));
+
+        // Padding after the status text is dropped, not copied.
+        selection.mouse(send(MouseEventKind::Down(MouseButton::Left), 0, 3), None);
+        selection.mouse(send(MouseEventKind::Up(MouseButton::Left), 11, 3), None);
+        assert!(
+            matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == " 漢 status")
+        );
+        let mut buffer = buffer;
+        buffer.set_string(0, 1, "a   ", Style::new());
+        let transcript = Pane::new(Rect::new(0, 0, 12, 1));
+        selection.frame(transcript, Pane::default(), Pane::screen(&buffer));
+        selection.mouse(send(MouseEventKind::Down(MouseButton::Left), 0, 1), None);
+        selection.mouse(send(MouseEventKind::Up(MouseButton::Left), 11, 2), None);
+        assert!(
+            matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == "a\n┌ Message ┐")
+        );
+        selection.frame(
+            Pane::new(Rect::new(0, 0, 12, 2)),
+            Pane::default(),
+            Pane::screen(&buffer),
+        );
+
+        selection.mouse(send(MouseEventKind::Down(MouseButton::Left), 0, 2), None);
+        let effect = selection.mouse(send(MouseEventKind::Up(MouseButton::Left), 11, 3), None);
+        assert!(effect.selection_released);
+        assert!(!effect.hold_transcript);
+        assert!(
+            matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == "┌ Message ┐\n 漢 status")
+        );
+
+        // A blank transcript cell never starts a raw screen selection.
+        selection.mouse(send(MouseEventKind::Down(MouseButton::Left), 5, 1), None);
+        selection.mouse(send(MouseEventKind::Up(MouseButton::Left), 5, 3), None);
+        assert!(selection.copy_text().is_none());
     }
 }

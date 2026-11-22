@@ -313,7 +313,7 @@ mod tests {
             Some(&mut pane),
         );
         let mut selection = Selection::default();
-        selection.frame(Pane::default(), pane);
+        selection.frame(Pane::default(), pane, Pane::default());
         for (kind, column, row) in [
             (MouseEventKind::Down(MouseButton::Left), 3, 1),
             (MouseEventKind::Up(MouseButton::Left), 4, 2),
