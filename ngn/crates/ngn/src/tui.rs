@@ -1502,7 +1502,8 @@ pub(crate) async fn run(
         composer_palette: composer::Palette::new(display.composer_theme, no_color),
         no_color,
         activity: footer::Activity::new(Instant::now(), animate),
-        tools: tool_cards::Cards::new(animate),
+        tools: tool_cards::Cards::new(animate)
+            .with_shell_timeout(display.shell_timeout_seconds.map(|seconds| seconds * 1000)),
         active: None,
         approval: None,
         preview_scroll: 0,
@@ -3334,7 +3335,18 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(contents.contains("Agent: Preview child"));
-        assert!(contents.contains("read_file · failed · 7ms"));
+        let rows: Vec<String> = contents
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(120)
+            .map(|row| row.iter().collect())
+            .collect();
+        assert!(
+            rows.iter().any(|row| row.contains("read_file")
+                && row.contains("failed")
+                && row.contains("failed         7ms")),
+            "{rows:#?}"
+        );
         assert!(contents.contains("Error: child fixture failed: [2Jmissing file"));
         assert!(contents.contains("Error: Tool approval denied, expired or cancelled"));
         assert!(!contents.contains('\x1b'));

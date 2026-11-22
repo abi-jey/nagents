@@ -41,6 +41,7 @@ pub(super) struct Cards {
     seen: i64,
     completions: HashMap<Key, Completion>,
     wipes: Vec<(Position, HeaderCells, Completion)>,
+    shell_timeout: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -92,8 +93,14 @@ impl Cards {
         }
     }
 
+    /// The host's shell deadline in milliseconds, shown in each shell header.
+    pub(super) fn with_shell_timeout(mut self, timeout: Option<u64>) -> Self {
+        self.shell_timeout = timeout;
+        self
+    }
+
     pub(super) fn reset(&mut self) {
-        *self = Self::new(self.animated);
+        *self = Self::new(self.animated).with_shell_timeout(self.shell_timeout);
     }
 
     pub(super) fn skip_completions(&mut self, after: i64) {
@@ -470,7 +477,24 @@ fn shown_status(status: &str) -> &str {
     if status == "complete" { "" } else { status }
 }
 
-fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
+// The Python TUI's right-hand columns: outcome, elapsed and an optional timeout.
+// Every row reserves the same slots so the columns line up down the transcript.
+const OUTCOME_COLUMN: usize = 10;
+const TIME_COLUMN: usize = 8;
+const MIN_LABEL: usize = 12;
+
+fn columns(status: &str, elapsed: Option<&str>, timeout: Option<&str>) -> String {
+    let timeout = timeout.map_or_else(
+        || " ".repeat(TIME_COLUMN + 3),
+        |timeout| format!(" / {timeout:>TIME_COLUMN$}"),
+    );
+    format!(
+        "{status:<OUTCOME_COLUMN$}{:>TIME_COLUMN$}{timeout}",
+        elapsed.unwrap_or_default()
+    )
+}
+
+fn summary(card: &ToolCard<'_>, marker: &str, width: u16, shell_timeout: Option<u64>) -> String {
     let cells = usize::from(width);
     let mut prefix = if marker.is_empty() {
         String::new()
@@ -494,6 +518,20 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     } else {
         shown
     };
+    let timeout = card
+        .timeout
+        .or(shell_timeout.filter(|_| card.shell))
+        .map(duration);
+    let aligned = columns(status, elapsed.as_deref(), timeout.as_deref());
+    let aligned_width = Span::raw(&aligned).width();
+    if available >= MIN_LABEL + 2 + aligned_width {
+        let label = clip(&card.label, available - 2 - aligned_width);
+        let gap = available - aligned_width - Span::raw(&label).width();
+        prefix.push_str(&label);
+        prefix.push_str(&" ".repeat(gap));
+        prefix.push_str(&aligned);
+        return prefix;
+    }
     let mut outcome = suffix(status);
     if Span::raw(&outcome).width() > available && waiting {
         status = "waiting";
@@ -716,7 +754,8 @@ impl<'a> Layout<'a> {
                             style = style.add_modifier(Modifier::UNDERLINED);
                         }
                     }
-                    let title = summary(card, marker, width);
+                    let shell_timeout = cards.and_then(|cards| cards.shell_timeout);
+                    let title = summary(card, marker, width, shell_timeout);
                     if cards.is_some()
                         && Some(card.key) == active
                         && card.status == "running"
@@ -1498,7 +1537,7 @@ mod tests {
                 .collect::<String>()
         };
         assert!(lines(&final_frame).contains("shell"));
-        assert!(lines(&final_frame).contains("· 1.25s"));
+        assert!(lines(&final_frame).contains(" 1.25s"));
         for mut frame in [first, middle] {
             for column in 2..60 {
                 frame[(column, row)].fg = final_frame[(column, row)].fg;
@@ -2127,6 +2166,60 @@ mod tests {
     }
 
     #[test]
+    fn headers_align_outcome_elapsed_and_timeout_columns_like_the_python_tui() {
+        use ngn_protocol::ToolCall;
+        let shell = ToolCall {
+            call_id: "a".into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"command": "ls"}),
+        };
+        let fetch = ToolCall {
+            call_id: "b".into(),
+            name: "fetch".into(),
+            arguments: serde_json::json!({"timeout_ms": 1500}),
+        };
+        let read = ToolCall {
+            call_id: "c".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "x"}),
+        };
+        let card = |call, status| ToolCard::for_test(call, status, Some(1250));
+        let shell_timeout = Some(120_000);
+        let rows = [
+            summary(&card(&shell, "running"), "▸", 60, shell_timeout),
+            summary(&card(&fetch, "failed"), "▸", 60, shell_timeout),
+            summary(&card(&read, "complete"), "▸", 60, shell_timeout),
+        ];
+        let pad = |count| " ".repeat(count);
+        assert_eq!(
+            rows[0],
+            format!(
+                "▸ shell · ls{}running{}1.25s /{}2m",
+                pad(19),
+                pad(6),
+                pad(7)
+            )
+        );
+        assert_eq!(
+            rows[1],
+            format!("▸ fetch{}failed{}1.25s /{}1.5s", pad(24), pad(7), pad(5))
+        );
+        // Success shows no word; a call with no deadline keeps the timeout slot blank.
+        assert_eq!(
+            rows[2],
+            format!("▸ read_file · x{}1.25s{}", pad(29), pad(11))
+        );
+        let column = |row: &str| row.find("1.25s").map(|byte| row[..byte].chars().count());
+        assert_eq!(column(&rows[0]), column(&rows[1]));
+        assert_eq!(column(&rows[1]), column(&rows[2]));
+        // Narrow headers fall back to the compact form and keep the tool name.
+        let narrow = summary(&card(&shell, "running"), "▸", 30, shell_timeout);
+        assert!(narrow.starts_with("▸ shell"), "{narrow}");
+        assert!(!narrow.contains(" / "), "{narrow}");
+        assert!(narrow.ends_with("running · 1.25s"), "{narrow}");
+    }
+
+    #[test]
     fn card_focus_and_disclosure_are_independent_by_run_and_call() {
         let mut app = App {
             records: vec![
@@ -2161,7 +2254,10 @@ mod tests {
         let rows = draw(&mut app, &mut terminal).join("\n");
         assert!(rows.contains("▸ shell · first"));
         assert!(rows.contains("▸ shell · neighbor"));
-        assert!(rows.contains("▾ shell · second · 1.25s"));
+        assert!(
+            rows.lines()
+                .any(|row| row.starts_with("▾ shell · second") && row.contains(" 1.25s"))
+        );
         assert!(rows.contains("Result: \"output-second\""));
         assert_eq!(rows.matches("Arguments:").count(), 1);
         let selected = terminal

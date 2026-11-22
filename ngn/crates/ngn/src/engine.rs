@@ -39,6 +39,8 @@ pub(crate) struct ClientDisplay {
     pub(crate) provider: ProviderDisplay,
     pub(crate) animations: Option<bool>,
     pub(crate) composer_theme: Option<PaintedComposerTheme>,
+    /// The host's shell deadline, shown beside each shell call's elapsed time.
+    pub(crate) shell_timeout_seconds: Option<u64>,
 }
 
 #[derive(Default)]
@@ -72,6 +74,7 @@ impl From<&Config> for ClientDisplay {
             provider,
             animations: config.legacy_animations,
             composer_theme: config.legacy_composer_theme,
+            shell_timeout_seconds: Some(config.shell_timeout_seconds),
         }
     }
 }
