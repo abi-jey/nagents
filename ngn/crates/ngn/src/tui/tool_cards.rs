@@ -677,14 +677,14 @@ impl<'a> Layout<'a> {
                         && let Some([TranscriptPart::Card(before), _, TranscriptPart::Card(after)]) =
                             parts.get(index.saturating_sub(1)..=index + 1)
                         && before.key.0 == after.key.0
-                        && [before, after].iter().all(|card| {
-                            !cards
-                                .expanded
-                                .contains(&(card.key.0.to_owned(), card.key.1.to_owned()))
-                        })
+                        && !cards
+                            .expanded
+                            .contains(&(before.key.0.to_owned(), before.key.1.to_owned()))
                     {
                         // The projection inserts one empty row between adjacent
-                        // calls. Keep other text and expanded-detail boundaries.
+                        // calls. Keep it only to close the details of an
+                        // expanded call: a gap above an expanded header would
+                        // move the very row that was just clicked.
                         continue;
                     }
                     layout.prose(text);
@@ -2057,7 +2057,8 @@ mod tests {
         app.tools.expanded.insert(("r".into(), "c".into()));
         let expanded = rows(&mut app, &mut terminal);
         assert!(
-            expanded.contains("▸ ✓ shell · 甲 · 1.25s\n\n▾ ✓ shell · 乙 · 1.25s"),
+            // Expanding a call never pushes its own header down a row.
+            expanded.contains("▸ ✓ shell · 甲 · 1.25s\n▾ ✓ shell · 乙 · 1.25s"),
             "{expanded}"
         );
         assert!(
