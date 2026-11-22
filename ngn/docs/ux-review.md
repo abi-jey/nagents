@@ -64,8 +64,9 @@ without reading docs, and an experienced user should never wait on the UI.
   more of the preview is below.
 - **Markdown** rendering for assistant prose (pulldown-cmark, no extra
   features) with soft-wrap metadata so copy stays faithful.
-- **Tool cards:** `▸`/`▾` markers, `✓`/`✗`/`⊘` outcome icons, no `complete`
-  suffix, and *waiting for approval* without a timer.
+- **Tool cards:** `▸`/`▾` markers, no `complete` suffix (the label turns
+  green), and *waiting for approval* without a timer. Headers never gain a
+  prefix when a call finishes, so text does not shift under the reader.
 - **User messages** carry a left accent bar (plain bar under `NO_COLOR`).
 - **Agents rail** only appears once a run delegates, or when Ctrl+T focuses it.
 - **Welcome screen, composer placeholder, grouped help, full slash menu** and

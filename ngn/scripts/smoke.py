@@ -433,14 +433,16 @@ def tui_check(
         wait_for(settled, "TUI did not paint the final reply and settled footer")
         pane = visible().decode()
         require("✓ Done" not in pane, "TUI showed a redundant successful turn marker")
-        require("✓ write · changed.txt" in pane, "TUI lost the completed tool badge")
+        require(
+            "write · changed.txt" in pane and "changed.txt · complete" not in pane, "TUI lost the completed tool badge"
+        )
         require(
             destination.read_text() == "written by an approved Rust host tool\n",
             "TUI did not execute its approved native Rust tool",
         )
         # Use painted terminal coordinates and real SGR mouse reports,
         # rather than invoking the tool-card handler directly.
-        card = " ✓ write · changed.txt"
+        card = " write · changed.txt"
 
         def disclosed(marker: str) -> bool:
             rows = terminal_rows(output, ready.rows, ready.columns)
@@ -461,7 +463,7 @@ def tui_check(
         os.write(master, mouse(0, marker) + mouse(0, marker, release=True))
         wait_for(lambda: disclosed("▾"), "Mouse click did not expand the tool card", timeout=5)
         column, row = locate("▾" + card)
-        letter = (column + 4, row)  # The "w" after the marker and status icon.
+        letter = (column + 2, row)  # The "w" after the marker.
         os.write(master, mouse(0, letter) + mouse(32, letter) + mouse(0, letter, release=True))
         wait_for(lambda: disclosed("▸"), "Same-cell motion did not preserve the collapse click", timeout=5)
 
@@ -488,8 +490,8 @@ def tui_check(
             wait_for(lambda: b"Copy requested" in visible(), "TUI did not paint clipboard request feedback", timeout=5)
 
         column, row = locate("▸" + card)
-        # Skip the marker and status icon ("▸ ✓ ") to start on "w".
-        drag_and_copy((column + 4, row), (column + 5, row), (column + 7, row), b"writ", "tool label")
+        # Skip the marker ("▸ ") to start on "w".
+        drag_and_copy((column + 2, row), (column + 3, row), (column + 5, row), b"writ", "tool label")
         require(disclosed("▸"), "Dragging across the tool label disclosed its card")
 
         # Both endpoints are inside words on adjacent rows of a single logical
