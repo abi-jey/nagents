@@ -483,23 +483,21 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
         prefix.push_str(icon);
     }
     let available = cells.saturating_sub(Span::raw(&prefix).width());
-    let elapsed = card.elapsed.map(duration);
+    let waiting = card.status == "Approval waiting";
+    // A waiting call's time is not progress; it would only look frozen.
+    let elapsed = card.elapsed.filter(|_| !waiting).map(duration);
     let suffix = |status: &str| match (status.is_empty(), elapsed.as_deref()) {
         (false, Some(elapsed)) => format!("{status} · {elapsed}"),
         (true, Some(elapsed)) => elapsed.to_owned(),
         _ => status.to_owned(),
     };
-    let mut status = if card.status == "Approval waiting" && available >= 36 {
-        "Approval waiting · active"
+    let mut status = if waiting {
+        "waiting for approval"
     } else {
         shown
     };
     let mut outcome = suffix(status);
-    if Span::raw(&outcome).width() > available && status == "Approval waiting · active" {
-        status = card.status;
-        outcome = suffix(status);
-    }
-    if Span::raw(&outcome).width() > available && status.starts_with("Approval") {
+    if Span::raw(&outcome).width() > available && waiting {
         status = "waiting";
         outcome = suffix(status);
     }
@@ -1968,7 +1966,7 @@ mod tests {
                     call: call("c", "active"),
                     preview: String::new(),
                 },
-                "Approval waiting",
+                "waiting for approval",
                 Color::Reset,
             ),
             (
@@ -2249,7 +2247,7 @@ mod tests {
         render(&mut app, &mut terminal, Some(("r", "c")), Instant::now());
         assert!(app.tools.sweep.is_none());
         let rows = draw(&mut app, &mut terminal);
-        assert!(rows[1].contains("Approval waiting"));
+        assert!(rows[1].contains("waiting"));
         assert!(!rows[1].contains("running"));
         app.approval = None;
         assert!(key(&mut app, KeyCode::Enter));

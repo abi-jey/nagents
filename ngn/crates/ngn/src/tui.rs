@@ -34,7 +34,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Text},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use uuid::Uuid;
@@ -63,29 +63,51 @@ const MUTED: Color = Color::Rgb(148, 158, 144);
 use completion::Command;
 
 const HELP: &str = "\
-F2  Conversations (/sessions, /resume; /resume ID opens directly)
-F3  New conversation (/new)
- F4  Focus tool cards · Up/Down select · Enter/Space toggle · Esc back
-F5  Subagents (/tasks)
-Ctrl+T  Focus Agents rail at wide widths; otherwise open inspector
- Agents: Tab/Shift+Tab  Focus context · Enter/Space  Toggle
-Context: ↑/↓, PgUp/PgDn, Home/End  Scroll · Esc  Return to draft
-F6  Input queue (/queue [pause|resume|clear])
-F7  Steering receipts (/steering)
-F8  Focus long code blocks · Left/Right pan · Up/Down select
-Code: Home/End  Pan to edge · Esc or F8  Return to draft
-Enter  Send when idle; steer the active turn if supported
-Ctrl+Enter  Queue for a later turn if busy · Shift+Enter  Newline
-/  Show commands · Up/Down select · Tab/Enter fill · Esc close
-/steer TEXT  Steer the active turn explicitly
-y or Enter  Allow a pending tool call once · n  Deny
-Esc  Cancel active work (completed actions are not rolled back)
-PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
- /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
- Mouse  Click tool headers · Wheel scroll
- Drag  Select conversation or draft text · Release to copy · Esc  Clear selection
- For terminal-native selection, use your terminal's override (often Shift+drag)
- Ctrl+C  Quit";
+Basics
+  Enter          Send · while a turn runs, steer it
+  Shift+Enter    New line
+  Ctrl+Enter     Queue the message for after the current turn
+  Esc            Stop the current turn (finished actions stay done)
+  /              Commands · ↑/↓ select · Tab/Enter fill · Esc close
+  Ctrl+Q         Quit (/quit) · Ctrl+C also quits
+
+Approvals
+  y or Enter     Allow a pending tool call once
+  n              Deny it · Esc stops the turn · PgUp/PgDn scroll
+
+Conversations
+  F2             Past conversations (/sessions, /resume ID)
+  F3             New conversation (/new)
+
+Reading
+  PgUp/PgDn      Scroll · the mouse wheel also scrolls
+  Click a tool   Show or hide its details
+  F4             Tool cards by keyboard · ↑/↓ select · Enter toggle
+  F8             Pan wide code blocks · ←/→ · Home/End · Esc back
+  Drag           Select text; release copies it · Esc clears
+                 Your terminal's own selection is often Shift+drag
+
+Agents and queue
+  F5             Subagents (/tasks) · Ctrl+X cancels one
+  Ctrl+T         Agents sidebar on wide screens · Tab for context
+  F6             Pending messages (/queue pause|resume|clear)
+                 /queue retry or /queue verify for an unconfirmed send
+  F7             Steering receipts (/steering) · /steer TEXT";
+
+/// Section headings are the unindented lines of `HELP`.
+fn help_text() -> Text<'static> {
+    HELP.lines()
+        .map(|line| {
+            if line.starts_with(' ') || line.is_empty() {
+                Line::raw(line)
+            } else {
+                Line::styled(line, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
+            }
+        })
+        .collect()
+}
+
+const PLACEHOLDER: &str = "Ask anything · / for commands · F1 for shortcuts";
 
 const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
 
@@ -674,6 +696,17 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         app.composer_palette,
         draft_text.as_mut(),
     );
+    if app.input.is_empty() && app.composer_available() && input_area.width > 2 {
+        // Drawn after the draft pane is recorded, so it is never selectable.
+        // The first cell stays free for the caret.
+        let hint = Line::styled(
+            PLACEHOLDER,
+            Style::new().fg(MUTED).add_modifier(Modifier::DIM),
+        );
+        frame
+            .buffer_mut()
+            .set_line(input_area.x + 1, input_area.y, &hint, input_area.width - 1);
+    }
     app.selection
         .frame(transcript_text, draft_text.unwrap_or_default());
     if let Some(hint) = app.selection.hint()
@@ -776,12 +809,12 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         ))).highlight_style(Style::new().fg(accent)), area, &mut selection);
     }
     if app.help {
-        let area = center(frame.area(), 76, 18);
+        let area = center(frame.area(), 76, 36);
         frame.render_widget(Clear, area);
         frame.render_widget(
-            Paragraph::new(HELP)
-                .block(Block::bordered().title(" Help · F1/Esc close "))
-                .wrap(Wrap { trim: true })
+            Paragraph::new(help_text())
+                .block(Block::bordered().title(" Keyboard shortcuts · Esc close · PgUp/PgDn "))
+                .wrap(Wrap { trim: false })
                 .scroll((app.help_scroll, 0)),
             area,
         );
@@ -1644,12 +1677,11 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         for expected in [
-            "F2  Conversations",
-            "F7  Steering receipts",
-            "F8  Focus long code blocks",
-            "Enter  Send when idle; steer the active turn if supported",
-            "Ctrl+Enter  Queue for a later turn if busy",
-            "y or Enter  Allow a pending tool call once",
+            "Basics",
+            "Enter          Send · while a turn runs, steer it",
+            "Ctrl+Enter     Queue the message for after the current turn",
+            "y or Enter     Allow a pending tool call once",
+            "F2             Past conversations",
         ] {
             assert!(screen.contains(expected), "missing help entry: {expected}");
         }
@@ -1664,7 +1696,40 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(screen.contains("Mouse  Click tool headers · Wheel scroll"));
+        assert!(screen.contains("Click a tool   Show or hide its details"));
+    }
+
+    #[test]
+    fn empty_draft_shows_a_dim_placeholder_that_is_not_part_of_the_draft() {
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: dir.path().into(),
+                data_dir: dir.path().join("state"),
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let now = Instant::now();
+        for (input, shown) in [("", true), ("draft", false)] {
+            let mut app = App {
+                input: input.into(),
+                ..App::default()
+            };
+            let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(80, 16)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut app, &host, now))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let [_, _, composer] = content_rows(buffer.area, 0);
+            let row: String = (0..80)
+                .map(|x| buffer[(x, composer.y + 1)].symbol())
+                .collect();
+            assert_eq!(row.contains(PLACEHOLDER), shown, "{row}");
+            assert_eq!(app.input, input);
+        }
     }
 
     #[test]

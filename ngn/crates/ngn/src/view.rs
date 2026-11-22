@@ -598,6 +598,17 @@ fn assistant_edits<'a>(
     edits
 }
 
+/// How a finished turn reads in the conversation. Plain words, not enum names.
+fn outcome_label(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Completed => "✓ Done",
+        RunStatus::Failed => "✗ Failed",
+        RunStatus::Cancelled => "⊘ Stopped",
+        RunStatus::Interrupted => "⚠ Interrupted before the turn finished",
+        _ => "· Ended",
+    }
+}
+
 pub enum TranscriptScope {
     Main,
     AgentInspector,
@@ -700,7 +711,8 @@ pub fn transcript(
                 }
             }
             Event::RunFinished { status, error } => output.push_str(&format!(
-                "\n— {status:?}{}\n",
+                "\n{}{}\n",
+                outcome_label(*status),
                 if error.is_empty() {
                     String::new()
                 } else {
@@ -983,13 +995,13 @@ mod tests {
             transcript(&records, false, 0),
             concat!(
                 "Answer without a closing snapshot\n\nNext prompt\n\n",
-                "\n— Failed: try a different input\n",
-                "\n— Interrupted\n\n— Cancelled\n",
+                "\n✗ Failed: try a different input\n",
+                "\n⚠ Interrupted before the turn finished\n\n⊘ Stopped\n",
             ),
         );
         assert!(
             matches!(&super::transcript(&records[..2], 0, TranscriptScope::AgentInspector)[..],
-                [TranscriptPart::Text(text)] if text.ends_with("\n— Completed\n"))
+                [TranscriptPart::Text(text)] if text.ends_with("\n✓ Done\n"))
         );
     }
 

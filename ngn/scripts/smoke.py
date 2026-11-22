@@ -432,20 +432,20 @@ def tui_check(
         wait_for(completed, "TUI fixture run did not complete after approving")
         wait_for(settled, "TUI did not paint the final reply and settled footer")
         pane = visible().decode()
-        require("— Completed" not in pane, "TUI showed a redundant successful turn marker")
-        require("changed.txt · complete" in pane, "TUI lost the completed tool badge")
+        require("✓ Done" not in pane, "TUI showed a redundant successful turn marker")
+        require("✓ write · changed.txt" in pane, "TUI lost the completed tool badge")
         require(
             destination.read_text() == "written by an approved Rust host tool\n",
             "TUI did not execute its approved native Rust tool",
         )
         # Use painted terminal coordinates and real SGR mouse reports,
         # rather than invoking the tool-card handler directly.
-        card = " write · changed.txt · complete"
+        card = " ✓ write · changed.txt"
 
         def disclosed(marker: str) -> bool:
             rows = terminal_rows(output, ready.rows, ready.columns)
             has_details = any(line.lstrip().startswith("Arguments:") for line in rows)
-            return any(line.startswith(marker + card) for line in rows) and has_details == (marker == "v")
+            return any(line.startswith(marker + card) for line in rows) and has_details == (marker == "▾")
 
         def locate(text: str) -> tuple[int, int]:
             for row, line in enumerate(terminal_rows(output, ready.rows, ready.columns), 1):
@@ -457,13 +457,13 @@ def tui_check(
             column, row = cell
             return f"\x1b[<{button};{column};{row}{'m' if release else 'M'}".encode()
 
-        marker = locate(">" + card)
+        marker = locate("▸" + card)
         os.write(master, mouse(0, marker) + mouse(0, marker, release=True))
-        wait_for(lambda: disclosed("v"), "Mouse click did not expand the tool card", timeout=5)
-        column, row = locate("v" + card)
-        letter = (column + 2, row)
+        wait_for(lambda: disclosed("▾"), "Mouse click did not expand the tool card", timeout=5)
+        column, row = locate("▾" + card)
+        letter = (column + 4, row)  # The "w" after the marker and status icon.
         os.write(master, mouse(0, letter) + mouse(32, letter) + mouse(0, letter, release=True))
-        wait_for(lambda: disclosed(">"), "Same-cell motion did not preserve the collapse click", timeout=5)
+        wait_for(lambda: disclosed("▸"), "Same-cell motion did not preserve the collapse click", timeout=5)
 
         def drag_and_copy(
             start: tuple[int, int],
@@ -487,9 +487,10 @@ def tui_check(
             require(base64.b64decode(match[1], validate=True) == expected, f"Release copied incorrect {label} bytes")
             wait_for(lambda: b"Copy requested" in visible(), "TUI did not paint clipboard request feedback", timeout=5)
 
-        column, row = locate(">" + card)
-        drag_and_copy((column + 2, row), (column + 3, row), (column + 5, row), b"writ", "tool label")
-        require(disclosed(">"), "Dragging across the tool label disclosed its card")
+        column, row = locate("▸" + card)
+        # Skip the marker and status icon ("▸ ✓ ") to start on "w".
+        drag_and_copy((column + 4, row), (column + 5, row), (column + 7, row), b"writ", "tool label")
+        require(disclosed("▸"), "Dragging across the tool label disclosed its card")
 
         # Both endpoints are inside words on adjacent rows of a single logical
         # line; copying must neither add a newline nor include pane padding.
