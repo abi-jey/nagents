@@ -51,4 +51,5 @@ EXPOSE 8765
 CMD ["ngn", "serve", "--host", "0.0.0.0"]
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -fsS --max-time 4 -o /dev/null http://127.0.0.1:8765/api/bootstrap || exit 1
+    CMD if [ -n "$NGN_WEB_OIDC_ISSUER" ]; then endpoint=/healthz; else endpoint=/api/bootstrap; fi; \
+        curl -fsS --max-time 4 -o /dev/null "http://127.0.0.1:8765$endpoint" || exit 1

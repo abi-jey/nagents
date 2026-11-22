@@ -10,6 +10,7 @@ export type Bootstrap = {
   agent: string;
   demo: boolean;
   provider_setup?: { configured: boolean; message: string };
+  oidc_login?: boolean;
   active_run_id: string;
   active_session_id?: string;
   active_run_background?: boolean;

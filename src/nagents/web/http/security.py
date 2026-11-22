@@ -33,9 +33,12 @@ SECURITY_HEADERS = {
 
 
 class LocalOnly:
-    def __init__(self, app: "ASGIApp", *, authority: str, token: str, enforce_authority: bool = True) -> None:
+    def __init__(
+        self, app: "ASGIApp", *, authority: str, token: str, enforce_authority: bool = True, origin: str = ""
+    ) -> None:
         self.app = app
         self.authority = authority
+        self.origin = origin or f"http://{authority}"
         self.token = token
         # A non-loopback bind has no single trusted authority to compare against,
         # so the exact Host/Origin checks are skipped. The per-process token,
@@ -63,7 +66,7 @@ class LocalOnly:
                 not expected
                 or scope["query_string"]
                 or (self.enforce_authority and headers.getlist("host") != [self.authority])
-                or (self.enforce_authority and headers.getlist("origin") != [f"http://{self.authority}"])
+                or (self.enforce_authority and headers.getlist("origin") != [self.origin])
                 or headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}
                 or len(protocols) != 2
                 or protocols.count(expected) != 1
@@ -121,7 +124,7 @@ class LocalOnly:
             and headers.getlist("sec-fetch-mode") == ["navigate"]
             and headers.getlist("sec-fetch-dest") == ["document"]
         )
-        origin = f"http://{self.authority}"
+        origin = self.origin
         if self.enforce_authority and headers.getlist("host") != [self.authority]:
             await reject(403, "Untrusted Host. Open the exact loopback URL printed by ngn serve.")
             return
