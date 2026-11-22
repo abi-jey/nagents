@@ -16,7 +16,7 @@ use ratatui::{
 use crate::view::{FenceKey, ToolCard, ToolKey, TranscriptPart, duration};
 
 use super::{
-    code_fences,
+    code_fences, markdown,
     shimmer::{COMPLETE, COMPLETION_DURATION, Sweep, Wipe},
 };
 
@@ -617,7 +617,7 @@ impl<'a> Layout<'a> {
                         // calls. Keep other text and expanded-detail boundaries.
                         continue;
                     }
-                    layout.text(text, false);
+                    layout.prose(text);
                 }
                 TranscriptPart::User(text) => {
                     layout.text(text, !matches!(user_paint, UserPaint::Plain));
@@ -710,6 +710,36 @@ impl<'a> Layout<'a> {
     fn detail(&mut self, text: &str) {
         for line in text.lines() {
             self.push(Line::raw(line.to_owned()));
+        }
+    }
+
+    /// Assistant and notice text: Markdown, wrapped here so list and quote
+    /// prefixes hang correctly. Surrounding blank rows are kept verbatim
+    /// because they separate cards and user messages.
+    fn prose(&mut self, text: &'a str) {
+        let lines: Vec<&str> = text.lines().collect();
+        let lead = lines
+            .iter()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        if lead == lines.len() || self.width == 0 {
+            self.text(text, false);
+            return;
+        }
+        let trail = lines
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        for _ in 0..lead {
+            self.push(Line::raw(""));
+        }
+        let body = lines[lead..lines.len() - trail].join("\n");
+        for line in markdown::render_cached(&body, self.width).iter() {
+            self.push(line.clone());
+        }
+        for _ in 0..trail {
+            self.push(Line::raw(""));
         }
     }
 
@@ -986,6 +1016,37 @@ mod tests {
 
     fn key(app: &mut App, code: KeyCode) -> bool {
         app.transcript_key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn assistant_markdown_is_rendered_but_user_text_stays_verbatim() {
+        let parts = [
+            TranscriptPart::User("# mine\n".into()),
+            TranscriptPart::Text("\n# Title\n\n- **one** two three four five six\n".into()),
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(16, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let layout = Layout::new(&parts, area.width, None, false, None, UserPaint::Plain);
+                assert_eq!(layout.rows, 6);
+                layout.render(frame, area, 0, None, false);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| {
+            (0..16)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        assert_eq!(row(0), "# mine");
+        assert_eq!(row(1), "");
+        assert_eq!(row(2), "Title");
+        assert_eq!(row(3), "");
+        assert_eq!(row(4), "• one two three");
+        assert_eq!(row(5), "  four five six");
     }
 
     #[test]
