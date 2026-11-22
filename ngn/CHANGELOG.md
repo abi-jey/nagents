@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.47
+
+- Opt-in Python engine, Enter-to-steer in the browser, and elapsed/timeout columns in TUI tool headers.
+
 ## 0.100.46
 
 - Restore the React workspace in native ngn, add a terminal transcript scrollbar, and plan the migration to one Python engine.
