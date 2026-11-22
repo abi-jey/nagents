@@ -1216,7 +1216,8 @@ mod tests {
                 .map(|y| (0..left_width).map(|x| buffer[(x, y)].symbol()).collect())
                 .collect()
         };
-        for (width, left_width) in [(110, 110), (111, 80)] {
+        // Without agents, no rail narrows even a wide conversation.
+        for (width, left_width) in [(110, 110), (111, 111)] {
             let buffer = paint(&mut app, width);
             let left = rows(&buffer, left_width);
             assert_eq!(left[0].trim(), "Tools · F4 focus");
@@ -1246,16 +1247,13 @@ mod tests {
                 assert!(!screen.contains(old));
             }
             assert!(screen.contains("› /sessions"));
-            assert_eq!(
-                rows(&buffer, width)[0].contains("Agents / Ctrl+T"),
-                width == 111
-            );
+            assert!(!rows(&buffer, width)[0].contains("Agents / Ctrl+T"));
             assert_eq!(buffer[(width - 1, 29)].symbol(), "┐");
         }
 
         assert!(key(&mut app, KeyCode::F(4)));
         assert!(key(&mut app, KeyCode::Enter));
-        let focused = rows(&paint(&mut app, 111), 80);
+        let focused = rows(&paint(&mut app, 111), 111);
         assert!(focused[0].contains("Enter/Space toggle"));
         assert!(focused.iter().any(|row| row.contains("synthetic result")));
         assert!(key(&mut app, KeyCode::Esc));

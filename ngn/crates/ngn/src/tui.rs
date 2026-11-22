@@ -583,10 +583,13 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
     // Suggestions occupy the bottom of the left column, not rows of the
     // adjacent tree. The tree's height is independent of the draft/menu.
-    let (mut transcript_area, rail) = agents::split(Rect {
-        height: conversation.height + suggestions.height,
-        ..conversation
-    });
+    let (mut transcript_area, rail) = agents::split(
+        Rect {
+            height: conversation.height + suggestions.height,
+            ..conversation
+        },
+        app.has_rail_content(),
+    );
     transcript_area.height = conversation.height;
     app.agents.clear_motion_rows();
     let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
@@ -1692,7 +1695,7 @@ mod tests {
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let [transcript, _, composer] = content_rows(buffer.area, 0);
-            let (main, _) = agents::split(transcript);
+            let (main, _) = agents::split(transcript, false);
             let row = |y| -> String { (0..main.width).map(|x| buffer[(x, y)].symbol()).collect() };
             let fits = width >= 43;
             assert_eq!(row(0).trim_end(), if fits { EMPTY_TIP } else { "" });
@@ -2296,6 +2299,20 @@ mod tests {
         .unwrap();
         let mut app = App {
             input: "/".into(), // Keep the suggestion menu visible below the transcript.
+            // One agent run keeps the rail beside the conversation at 120 columns.
+            tasks: vec![TaskInfo {
+                run_id: "child".into(),
+                session_id: "session-child".into(),
+                parent_run_id: "run".into(),
+                parent_session_id: "session".into(),
+                root_run_id: "run".into(),
+                root_session_id: "session".into(),
+                call_id: "call-child".into(),
+                title: "child".into(),
+                depth: 1,
+                read_only: true,
+                status: ngn_protocol::RunStatus::Completed,
+            }],
             ..App::default()
         };
         app.completion.edited(&app.input);
