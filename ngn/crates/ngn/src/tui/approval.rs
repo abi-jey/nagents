@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ngn_core::host::Approval;
 use ratatui::{
     layout::Rect,
@@ -16,8 +16,8 @@ use ratatui::{
 
 use crate::view;
 
-/// Plain `y` and `Enter` are ignored for this long after the panel appears so
-/// that keystrokes aimed at the composer cannot approve a call.
+/// Plain `y` and `Enter` only count after this long without any keypress
+/// since the panel appeared, so typing aimed at the composer cannot approve.
 pub(super) const EARLY_KEY_GUARD: Duration = Duration::from_millis(300);
 
 pub(super) const KEYS: &str = " y allow · n deny · Esc stop · PgUp/PgDn scroll ";
@@ -26,7 +26,7 @@ const MIN_HEIGHT: u16 = 5;
 const MAX_WIDTH: u16 = 110;
 const MAX_HEIGHT: u16 = 32;
 
-/// When the current approval appeared.
+/// When the current approval appeared, or the last key arrived after that.
 pub(super) struct Since(Instant);
 
 impl Default for Since {
@@ -62,6 +62,10 @@ pub(super) enum Action {
 pub(super) fn action(key: KeyEvent, shown_for: Duration) -> Action {
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
+        // An auto-repeating key is never a decision.
+        KeyCode::Char('y' | 'n') | KeyCode::Enter if key.kind == KeyEventKind::Repeat => {
+            Action::Ignore
+        }
         // Deliberate chords kept for compatibility; they are not typed by accident.
         KeyCode::Char('y') if control => Action::Allow,
         KeyCode::Char('d') if control => Action::Deny,
@@ -80,27 +84,50 @@ pub(super) fn action(key: KeyEvent, shown_for: Duration) -> Action {
     }
 }
 
+/// Characters that render invisibly or reorder text, so a command or path
+/// could read differently from what runs.
+fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}'
+        | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}'
+        | '\u{FFA0}' | '\u{FFF0}'..='\u{FFFB}' | '\u{E0000}'..='\u{E0FFF}')
+}
+
+/// `view::plain`, plus invisible and bidirectional characters shown as `⟨U+XXXX⟩`.
+pub(super) fn reveal(text: &str) -> String {
+    let mut out = String::new();
+    for c in view::plain(text).chars() {
+        if is_invisible(c) {
+            out.push_str(&format!("⟨U+{:04X}⟩", u32::from(c)));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub(super) fn title(approval: &Approval) -> String {
-    let name = view::plain(&approval.call.name);
+    let name = reveal(&approval.call.name);
     let path = approval
         .call
         .arguments
         .get("path")
         .and_then(|value| value.as_str())
-        .map(view::plain);
+        .map(reveal);
     let mut text = match (name.as_str(), path) {
         ("shell", _) => "Run shell command?".to_owned(),
         (_, Some(path)) => format!("Allow {name} to {path}?"),
         _ => format!("Allow {name}?"),
     };
     if approval.depth > 0 {
-        text.push_str(&format!(" · from {}", view::plain(&approval.agent_title)));
+        text.push_str(&format!(" · from {}", reveal(&approval.agent_title)));
     }
     format!(" {text} ")
 }
 
 pub(super) fn lines(approval: &Approval, no_color: bool) -> Vec<Line<'static>> {
-    let preview = view::plain(&approval.preview);
+    let preview = reveal(&approval.preview);
     let paint = |color: Color| {
         if no_color {
             Style::new()
@@ -146,6 +173,23 @@ pub(super) fn lines(approval: &Approval, no_color: bool) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// Content rows that must be visible before an approval can be given.
+const MIN_VISIBLE: usize = 3;
+
+/// Whether `panel` shows enough of `content` to decide on it.
+pub(super) fn fits(panel: Rect, content: &Paragraph) -> bool {
+    let rows = content.line_count(panel.width.saturating_sub(2));
+    usize::from(panel.height.saturating_sub(2)) >= rows.min(MIN_VISIBLE)
+}
+
+/// The furthest useful scroll position.
+pub(super) fn max_scroll(panel: Rect, content: &Paragraph) -> u16 {
+    let rows = content.line_count(panel.width.saturating_sub(2));
+    u16::try_from(rows)
+        .unwrap_or(u16::MAX)
+        .saturating_sub(panel.height.saturating_sub(2))
+}
+
 /// Anchor the panel at the bottom of `area`, as tall as its content needs.
 pub(super) fn panel(area: Rect, content: &Paragraph) -> Rect {
     let width = area.width.min(MAX_WIDTH);
@@ -161,11 +205,19 @@ pub(super) fn content(approval: &Approval, no_color: bool) -> Paragraph<'static>
     Paragraph::new(lines(approval, no_color)).wrap(Wrap { trim: false })
 }
 
-pub(super) fn block(approval: &Approval) -> Block<'static> {
+pub(super) const TOO_SMALL: &str = " Enlarge the terminal to review · n deny · Esc stop ";
+pub(super) const MORE: &str = " y allow · n deny · Esc stop · PgDn more below ";
+
+/// `fits` and whether more lines are below pick the footer.
+pub(super) fn block(approval: &Approval, fits: bool, more: bool) -> Block<'static> {
     Block::bordered()
         .border_style(Style::new().fg(Color::Yellow))
         .title(title(approval))
-        .title_bottom(KEYS)
+        .title_bottom(match (fits, more) {
+            (false, _) => TOO_SMALL,
+            (true, true) => MORE,
+            (true, false) => KEYS,
+        })
 }
 
 #[cfg(test)]
@@ -369,5 +421,48 @@ mod tests {
         assert_eq!(rect.height, MAX_HEIGHT);
         let tiny = panel(Rect::new(0, 0, 50, 3), &content(&short, false));
         assert_eq!(tiny.height, 3);
+    }
+
+    #[test]
+    fn invisible_and_bidi_characters_are_shown_not_applied() {
+        let spoof = approval(
+            "shell",
+            serde_json::json!({}),
+            "$ echo safe\u{202E}fr- mr\u{200B}\n\nRuns unsandboxed",
+            0,
+        );
+        let text: String = lines(&spoof, true)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            text.contains("⟨U+202E⟩") && text.contains("⟨U+200B⟩"),
+            "{text}"
+        );
+        assert!(!text.contains('\u{202E}'));
+        let path = approval("write", serde_json::json!({"path":"a\u{2066}b"}), "", 0);
+        assert!(title(&path).contains("⟨U+2066⟩"));
+        // Ordinary text, including wide and accented characters, is untouched.
+        assert_eq!(reveal("café 漢字 ✓"), "café 漢字 ✓");
+    }
+
+    #[test]
+    fn repeated_keys_never_decide() {
+        let mut key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        key.kind = KeyEventKind::Repeat;
+        assert_eq!(action(key, Duration::MAX), Action::Ignore);
+        key.code = KeyCode::Enter;
+        assert_eq!(action(key, Duration::MAX), Action::Ignore);
+    }
+
+    #[test]
+    fn a_panel_too_small_to_read_does_not_fit_and_scroll_is_bounded() {
+        let long = approval("edit", serde_json::json!({"path":"f"}), DIFF, 0);
+        let body = content(&long, false);
+        assert!(!fits(Rect::new(0, 0, 60, 3), &body));
+        assert!(fits(Rect::new(0, 0, 60, 5), &body));
+        let rows = u16::try_from(body.line_count(58)).unwrap();
+        assert_eq!(max_scroll(Rect::new(0, 0, 60, 5), &body), rows - 3);
+        assert_eq!(max_scroll(Rect::new(0, 0, 60, 40), &body), 0);
     }
 }

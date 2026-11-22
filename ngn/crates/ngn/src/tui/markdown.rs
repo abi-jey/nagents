@@ -183,7 +183,7 @@ fn trim_end(line: &mut Vec<Cell<'_>>) {
 }
 
 /// Word wrap, breaking words longer than a row. Wide glyphs that can never
-/// fit are dropped so no row exceeds `width`. Each row also reports whether
+/// fit become U+FFFD so no row exceeds `width`. Each row also reports whether
 /// it ended at a (removed) space rather than inside a word.
 fn wrap<'a>(cells: &[Cell<'a>], width: usize) -> Vec<(Vec<Cell<'a>>, bool)> {
     let mut lines = Vec::new();
@@ -226,15 +226,22 @@ fn wrap<'a>(cells: &[Cell<'a>], width: usize) -> Vec<(Vec<Cell<'a>>, bool)> {
                 current.extend_from_slice(word);
                 used = word_width;
             } else {
-                for cell in word {
-                    if cell.w > width {
-                        continue;
-                    }
+                for &cell in word {
+                    let cell = if cell.w > width {
+                        // Same substitute text_layout uses, so it is not lost.
+                        Cell {
+                            sym: "\u{FFFD}",
+                            style: cell.style,
+                            w: 1,
+                        }
+                    } else {
+                        cell
+                    };
                     if used + cell.w > width {
                         lines.push((std::mem::take(&mut current), false));
                         used = 0;
                     }
-                    current.push(*cell);
+                    current.push(cell);
                     used += cell.w;
                 }
             }

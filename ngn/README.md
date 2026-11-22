@@ -102,6 +102,11 @@ matching published core. The API is **not available in nagents
 
 ## Controls
 
+See the [native TUI UX review and roadmap](docs/ux-review.md) for the design
+principles behind these controls and what is planned next.
+
+The [UX review](docs/ux-review.md) explains the design principles and roadmap.
+
 - In the terminal, **Enter** sends when idle and steers the active turn if supported.
   **Ctrl+Enter** explicitly submits to the next-turn FIFO (it can start immediately
   when idle and unpaused). A paused queue remains paused. **Shift+Enter** inserts a
@@ -110,6 +115,16 @@ matching published core. The API is **not available in nagents
 - On touch/coarse-pointer browsers, **Return inserts a newline**; tap Send/Queue
   (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
   Send and Stop preserve composer focus and Stop retains an unsent draft.
+- A new conversation opens with the version, the workspace and the first keys
+  to know; the empty composer shows a hint that is never part of the draft.
+- Assistant replies render Markdown: headings, emphasis, lists, quotes, links,
+  rules and code fences. Copying a wrapped paragraph gives back one line.
+- Tool calls show one header each: **▸**/**▾** for collapsed/expanded, then
+  **✓** done, **✗** failed or denied, **⊘** cancelled, or no icon while
+  running. A call waiting for you reads *waiting for approval*. Finished turns
+  only get a line when something went wrong: **✗ Failed: reason**,
+  **⊘ Stopped** or **⚠ Interrupted before the turn finished**. Provider errors
+  say what happened (for example HTTP 429 after its retries) and what to do.
 - In the terminal, type **`/`** to discover native commands. **↑/↓** selects;
   **Tab** or **Enter** fills the command without running it. Press **Enter**
   again to run it, or type any arguments first. **Esc** dismisses suggestions

@@ -125,12 +125,24 @@ fn welcome(workspace: &std::path::Path, width: u16) -> Vec<Line<'static>> {
         None => workspace.display().to_string(),
     };
     let dim = Style::new().add_modifier(Modifier::DIM);
+    let version = format!("ngn {}", env!("CARGO_PKG_VERSION"));
+    // Keep the end of a long path, which names the project, behind an ellipsis.
+    let mut place = view::plain(&place);
+    let budget = usize::from(width).saturating_sub(Span::raw(&version).width() + 3);
+    if Span::raw(&place).width() > budget && budget > 1 {
+        let mut tail: Vec<char> = Vec::new();
+        for c in place.chars().rev() {
+            tail.insert(0, c);
+            if Span::raw(tail.iter().collect::<String>()).width() + 1 > budget {
+                tail.remove(0);
+                break;
+            }
+        }
+        place = format!("…{}", tail.into_iter().collect::<String>());
+    }
     [
         Line::from(vec![
-            Span::styled(
-                format!("ngn {}", env!("CARGO_PKG_VERSION")),
-                Style::new().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(version, Style::new().add_modifier(Modifier::BOLD)),
             Span::styled(format!(" · {place}"), dim),
         ]),
         Line::styled(WELCOME_HINT, dim),
@@ -232,6 +244,8 @@ struct App {
     preview_scroll: u16,
     /// When the visible approval first appeared (guards against early keys).
     approval_since: approval::Since,
+    /// Whether the approval panel shows enough to decide; Allow waits for it.
+    approval_fits: bool,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
@@ -658,8 +672,17 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     // Keep the exact waiting child visible next to its approval prompt.
     let approval_dialog = app.approval.as_ref().map(|approval| {
         let body = approval::content(approval, app.no_color);
-        (approval, approval::panel(transcript_area, &body), body)
+        let mut area = approval::panel(transcript_area, &body);
+        if !approval::fits(area, &body) {
+            // Cover the composer too rather than ask for a blind decision.
+            area = approval::panel(frame.area(), &body);
+        }
+        (approval, area, body)
     });
+    if let Some((_, area, body)) = &approval_dialog {
+        app.approval_fits = approval::fits(*area, body);
+        app.preview_scroll = app.preview_scroll.min(approval::max_scroll(*area, body));
+    }
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
@@ -849,10 +872,14 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         );
     }
     if let Some((approval, area, body)) = approval_dialog {
+        let more = app.preview_scroll < approval::max_scroll(area, &body);
         frame.render_widget(Clear, area);
         frame.render_widget(
-            body.scroll((app.preview_scroll, 0))
-                .block(approval::block(approval)),
+            body.scroll((app.preview_scroll, 0)).block(approval::block(
+                approval,
+                app.approval_fits,
+                more,
+            )),
             area,
         );
     }
@@ -1291,6 +1318,7 @@ pub async fn run(
         approval: None,
         preview_scroll: 0,
         approval_since: approval::Since::default(),
+        approval_fits: true,
         tasks: Vec::new(),
         task_picker: false,
         task_index: 0,
@@ -1485,7 +1513,12 @@ pub async fn run(
                             continue;
                         }
                         if let Some(approval) = &app.approval {
-                            let handled = match approval::action(key, app.approval_since.elapsed()) {
+                            let quiet = app.approval_since.elapsed();
+                            // Every key restarts the quiet period, so a y or
+                            // Enter in the middle of typing never approves.
+                            app.approval_since.reset();
+                            let handled = match approval::action(key, quiet) {
+                                approval::Action::Allow if !app.approval_fits => true,
                                 approval::Action::Allow | approval::Action::Deny => {
                                     let allow = approval::action(key, Duration::MAX) == approval::Action::Allow;
                                     if let Err(error) = host.decide(&approval.run_id, &approval.id, allow).await { app.status = error.to_string(); }
@@ -1801,7 +1834,12 @@ mod tests {
                 assert!(buffer[(0, 1)].modifier.contains(Modifier::DIM));
             }
             if width <= 20 {
-                assert!(expected.is_empty());
+                // Only the version line survives, its path shortened with "…".
+                assert!(expected.len() <= 1);
+            }
+            if width == 20 {
+                assert!(row(0).starts_with("ngn "));
+                assert!(row(0).contains('…'));
             }
             assert!(
                 (u16::try_from(expected.len()).unwrap()..transcript.height)
@@ -2771,6 +2809,7 @@ mod tests {
             approval: None,
             preview_scroll: 0,
             approval_since: approval::Since::default(),
+            approval_fits: true,
             tasks: Vec::new(),
             task_picker: false,
             task_index: 0,

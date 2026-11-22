@@ -257,7 +257,10 @@ impl Tools {
 
     fn relative(&self, path: &str, directory: bool) -> Result<PathBuf> {
         ensure!(
-            !path.is_empty() && path.len() <= 4096 && !path.contains(['\\', '\0']),
+            !path.is_empty()
+                && path.len() <= 4096
+                && !path.contains('\\')
+                && !path.chars().any(char::is_control),
             "Invalid workspace path"
         );
         let relative = Path::new(path);
