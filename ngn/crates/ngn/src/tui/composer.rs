@@ -1,8 +1,6 @@
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ngn_core::legacy::PaintedComposerTheme;
 use ratatui::{
     buffer::Buffer,
@@ -11,6 +9,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::Block,
 };
+
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::view;
 
@@ -117,6 +117,8 @@ impl Caret {
 struct Glyph<'a> {
     symbol: &'a str,
     width: usize,
+    /// Byte offset of the grapheme in the sanitised draft.
+    start: usize,
 }
 
 impl Glyph<'_> {
@@ -125,12 +127,149 @@ impl Glyph<'_> {
     }
 }
 
-/// Lay out graphemes once for both drawing and locating the append position.
-/// Keep a cell in reserve as Textual does, and follow the draft's visual tail.
+/// Where typing goes in the draft. It remembers the draft length it was set
+/// for: when anything else replaces the draft, it falls back to the end.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Cursor(Option<(usize, usize)>);
+
+impl Cursor {
+    pub(super) fn at(self, input: &str) -> usize {
+        match self.0 {
+            Some((at, len)) if len == input.len() && input.is_char_boundary(at) => at,
+            _ => input.len(),
+        }
+    }
+
+    fn set(&mut self, input: &str, at: usize) {
+        self.0 = (at < input.len()).then_some((at, input.len()));
+    }
+
+    /// Insert at the cursor and move past the inserted text.
+    pub(super) fn insert(&mut self, input: &mut String, text: &str) {
+        let at = self.at(input);
+        input.insert_str(at, text);
+        self.set(input, at + text.len());
+    }
+
+    /// Apply a cursor movement or deletion key. Returns `None` when the key
+    /// is not an editing key, otherwise whether the draft text changed.
+    pub(super) fn key(&mut self, input: &mut String, key: KeyEvent) -> Option<bool> {
+        let at = self.at(input);
+        let word = key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let target = match key.code {
+            KeyCode::Left if word => word_start(input, at),
+            KeyCode::Left => previous_grapheme(input, at),
+            KeyCode::Right if word => word_end(input, at),
+            KeyCode::Right => next_grapheme(input, at),
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => 0,
+            KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => input.len(),
+            KeyCode::Home => line_start(input, at),
+            KeyCode::End => line_end(input, at),
+            // Single-line drafts leave Up/Down free for other bindings.
+            KeyCode::Up | KeyCode::Down if !input.contains('\n') => return None,
+            KeyCode::Up => vertical(input, at, false),
+            KeyCode::Down => vertical(input, at, true),
+            KeyCode::Backspace | KeyCode::Delete => {
+                let (from, to) = match (key.code, word) {
+                    (KeyCode::Backspace, true) => (word_start(input, at), at),
+                    (KeyCode::Backspace, false) => (previous_grapheme(input, at), at),
+                    (_, true) => (at, word_end(input, at)),
+                    (_, false) => (at, next_grapheme(input, at)),
+                };
+                if from == to {
+                    return Some(false);
+                }
+                input.replace_range(from..to, "");
+                self.set(input, from);
+                return Some(true);
+            }
+            _ => return None,
+        };
+        self.set(input, target);
+        Some(false)
+    }
+}
+
+fn previous_grapheme(input: &str, at: usize) -> usize {
+    input[..at]
+        .grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(index, _)| index)
+}
+
+fn next_grapheme(input: &str, at: usize) -> usize {
+    input[at..]
+        .graphemes(true)
+        .next()
+        .map_or(at, |grapheme| at + grapheme.len())
+}
+
+fn word_start(input: &str, at: usize) -> usize {
+    let head = input[..at].trim_end();
+    head.rfind(char::is_whitespace).map_or(0, |index| {
+        index + head[index..].chars().next().map_or(1, char::len_utf8)
+    })
+}
+
+fn word_end(input: &str, at: usize) -> usize {
+    let tail = &input[at..];
+    let skipped = tail.len() - tail.trim_start().len();
+    let rest = &tail[skipped..];
+    at + skipped + rest.find(char::is_whitespace).unwrap_or(rest.len())
+}
+
+fn line_start(input: &str, at: usize) -> usize {
+    input[..at].rfind('\n').map_or(0, |index| index + 1)
+}
+
+fn line_end(input: &str, at: usize) -> usize {
+    input[at..]
+        .find('\n')
+        .map_or(input.len(), |index| at + index)
+}
+
+/// Move to the same grapheme column on the previous or next line.
+fn vertical(input: &str, at: usize, down: bool) -> usize {
+    let start = line_start(input, at);
+    let column = input[start..at].graphemes(true).count();
+    let target = if down {
+        let end = line_end(input, at);
+        if end == input.len() {
+            return input.len();
+        }
+        end + 1
+    } else {
+        if start == 0 {
+            return 0;
+        }
+        line_start(input, start - 1)
+    };
+    let line = &input[target..line_end(input, target)];
+    target
+        + line
+            .grapheme_indices(true)
+            .nth(column)
+            .map_or(line.len(), |(index, _)| index)
+}
+
+/// The cursor as a byte offset into `view::plain(input)`. An offset that is
+/// out of range or inside a character means the end of the draft.
+fn plain_cursor(input: &str, cursor: usize) -> usize {
+    input
+        .get(..cursor)
+        .map_or_else(|| view::plain(input).len(), |head| view::plain(head).len())
+}
+
+/// Lay out graphemes once for both drawing and locating the caret. Keep a
+/// cell in reserve as Textual does. The visible rows follow the caret, which
+/// is the draft's tail while typing at the end.
 pub(super) fn draw(
     buffer: &mut Buffer,
     area: Rect,
     input: &str,
+    cursor: usize,
     caret_visible: bool,
     palette: Palette,
     mut pane: Option<&mut Pane>,
@@ -144,37 +283,34 @@ pub(super) fn draw(
     let wrap_width = available.saturating_sub(1).max(1);
     let tab_stop = wrap_width.min(4);
     let text = view::plain(input);
-    // Unlike str::lines, split keeps the empty visual row after a final newline.
-    let lines: Vec<_> = text.split('\n').map(Span::raw).collect();
+    let cursor = plain_cursor(input, cursor);
     let height = usize::from(area.height);
-    let mut rows = VecDeque::new();
+    let mut rows: Vec<(Vec<Glyph>, bool)> = Vec::new();
     let mut row = Vec::new();
     let mut column = 0;
-    let mut finish_row = |row: &mut Vec<_>, soft_wrap| {
-        let mut next = if rows.len() == height {
-            rows.pop_front().map(|(row, _)| row).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        next.clear();
-        std::mem::swap(row, &mut next);
-        rows.push_back((next, soft_wrap));
-    };
+    let mut caret: Option<(usize, usize)> = None;
     let mut glyphs = Vec::new();
-    for (index, span) in lines.iter().enumerate() {
+    let mut line_start = 0;
+    // Unlike str::lines, split keeps the empty visual row after a final newline.
+    for (index, line) in text.split('\n').enumerate() {
         if index > 0 {
-            finish_row(&mut row, false);
+            // The caret sits at the end of the previous line, before its newline.
+            if caret.is_none() && cursor < line_start {
+                caret = Some((rows.len(), column));
+            }
+            rows.push((std::mem::take(&mut row), false));
             column = 0;
         }
         glyphs.clear();
         let mut logical_column = 0;
-        for grapheme in span.styled_graphemes(Style::default()) {
-            let symbol = grapheme.symbol;
+        for (offset, symbol) in line.grapheme_indices(true) {
+            let start = line_start + offset;
             if symbol == "\t" {
                 let spaces = tab_stop - logical_column % tab_stop;
                 glyphs.push(Glyph {
                     symbol,
                     width: spaces,
+                    start,
                 });
                 logical_column += spaces;
                 continue;
@@ -187,7 +323,11 @@ pub(super) fn draw(
                 } else {
                     (symbol, width)
                 };
-                glyphs.push(Glyph { symbol, width });
+                glyphs.push(Glyph {
+                    symbol,
+                    width,
+                    start,
+                });
                 logical_column += width;
             }
         }
@@ -196,29 +336,40 @@ pub(super) fn draw(
             if column > 0
                 && column + word.iter().map(|glyph| glyph.width).sum::<usize>() > wrap_width
             {
-                finish_row(&mut row, true);
+                rows.push((std::mem::take(&mut row), true));
                 column = 0;
             }
             for &glyph in word {
                 if column > 0 && column + glyph.width > wrap_width {
-                    finish_row(&mut row, true);
+                    rows.push((std::mem::take(&mut row), true));
                     column = 0;
+                }
+                if caret.is_none() && glyph.start >= cursor {
+                    caret = Some((rows.len(), column));
                 }
                 row.push(glyph);
                 column += glyph.width;
             }
         }
+        line_start += line.len() + 1;
     }
-    finish_row(&mut row, false);
-    // At tiny widths the text can use every cell, leaving the caret on the next row.
-    if column == available {
-        finish_row(&mut row, false);
-        column = 0;
-    }
+    rows.push((row, false));
+    let caret = caret.unwrap_or_else(|| {
+        // At tiny widths the text can use every cell, leaving the caret on the next row.
+        if column == available {
+            rows.push((Vec::new(), false));
+            (rows.len() - 1, 0)
+        } else {
+            (rows.len() - 1, column)
+        }
+    });
+    // Show the tail unless the caret has moved above it.
+    let tail = rows.len().saturating_sub(height);
+    let first = if caret.0 < tail { caret.0 } else { tail };
     let mut y = area.y;
-    for (row, soft_wrap) in rows {
+    for (row, soft_wrap) in rows.iter().skip(first).take(height) {
         if let Some(pane) = pane.as_deref_mut() {
-            pane.line(y, soft_wrap);
+            pane.line(y, *soft_wrap);
         }
         let mut x = area.x;
         for glyph in row {
@@ -232,7 +383,7 @@ pub(super) fn draw(
         }
         y += 1;
     }
-    let position = Position::new(area.x + column as u16, y - 1);
+    let position = Position::new(area.x + caret.1 as u16, area.y + (caret.0 - first) as u16);
     if caret_visible {
         buffer[position].set_style(palette.cursor());
     }
@@ -249,7 +400,15 @@ mod tests {
             let mut buffer = Buffer::empty(Rect::new(0, 0, width + 5, height + 4));
             let position = Position::new(area.x + cursor.0, area.y + cursor.1);
             assert_eq!(
-                draw(&mut buffer, area, input, visible, Palette::default(), None),
+                draw(
+                    &mut buffer,
+                    area,
+                    input,
+                    usize::MAX,
+                    visible,
+                    Palette::default(),
+                    None
+                ),
                 Some(position)
             );
             assert_eq!(buffer[position].symbol(), " ");
@@ -308,6 +467,7 @@ mod tests {
             &mut buffer,
             area,
             "ab\t界e\u{301}\nend",
+            usize::MAX,
             false,
             Palette::default(),
             Some(&mut pane),
@@ -340,11 +500,27 @@ mod tests {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 2));
         let palette = Palette::default();
         assert_eq!(
-            draw(&mut buffer, Rect::new(2, 0, 3, 1), "a", true, palette, None),
+            draw(
+                &mut buffer,
+                Rect::new(2, 0, 3, 1),
+                "a",
+                usize::MAX,
+                true,
+                palette,
+                None
+            ),
             None
         );
         assert_eq!(
-            draw(&mut buffer, Rect::new(1, 1, 3, 3), "a", true, palette, None),
+            draw(
+                &mut buffer,
+                Rect::new(1, 1, 3, 3),
+                "a",
+                usize::MAX,
+                true,
+                palette,
+                None
+            ),
             Some(Position::new(1, 1))
         );
     }
@@ -400,7 +576,15 @@ mod tests {
                 caret.focus(focused, now);
                 assert_eq!(caret.visible(now), visible);
                 assert_eq!(
-                    draw(&mut buffer, area, draft, caret.visible(now), palette, None),
+                    draw(
+                        &mut buffer,
+                        area,
+                        draft,
+                        usize::MAX,
+                        caret.visible(now),
+                        palette,
+                        None
+                    ),
                     Some(Position::new(3, 2))
                 );
                 assert_eq!(buffer[(1, 1)].symbol(), "a");
@@ -447,5 +631,88 @@ mod tests {
         assert!(steady.visible(start + BLINK_INTERVAL));
         steady.focus(false, start + BLINK_INTERVAL);
         assert!(!steady.visible(start + BLINK_INTERVAL));
+    }
+
+    #[test]
+    fn cursor_moves_by_grapheme_word_and_line_and_edits_in_place() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+        let mut input = String::from("héllo 👩‍💻 world");
+        let mut cursor = Cursor::default();
+        assert_eq!(cursor.at(&input), input.len());
+
+        // " world" is six graphemes; the seventh Left steps over the whole emoji.
+        for _ in 0..7 {
+            cursor.key(&mut input, press(KeyCode::Left));
+        }
+        assert_eq!(&input[cursor.at(&input)..], "👩‍💻 world");
+        cursor.key(&mut input, press(KeyCode::Right));
+        assert_eq!(&input[cursor.at(&input)..], " world");
+        cursor.insert(&mut input, "!");
+        assert_eq!(input, "héllo 👩‍💻! world");
+        assert_eq!(
+            cursor.key(&mut input, press(KeyCode::Backspace)),
+            Some(true)
+        );
+        assert_eq!(
+            cursor.key(&mut input, press(KeyCode::Backspace)),
+            Some(true)
+        );
+        assert_eq!(input, "héllo  world");
+        cursor.key(&mut input, ctrl(KeyCode::Left));
+        assert_eq!(cursor.at(&input), 0);
+        cursor.key(&mut input, ctrl(KeyCode::Right));
+        assert_eq!(&input[cursor.at(&input)..], "  world");
+        assert_eq!(cursor.key(&mut input, press(KeyCode::Delete)), Some(true));
+        assert_eq!(input, "héllo world");
+        cursor.key(&mut input, press(KeyCode::Home));
+        assert_eq!(cursor.at(&input), 0);
+        cursor.key(&mut input, press(KeyCode::End));
+        assert_eq!(cursor.at(&input), input.len());
+
+        // Up/Down only act on multi-line drafts and keep the column.
+        assert_eq!(cursor.key(&mut input, press(KeyCode::Up)), None);
+        let mut input = String::from("abcd\nxy\nlonger");
+        let mut cursor = Cursor::default();
+        cursor.key(&mut input, press(KeyCode::Up));
+        assert_eq!(&input[cursor.at(&input)..], "\nlonger");
+        cursor.key(&mut input, press(KeyCode::Up));
+        assert_eq!(&input[cursor.at(&input)..], "cd\nxy\nlonger");
+        cursor.key(&mut input, press(KeyCode::Down));
+        assert_eq!(&input[cursor.at(&input)..], "\nlonger");
+
+        // Replacing the draft elsewhere puts the cursor back at the end.
+        input = "new draft".into();
+        assert_eq!(cursor.at(&input), input.len());
+    }
+
+    #[test]
+    fn caret_is_drawn_at_the_cursor_and_kept_visible() {
+        let area = Rect::new(0, 0, 6, 2);
+        let mut buffer = Buffer::empty(area);
+        let draft = "one\ntwo\nthree\nfour";
+        // Caret on the 'w' of "two": rows scroll up to show it.
+        let at = draft.find('w').unwrap();
+        let position = draw(&mut buffer, area, draft, at, true, Palette::default(), None).unwrap();
+        assert_eq!(position, Position::new(1, 0));
+        let row =
+            |buffer: &Buffer, y| -> String { (0..6).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert_eq!(row(&buffer, 0).trim_end(), "two");
+        assert!(buffer[(1, 0)].modifier.contains(Modifier::REVERSED));
+        // At the end the tail is shown as before.
+        let mut buffer = Buffer::empty(area);
+        let position = draw(
+            &mut buffer,
+            area,
+            draft,
+            usize::MAX,
+            true,
+            Palette::default(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(position, Position::new(4, 1));
+        assert_eq!(row(&buffer, 1).trim_end(), "four");
     }
 }

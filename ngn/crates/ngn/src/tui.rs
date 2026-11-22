@@ -66,6 +66,8 @@ const HELP: &str = "\
 Basics
   Enter          Send · while a turn runs, steer it
   Shift+Enter    New line
+  ←/→ Home/End   Move in the draft · Ctrl+←/→ by word · ↑/↓ between lines
+  Delete         Delete forward · Ctrl+Backspace deletes a word
   Ctrl+Enter     Queue the message for after the current turn
   Esc            Stop the current turn (finished actions stay done)
   /              Commands · ↑/↓ select · Tab/Enter fill · Esc close
@@ -242,6 +244,8 @@ struct App {
     transcript_area: Rect,
     selection: selection::Selection,
     preview_scroll: u16,
+    /// Where typing goes in the draft.
+    cursor: composer::Cursor,
     /// When the visible approval first appeared (guards against early keys).
     approval_since: approval::Since,
     /// Whether the approval panel shows enough to decide; Allow waits for it.
@@ -747,6 +751,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         frame.buffer_mut(),
         input_area,
         &app.input,
+        app.cursor.at(&app.input),
         app.caret_visible(now),
         app.composer_palette,
         draft_text.as_mut(),
@@ -1322,6 +1327,7 @@ pub async fn run(
         active: None,
         approval: None,
         preview_scroll: 0,
+        cursor: composer::Cursor::default(),
         approval_since: approval::Since::default(),
         approval_fits: true,
         tasks: Vec::new(),
@@ -1585,15 +1591,19 @@ pub async fn run(
                             // Approval and overlay shortcuts above retain their routing.
                             // Draft edits and submission require the same focus as the caret.
                             _ if !app.composer_available() => (),
-                             KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => { if app.input.len() < 32_000 { app.input.push('\n'); app.completion.edited(&app.input); } },
+                             KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => { if app.input.len() < 32_000 { app.cursor.insert(&mut app.input, "\n"); app.completion.edited(&app.input); } },
                              KeyCode::Enter if matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::CONTROL) => {
                                  let submission = if control { SubmissionKey::Queue } else { SubmissionKey::Enter };
                                  if submit_from_enter(&mut app, &host, submission).await { break; }
                                  app.state(&host).await;
                              },
-                            KeyCode::Backspace => { if app.input.pop().is_some() { app.completion.edited(&app.input); } },
-                            KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => { app.input.push(character); app.completion.edited(&app.input); },
-                            _ => (),
+                            KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => { app.cursor.insert(&mut app.input, character.encode_utf8(&mut [0; 4])); app.completion.edited(&app.input); },
+                            _ => {
+                                if let Some(changed) = app.cursor.key(&mut app.input, key) {
+                                    app.caret.restart(Instant::now());
+                                    if changed { app.completion.edited(&app.input); }
+                                }
+                            },
                         }
                     }
                     TerminalEvent::Paste(text) => {
@@ -1606,7 +1616,7 @@ pub async fn run(
                                 app.status = "Paste exceeds 32000 UTF-8 bytes".into();
                             } else if !text.is_empty() {
                                 app.caret.restart(Instant::now());
-                                app.input.push_str(&text);
+                                app.cursor.insert(&mut app.input, &text);
                                 app.completion.edited(&app.input);
                             }
                         }
@@ -2813,6 +2823,7 @@ mod tests {
             active: None,
             approval: None,
             preview_scroll: 0,
+            cursor: composer::Cursor::default(),
             approval_since: approval::Since::default(),
             approval_fits: true,
             tasks: Vec::new(),

@@ -111,6 +111,10 @@ The [UX review](docs/ux-review.md) explains the design principles and roadmap.
   **Ctrl+Enter** explicitly submits to the next-turn FIFO (it can start immediately
   when idle and unpaused). A paused queue remains paused. **Shift+Enter** inserts a
   newline. See [terminal keyboard compatibility](docs/steering.md#native-tui).
+- The draft is editable anywhere: **←/→** move by character, **Ctrl+←/→**
+  (or Alt) by word, **Home/End** to the line's start or end (with Ctrl, the
+  draft's), and **↑/↓** between lines of a multi-line draft. **Backspace**
+  and **Delete** work at the cursor; with Ctrl or Alt they remove a word.
 - Desktop browser **Enter** still sends or queues; **Shift+Enter** inserts a newline.
 - On touch/coarse-pointer browsers, **Return inserts a newline**; tap Send/Queue
   (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
