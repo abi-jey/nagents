@@ -2,6 +2,7 @@
 Core types for the v2 LLM integration module.
 """
 
+from collections.abc import Awaitable
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
@@ -170,6 +171,18 @@ class Message:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None  # For tool result messages
     name: str | None = None  # Tool name for tool results
+
+
+@dataclass(frozen=True)
+class AdmittedTextBatch:
+    """Host-owned text inputs prepared separately and committed before one model turn.
+
+    The host's callback must persist every supplied message in order in the
+    caller's session. It can attach the exact ingress identity for each message.
+    """
+
+    prompts: tuple[str, ...]
+    commit: Callable[[tuple[Message, ...]], Awaitable[None]] = field(repr=False)
 
 
 @dataclass

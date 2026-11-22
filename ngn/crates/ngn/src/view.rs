@@ -1,6 +1,18 @@
-use std::{collections::HashMap, iter::Peekable, ops::Range};
+use std::{
+    collections::HashMap,
+    iter::Peekable,
+    ops::Range,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
+
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// Compact, bounded units; the wire continues to carry integer milliseconds.
 pub fn duration(milliseconds: u64) -> String {
@@ -87,6 +99,14 @@ fn plain_chars(text: &str) -> impl Iterator<Item = char> {
     })
 }
 
+fn bounded_detail(text: &str) -> String {
+    const LIMIT: usize = 4096;
+    if text.len() <= LIMIT {
+        return text.to_owned();
+    }
+    format!("{}\n[truncated]", &text[..text.floor_char_boundary(LIMIT)])
+}
+
 enum ToolState<'a> {
     Running {
         since_ms: u64,
@@ -128,24 +148,22 @@ impl ToolCard<'_> {
         self.result
             .filter(|result| !result.error.is_empty())
             .map(|result| {
-                let error = ngn_core::tools::bounded(&result.error, 4096);
+                let error = bounded_detail(&result.error);
                 format!("  Error: {}", plain(&error))
             })
     }
 
     pub fn details(&self) -> impl Iterator<Item = String> {
-        use ngn_core::tools::bounded;
-
         let arguments = self.call.map(|call| {
             format!(
                 "  Arguments: {}",
-                bounded(&call.arguments.to_string(), 4096)
+                bounded_detail(&call.arguments.to_string())
             )
         });
         let result = self
             .result
             .filter(|result| !result.result.is_null())
-            .map(|result| format!("  Result: {}", bounded(&result.result.to_string(), 4096)));
+            .map(|result| format!("  Result: {}", bounded_detail(&result.result.to_string())));
         [arguments, result]
             .into_iter()
             .flatten()

@@ -1,6 +1,5 @@
 //! Native, bounded tools. Capability-relative files are not an OS sandbox.
 
-mod diff;
 mod discovery;
 
 use std::{
@@ -13,6 +12,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use cap_std::{ambient_authority, fs::Dir};
+use nagents_native::diff;
 use ngn_protocol::{ToolCall, ToolDefinition};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,7 +23,6 @@ use uuid::Uuid;
 
 const MAX_FILE: usize = 262_144;
 const MAX_OUTPUT: usize = 32_768;
-const MAX_PATHS: usize = 5000;
 
 #[derive(Clone)]
 pub struct Tools {

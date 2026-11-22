@@ -3,7 +3,7 @@ import type { Approval as DialogApproval } from "../types.js";
 import type { TeamAgent } from "../features/team/model.js";
 import type { Approval, Bootstrap, Event, Task } from "./transport.js";
 
-export function isArchive(session: string) { return /^python-archive-[a-f0-9]{64}$/.test(session); }
+export function isArchive(session: string) { return /^(?:python|host)-archive-[a-f0-9]{64}$/.test(session); }
 
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 type RunTools = { calls: Map<string, string>; approvals: Map<string, string> };

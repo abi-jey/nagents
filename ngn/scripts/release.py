@@ -23,6 +23,7 @@ import protocol_fixture
 ROOT = Path(__file__).resolve().parents[2]
 NGN = ROOT / "ngn"
 LINUX = "linux-x86_64"
+COORDINATED_CRATES = ("ngn", "ngn-core", "ngn-protocol", "ngn-api", "nagents-native")
 
 
 def manifest_name(platform_name: str) -> str:
@@ -69,9 +70,8 @@ def version_check(tag: str = "") -> str:
     bootstrap = re.search(r"(?m)^NGN_BOOTSTRAP_VERSION=([0-9.]+)$", (NGN / "install.sh").read_text())
     assert bootstrap is not None and bootstrap[1] == version, "Installer bootstrap version mismatch"
     lock = tomllib.loads((NGN / "Cargo.lock").read_text())
-    for package in lock["package"]:
-        if package["name"] in {"ngn", "ngn-core", "ngn-protocol"}:
-            assert package["version"] == version, "Cargo lock version mismatch"
+    locked = {package["name"]: package["version"] for package in lock["package"] if "source" not in package}
+    assert all(locked.get(crate) == version for crate in COORDINATED_CRATES), "Cargo lock version mismatch"
     return version
 
 
@@ -107,7 +107,7 @@ def bump(version: str, notes: str, root: Path = ROOT) -> None:
             )
         ),
     ]
-    for crate in ("ngn", "ngn-core", "ngn-protocol"):
+    for crate in COORDINATED_CRATES:
         replacements.append(
             (ngn / "Cargo.lock", rf'(?m)^(name = "{crate}"\n)version = "{old}"$', rf'\g<1>version = "{version}"')
         )

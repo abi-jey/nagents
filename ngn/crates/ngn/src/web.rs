@@ -21,12 +21,22 @@ use subtle::ConstantTimeEq;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod engine;
+pub(crate) use engine::serve_python;
+
 #[derive(Clone)]
 struct WebState {
     host: Arc<Host>,
     authority: String,
     token: String,
     shutdown: CancellationToken,
+}
+
+#[derive(Clone)]
+struct BrowserBoundary {
+    authority: String,
+    token: String,
+    events_path: &'static str,
 }
 
 struct ApiError(StatusCode, String);
@@ -83,7 +93,11 @@ fn token_matches(value: &[u8], expected: &str) -> bool {
     bool::from(value.ct_eq(expected.as_bytes()))
 }
 
-async fn boundary(State(state): State<WebState>, request: Request<Body>, next: Next) -> Response {
+async fn boundary(
+    State(state): State<BrowserBoundary>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
     let rejected = |status, detail: &str| ApiError(status, detail.into()).into_response();
     let path = request.uri().path();
     let method = request.method();
@@ -93,7 +107,10 @@ async fn boundary(State(state): State<WebState>, request: Request<Body>, next: N
         && method == Method::GET
         && exactly(headers, "sec-fetch-mode", "navigate")
         && exactly(headers, "sec-fetch-dest", "document");
-    let websocket = path == "/api/events";
+    let websocket = path == state.events_path;
+    let history_query = state.events_path == ngn_api::EVENTS_PATH
+        && path.starts_with("/api/v1/sessions/")
+        && path.ends_with("/history");
     let valid = if !exactly(headers, "host", &state.authority) {
         Err((
             StatusCode::FORBIDDEN,
@@ -108,8 +125,9 @@ async fn boundary(State(state): State<WebState>, request: Request<Body>, next: N
         Err((StatusCode::FORBIDDEN, "Same-origin requests only"))
     } else if ![Method::GET, Method::HEAD, Method::POST].contains(method) {
         Err((StatusCode::METHOD_NOT_ALLOWED, "Method not supported"))
-    } else if !["/api/events"].contains(&path)
-        && request.uri().query().is_some()
+    } else if request.uri().query().is_some()
+        && !websocket
+        && !history_query
         && !path.ends_with("/events")
     {
         Err((
@@ -124,7 +142,7 @@ async fn boundary(State(state): State<WebState>, request: Request<Body>, next: N
             .flat_map(|value| value.split(',').map(str::trim))
             .collect();
         if protocols.len() != 2
-            || !protocols.contains(&"ngn.events.v1")
+            || !protocols.contains(&ngn_api::EVENTS_SUBPROTOCOL)
             || protocols
                 .iter()
                 .filter(|protocol| {
@@ -194,6 +212,11 @@ async fn boundary(State(state): State<WebState>, request: Request<Body>, next: N
 }
 
 fn router(state: WebState) -> Router {
+    let security = BrowserBoundary {
+        authority: state.authority.clone(),
+        token: state.token.clone(),
+        events_path: "/api/events",
+    };
     Router::new()
         .route("/", get(static_file))
         .route("/assets/{*path}", get(static_file))
@@ -209,7 +232,7 @@ fn router(state: WebState) -> Router {
         .route("/api/approvals", post(decide))
         .route("/api/events", get(events))
         .layer(DefaultBodyLimit::max(64 * 1024))
-        .layer(middleware::from_fn_with_state(state.clone(), boundary))
+        .layer(middleware::from_fn_with_state(security, boundary))
         .with_state(state)
 }
 

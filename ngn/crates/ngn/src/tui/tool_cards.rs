@@ -972,12 +972,12 @@ impl<'a> Layout<'a> {
 #[cfg(test)]
 mod tests {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ngn_core::host::Approval;
     use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
     use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
     use serde_json::json;
 
     use super::*;
+    use crate::engine::{Approval, ClientDisplay, PaintedComposerTheme};
     use crate::tui::footer::Activity;
     use crate::tui::{App, main_transcript};
 
@@ -1094,8 +1094,6 @@ mod tests {
 
     #[test]
     fn user_shade_wraps_wide_text_without_coloring_other_rows() {
-        use ngn_core::legacy::PaintedComposerTheme;
-
         let parts = [
             TranscriptPart::Text("before\n".into()),
             TranscriptPart::User("界界界\n".into()),
@@ -1255,17 +1253,7 @@ mod tests {
 
     #[test]
     fn workspace_renders_multiple_turns_and_completed_cards_without_top_chrome() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = ngn_core::Host::open(
-            ngn_core::Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..ngn_core::Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let now = Instant::now();
         let mut app = App {
             session: "synthetic-workspace-session".into(),
@@ -1334,7 +1322,7 @@ mod tests {
         let paint = |app: &mut App, width| {
             let mut terminal = Terminal::new(TestBackend::new(width, 36)).unwrap();
             terminal
-                .draw(|frame| super::super::draw(frame, app, &host, now))
+                .draw(|frame| super::super::draw(frame, app, &display, now))
                 .unwrap();
             terminal.backend().buffer().clone()
         };

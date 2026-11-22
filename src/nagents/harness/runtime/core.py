@@ -31,6 +31,7 @@ from nagents.observation import scope as observation_scope
 from nagents.provider.codex.openai import OpenAIProvider
 from nagents.session import SessionManager
 from nagents.session import forks
+from nagents.types import AdmittedTextBatch
 from nagents.types import ContentPart
 from nagents.types import GenerationConfig
 from nagents.types import ReasoningEffort
@@ -125,6 +126,11 @@ def _prompt_text(prompt: str | list["ContentPart"]) -> str:
     if isinstance(prompt, str):
         return prompt
     return "\n".join(part.text for part in prompt if isinstance(part, TextContent))
+
+
+def session_database_path(workspace: Path, data_dir: Path) -> Path:
+    scope = hashlib.sha256(str(workspace.resolve()).encode("utf-8")).hexdigest()[:32]
+    return data_dir / scope / "sessions.db"
 
 
 class _HarnessSession(SessionManager):
@@ -251,7 +257,6 @@ class Harness:
         self.workspace: Path = config.workspace.resolve()
         if not self.workspace.is_dir():
             raise ValueError(f"Workspace is not a directory: {self.workspace}")
-        scope = hashlib.sha256(str(self.workspace).encode("utf-8")).hexdigest()[:32]
         self.session_id = f"ngn-{uuid.uuid4().hex[:16]}"
         self.approval_handler: ApprovalHandler = _deny
         self.wakeup_handler: WakeupHandler | None = None
@@ -303,7 +308,7 @@ class Harness:
                 if config.provider
                 else HarnessProvider(config, self.login_store if not config.provider else None)
             ),
-            session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
+            session_manager=_HarnessSession(session_database_path(self.workspace, config.data_dir)),
             streaming=True,
             max_tool_rounds=config.max_tool_rounds,
             save_tool_outputs=False,
@@ -942,22 +947,33 @@ class Harness:
                 yield event
 
     async def _generation_events(
-        self, prompt: str | list[ContentPart], *, persisted_notice_id: int = 0
+        self,
+        prompt: str | list[ContentPart],
+        *,
+        persisted_notice_id: int = 0,
+        admitted_text: AdmittedTextBatch | None = None,
     ) -> AsyncGenerator[HarnessEvent, None]:
         capture = self.wire_log.capture(self.session_id) if self.wire_log is not None else nullcontext()
         with capture:
-            stream = (
-                self._observed_generation_events(prompt, persisted_notice_id=persisted_notice_id)
-                if persisted_notice_id
-                else self._observed_generation_events(prompt)
-            )
+            if admitted_text is not None:
+                stream = self._observed_generation_events(prompt, admitted_text=admitted_text)
+            elif persisted_notice_id:
+                stream = self._observed_generation_events(prompt, persisted_notice_id=persisted_notice_id)
+            else:
+                stream = self._observed_generation_events(prompt)
             async with aclosing(stream) as events:
                 async for event in events:
                     yield event
 
     async def _observed_generation_events(
-        self, prompt: str | list[ContentPart], *, persisted_notice_id: int = 0
+        self,
+        prompt: str | list[ContentPart],
+        *,
+        persisted_notice_id: int = 0,
+        admitted_text: AdmittedTextBatch | None = None,
     ) -> AsyncGenerator[HarnessEvent, None]:
+        if admitted_text is not None and self._remote_profile.configured:
+            raise ValueError("Run-scoped text batches require a local agent conversation.")
         if self._remote_profile.configured:
             from ..remote.runtime import run_remote
 
@@ -971,15 +987,22 @@ class Harness:
                 async for event in events:
                     yield event
         else:
-            stream = (
-                self.agent.resume_notice(
+            if admitted_text is not None:
+                stream = self.agent.run(
+                    prompt,
+                    session_id=self.session_id,
+                    user_id="harness",
+                    config=self.generation_config(),
+                    admitted_text=admitted_text,
+                )
+            elif persisted_notice_id:
+                stream = self.agent.resume_notice(
                     persisted_notice_id, session_id=self.session_id, user_id="harness", config=self.generation_config()
                 )
-                if persisted_notice_id
-                else self.agent.run(
+            else:
+                stream = self.agent.run(
                     prompt, session_id=self.session_id, user_id="harness", config=self.generation_config()
                 )
-            )
             async with aclosing(stream) as events:
                 async for event in events:
                     yield event
@@ -1177,7 +1200,9 @@ class Harness:
                                 async with (
                                     message.context(),
                                     aclosing(
-                                        self._generation_events(
+                                        self._generation_events(message.prompt, admitted_text=message.admitted_text)
+                                        if message.admitted_text is not None
+                                        else self._generation_events(
                                             message.prompt, persisted_notice_id=message.persisted_notice_id
                                         )
                                     ) as events,

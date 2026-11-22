@@ -54,7 +54,8 @@ export function NativeWorkspace() {
     active_run_id: view.runs.find(run => run.session_id === item.id)?.id,
   }));
   const archive = isArchive(session);
-  const model = archive ? "Read-only Python archive" : config?.model ? `Assistant: ${config.model}` : "Assistant";
+  const archiveLabel = session.startsWith("host-archive-") ? "Read-only Rust host archive" : "Read-only Python archive";
+  const model = archive ? archiveLabel : config?.model ? `Assistant: ${config.model}` : "Assistant";
   const submitting = view.bindings.some(binding => binding.session === session && binding.state === "sending");
   const canSubmit = view.connected && !!view.queue && !archive && !child;
   const steering = steeringTarget(view);
@@ -117,7 +118,7 @@ export function NativeWorkspace() {
             <span>Delegated conversations are inspect-only.</span>
             {child.task.status === "running" && <button type="button" disabled={!!view.stopping || !view.connected}
               onClick={() => void client.cancel(child.task.run_id)}>Stop this agent</button>}
-          </div> : archive ? <p className="activity-warning">Read-only Python archive. Start a new session to send messages.</p> : <>
+          </div> : archive ? <p className="activity-warning">{archiveLabel}. Start a new session to send messages.</p> : <>
             <RunControls client={client} view={view} />
             <Composer inputRef={composer} prompt={view.draft} setPrompt={value => client.setDraft(value)} demo={demo}
               disabled={!config || !session} commandsEnabled={false} deliveryEnabled={false} canSubmit={canSubmit}

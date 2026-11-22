@@ -12,7 +12,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::view;
+use crate::{engine::ProviderDisplay, view};
 
 use super::shimmer::Sweep;
 
@@ -535,7 +535,7 @@ impl Activity {
         frame: &mut Frame,
         area: Rect,
         app: &super::App,
-        config: &ngn_core::Config,
+        provider: &ProviderDisplay,
         now: Instant,
     ) {
         if area.is_empty() {
@@ -544,7 +544,7 @@ impl Activity {
         // One cell each from compose-area and footer (no painted background).
         let padding = 2.min(area.width.saturating_sub(1) / 2);
         let width = area.width - 2 * padding;
-        let failure = app.failure.as_deref();
+        let failure = app.connection_notice.as_deref().or(app.failure.as_deref());
         let mut line = self.line(
             now,
             app.approval.as_ref().map(|a| a.call.name.as_str()),
@@ -566,15 +566,18 @@ impl Activity {
         let row = Rect::new(area.x + padding, area.y, width, 1);
         frame.render_widget(fit(line, usize::from(width)), row);
         if area.height > 1 {
-            let provider_model = if let Ok(provider) = config.selected_provider() {
-                Line::from(vec![
-                    Span::styled(inline(&config.provider), Style::new().fg(INFO)),
-                    Span::styled(" · ", Style::new().fg(INFO).add_modifier(Modifier::DIM)),
-                    Span::styled(
-                        inline(&provider.model),
-                        Style::new().fg(INFO).add_modifier(Modifier::BOLD),
-                    ),
-                ])
+            let provider_model = if let ProviderDisplay::Configured { id, model, .. } = provider {
+                let mut spans = vec![Span::styled(inline(id), Style::new().fg(INFO))];
+                if let Some(model) = model {
+                    spans.extend([
+                        Span::styled(" · ", Style::new().fg(INFO).add_modifier(Modifier::DIM)),
+                        Span::styled(
+                            inline(model),
+                            Style::new().fg(INFO).add_modifier(Modifier::BOLD),
+                        ),
+                    ]);
+                }
+                Line::from(spans)
             } else {
                 Line::styled("Provider not configured", Style::new().fg(INFO))
             };
@@ -592,7 +595,7 @@ impl Activity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ngn_protocol::{ProviderConfig, ToolCall, ToolResult, VERSION};
+    use ngn_protocol::{ProviderAuth, ToolCall, ToolResult, VERSION};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     fn event(sequence: i64, run_id: &str, timestamp_ms: u64, event: Event) -> EventRecord {
@@ -788,35 +791,25 @@ mod tests {
             activity: Activity::new(t, false),
             ..Default::default()
         };
-        let config = ngn_core::Config {
-            provider: "work".into(),
-            providers: [(
-                "work".into(),
-                ProviderConfig {
-                    kind: "openai".into(),
-                    model: "模型-test".into(),
-                    api: String::new(),
-                    base_url: String::new(),
-                    api_key_env: "OPENAI_API_KEY".into(),
-                    auth: ngn_protocol::ProviderAuth::ApiKey,
-                },
-            )]
-            .into(),
-            ..Default::default()
+        let provider = ProviderDisplay::Configured {
+            id: "work".into(),
+            kind: "openai".into(),
+            model: Some("模型-test".into()),
+            auth: Some(ProviderAuth::ApiKey),
         };
         fn render(
             app: &super::super::App,
-            config: &ngn_core::Config,
+            provider: &ProviderDisplay,
             now: Instant,
             width: u16,
         ) -> Buffer {
             let mut terminal = Terminal::new(TestBackend::new(width, 2)).unwrap();
             terminal
-                .draw(|frame| app.activity.draw(frame, frame.area(), app, config, now))
+                .draw(|frame| app.activity.draw(frame, frame.area(), app, provider, now))
                 .unwrap();
             terminal.backend().buffer().clone()
         }
-        let wide = render(&app, &config, t, 38);
+        let wide = render(&app, &provider, t, 38);
         let text = |buffer: &Buffer, y| -> String {
             (0..buffer.area.width)
                 .map(|x| buffer[(x, y)].symbol())
@@ -829,7 +822,7 @@ mod tests {
         assert!(wide[(7, 1)].modifier.contains(Modifier::DIM));
         assert!(wide[(9, 1)].modifier.contains(Modifier::BOLD));
         assert_eq!(wide[(9, 1)].bg, Color::Reset);
-        let narrow = render(&app, &config, t, 14);
+        let narrow = render(&app, &provider, t, 14);
         assert_eq!(text(&narrow, 1), "  work · 模 …  ");
         assert!(!text(&wide, 0).contains("F2"));
 

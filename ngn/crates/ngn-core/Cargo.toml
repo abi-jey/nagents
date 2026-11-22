@@ -13,13 +13,12 @@ test-support = []
 anyhow.workspace = true
 cap-std.workspace = true
 fs2 = "0.4"
-ignore.workspace = true
+nagents-native.workspace = true
 ngn-protocol.workspace = true
 rusqlite = { workspace = true, features = ["hooks"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-similar = "2"
 tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

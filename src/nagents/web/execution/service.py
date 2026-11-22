@@ -99,6 +99,7 @@ class Pending:
     request: ApprovalRequest | None = None
     harness: Harness | None = None
     decision: str = ""
+    engine_ready: bool = False
 
 
 @dataclass
@@ -278,6 +279,7 @@ class WebState:
         self.mutation_released.set()
         self.bus = EventBus()
         self.run_observers: set[Callable[[Run | None, dict[str, object]], None]] = set()
+        self.engine_event_sink: Callable[[Run, dict[str, object]], Awaitable[None]] | None = None
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
         self.tasks = Tasks(self)
         self.queued_inputs = QueuedInputs(self)
@@ -355,6 +357,9 @@ class WebState:
         run = Run(
             work.session_id, server_owned=True, message_id=work.message_id, voice=bool(work.voice_session_id), work=work
         )
+        if work.engine is not None:
+            run.id = work.engine.run_id
+            run.chain.engine_owned = True
         if work.channel:
             run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
         self.executions.reserve(run)
@@ -533,11 +538,22 @@ class WebState:
         if record.get("event") == "task_completed":
             await self.responses.finish(run, str(record.get("session_id", "")), str(record.get("status", "failed")))
         await self.tasks.record(run, record)
+        if self.engine_event_sink is not None and run.work is not None and run.work.engine is not None:
+            await self.engine_event_sink(run, record)
         self.publish(run, record)
 
     async def approve(self, request: ApprovalRequest) -> bool:
         run = self.active
         if run is None or run.pending is not None or run.finished or run.task.done() or run.task.cancelling():
+            return False
+        engine = run.work.engine if run.work is not None else None
+        if engine is None and run.chain.engine_owned:
+            # Scheduled continuations do not inherit an interactive decision
+            # connection or opt back into browser auto-approval policy.
+            return False
+        if engine is not None and (
+            not engine.interactive or self.engine_event_sink is None or not 1 <= len(request.id) <= 200
+        ):
             return False
         # Display correlation only. The nonce and the real executor request
         # remain the authority for approving an operation.
@@ -555,7 +571,11 @@ class WebState:
         ):
             identity = {"generation_id": generation, "index": index}
         harness = self.running_harness
-        binding = None if request.mandatory else self.tool_approvals.requested_binding(harness, request)
+        if engine is not None and self.tool_approvals.active_request_owner(harness, request) is None:
+            return False
+        binding = (
+            None if engine is not None or request.mandatory else self.tool_approvals.requested_binding(harness, request)
+        )
         try:
             allowed = binding is not None and await self.tool_approvals.check_allowed(binding)
         except sqlite3.Error:
@@ -567,7 +587,10 @@ class WebState:
             or run.finished
             or run.task.done()
             or run.task.cancelling()
-            or (None if request.mandatory else self.tool_approvals.requested_binding(harness, request)) != binding
+            or (
+                engine is None
+                and (None if request.mandatory else self.tool_approvals.requested_binding(harness, request)) != binding
+            )
         ):
             return False
         if allowed:
@@ -586,7 +609,7 @@ class WebState:
                 },
             )
             return True
-        if await automatic_reply(self, run, request):
+        if engine is None and await automatic_reply(self, run, request):
             self.publish(
                 run,
                 {
@@ -603,7 +626,7 @@ class WebState:
             )
             return True
         in_chat = False
-        if (run.background or run.server_owned) and not self.bus.listening(run.session_id):
+        if engine is None and (run.background or run.server_owned) and not self.bus.listening(run.session_id):
             # A browser subscriber is normally required. An opted-in owning chat
             # may instead decide the approval from the channel itself.
             in_chat = await self.channels.in_chat_approvals(run.session_id)
@@ -622,9 +645,10 @@ class WebState:
                 return False
         if self.active is not run or run.finished or run.task.done() or run.task.cancelling():
             return False
-        pending = Pending(
-            secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future(), in_chat=in_chat
-        )
+        nonce = secrets.token_urlsafe(24)
+        if engine is not None:
+            nonce = f"approval-{nonce}"
+        pending = Pending(nonce, request.id, asyncio.get_running_loop().create_future(), in_chat=in_chat)
         pending.binding = binding
         pending.request = replace(request)
         pending.harness = self.running_harness
@@ -643,6 +667,8 @@ class WebState:
         expired = False
         try:
             await self.send(run, pending.record)
+            if engine is not None:
+                pending.engine_ready = self.engine_event_sink is not None
             if run.notices is not None:
                 await run.notices.waiting_for_approval(request, live=True)
             approved = await asyncio.wait_for(pending.answer, timeout=self.approval_timeout())

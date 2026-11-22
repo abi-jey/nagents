@@ -91,6 +91,7 @@ from .skills.types import validate_skill_token_limit
 from .tools import ToolExecutor
 from .tools import ToolRegistry
 from .tools.output import ToolOutput
+from .types import AdmittedTextBatch
 from .types import AudioContent
 from .types import ContentPart
 from .types import GenerationConfig
@@ -1339,6 +1340,7 @@ class Agent:
         *,
         auto_commit: bool | None = None,
         log_file: Path | str | None = None,
+        admitted_text: AdmittedTextBatch | None = None,
     ) -> AsyncGenerator[Event, None]:
         """
         Run a complete interaction with automatic tool execution.
@@ -1367,6 +1369,9 @@ class Agent:
                          when the input is exhausted (push-to-talk). Defaults to the
                          inverse of the Realtime config's turn detection.
             log_file: Voice mode: optional JSON-lines log of all raw events.
+            admitted_text: Optional host-owned text prefix ending in ``user_message``.
+                           Run input hooks apply to each message; the callback persists
+                           the whole sequence before a single model turn.
 
         Yields:
             Events as they occur
@@ -1388,7 +1393,13 @@ class Agent:
             with self._execution_bridge.turn(session_id) if self._execution_bridge else nullcontext():
                 async with aclosing(
                     self._run_interaction(
-                        user_message, session_id, user_id, config, auto_commit=auto_commit, log_file=log_file
+                        user_message,
+                        session_id,
+                        user_id,
+                        config,
+                        auto_commit=auto_commit,
+                        log_file=log_file,
+                        admitted_text=admitted_text,
                     )
                 ) as events:
                     async for event in events:
@@ -1446,7 +1457,17 @@ class Agent:
         auto_commit: bool | None,
         log_file: Path | str | None,
         persisted_notice_id: int = 0,
+        admitted_text: AdmittedTextBatch | None = None,
     ) -> AsyncGenerator[Event, None]:
+        if admitted_text is not None and (
+            self.batch
+            or persisted_notice_id
+            or not isinstance(user_message, str)
+            or not admitted_text.prompts
+            or admitted_text.prompts[-1] != user_message
+            or not session_id
+        ):
+            raise ValueError("A host text batch requires its last prompt and an explicit local text session.")
         if user_message is None:
             if self.provider.live_config is None:
                 self._check_extension_mode("voice")
@@ -1486,21 +1507,36 @@ class Agent:
         try:
             await self._repair_tool_calls(session_id)
             await self.refresh_skills()
-            # Capture only original incoming user text, never tool output, prior
-            # history, transcribed audio or plugin-injected instructions.
-            text = ""
-            if message.role == "user" and not persisted_notice_id:
-                if isinstance(message.content, str):
-                    text = message.content
-                elif isinstance(message.content, list):
-                    text = "\n".join(part.text for part in message.content if isinstance(part, TextContent))
-            references = explicit_skill_names(text) if self.skill_discoverer is not None else ()
-            for plugin in plugins:
-                message = await plugin.before_run(context, message)
-                if not isinstance(message, Message):
-                    raise TypeError(f"{type(plugin).__name__}.before_run must return Message")
+            inputs = (
+                [Message(role="user", content=prompt) for prompt in admitted_text.prompts]
+                if admitted_text is not None
+                else [message]
+            )
+            prepared: list[Message] = []
+            references: dict[str, None] = {}
+            for entry in inputs:
+                # Capture only original user text, not plugin-injected
+                # instructions, audio transcripts, past history or tool output.
+                if entry.role == "user" and not persisted_notice_id and self.skill_discoverer is not None:
+                    text = (
+                        entry.content
+                        if isinstance(entry.content, str)
+                        else "\n".join(part.text for part in entry.content or () if isinstance(part, TextContent))
+                    )
+                    references.update(dict.fromkeys(explicit_skill_names(text)))
+                for plugin in plugins:
+                    entry = await plugin.before_run(context, entry)
+                    if not isinstance(entry, Message):
+                        raise TypeError(f"{type(plugin).__name__}.before_run must return Message")
+                prepared.append(entry)
             text_run = self._run_text(
-                message, context, config, plugins, references, persisted_notice_id=persisted_notice_id
+                prepared,
+                context,
+                config,
+                plugins,
+                tuple(references),
+                persisted_notice_id=persisted_notice_id,
+                commit_inputs=admitted_text.commit if admitted_text is not None else None,
             )
             while True:
                 # Scope each advance, never the outward yield: callers may stop
@@ -1575,13 +1611,14 @@ class Agent:
 
     async def _run_text(
         self,
-        message: Message,
+        inputs: list[Message],
         context: RunContext,
         config: GenerationConfig | None,
         plugins: tuple[AgentPlugin, ...],
         skill_references: tuple[str, ...] = (),
         *,
         persisted_notice_id: int = 0,
+        commit_inputs: Callable[[tuple[Message, ...]], Awaitable[None]] | None = None,
     ) -> AsyncGenerator[Event, None]:
         session_id = context.session_id
         skill_context: list[Message] = []
@@ -1589,25 +1626,21 @@ class Agent:
             async for event in activations:
                 yield event
 
-        # Process audio content through STT if present
-        processed_content = await self._process_multimodal_content(message.content)
-
-        # Create processed message
-        processed_message = Message(
-            role=message.role,
-            content=processed_content,
-            tool_calls=message.tool_calls,
-            tool_call_id=message.tool_call_id,
-            name=message.name,
-        )
+        # Process audio content through STT if present, including each
+        # independently prepared user input in an admitted prefix.
+        processed = [
+            replace(message, content=await self._process_multimodal_content(message.content)) for message in inputs
+        ]
 
         # A claimed job notice already has its durable history row.
-        if not persisted_notice_id:
-            await self.session.add_message(session_id, processed_message)
+        if commit_inputs is not None:
+            await commit_inputs(tuple(processed))
+        elif not persisted_notice_id:
+            await self.session.add_message(session_id, processed[0])
         else:
             from .session.shells import ShellStore
 
-            await ShellStore(self.session).transform_notice(session_id, persisted_notice_id, processed_message)
+            await ShellStore(self.session).transform_notice(session_id, persisted_notice_id, processed[0])
 
         session_usage = self._session_usage.setdefault(session_id, TokenUsage())
         last_usage = Usage()
@@ -1636,7 +1669,7 @@ class Agent:
             stored_prompt_tokens = observed_usage.prompt_tokens if observed_usage is not None else 0
 
             # Estimate tokens for new user message (not yet in history)
-            new_message_tokens = estimate_messages_tokens([processed_message])
+            new_message_tokens = estimate_messages_tokens(processed)
 
             # Total context: stored prompt_tokens + estimated new tokens
             # Use stored tokens from last API response (actual) + estimate for new message

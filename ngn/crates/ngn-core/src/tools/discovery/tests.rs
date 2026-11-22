@@ -1,5 +1,8 @@
 use std::{fs, path::PathBuf};
 
+use nagents_native::discovery::{
+    MAX_IGNORE_FILE, MAX_IGNORE_FILES, MAX_IGNORE_LINE, MAX_IGNORE_LINES, MAX_PATHS,
+};
 use ngn_protocol::ToolCall;
 use serde_json::{Value, json};
 
@@ -68,6 +71,51 @@ impl Fixture {
             );
         }
     }
+}
+
+#[test]
+#[ignore = "run by ngn/scripts/native_discovery_bench.py on a shared fixture"]
+fn native_abi3_comparison_baseline() {
+    use std::time::Instant;
+
+    let root = PathBuf::from(std::env::var_os("NGN_DISCOVERY_BENCH_ROOT").unwrap());
+    let tools = Tools::open(&root, &root.join("not-workspace-data"), true, 1).unwrap();
+    let measure = |name: &str, arguments: Value, value: &str| {
+        let call = ToolCall {
+            call_id: "benchmark".into(),
+            name: name.into(),
+            arguments,
+        };
+        let mut samples = Vec::new();
+        let mut last = Value::Null;
+        for _ in 0..8 {
+            let start = Instant::now();
+            let prepared = tools.prepare(&call).unwrap();
+            samples.push(u64::try_from(start.elapsed().as_nanos()).unwrap());
+            let Action::Result(result) = prepared.action else {
+                panic!("discovery must stay read-only");
+            };
+            last = result;
+        }
+        samples.remove(0);
+        samples.sort_unstable();
+        (
+            samples[samples.len() / 2],
+            last[value].clone(),
+            last["truncated"].as_bool().unwrap(),
+        )
+    };
+    let (discovery, paths, paths_capped) = measure("list_files", json!({"limit": 1000}), "paths");
+    let (search, matches, search_capped) = measure(
+        "search",
+        json!({"query": "benchmark-token", "limit": 1000}),
+        "matches",
+    );
+    println!(
+        "NGN_DISCOVERY_BASELINE:{}",
+        json!({"discovery_ns": discovery, "search_ns": search, "paths": paths,
+            "paths_capped": paths_capped, "matches": matches, "search_capped": search_capped})
+    );
 }
 
 fn call(name: &str, arguments: Value) -> ToolCall {

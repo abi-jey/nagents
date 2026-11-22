@@ -23,11 +23,15 @@ dev = [ "azure-identity>=1.17.0", "debugpy>=1.8.22",]
 dev = [ "pytest>=8.0", "pytest-asyncio>=1.0", "pytest-cov>=4.1.0", "pytest-xdist>=3.5", "httpx>=0.28.1", "httpx2>=2.0.0", "ruff>=0.9.0", "mypy>=1.14.0", "pre-commit>=4.0.0", "fastapi>=0.100", "pydantic>=2.0", "sounddevice>=0.5.0", "numpy>=2.5.2", "python-dotenv>=1.0", "types-PyYAML>=6.0.12.20260906", "a2a-sdk[http-server]>=1.2.3", "PyJWT[crypto]>=2.10.1",]
 docs = [ "mkdocs>=1.6.0", "mkdocs-material>=9.5.0", "mkdocstrings[python]>=0.27.0",]
 web = [ "fastapi>=0.100", "uvicorn>=0.24", "pydantic>=2.0", "websockets>=13", "aiortc>=1.14",]
+# The first engine phase shares the web service's FastAPI/WebState lifespan.
+# Keep this aligned with `web` until the engine can use a slimmer dependency set.
+engine = [ "fastapi>=0.100", "uvicorn>=0.24", "pydantic>=2.0", "websockets>=13", "aiortc>=1.14",]
 voice = [ "sounddevice>=0.5.6", "fastapi>=0.100", "pydantic>=2.0", "aiortc>=1.14",]
 a2a = [ "a2a-sdk[http-server]>=1.2.3", "PyJWT[crypto]>=2.10.1", "uvicorn>=0.24",]
 
 [project.scripts]
 ngn = "nagents.cli:main"
+nagents = "nagents.engine.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/abi-jey/nagents"

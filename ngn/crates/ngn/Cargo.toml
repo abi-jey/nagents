@@ -15,6 +15,7 @@ crossterm.workspace = true
 futures-util.workspace = true
 flate2.workspace = true
 fs2.workspace = true
+ngn-api.workspace = true
 ngn-core.workspace = true
 ngn-protocol.workspace = true
 ratatui.workspace = true
@@ -33,6 +34,7 @@ unicode-segmentation = "1.13"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["fs", "user", "signal", "process", "term", "poll"] }
+rustix = { version = "1", features = ["fs", "process"] }
 
 [dev-dependencies]
 ngn-core = { workspace = true, features = ["test-support"] }

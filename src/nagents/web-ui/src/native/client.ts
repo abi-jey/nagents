@@ -1,8 +1,9 @@
 import type { Entry } from "../features/chat/transcript.js";
+import { readEngineEvent } from "./engine-transport.js";
 import { isArchive, NativeTranscript } from "./transcript.js";
 import {
-  browserTransport, runPath, sessionPath,
-  type Approval, type Bootstrap, type Event, type Queue, type QueueAction, type Run, type RunStatus,
+  browserTransport, pythonEngineTransport, runPath, sessionPath,
+  type Approval, type Bootstrap, type Event, type Queue, type QueueAction, type Run,
   type Session, type Snapshot, type SteeringReceipt, type SteeringState, type Task, type TaskLimits, type Transport,
 } from "./transport.js";
 
@@ -34,7 +35,7 @@ export function steeringTarget(view: View): string | undefined {
     state.run_status === "running" && state.supported && state.accepting)) return run.id;
 }
 
-/** One Rust transport for both the root conversation and the read-only child inspector. */
+/** The root conversation and read-only child inspector share one view model. */
 export class NativeClient {
   private view: View = {
     session: "", sessions: [], entries: [], connected: false, connecting: false, reconnecting: false,
@@ -46,15 +47,20 @@ export class NativeClient {
   private scope = new AbortController();
   private closeRoot?: () => void;
   private closeChild?: () => void;
+  private receiveChild?: (record: Event) => void;
   private flush?: ReturnType<typeof setTimeout>;
   private transcript?: NativeTranscript;
   private transcriptDirty = false;
+  private readError = "";
   private revisions = new Map<Refresh, number>();
   private pending = new Set<Refresh>();
   private seenSteering = new Set<string>();
   private drafts = new Map<string, Draft>();
 
-  constructor(private transport: Transport = browserTransport, private requestId: () => string = () => crypto.randomUUID()) {}
+  private transport: Transport;
+  constructor(private bootstrapTransport: Transport = browserTransport, private requestId: () => string = () => crypto.randomUUID()) {
+    this.transport = bootstrapTransport;
+  }
 
   snapshot = () => this.view;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -70,12 +76,14 @@ export class NativeClient {
     this.closeRoot?.();
     this.closeChild?.();
     this.closeRoot = this.closeChild = undefined;
+    this.receiveChild = undefined;
     clearTimeout(this.flush);
     this.flush = undefined;
     this.pending.clear();
     this.revisions.clear();
     this.seenSteering.clear();
     this.transcriptDirty = false;
+    this.readError = "";
   }
 
   dispose() {
@@ -89,10 +97,13 @@ export class NativeClient {
     const { signal } = this.boot;
     this.update({ connected: false, connecting: true, reconnecting: false, creating: false, approvals: [], error: "" });
     try {
-      const config = await this.transport.request<Bootstrap>("/api/bootstrap", undefined, undefined, signal);
+      const config = await this.bootstrapTransport.request<Bootstrap>("/api/bootstrap", undefined, undefined, signal);
       if (config.protocol_version !== 1 || !config.token) throw new Error("This browser needs ngn web protocol v1.");
-      const { sessions } = await this.transport.request<{ sessions: Session[] }>("/api/sessions", config.token, undefined, signal);
+      const transport = this.bootstrapTransport === browserTransport && config.transport === "engine-v1"
+        ? pythonEngineTransport : this.bootstrapTransport;
+      const { sessions } = await transport.request<{ sessions: Session[] }>("/api/sessions", config.token, undefined, signal);
       if (signal.aborted) return;
+      this.transport = transport;
       this.update({ config, sessions, connecting: false });
       const previous = sessions.find(session => session.id === this.view.session);
       const session = previous || sessions[0];
@@ -133,7 +144,13 @@ export class NativeClient {
       queueBusy: false, deciding: undefined, stopping: undefined });
     const refresh = () => this.invalidate("state", "sessions", ...(isArchive(session) ? [] : ["tasks", "queue"] as const));
     this.closeRoot = this.transport.watch(session, this.view.config.token, record => {
-      if (signal.aborted || record.session_id !== session) return;
+      if (signal.aborted) return;
+      if (record.session_id !== session) {
+        this.receiveChild?.(record);
+        if (record.event === "approval_requested" || record.event === "approval_resolved" || record.event === "run_finished")
+          this.invalidate("state");
+        return;
+      }
       if (this.transcript?.apply(record)) { this.transcriptDirty = true; this.schedule(); }
       this.onEvent(record);
     }, connected => {
@@ -141,7 +158,9 @@ export class NativeClient {
       // A previous connection's snapshot may be stale, including a decision
       // another client made while this socket was down.
       if (connected) refresh();
-      this.update({ connected, reconnecting: !connected, approvals: [] });
+      const clearReadError = connected && this.view.reconnecting && this.view.error === this.readError;
+      if (clearReadError) this.readError = "";
+      this.update({ connected, reconnecting: !connected, approvals: [], ...(clearReadError && { error: "" }) });
       if (connected) {
         for (const run of this.seenSteering) this.invalidate(`steering:${run}`);
       }
@@ -165,7 +184,7 @@ export class NativeClient {
     const transcript = new NativeTranscript(id, task.run_id);
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined;
     this.update({ child: { task, entries: [] } });
-    const unwatch = this.transport.watch(id, config.token, record => {
+    const receive = (record: Event) => {
       if (!stopped && !signal.aborted && transcript.apply(record)) {
         timer ??= setTimeout(() => {
           timer = undefined;
@@ -174,7 +193,55 @@ export class NativeClient {
             this.update({ child: { ...current, entries: transcript.snapshot() } });
         }, 32);
       }
-    }, () => {}, () => { if (!stopped) this.update({ error: "Invalid agent conversation event." }); });
+    };
+    if (config.transport === "engine-v1") {
+      // Catch up the inspected activation over HTTP. Live child frames from
+      // the root's one socket are buffered only while catch-up is in flight.
+      const load = new AbortController();
+      let pending: Event[] = [], catchingUp = true, overflow = false;
+      this.receiveChild = record => {
+        if (record.session_id !== id || record.run_id !== task.run_id) return;
+        if (!catchingUp) receive(record);
+        else if (pending.length < 128) pending.push(record);
+        else { pending = []; overflow = true; }
+      };
+      this.closeChild = () => {
+        stopped = true;
+        load.abort();
+        clearTimeout(timer);
+        this.receiveChild = undefined;
+      };
+      void (async () => {
+        let cursor = 0;
+        for (let page = 0; page < 64 && !stopped; page++) {
+          const latest = await this.transport.request<{ events: unknown[]; cursor: number; has_more: boolean }>(
+            `${sessionPath(id)}/history?after=${cursor}`, config.token, undefined, load.signal);
+          if (stopped) return;
+          if (!Number.isSafeInteger(latest.cursor) || latest.cursor < cursor || (latest.has_more && latest.cursor === cursor))
+            throw new Error("Invalid agent history cursor.");
+          for (const frame of latest.events) {
+            const record = readEngineEvent(frame, id, cursor);
+            if (record) receive(record);
+          }
+          cursor = latest.cursor;
+          if (latest.has_more) continue;
+          if (overflow) { overflow = false; continue; }
+          catchingUp = false;
+          for (const record of pending) receive(record);
+          pending = [];
+          return;
+        }
+        if (!stopped) throw new Error("Agent history exceeds the inspection limit.");
+      })().catch(error => {
+        if (!stopped) {
+          this.closeChild?.();
+          this.update({ child: undefined, error: detail(error) });
+        }
+      });
+      return;
+    }
+    const unwatch = this.transport.watch(id, config.token, receive, () => {},
+      () => { if (!stopped) this.update({ error: "Invalid agent conversation event." }); });
     this.closeChild = () => { stopped = true; clearTimeout(timer); unwatch(); };
   }
 
@@ -182,6 +249,9 @@ export class NativeClient {
     switch (record.event) {
       case "run_started":
         this.invalidate("state", "sessions", "queue");
+        break;
+      case "session_updated":
+        this.invalidate("sessions");
         break;
       case "run_finished":
         this.invalidate("state", "sessions", "queue");
@@ -256,7 +326,7 @@ export class NativeClient {
         const { queue, limit } = await get<{ queue: Queue; limit: number }>(`${sessionPath(session)}/queue`);
         if (latest() && queue.session_id === session) this.update({ queue, queueLimit: limit });
       } else if (key === "tasks") {
-        if (isArchive(session)) return;
+        if (isArchive(session) || (config.transport === "engine-v1" && !config.capabilities?.includes("tasks"))) return;
         const { tasks, limits } = await get<{ tasks: Task[]; limits: TaskLimits }>(`${sessionPath(session)}/tasks`);
         if (!latest()) return;
         const scoped = tasks.filter(task => task.root_session_id === session);
@@ -269,7 +339,10 @@ export class NativeClient {
         if (latest() && steering.run_id === run && steering.session_id === session) this.applySteering(steering);
       }
     } catch (error) {
-      if (latest()) this.update({ error: detail(error) });
+      if (latest()) {
+        this.readError = detail(error);
+        this.update({ error: this.readError });
+      }
     }
   }
 
@@ -355,7 +428,7 @@ export class NativeClient {
         if (receipt.run_id !== run || receipt.session_id !== session || receipt.request_id !== id || receipt.prompt !== prompt)
           throw new Error("Steering response identity mismatch");
       } else {
-        const reply = await this.transport.request<{ run: Omit<Run, "status"> & { status: RunStatus | null }; warning?: string }>(
+        const reply = await this.transport.request<{ run: Pick<Run, "session_id" | "request_id">; warning?: string }>(
           `${sessionPath(session)}/runs`, config.token, input);
         if (reply.run.session_id !== session || reply.run.request_id !== id) throw new Error("Submission response identity mismatch");
         warning = reply.warning ? `Input accepted — ${reply.warning}` : "";
@@ -393,7 +466,7 @@ export class NativeClient {
   async cancel(run: string) {
     const { child, stopping, queue, connected } = this.view;
     if (!connected || stopping || !(run === activeRun(this.view)?.id || run === pendingApproval(this.view)?.run_id ||
-        run === child?.task.run_id || queue?.entries.some(entry => entry.run.id === run))) return;
+        run === child?.task.run_id || queue?.entries.some(entry => entry.run?.id === run))) return;
     const { signal } = this.scope;
     this.update({ stopping: run });
     await this.mutate(`${runPath(run)}/cancel`, {}, "state", "queue", "tasks");
@@ -405,7 +478,10 @@ export class NativeClient {
     const pending = pendingApproval(this.view);
     if (!pending || approval.id !== pending.id || approval.run_id !== pending.run_id || this.view.deciding || !this.view.connected) return;
     this.update({ deciding: approval.id });
-    const accepted = await this.mutate("/api/approvals", { run_id: approval.run_id, approval_id: approval.id, allow }, "state");
+    const accepted = await this.mutate("/api/approvals", {
+      run_id: approval.run_id, approval_id: approval.id, allow,
+      ...(this.view.config?.transport === "engine-v1" && { call_id: approval.call.call_id }),
+    }, "state");
     if (!signal.aborted) {
       this.update({ deciding: undefined,
         ...(accepted && { approvals: this.view.approvals.filter(item => item.id !== approval.id) }) });

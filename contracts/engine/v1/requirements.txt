@@ -1,0 +1,4 @@
+# Pin the exporters, not the runtime dependency range. Their schema formatting
+# is part of the generated-file drift check.
+fastapi==0.165.0
+pydantic==2.14.4

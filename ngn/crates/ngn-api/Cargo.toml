@@ -1,0 +1,21 @@
+[package]
+name = "ngn-api"
+description = "Generated client and models for the nagents engine v1 contract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

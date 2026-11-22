@@ -1,3 +1,5 @@
+mod engine;
+mod engine_process;
 mod install;
 #[cfg(test)]
 #[path = "../../ngn-core/src/test_support.rs"]
@@ -14,12 +16,15 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, error::ErrorKind};
 use ngn_core::auth::{self, Operation};
 use ngn_core::{ApprovalMode, Config, Host};
 use ngn_protocol::{Event, EventRecord, RunStatus};
 use uuid::Uuid;
+
+use engine::{Engine, InProcess, SessionSelection};
+use engine_process::{EngineProcess, Launch};
 
 pub(crate) async fn shutdown_signal() -> std::io::Result<()> {
     #[cfg(unix)]
@@ -44,7 +49,7 @@ pub(crate) async fn shutdown_signal() -> std::io::Result<()> {
 struct Cli {
     #[arg(short = 'C', long, global = true)]
     workspace: Option<PathBuf>,
-    /// Trusted Rust configuration file; omit to use existing Python ngn provider settings.
+    /// Trusted configuration file for the selected engine.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[arg(long, global = true)]
@@ -55,6 +60,18 @@ struct Cli {
     provider_id: Option<String>,
     #[arg(short, long, global = true)]
     model: Option<String>,
+    /// Select the opt-in Python engine, legacy host (default), or an engine URL.
+    #[arg(long, global = true, value_name = "python|legacy|URL")]
+    engine: Option<String>,
+    /// Start a private Python engine that shuts down when this client exits.
+    #[arg(long, global = true)]
+    standalone: bool,
+    /// Use the offline demo when starting a Python engine.
+    #[arg(long, global = true)]
+    engine_demo: bool,
+    /// Trust project configuration and code when starting a Python engine.
+    #[arg(long, global = true)]
+    trust_project: bool,
     #[arg(long, global = true, conflicts_with = "continue_session")]
     resume: Option<String>,
     #[arg(short = 'c', long = "continue", global = true)]
@@ -135,7 +152,7 @@ enum Commands {
         #[arg(long, default_value_t = 8765)]
         port: u16,
     },
-    /// List Rust-host sessions for this workspace.
+    /// List sessions for this workspace.
     Sessions,
     /// Show local configuration diagnostics without starting Python or making requests.
     Doctor,
@@ -156,16 +173,6 @@ impl AuthCommand {
             Self::Logout => Operation::Logout,
         }
     }
-}
-
-async fn session(host: &Host, resume: Option<&str>, continue_session: bool) -> Result<String> {
-    if let Some(resume) = resume {
-        return Ok(host.store.session(resume).await?.id);
-    }
-    if continue_session && let Some(id) = host.store.latest_native_session().await? {
-        return Ok(id);
-    }
-    Ok(host.store.create_session().await?.id)
 }
 
 fn print_record(record: &EventRecord, json: bool, streamed: &mut bool) -> Result<()> {
@@ -247,7 +254,234 @@ async fn headless(host: Arc<Host>, session: &str, prompt: &str, json: bool) -> R
     }
 }
 
+fn run_prompt(words: Vec<String>) -> Result<String> {
+    let mut prompt = words.join(" ");
+    if prompt == "-" || (prompt.is_empty() && !std::io::stdin().is_terminal()) {
+        prompt.clear();
+        std::io::stdin().take(32_001).read_to_string(&mut prompt)?;
+    }
+    ensure!(
+        !prompt.trim().is_empty(),
+        "A prompt is required. Try: ngn run --json 'hello'"
+    );
+    Ok(prompt)
+}
+
+async fn engine_session(
+    client: &ngn_api::Client,
+    selection: SessionSelection<'_>,
+) -> Result<String> {
+    use ngn_api::models::SessionCreate;
+
+    match selection {
+        SessionSelection::Resume(id) => return Ok(client.session(id).await?.id),
+        SessionSelection::LatestOrNew => {
+            if let Some(session) = client
+                .sessions()
+                .await?
+                .into_iter()
+                .find(|session| !session.archived)
+            {
+                return Ok(session.id);
+            }
+        }
+        SessionSelection::New => (),
+    }
+    Ok(client
+        .create_session(&SessionCreate { title: None })
+        .await?
+        .id)
+}
+
+fn print_engine_record(
+    record: &ngn_api::models::EventRecord,
+    json: bool,
+    streamed: &mut bool,
+) -> Result<()> {
+    use ngn_api::models::EngineEvent;
+
+    if json {
+        println!("{}", serde_json::to_string(record)?);
+    } else {
+        match &record.event {
+            EngineEvent::TextDelta(value) => {
+                print!("{}", view::plain(&value.text));
+                *streamed = true;
+            }
+            EngineEvent::TextCompleted(value) => {
+                if !*streamed {
+                    print!("{}", view::plain(&value.text));
+                }
+                println!();
+                *streamed = false;
+            }
+            EngineEvent::ToolStarted(value) => eprintln!("[{}]", view::plain(&value.call.name)),
+            EngineEvent::ToolCompleted(value) if !value.result.error.is_empty() => eprintln!(
+                "[{}: {}]",
+                view::plain(&value.result.name),
+                view::plain(&value.result.error)
+            ),
+            EngineEvent::Notice(value) => eprintln!("{}", view::plain(&value.text)),
+            EngineEvent::RunFinished(value) => {
+                if !value.error.is_empty() {
+                    eprintln!("{}", view::plain(&value.error));
+                }
+                eprintln!("Session: {} · {}", record.session_id, value.status.as_str());
+            }
+            _ => (),
+        }
+    }
+    std::io::stdout().flush()?;
+    Ok(())
+}
+
+async fn headless_python(
+    client: &ngn_api::Client,
+    session: &str,
+    prompt: String,
+    json: bool,
+) -> Result<i32> {
+    use ngn_api::models::{EngineEvent, RunMode, RunStart, RunStatus};
+
+    let mut events = client.subscribe(0, Some(session)).await?;
+    let request_id = Uuid::new_v4().to_string();
+    let receipt = client
+        .start_run(
+            session,
+            &RunStart {
+                request_id: request_id.clone(),
+                prompt,
+                mode: Some(RunMode::Idle),
+                interactive: Some(false),
+            },
+        )
+        .await
+        .with_context(|| format!("Run admission failed; request ID {request_id}"))?;
+    ensure!(
+        receipt.session_id == session && receipt.request_id == request_id,
+        "Run receipt identity mismatch"
+    );
+    let run = receipt
+        .run_id
+        .context("Python engine did not identify the submitted run")?;
+    let mut streamed = false;
+    let mut stop_requested = false;
+    loop {
+        tokio::select! {
+            _ = shutdown_signal(), if !stop_requested => {
+                stop_requested = true;
+                if let Err(error) = client.cancel_run(&run).await {
+                    eprintln!("Cancellation request: {}", view::plain(&error.to_string()));
+                }
+            }
+            next = events.next() => {
+                let record = next?.context("Engine event stream closed before completion. Reopen the session to recover its durable history.")?;
+                if record.run_id != run || record.session_id != session { continue; }
+                print_engine_record(&record, json, &mut streamed)?;
+                if let EngineEvent::RunFinished(value) = record.event {
+                    return Ok(match value.status {
+                        RunStatus::Completed => 0,
+                        RunStatus::Cancelled => 130,
+                        _ => 1,
+                    });
+                }
+            }
+        }
+    }
+}
+
+async fn execute_python(cli: Cli, wire_log: Option<bool>) -> Result<i32> {
+    ensure!(
+        matches!(
+            cli.command,
+            None | Some(Commands::Serve { .. } | Commands::Run { .. } | Commands::Sessions)
+        ),
+        "This command is not available with the Python engine; use the legacy host"
+    );
+    if cli.command.is_none() {
+        ensure!(
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            "The TUI needs a terminal; use ngn run --json PROMPT for scripts"
+        );
+    }
+    let options = Launch {
+        workspace: cli.workspace.as_deref(),
+        data_dir: cli.data_dir.as_deref(),
+        config: cli.config.as_deref(),
+        provider_id: cli.provider_id.as_deref(),
+        model: cli.model.as_deref(),
+        wire_log,
+        read_only: cli.read_only,
+        trust_project: cli.trust_project,
+        demo: cli.engine_demo,
+        standalone: cli.standalone,
+    };
+    let source = cli.engine.as_deref().unwrap_or("python");
+    let engine = if source == "python" {
+        EngineProcess::local(options).await?
+    } else {
+        ensure!(
+            !options.standalone
+                && !options.has_launch_overrides()
+                && options.data_dir.is_none()
+                && options.workspace.is_none(),
+            "Launch options cannot be used while attaching to an explicit --engine URL"
+        );
+        EngineProcess::attach(source).await?
+    };
+    let selection = SessionSelection::initial(cli.resume.as_deref(), cli.continue_session);
+    let result = async {
+        match cli.command {
+            Some(Commands::Serve { host, port }) => {
+                web::serve_python(engine.client.clone(), SocketAddr::new(host, port)).await?;
+                Ok(0)
+            }
+            Some(Commands::Sessions) => {
+                for session in engine.client.sessions().await? {
+                    println!(
+                        "{}  {}",
+                        view::plain(&session.id),
+                        view::plain(&session.title)
+                    );
+                }
+                Ok(0)
+            }
+            Some(Commands::Run { json, prompt }) => {
+                let prompt = run_prompt(prompt)?;
+                let session = engine_session(&engine.client, selection).await?;
+                headless_python(&engine.client, &session, prompt, json).await
+            }
+            None => {
+                let engine = engine::Remote::new(engine.client.clone())
+                    .await
+                    .context("Could not load Python engine configuration")?;
+                tui::run(&engine, selection, !cli.no_animations.is_empty()).await?;
+                engine.shutdown().await;
+                Ok(0)
+            }
+            _ => unreachable!(),
+        }
+    }
+    .await;
+    let shutdown = engine.shutdown().await;
+    if result.is_ok() {
+        shutdown?;
+    }
+    result
+}
+
 async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
+    let selected =
+        cli.engine
+            .as_deref()
+            .unwrap_or(if cli.standalone { "python" } else { "legacy" });
+    if selected != "legacy" {
+        return execute_python(cli, wire_log_override).await;
+    }
+    ensure!(
+        !cli.standalone && !cli.trust_project && !cli.engine_demo,
+        "--standalone, --trust-project and --engine-demo require the Python engine"
+    );
     if let Some(Commands::Upgrade { backup }) = &cli.command {
         ensure!(
             cli.config.is_none()
@@ -437,19 +671,13 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
     if cli.command.is_some() && host.runtime_log_path().is_none() {
         eprintln!("ngn: runtime log unavailable; continuing without it");
     }
+    let engine = InProcess::new(host.clone());
+    let selection = SessionSelection::initial(cli.resume.as_deref(), cli.continue_session);
     let result = async {
         match cli.command {
             Some(Commands::Run { json, prompt }) => {
-                let mut prompt = prompt.join(" ");
-                if prompt == "-" || (prompt.is_empty() && !std::io::stdin().is_terminal()) {
-                    prompt.clear();
-                    std::io::stdin().take(32_001).read_to_string(&mut prompt)?;
-                }
-                ensure!(
-                    !prompt.trim().is_empty(),
-                    "A prompt is required. Try: ngn run --json 'hello'"
-                );
-                let id = session(&host, cli.resume.as_deref(), cli.continue_session).await?;
+                let prompt = run_prompt(prompt)?;
+                let id = engine.open_session(selection).await?;
                 headless(host.clone(), &id, &prompt, json).await
             }
             Some(Commands::Serve {
@@ -473,19 +701,13 @@ async fn execute(cli: Cli, wire_log_override: Option<bool>) -> Result<i32> {
                 | Commands::Upgrade { .. },
             ) => unreachable!(),
             None => {
-                tui::run(
-                    host.clone(),
-                    cli.resume.as_deref(),
-                    cli.continue_session,
-                    !cli.no_animations.is_empty(),
-                )
-                .await?;
+                tui::run(&engine, selection, !cli.no_animations.is_empty()).await?;
                 Ok(0)
             }
         }
     }
     .await;
-    host.shutdown().await;
+    engine.shutdown().await;
     result
 }
 

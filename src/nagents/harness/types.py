@@ -107,6 +107,8 @@ class TaskStarted:
     activation_run_id: str = ""
     activation_call_id: str = ""
     activation_call_position: int = -1
+    parent_activation: int | None = None
+    read_only: bool = False
 
 
 @dataclass

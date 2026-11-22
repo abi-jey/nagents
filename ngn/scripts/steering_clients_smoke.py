@@ -147,7 +147,9 @@ async def reopen_browser_approval(page: Page, path: str) -> Locator:
     return dialog
 
 
-async def browser_checks(browser: Browser, url: str, workspace: Path, fixture: Fixture, output: Path) -> None:
+async def browser_checks(
+    browser: Browser, url: str, workspace: Path, fixture: Fixture, output: Path, *, engine_v1: bool = False
+) -> None:
     errors: list[str] = []
     context = await browser.new_context(viewport={"width": 1280, "height": 980})
     try:
@@ -213,7 +215,7 @@ async def browser_checks(browser: Browser, url: str, workspace: Path, fixture: F
         page.on("pageerror", lambda error: errors.append(str(error)))
         await page.goto(url)
         await connected(page)
-        await new_mobile_session(page)
+        await new_mobile_session(page, engine_v1=engine_v1)
         composer = page.locator("#composer")
         await composer.fill("local Return")
         await composer.press("End")
@@ -226,7 +228,10 @@ async def browser_checks(browser: Browser, url: str, workspace: Path, fixture: F
         await receipt_status(page, "Pending", 1)
         await composer.fill("newer unsent draft")
         await page.locator(".chat-composer").get_by_role("button", name="Stop run", exact=True).tap()
-        await expect(stopped_message(root_conversation(page))).to_be_attached()
+        if engine_v1:
+            await expect(root_conversation(page).locator('.execution-state[data-state="Cancelled"]')).to_have_count(2)
+        else:
+            await expect(stopped_message(root_conversation(page))).to_be_attached()
         await ready(page)
         await receipt_status(page, "Undelivered", 1)
         await expect(composer).to_have_value("newer unsent draft")

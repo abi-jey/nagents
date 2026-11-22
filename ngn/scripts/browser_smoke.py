@@ -233,21 +233,23 @@ async def desktop_preferences(page: Page) -> None:
     await appearance.get_by_role("button", name="Close settings", exact=True).click()
 
 
-async def new_mobile_session(page: Page) -> None:
+async def new_mobile_session(page: Page, *, engine_v1: bool = False) -> None:
     drawer = page.locator(".sidebar")
     selected = drawer.locator(".session-row.selected")
     previous = await selected.get_attribute("data-session-id") or ""
     require(previous, "No session was selected before creating a new one")
     await page.get_by_role("button", name="Toggle sessions", exact=True).tap()
     await expect(drawer).to_be_visible()
+    endpoint = "/api/v1/sessions" if engine_v1 else "/api/sessions"
     async with page.expect_response(
-        lambda response: response.request.method == "POST" and urlsplit(response.url).path == "/api/sessions",
+        lambda response: response.request.method == "POST" and urlsplit(response.url).path == endpoint,
         timeout=8000,
     ) as creating:
         await drawer.locator(".sidebar-create").get_by_role("button", name="New session", exact=True).tap()
     response = await creating.value
     require(response.ok, "The host refused to create a session")
-    created = (await response.json())["session"]["id"]
+    body = await response.json()
+    created = body["id"] if engine_v1 else body["session"]["id"]
     require(created != previous, "The host did not create a new session")
     await expect(drawer).to_be_hidden()
     await expect(selected).to_have_attribute("data-session-id", created)

@@ -3,10 +3,6 @@ use std::{
     time::Instant,
 };
 
-use ngn_core::{
-    host::{Approval, ChildTextPhase, ChildToolDispatch},
-    store::Store,
-};
 use ngn_protocol::{Event, EventRecord, RunStatus, TaskInfo};
 use ratatui::{
     style::{Color, Style},
@@ -15,6 +11,7 @@ use ratatui::{
 use tokio::sync::oneshot;
 
 use super::super::footer::{Field, Phase, WIDTH};
+use crate::engine::{Approval, ChildTextPhase, ChildToolDispatch, Engine, TaskIdentity};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Progress {
@@ -256,12 +253,11 @@ impl Child {
     }
 }
 
-type Identity = (String, String); // session, run
 const RECOVERY_BATCH: usize = 4;
 const PENDING_LIMIT: usize = 256;
 
 struct Pending {
-    identity: Identity,
+    identity: TaskIdentity,
     sequence: i64,
     signal: Signal,
 }
@@ -274,7 +270,7 @@ struct Recovery {
 
 #[derive(Clone)]
 struct RecoveryTarget {
-    identity: Identity,
+    identity: TaskIdentity,
     registration: u64,
     revision: u64,
 }
@@ -423,7 +419,7 @@ impl Activity {
 
     pub(super) fn recover<'a>(
         &mut self,
-        store: &Store,
+        engine: &impl Engine,
         visible: impl Iterator<Item = &'a TaskInfo>,
     ) {
         // Called only on the existing 100ms state tick; a busy stream never
@@ -468,13 +464,13 @@ impl Activity {
             return;
         }
         let (send, result) = oneshot::channel();
-        let store = store.clone();
         let requested = targets
             .iter()
             .map(|target| target.identity.clone())
             .collect();
+        let load = engine.task_activity_tail(requested);
         tokio::spawn(async move {
-            let _ = send.send(store.task_activity_tail(requested).await.ok());
+            let _ = send.send(load.await.ok());
         });
         self.recovery = Some(Recovery {
             targets,
@@ -1031,6 +1027,8 @@ mod tests {
         use ngn_core::{ApprovalMode, Config, Host, config::Backend};
         use tokio::sync::broadcast::error::TryRecvError;
 
+        use crate::engine::{InProcess, SessionSelection};
+
         let dir = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
@@ -1043,10 +1041,11 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let session = host.store.create_session().await.unwrap();
+        let engine = InProcess::new(host.clone());
+        let session = engine.open_session(SessionSelection::New).await.unwrap();
         let root = host
             .start(
-                &session.id,
+                &session,
                 "demo hold",
                 &uuid::Uuid::new_v4().to_string(),
                 ApprovalMode::Deny,
@@ -1069,7 +1068,7 @@ mod tests {
                 .unwrap();
             assert!(result.error.is_empty(), "{}", result.error);
         }
-        let tasks = host.store.tasks(&session.id).await.unwrap();
+        let tasks = engine.tasks(&session).await.unwrap().unwrap();
         let closed = tasks.iter().find(|task| task.title == "closed").unwrap();
         let held = tasks.iter().find(|task| task.title == "held").unwrap();
         let active = host.active().await;
@@ -1092,7 +1091,11 @@ mod tests {
             old.push(record);
             assert_eq!(activity.indicator(task, Color::Reset).1, " · Responding");
         }
-        let (_, old_phases) = host.conversation_activity(&session.id).await;
+        let old_phases = engine
+            .conversation_activity(&session)
+            .await
+            .unwrap()
+            .child_text;
         host.emit(
             run(closed),
             Event::TextCompleted {
@@ -1112,8 +1115,7 @@ mod tests {
             host.events.send(record(held, 0, notice())).unwrap();
         }
         assert!(matches!(receiver.try_recv(), Err(TryRecvError::Lagged(1))));
-        let tails = host
-            .store
+        let tails = engine
             .task_activity_tail(
                 [closed, held]
                     .into_iter()
@@ -1130,7 +1132,11 @@ mod tests {
         }));
 
         activity.invalidate();
-        let (_, phases) = host.conversation_activity(&session.id).await;
+        let phases = engine
+            .conversation_activity(&session)
+            .await
+            .unwrap()
+            .child_text;
         assert_eq!(phases.len(), 2);
         for (task, tail) in [closed, held].into_iter().zip(tails) {
             activity.apply_tail(target(&activity, task), &tail);
@@ -1172,33 +1178,47 @@ mod tests {
         assert_eq!(activity.indicator(closed, Color::Reset).1, "");
         assert_eq!(activity.indicator(held, Color::Reset).1, " · Responding");
         host.emit(run(closed), delta()).await.unwrap();
-        let (_, reopened) = host.conversation_activity(&session.id).await;
+        let reopened = engine
+            .conversation_activity(&session)
+            .await
+            .unwrap()
+            .child_text;
         activity.sync_text_phases(&reopened);
         assert_eq!(activity.child(closed).unwrap().after, watermark);
         assert_eq!(activity.indicator(closed, Color::Reset).1, " · Responding");
-        host.shutdown().await;
+        engine.shutdown().await;
     }
 
     #[tokio::test]
     async fn hidden_and_reduced_motion_never_start_recovery_and_batch_is_bounded() {
+        use ngn_core::{Config, Host};
+
+        use crate::engine::InProcess;
+
         let dir = crate::test_support::private_tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
+        let host = Host::open(Config {
+            workspace: dir.path().into(),
+            data_dir: dir.path().join("state"),
+            ..Config::default()
+        })
+        .unwrap();
+        let engine = InProcess::new(host);
         let tasks: Vec<_> = (0..24).map(task).collect();
         let mut activity = Activity::default();
         activity.catalog(&tasks);
-        activity.recover(&store, tasks.iter()); // Reduced motion.
+        activity.recover(&engine, tasks.iter()); // Reduced motion.
         assert!(activity.recovery.is_none());
         activity.set_animated(true);
-        activity.recover(&store, std::iter::empty()); // Hidden or clipped.
+        activity.recover(&engine, std::iter::empty()); // Hidden or clipped.
         assert!(activity.recovery.is_none());
 
-        activity.recover(&store, tasks.iter().skip(5)); // Viewport scroll/resize.
+        activity.recover(&engine, tasks.iter().skip(5)); // Viewport scroll/resize.
         let queued = activity.recovery.as_ref().unwrap();
         assert_eq!(queued.targets.len(), 4);
         assert_eq!(queued.targets[0].identity.0, "session-5");
         activity.invalidate(); // Even lag must wait for the in-flight result.
         assert!(activity.recovery.as_ref().unwrap().stale);
-        activity.recover(&store, tasks.iter());
+        activity.recover(&engine, tasks.iter());
         if let Some(queued) = &activity.recovery {
             assert!(queued.stale);
             assert_eq!(queued.targets[0].identity.0, "session-5");

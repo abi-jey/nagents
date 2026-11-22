@@ -6,9 +6,9 @@ descriptors keep file operations anchored during path changes. Storage directory
 identities also block filesystem aliases such as case-insensitive names. This is
 not an OS sandbox: approved shell commands and trusted Python have full user access.
 
-Ignore discovery supports nested .gitignore files, !negation, /anchoring,
-directory patterns and fnmatch globs; escaped patterns and Git's complete
-wildmatch semantics are not supported. Always-pruned directories stay pruned.
+Default discovery supports nested .gitignore files, !negation, /anchoring,
+directory patterns and fnmatch globs. Opt-in native discovery shares the
+legacy Rust host's bounded Git matcher. Always-pruned directories stay pruned.
 Skill frontmatter uses the shared text-only name/description parser; other
 metadata has no executable effect. General YAML and multiline scalars are unsupported.
 """
@@ -36,6 +36,7 @@ from types import MethodType
 from typing import TYPE_CHECKING
 from typing import cast
 
+from nagents._async import finish_on_cancel
 from nagents.events import ToolResultEvent
 from nagents.skills import SkillLoadResult
 from nagents.skills import parse_skill_metadata
@@ -49,6 +50,13 @@ from nagents.types import ToolDefinition
 from .execution import _execution_for
 from .execution import _mask_delivery_authority
 from .timing import invocation
+
+try:
+    import nagents_native
+except ModuleNotFoundError as error:
+    if error.name != "nagents_native":
+        raise
+    nagents_native = None
 
 READ_ONLY_TOOLS = frozenset(
     {
@@ -70,6 +78,8 @@ if TYPE_CHECKING:
     from .execution import ExecutionBridge
 
 _PRUNED = {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+_BLOCKED_PREFIXES = (".env", "credentials.", "client_secret")
+_BLOCKED_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".tfstate")
 _CREDENTIALS = {
     ".ssh",
     ".aws",
@@ -511,8 +521,8 @@ class CodingTools:
             if (
                 name == ".git"
                 or name in _CREDENTIALS
-                or name.startswith((".env", "credentials.", "client_secret"))
-                or name.endswith((".pem", ".key", ".p12", ".pfx", ".tfstate"))
+                or name.startswith(_BLOCKED_PREFIXES)
+                or name.endswith(_BLOCKED_SUFFIXES)
             ):
                 raise PermissionError(f"Protected path component: {part}")
         policy = self._read_policy()
@@ -698,6 +708,48 @@ class CodingTools:
                 pass
         yield from visit(relative, ancestors)
 
+    @staticmethod
+    def _uses_native_discovery() -> bool:
+        return os.name == "posix" and os.environ.get("NGN_NATIVE_DISCOVERY") == "1"
+
+    def _scan_native(self, operation: str, relative: Path, parameters: tuple[object, ...]) -> object:
+        scan = getattr(nagents_native, operation, None)
+        if scan is None:
+            raise ValueError("Native discovery requires a nagents-native wheel with workspace discovery support")
+        policy = self._read_policy()
+        blocked = [
+            path.relative_to(self.root).as_posix()
+            for path in {policy.data_dir, policy.data_dir.resolve(), policy.auth_dir.resolve()}
+            if path.is_relative_to(self.root)
+        ]
+        with self.directory(Path()) as fd:
+            info = os.fstat(fd)
+            identities = tuple(self._storage_ids)
+            entries = scan(
+                os.fsencode(self.root),
+                (info.st_dev, info.st_ino),
+                (blocked, identities),
+                (sorted(_CREDENTIALS | _PRUNED | {".ngn"}), _BLOCKED_PREFIXES, _BLOCKED_SUFFIXES),
+                relative.as_posix(),
+                parameters,
+            )
+            self._check_storage(info)
+            if tuple(self._storage_ids) != identities:
+                raise PermissionError("Internal storage changed during workspace discovery")
+        return entries
+
+    async def _native_request(self, operation: str, relative: Path, parameters: tuple[object, ...]) -> object:
+        reader = self.discovery_reader()
+        try:
+            # The worker owns its directory handles until the bounded scan
+            # finishes, even when the calling run is cancelled.
+            result = await finish_on_cancel(asyncio.to_thread(reader._scan_native, operation, relative, parameters))
+            if self.root != reader.root or self._read_policy() != reader._discovery_policy:
+                raise PermissionError("Workspace discovery policy changed during the scan")
+            return result
+        finally:
+            self.retain_discovery_guards(reader)
+
     async def list_files(self, path: str = ".", limit: int = 200) -> dict[str, JsonValue]:
         """List immediate workspace children, excluding dependencies, credentials and ignored files."""
         return await self._find("*", path, limit, recursive=False)
@@ -715,12 +767,30 @@ class CodingTools:
             raise ValueError("limit must be 1..1000 and pattern must be 1..1000 characters")
         relative = self.relative(path)
         found: list[str] = []
-        truncated = False
         size = 0
-        for item, is_directory in self.walk(path, recursive=recursive):
-            await asyncio.sleep(0)
-            local = Path(item).relative_to(relative)
-            if local.match(pattern) or (pattern.startswith("**/") and local.match(pattern[3:])):
+        basename_only = "/" not in pattern and pattern != "."
+        native = self._uses_native_discovery()
+        entries, truncated = (
+            cast(
+                "tuple[list[tuple[str, bool]], bool]",
+                await self._native_request(
+                    "workspace_paths", relative, (recursive, False, self._read_policy().max_file_bytes)
+                ),
+            )
+            if native
+            else (self.walk(path, recursive=recursive), False)
+        )
+        for index, (item, is_directory) in enumerate(entries):
+            if not native or index % 64 == 0:
+                await asyncio.sleep(0)
+            if pattern == "**/*":
+                matched = True
+            elif basename_only:
+                matched = fnmatch.fnmatchcase(item.rsplit("/", 1)[-1], pattern)
+            else:
+                local = Path(item).relative_to(relative)
+                matched = local.match(pattern) or (pattern.startswith("**/") and local.match(pattern[3:]))
+            if matched:
                 size += len(item.encode("utf-8")) + 2
                 if len(found) == limit or size > self.harness.config.max_output:
                     truncated = True
@@ -744,6 +814,8 @@ class CodingTools:
             directory_target = stat.S_ISDIR(
                 os.stat(relative.name or ".", dir_fd=parent_fd, follow_symlinks=False).st_mode
             )
+        if self._uses_native_discovery():
+            return await self._search_native(relative, query, limit, directory_target=directory_target)
         if directory_target:
             self.instructions(relative, directory=True)
             entries = self.walk(path)
@@ -784,7 +856,37 @@ class CodingTools:
                 size += match_size
         return {"matches": matches, "truncated": False, "skipped_files": skipped}
 
+    async def _search_native(
+        self, relative: Path, query: str, limit: int, *, directory_target: bool
+    ) -> dict[str, JsonValue]:
+        output = self.harness.config.max_output
+        matches, truncated, skipped, included = cast(
+            "tuple[list[tuple[str, int, str]], bool, int, bool]",
+            await self._native_request(
+                "workspace_search",
+                relative,
+                (query, limit, self._read_policy().max_file_bytes, output, not directory_target),
+            ),
+        )
+        if output != self.harness.config.max_output:
+            raise PermissionError("Workspace output policy changed during the scan")
+        if directory_target or included:
+            self.instructions(relative, directory=directory_target)
+        for path in dict.fromkeys(path for path, _, _ in matches):
+            self.instructions(Path(path))
+        return {
+            "matches": [f"{path}:{line}: {text}" for path, line, text in matches],
+            "truncated": truncated,
+            "skipped_files": skipped,
+        }
+
     def diff(self, path: str, old: str, new: str, *, creating: bool = False) -> str:
+        if nagents_native is not None:
+            # Only render a preview of existing snapshots. The Python executor
+            # still owns path checks, the approval nonce, and atomic commit.
+            return cast(
+                "str", nagents_native.diff_preview(path, None if creating else old, new, self.harness.config.max_output)
+            )
         parts = difflib.unified_diff(
             old.splitlines(keepends=True),
             new.splitlines(keepends=True),

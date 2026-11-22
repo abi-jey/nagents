@@ -171,6 +171,74 @@ uv run --no-project --active ngn run --demo "Hello"
 Without activation, prefer the explicit `--python .venv/bin/python` form.
 `--active` does not create or identify the intended environment for you.
 
+### Opt-in Python engine (development)
+
+The headless engine from [ADR 0001](../adr/0001-python-core-rust-tui.md) is
+opt-in. The released v0.100.46 Rust binary and the Python `ngn serve` command
+do not switch their defaults.
+
+```bash
+uv pip install --python .venv/bin/python -e '.[engine]'
+.venv/bin/nagents engine --demo --workspace /path/to/project
+```
+
+The engine binds `127.0.0.1` on an available port and serves only authenticated
+API and event requests, not the browser UI. It writes `engine.json` (owner-only)
+with its URL, bearer token, PID and protocol version, and removes it on clean
+shutdown. The directory is `<ngn data_dir>/engine/workspaces/<SHA-256>`, where
+the hash is the lowercase hex digest of the canonical workspace path's POSIX
+bytes. `--state-dir` selects an exact private directory instead. Only one
+engine can own each directory, and it must not be shared with `ngn serve`.
+
+Launchers can pass the same configuration arguments to `--print-state-dir`
+instead of starting the process. It writes only the resolved absolute directory
+as filesystem bytes and a terminating newline, without creating state. It is
+separate from `--stdio`.
+
+For an owned engine, `--read-only` imposes the Harness read-only ceiling.
+`--provider-id` and `--model` set launch defaults for the named connection and
+model; provider secrets still come from the configured authentication source,
+not arguments. Choose `--wire-log` or `--no-wire-log` to override the
+configured logging. Project config still requires explicit `--trust-project`
+or selecting that file with `--config`.
+
+For a private child, launch with `--stdio` and connect stdin and stdout using
+owner-only pipes. Read one JSON readiness line from stdout with the same
+metadata; no discovery file is written. Keep stdin open for the lifetime of the
+child. Closing it requests shutdown. Do not log the registration or readiness
+record or send its token to a browser.
+
+The `engine` extra currently uses the same dependencies as `web` to reuse the
+existing server lifecycle, without building or serving the frontend assets.
+This is not the final decision on a slimmer engine dependency set.
+
+With a Rust binary **built from this checkout**, use its explicit path so it
+does not resolve to the Python `ngn` entry point in the virtual environment:
+
+```bash
+cargo build --locked --manifest-path ngn/Cargo.toml -p ngn
+export NGN_ENGINE_PYTHON="$PWD/.venv/bin/python"
+ngn/target/debug/ngn --engine=python --engine-demo -C /path/to/project
+ngn/target/debug/ngn --engine=python --engine-demo -C /path/to/project serve
+ngn/target/debug/ngn --standalone --engine-demo -C /path/to/project run --json "Hello"
+```
+
+Use one of these launches at a time for the same demo workspace. To test
+multiple clients, start `nagents engine --demo -C /path/to/project` first and
+omit `--engine-demo` from the Rust client commands so they attach to it.
+An attached client never stops the registered engine. `--standalone` starts
+its own engine, which exits when that client's stdin lease closes. To attach
+to an explicit URL, use `--engine <url>` with `NGN_ENGINE_TOKEN` set privately.
+The Rust browser gateway holds the engine token; the browser receives a
+different, same-origin credential.
+
+Starting the preview does not read or modify `host.sqlite3`.
+`nagents import-host` is a separate, offline command for read-only archive
+imports; it does not restore provider context or queued work. See
+[the runtime status](../adr/0001-runtime-status.md) for the migration limits.
+`--engine=legacy` is still the default. The v0.100.46 installer does not bundle
+the Python engine or its prerequisites.
+
 ### Explicit environment files
 
 ngn does not load `.env` automatically. If you intentionally keep provider

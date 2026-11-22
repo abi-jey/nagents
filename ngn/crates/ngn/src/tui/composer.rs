@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ngn_core::legacy::PaintedComposerTheme;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -12,7 +11,7 @@ use ratatui::{
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::view;
+use crate::{engine::PaintedComposerTheme, view};
 
 use super::selection::Pane;
 

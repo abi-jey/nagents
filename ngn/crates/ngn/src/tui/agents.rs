@@ -5,7 +5,6 @@ use std::collections::{HashMap, HashSet};
 mod activity;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ngn_core::{Config, Host};
 use ngn_protocol::{ProviderAuth, RunStatus, TaskInfo};
 use ratatui::{
     Frame,
@@ -20,7 +19,10 @@ use ratatui::{
 };
 
 use super::{App, footer};
-use crate::view;
+use crate::{
+    engine::{ClientDisplay, Engine, ProviderDisplay},
+    view,
+};
 
 const BREAKPOINT: u16 = 110;
 const WIDTH: u16 = 31;
@@ -152,7 +154,7 @@ impl Context {
         frame: &mut Frame,
         area: Rect,
         active: bool,
-        (config, session): (&Config, &str),
+        (display, session): (&ClientDisplay, &str),
         muted: Color,
     ) -> ContextViewport {
         if !self.expanded && !active {
@@ -186,24 +188,28 @@ impl Context {
                 Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD),
             )
         };
-        // Allowlist display fields. Never format the provider or its errors,
-        // nor consult environment variables, auth stores, or runtime auth.
-        let (provider, model, auth) = match config.providers.get(&config.provider) {
-            Some(provider) => (
-                format!("Provider: {}", clean(&provider.kind)),
-                format!("Model: {}", clean(&provider.model)),
-                match provider.auth {
-                    ProviderAuth::ApiKey => "API key mode",
-                    ProviderAuth::Chatgpt => "ChatGPT login mode",
-                    ProviderAuth::Codex => "Codex login mode",
+        let (provider, model, auth) = match &display.provider {
+            ProviderDisplay::Configured {
+                kind, model, auth, ..
+            } => (
+                format!("Provider: {}", clean(kind)),
+                format!(
+                    "Model: {}",
+                    model.as_deref().map_or_else(|| "unavailable".into(), clean)
+                ),
+                match auth {
+                    Some(ProviderAuth::ApiKey) => "API key mode",
+                    Some(ProviderAuth::Chatgpt) => "ChatGPT login mode",
+                    Some(ProviderAuth::Codex) => "Codex login mode",
+                    None => "Mode not reported by the engine",
                 },
             ),
-            None if config.provider.is_empty() => (
+            ProviderDisplay::Unselected => (
                 "No provider selected".into(),
                 "Model: unavailable".into(),
                 "Not configured",
             ),
-            None => (
+            ProviderDisplay::Unavailable => (
                 "Provider unavailable".into(),
                 "Model: unavailable".into(),
                 "Mode unavailable",
@@ -211,8 +217,8 @@ impl Context {
         };
         let paragraph = Paragraph::new(vec![
             heading("WORKSPACE"),
-            Line::raw(clean(&config.workspace.to_string_lossy())),
-            Line::raw(if config.read_only {
+            Line::raw(clean(&display.workspace.to_string_lossy())),
+            Line::raw(if display.read_only {
                 "Read-only mode: on"
             } else {
                 "Read-only mode: off"
@@ -428,7 +434,7 @@ impl Rail {
         area: Rect,
         tasks: &[TaskInfo],
         focused: bool,
-        (config, session): (&Config, &str),
+        (display, session): (&ClientDisplay, &str),
         (accent, muted): (Color, Color),
     ) -> Option<ContextViewport> {
         self.motion_rows.clear();
@@ -557,7 +563,7 @@ impl Rail {
                 frame,
                 Rect::new(inner.x, rows.bottom(), inner.width, context_height),
                 focused && self.context.focused,
-                (config, session),
+                (display, session),
                 muted,
             )
         })
@@ -568,10 +574,12 @@ impl Rail {
         self.activity_rows.clear();
     }
 
-    pub(super) fn recover_activity(&mut self, store: &ngn_core::store::Store, tasks: &[TaskInfo]) {
+    pub(super) fn recover_activity(&mut self, engine: &impl Engine, tasks: &[TaskInfo]) {
         if !self.activity_rows.is_empty() {
-            self.activity
-                .recover(store, self.activity_rows.iter().map(|&index| &tasks[index]));
+            self.activity.recover(
+                engine,
+                self.activity_rows.iter().map(|&index| &tasks[index]),
+            );
         }
     }
 
@@ -609,7 +617,7 @@ impl App {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        config: &Config,
+        display: &ClientDisplay,
         colors: (Color, Color),
     ) -> Option<ContextViewport> {
         let focused = self.rail_has_focus();
@@ -618,7 +626,7 @@ impl App {
             area,
             &self.tasks,
             focused,
-            (config, &self.session),
+            (display, &self.session),
             colors,
         )
     }
@@ -684,7 +692,7 @@ impl App {
         self.reset_task_detail(self.task_from_rail);
     }
 
-    pub(super) async fn task_key(&mut self, host: &Host, key: KeyEvent) {
+    pub(super) async fn task_key(&mut self, engine: &impl Engine, key: KeyEvent) {
         match key.code {
             KeyCode::Esc if self.task_from_rail => {
                 self.task_picker = false;
@@ -696,7 +704,7 @@ impl App {
             KeyCode::Esc => self.task_picker = false,
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(task) = self.tasks.get(self.task_index)
-                    && let Err(error) = host.cancel(&task.run_id).await
+                    && let Err(error) = engine.cancel(&task.run_id).await
                 {
                     self.status = error.to_string();
                 }
@@ -721,10 +729,12 @@ impl App {
 mod tests {
     use std::time::Instant;
 
+    use ngn_core::{Config, Host};
     use ngn_protocol::{Event, EventRecord, ToolCall, ToolResult, VERSION};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use super::*;
+    use crate::engine::{Approval, ChildToolDispatch, InProcess, Run, SessionSelection};
 
     fn task(id: &str, parent: &str, status: RunStatus) -> TaskInfo {
         TaskInfo {
@@ -746,14 +756,14 @@ mod tests {
         columns.map(|x| buffer[(x, y)].symbol()).collect()
     }
 
-    fn paint_rail(app: &mut App, config: &Config, height: u16) -> Buffer {
+    fn paint_rail(app: &mut App, display: &ClientDisplay, height: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(WIDTH + 2, height)).unwrap();
         terminal
             .draw(|frame| {
                 let viewport = app.draw_agents(
                     frame,
                     Rect::new(1, 0, WIDTH, height),
-                    config,
+                    display,
                     (Color::LightGreen, Color::Gray),
                 );
                 app.agents.observe_context(viewport);
@@ -841,16 +851,14 @@ mod tests {
                 },
             ),
         ];
-        let config = Config::default();
+        let display = ClientDisplay::default();
         app.agents.activity.observe(&app.tasks, &events, &[], t);
-        app.agents
-            .activity
-            .sync_dispatches(&[ngn_core::host::ChildToolDispatch {
-                run_id: "alpha".into(),
-                session_id: "session-alpha".into(),
-                call_id: call.call_id.clone(),
-            }]);
-        let first = paint_rail(&mut app, &config, 11);
+        app.agents.activity.sync_dispatches(&[ChildToolDispatch {
+            run_id: "alpha".into(),
+            session_id: "session-alpha".into(),
+            call_id: call.call_id.clone(),
+        }]);
+        let first = paint_rail(&mut app, &display, 11);
         let text = |buffer: &Buffer, y| row(buffer, y, 3..30);
         assert!(text(&first, 2).starts_with("─ ⠀⠀⠖⠶⠲⠀⠀ alpha · Tool"));
         assert!(text(&first, 3).starts_with("─ ⠀⠀⠖⠶⠲⠀⠀ beta · Responding"));
@@ -882,7 +890,7 @@ mod tests {
         app.agents
             .activity
             .observe(&app.tasks, &events, &["alpha", "gamma"], step(800));
-        let waiting = paint_rail(&mut app, &config, 11);
+        let waiting = paint_rail(&mut app, &display, 11);
         assert!(text(&waiting, 2).starts_with("─ Appr.   alpha"));
         assert!(text(&waiting, 4).starts_with("─ Appr.   gamma"));
         assert!(text(&waiting, 3).contains("Responding"));
@@ -917,7 +925,7 @@ mod tests {
         app.agents
             .activity
             .observe(&app.tasks, &events, &[], step(1200));
-        let denied = paint_rail(&mut app, &config, 11);
+        let denied = paint_rail(&mut app, &display, 11);
         assert!(!text(&denied, 2).contains("Tool"));
         assert!(text(&denied, 4).starts_with("─ Canc'd  gamma"));
         events.push(event(
@@ -937,7 +945,7 @@ mod tests {
         app.agents
             .activity
             .observe(&app.tasks, &events, &[], step(1400));
-        let after_tool = paint_rail(&mut app, &config, 11);
+        let after_tool = paint_rail(&mut app, &display, 11);
         assert!(!text(&after_tool, 2).contains(" · "));
 
         app.tasks.rotate_left(1);
@@ -946,7 +954,7 @@ mod tests {
         app.agents
             .activity
             .observe(&app.tasks, &events, &[], step(1500));
-        let reordered = paint_rail(&mut app, &config, 11);
+        let reordered = paint_rail(&mut app, &display, 11);
         assert!(text(&reordered, 2).starts_with("─ Done    beta"));
         assert!(text(&reordered, 3).starts_with("─ Canc'd  gamma"));
 
@@ -959,27 +967,17 @@ mod tests {
             .agents
             .activity
             .observe(&static_app.tasks, &events, &[], t);
-        let still = paint_rail(&mut static_app, &config, 11);
+        let still = paint_rail(&mut static_app, &display, 11);
         assert!(!static_app.agents.needs_frame());
         static_app
             .agents
             .advance_activity(&static_app.tasks, step(4000));
-        assert_eq!(still, paint_rail(&mut static_app, &config, 11));
+        assert_eq!(still, paint_rail(&mut static_app, &display, 11));
     }
 
     #[test]
     fn breakpoint_leaves_composer_full_width_and_shows_rail_only_with_agents() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let mut app = App {
             input: "draft".into(),
             ..App::default()
@@ -992,7 +990,7 @@ mod tests {
             };
             let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
             terminal
-                .draw(|frame| super::super::draw(frame, &mut app, &host, Instant::now()))
+                .draw(|frame| super::super::draw(frame, &mut app, &display, Instant::now()))
                 .unwrap();
             let buffer = terminal.backend().buffer();
             assert_eq!(buffer[(width - 1, 13)].symbol(), "┐"); // Composer top-right.
@@ -1014,15 +1012,7 @@ mod tests {
 
     #[test]
     fn short_wide_layout_is_monotone_with_or_without_completion() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let config = Config {
-            workspace: dir.path().into(),
-            data_dir: dir.path().join("state"),
-            ..Config::default()
-        }
-        .resolve()
-        .unwrap();
-        let host = Host::open(config).unwrap();
+        let display = ClientDisplay::default();
         let mut app = App {
             tasks: (0..8)
                 .map(|index| task(&format!("Task-{index}"), "root", RunStatus::Running))
@@ -1038,7 +1028,7 @@ mod tests {
             for (height, expected) in [(11, 3), (13, 4), (14, 4), (15, 4)] {
                 let mut terminal = Terminal::new(TestBackend::new(111, height)).unwrap();
                 terminal
-                    .draw(|frame| super::super::draw(frame, &mut app, &host, now))
+                    .draw(|frame| super::super::draw(frame, &mut app, &display, now))
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 let rail_rows: Vec<_> = (0..height).map(|y| row(buffer, y, 82..109)).collect();
@@ -1126,7 +1116,7 @@ mod tests {
                         Rect::new(1, 0, WIDTH, 8),
                         &tasks,
                         true,
-                        (&Config::default(), ""),
+                        (&ClientDisplay::default(), ""),
                         (Color::LightGreen, Color::Gray),
                     );
                 })
@@ -1204,13 +1194,14 @@ mod tests {
         app.agents.refresh(&app.tasks);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let focus = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        let display = ClientDisplay::from(&config);
         assert!(app.agents_key(focus, 111));
-        let buffer = paint_rail(&mut app, &config, 30);
+        let buffer = paint_rail(&mut app, &display, 30);
         assert!(buffer[(3, 2)].modifier.contains(Modifier::REVERSED));
         assert!(row(&buffer, 28, 2..31).trim().is_empty());
         assert!(app.agents_key(key(KeyCode::Tab), 111));
         assert!(app.agents_key(key(KeyCode::Enter), 111));
-        let buffer = paint_rail(&mut app, &config, 30);
+        let buffer = paint_rail(&mut app, &display, 30);
         let viewport = app.agents.context.viewport.unwrap();
         assert_eq!(viewport.page, 10);
         assert!(viewport.max_scroll > 0);
@@ -1246,7 +1237,7 @@ mod tests {
         assert!(!first.contains('\x1b'));
         assert!(app.agents_key(key(KeyCode::PageDown), 111));
         assert_eq!(app.agents.context.scroll, viewport.max_scroll.min(10));
-        let buffer = paint_rail(&mut app, &config, 30);
+        let buffer = paint_rail(&mut app, &display, 30);
         let last = panel(&buffer);
         assert!(last.contains("Provider: openai") && last.contains("Model: configured-model"));
         check_heading(&buffer, "AUTHENTICATION");
@@ -1265,10 +1256,11 @@ mod tests {
         assert_eq!(buffer[(31, 29)].symbol(), "╯");
 
         config.providers.get_mut("active").unwrap().auth = ProviderAuth::Chatgpt;
-        let buffer = paint_rail(&mut app, &config, 30);
+        let display = ClientDisplay::from(&config);
+        let buffer = paint_rail(&mut app, &display, 30);
         assert!(panel(&buffer).contains("ChatGPT login mode"));
         for height in [0, 1, 2, 3, 5, 8, 10, 16, 29, 40] {
-            let buffer = paint_rail(&mut app, &config, height);
+            let buffer = paint_rail(&mut app, &display, height);
             let inner = height.saturating_sub(2);
             if let Some(viewport) = app.agents.context.viewport {
                 assert!(viewport.page <= 10);
@@ -1282,31 +1274,22 @@ mod tests {
 
         // A missing/invalid provider must not expose config diagnostics.
         config.providers.clear();
+        let display = ClientDisplay::from(&config);
         assert!(app.agents_key(key(KeyCode::Tab), 111));
         assert!(app.agents_key(key(KeyCode::End), 111));
-        let last = panel(&paint_rail(&mut app, &config, 30));
+        let last = panel(&paint_rail(&mut app, &display, 30));
         assert!(last.contains("Provider unavailable"), "{last}");
         assert!(last.contains("Mode unavailable") && !last.contains("/private"));
     }
 
     #[test]
     fn title_only_resize_preserves_scroll_and_focus_but_allows_toggle() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let mut app = App::default();
         let draw = |app: &mut App, height| {
             let mut terminal = Terminal::new(TestBackend::new(111, height)).unwrap();
             terminal
-                .draw(|frame| super::super::draw(frame, app, &host, Instant::now()))
+                .draw(|frame| super::super::draw(frame, app, &display, Instant::now()))
                 .unwrap();
             terminal.backend().buffer().clone()
         };
@@ -1363,12 +1346,12 @@ mod tests {
 
     #[test]
     fn disclosure_focus_preserves_selection_draft_active_run_and_modal_priority() {
-        let config = Config::default();
+        let display = ClientDisplay::default();
         let mut app = App {
             session: "current-session".into(),
             input: "/se".into(),
             scroll: Some(7),
-            active: Some(ngn_core::store::Run {
+            active: Some(Run {
                 id: "active-root".into(),
                 session_id: "current-session".into(),
                 request_id: "request".into(),
@@ -1385,14 +1368,14 @@ mod tests {
         app.agents.refresh(&app.tasks);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let focus = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
-        paint_rail(&mut app, &config, 16);
+        paint_rail(&mut app, &display, 16);
         assert!(app.agents_key(focus, 111));
         assert!(app.agents_key(key(KeyCode::Down), 111));
         assert_eq!(app.agents.selected.as_deref(), Some("selected"));
         assert!(app.agents_key(key(KeyCode::Tab), 111));
         assert!(app.agents.context.focused);
         assert!(app.agents_key(key(KeyCode::Char(' ')), 111));
-        paint_rail(&mut app, &config, 16);
+        paint_rail(&mut app, &display, 16);
         assert!(app.agents.context.expanded);
         for code in [KeyCode::End, KeyCode::Down, KeyCode::Char('x')] {
             assert!(app.agents_key(key(code), 111));
@@ -1407,7 +1390,7 @@ mod tests {
         assert_eq!(app.tasks[app.task_index].run_id, "selected");
         assert!(!app.agents_key(key(KeyCode::Enter), 111));
         app.task_picker = false;
-        app.approval = Some(ngn_core::host::Approval {
+        app.approval = Some(Approval {
             id: "approval".into(),
             run_id: "active-root".into(),
             session_id: app.session.clone(),
@@ -1471,8 +1454,9 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        let engine = InProcess::new(host);
         let mut app = App {
-            session: host.store.create_session().await.unwrap().id,
+            session: engine.open_session(SessionSelection::New).await.unwrap(),
             input: "/se".into(),
             scroll: Some(7),
             ..App::default()
@@ -1508,34 +1492,48 @@ mod tests {
         assert!(app.agents_key(focus, 110)); // Narrow Ctrl+T uses the F5 catalog.
         assert_eq!(app.tasks[app.task_index].run_id, "cancelled");
         assert!(!app.task_detail);
-        app.task_key(&host, key(KeyCode::Esc)).await;
+        app.task_key(&engine, key(KeyCode::Esc)).await;
         assert!(app.agents_key(focus, 111));
         assert!(app.agents.collapsed.contains("failed"));
         assert!(app.agents_key(key(KeyCode::Enter), 111));
         assert!(app.task_detail);
         assert_eq!(app.tasks[app.task_index].run_id, "cancelled");
         assert!(!app.agents_key(focus, 111)); // Inspector owns input.
-        app.task_key(&host, key(KeyCode::PageUp)).await;
+        app.task_key(&engine, key(KeyCode::PageUp)).await;
         assert_eq!(app.task_scroll, 10);
         assert_eq!(app.scroll, Some(7));
-        app.task_key(&host, key(KeyCode::Esc)).await;
+        app.task_key(&engine, key(KeyCode::Esc)).await;
         assert!(!app.task_picker && app.composer_available());
         assert!(app.agents_key(focus, 111));
         assert!(app.agents_key(key(KeyCode::Up), 111)); // Still skips folded child.
         assert!(app.agents_key(key(KeyCode::Enter), 111));
         assert_eq!(app.tasks[app.task_index].run_id, "failed");
-        app.task_key(&host, key(KeyCode::Esc)).await;
+        app.task_key(&engine, key(KeyCode::Esc)).await;
         assert!(!app.task_picker && app.composer_available());
         app.open_tasks(false); // F5 retains the original two-step detail/catalog flow.
-        app.task_key(&host, key(KeyCode::Enter)).await;
-        app.task_key(&host, key(KeyCode::Esc)).await;
+        app.task_key(&engine, key(KeyCode::Enter)).await;
+        app.task_key(&engine, key(KeyCode::Esc)).await;
         assert!(app.task_picker && !app.task_detail);
-        app.task_key(&host, key(KeyCode::Esc)).await;
+        app.task_key(&engine, key(KeyCode::Esc)).await;
         assert!(!app.rail_has_focus());
         assert_eq!(app.input, "/se");
         assert_eq!(app.scroll, Some(7));
-        assert!(host.active().await.is_empty());
-        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
-        assert!(host.store.events(&app.session, 0).await.unwrap().is_empty());
+        assert!(
+            engine
+                .conversation_activity(&app.session)
+                .await
+                .unwrap()
+                .active
+                .is_none()
+        );
+        assert!(engine.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(
+            engine
+                .history(&app.session, 0)
+                .await
+                .unwrap()
+                .records
+                .is_empty()
+        );
     }
 }

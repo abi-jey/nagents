@@ -27,11 +27,17 @@ from nagents.channels.store import InboxStore
 from nagents.channels.store import is_sqlite_busy
 
 from ..channels.upload_store import bind as bind_uploads
+from ..execution import engine_inputs
+from ..execution.engine_inputs import EngineWork
+from ..execution.engine_inputs import SteeringWork
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.channels.types import ChannelCommand
+
+    from ..execution.engine_inputs import EngineAdmission
+    from ..execution.engine_inputs import SteeringAdmission
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,39 @@ class Work:
     voice_session_id: str = ""
     voice_delegation_id: str = ""
     voice_display: str = ""
+    engine: EngineWork | None = None
+    steering: SteeringWork | None = None
+
+
+_WORK_COLUMNS = (
+    "id, session_id, channel, message_id, prompt, conversation_id, thread_id, reply_to, "
+    "acknowledgement, command, attachments, voice_session_id, voice_delegation_id, voice_display, delivery, "
+    "engine_request_id, engine_run_id, engine_interactive, engine_steer_run, engine_steer_id"
+)
+type _WorkRow = tuple[
+    int, str, str, str, str, str, str, str, str, str, str, str, str, str, str, str, str, int, str, str
+]
+
+
+def _claimed_work(row: _WorkRow) -> Work:
+    return Work(
+        id=row[0],
+        session_id=row[1],
+        channel=row[2],
+        message_id=row[3],
+        prompt=row[4],
+        conversation_id=row[5],
+        thread_id=row[6],
+        reply_to=row[7],
+        acknowledgement=row[8],
+        command=row[9],
+        attachments=tuple(json.loads(row[10])),
+        voice_session_id=row[11],
+        voice_delegation_id=row[12],
+        voice_display=row[13],
+        engine=EngineWork(row[15], row[16], bool(row[17])) if row[16] else None,
+        steering=SteeringWork(row[15], row[18], row[19]) if row[19] else None,
+    )
 
 
 class FollowupClaimDeferred(Exception):
@@ -108,9 +147,11 @@ class RoutingStore(InboxStore):
                 "CREATE TABLE IF NOT EXISTS ngn_web_deleted_messages ("
                 "channel TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(channel, message_id))"
             )
+            engine_inputs.initialize(db)
             self._migrate_owners(db)
             db.execute("UPDATE ngn_web_inbox SET status = 'interrupted' WHERE status = 'running'")
             self._quarantine_work(db)
+            engine_inputs.pause_pending(db)
 
         await self._transaction(initialize)
 
@@ -357,6 +398,8 @@ class RoutingStore(InboxStore):
         voice_session_id: str = "",
         voice_delegation_id: str = "",
         voice_display: str = "",
+        engine_admission: EngineAdmission | None = None,
+        steering_admission: SteeringAdmission | None = None,
     ) -> tuple[str, bool]:
         """Return the root and whether this is newly admitted (not an HTTP retry)."""
         if delivery not in {"", "steer", "queue"}:
@@ -379,10 +422,29 @@ class RoutingStore(InboxStore):
         ):
             raise HTTPException(422, "Voice input needs bounded call identity and caller text.")
 
+        engine = engine_admission.work if engine_admission is not None else None
+        steering = steering_admission.work if steering_admission is not None else None
+        if engine is not None and steering is not None:
+            raise ValueError("Versioned admission must identify one input kind.")
+        engine_mode = engine_admission.mode if engine_admission is not None else ("steer" if steering else "")
+        request_id = engine.request_id if engine else steering.request_id if steering else ""
+        steer_run = steering.run_id if steering else ""
+        interactive = engine is not None and engine.interactive
+        if engine_mode and (
+            delivery != ("steer" if steering else "queue")
+            or command
+            or attachments
+            or voice_session_id
+            or voice_delegation_id
+            or voice_display
+        ):
+            raise ValueError("Versioned admission must originate as an ordinary text input.")
+
         def admit(db: sqlite3.Connection) -> tuple[str, bool]:
             self.execution_root(db, session_id)
             row = db.execute(
-                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, voice_display, delivery "
+                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, "
+                "voice_display, delivery, engine_request_id, engine_mode, engine_interactive, engine_steer_run "
                 "FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
                 (message_id,),
             ).fetchone()
@@ -391,14 +453,23 @@ class RoutingStore(InboxStore):
                     row[:2] != (session_id, prompt)
                     or tuple(json.loads(row[2])) != attachments
                     or row[3] != command
-                    or row[4:] != (voice_session_id, voice_delegation_id, voice_display, delivery)
+                    or row[4:8] != (voice_session_id, voice_delegation_id, voice_display, delivery)
+                    or row[8].lower() != request_id.lower()
+                    or row[9:] != (engine_mode, interactive, steer_run)
                 ):
                     raise HTTPException(409, "Message ID already belongs to a different submission.")
                 return session_id, False
+            if engine_admission is not None:
+                engine_admission.check(db, session_id)
+            if steering_admission is not None:
+                steering_admission.check(db, session_id)
             self.capacity(db)
             cursor = db.execute(
                 "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, attachments, command, "
-                "voice_session_id, voice_delegation_id, voice_display, delivery) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "voice_session_id, voice_delegation_id, voice_display, delivery, "
+                "engine_request_id, engine_run_id, engine_mode, engine_interactive, "
+                "engine_steer_id, engine_steer_run, engine_steer_state) "
+                "VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     session_id,
                     message_id,
@@ -409,6 +480,13 @@ class RoutingStore(InboxStore):
                     voice_delegation_id,
                     voice_display,
                     delivery,
+                    request_id,
+                    engine.run_id if engine is not None else "",
+                    engine_mode,
+                    interactive,
+                    steering.input_id if steering else "",
+                    steer_run,
+                    "pending" if steering else "",
                 ),
             )
             assert cursor.lastrowid is not None
@@ -564,6 +642,8 @@ class RoutingStore(InboxStore):
         predicate = (
             "status = 'queued' AND (? = 0 OR channel = '') AND EXISTS ("
             "SELECT 1 FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id WHERE h.id = ngn_web_inbox.session_id)"
+            f" AND {engine_inputs.eligible('ngn_web_inbox')}"
+            " AND engine_steer_run = ''"
         )
         parameters: tuple[str | bool, ...] = (web_only,)
         if available_channels is not None:
@@ -610,27 +690,13 @@ class RoutingStore(InboxStore):
             predicate += f" AND session_id NOT IN ({slots})"
             parameters += excluded_sessions
 
-        if session_id:
-            # A negative probe is only a hint for this boundary. A concurrent
-            # submit wakes the active run or dispatcher; a positive probe never
-            # carries a row identity across the transaction boundary.
-            try:
-                if not await self._has_candidate(predicate, parameters):
-                    return None
-            except sqlite3.OperationalError as error:
-                if not is_sqlite_busy(error):
-                    raise
-                owner = asyncio.current_task()
-                if owner is not None and owner.cancelling():
-                    raise asyncio.CancelledError from None
-                self._defer_followup(error)
+        if session_id and not await self._probe_followup(predicate, parameters):
+            return None
 
         def claim(db: sqlite3.Connection) -> Work | None:
             self._quarantine_work(db)
             row = db.execute(
-                "SELECT id, session_id, channel, message_id, prompt, conversation_id, thread_id, reply_to, "
-                f"acknowledgement, command, attachments, voice_session_id, voice_delegation_id, voice_display, delivery "
-                f"FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
+                f"SELECT {_WORK_COLUMNS} FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
                 parameters,
             ).fetchone()
             if row is None:
@@ -640,26 +706,49 @@ class RoutingStore(InboxStore):
                 # active outer run finishes, including child notifications.
                 return None
             db.execute("UPDATE ngn_web_inbox SET status = 'running' WHERE id = ?", (row[0],))
-            return Work(
-                id=row[0],
-                session_id=row[1],
-                channel=row[2],
-                message_id=row[3],
-                prompt=row[4],
-                conversation_id=row[5],
-                thread_id=row[6],
-                reply_to=row[7],
-                acknowledgement=row[8],
-                command=row[9],
-                attachments=tuple(json.loads(row[10])),
-                voice_session_id=row[11],
-                voice_delegation_id=row[12],
-                voice_display=row[13],
-            )
+            return _claimed_work(row)
 
         if session_id:
             return await self._transaction(claim, on_busy=self._defer_followup)
         return await self._transaction(claim)
+
+    async def claim_steering(self, session_id: str, run_id: str) -> tuple[Work, ...]:
+        """Offer the complete committed FIFO prefix for one live run, never next-run work."""
+        if not session_id or not run_id:
+            raise ValueError("Steering requires an exact run and session.")
+        predicate = (
+            "session_id = ? AND engine_steer_run = ? AND engine_steer_state = 'pending' "
+            "AND channel = '' AND status = 'queued' AND EXISTS ("
+            "SELECT 1 FROM ngn_web_inbox owner WHERE owner.engine_run_id = ngn_web_inbox.engine_steer_run "
+            "AND owner.session_id = ngn_web_inbox.session_id AND owner.status = 'running')"
+        )
+        parameters = (session_id, run_id)
+        if not await self._probe_followup(predicate, parameters):
+            return ()
+
+        def claim(db: sqlite3.Connection) -> tuple[Work, ...]:
+            self.execution_root(db, session_id)
+            rows = db.execute(
+                f"SELECT {_WORK_COLUMNS} FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT ?",
+                (*parameters, engine_inputs.ENGINE_STEERING_LIMIT),
+            ).fetchall()
+            db.executemany("UPDATE ngn_web_inbox SET status = 'running' WHERE id = ?", ((row[0],) for row in rows))
+            return tuple(_claimed_work(row) for row in rows)
+
+        return await self._transaction(claim, on_busy=self._defer_followup)
+
+    async def _probe_followup(self, predicate: str, parameters: tuple[str | bool, ...]) -> bool:
+        # A negative probe is just a hint. A positive probe never carries row
+        # identity or FIFO cutoff across the actual writer transaction.
+        try:
+            return await self._has_candidate(predicate, parameters)
+        except sqlite3.OperationalError as error:
+            if not is_sqlite_busy(error):
+                raise
+            owner = asyncio.current_task()
+            if owner is not None and owner.cancelling():
+                raise asyncio.CancelledError from None
+            self._defer_followup(error)
 
     @staticmethod
     def _defer_followup(error: sqlite3.OperationalError) -> Never:
@@ -708,6 +797,20 @@ class RoutingStore(InboxStore):
         await self._transaction(interrupt)
 
     async def finish_work(self, work: Work, status: str) -> None:
+        engine = work.engine
+        if engine is not None and status in {"queued", "interrupted"}:
+            # A versioned claim already has a durable run.started. Recovery
+            # never puts that identity back at the head of the inbox.
+            await self._transaction(
+                lambda db: db.execute(
+                    "UPDATE ngn_web_inbox SET status = CASE engine_cancel WHEN 1 THEN 'cancelled' ELSE 'interrupted' END "
+                    "WHERE id = ? AND session_id = ? AND engine_run_id = ? AND status = 'running'",
+                    (work.id, work.session_id, engine.run_id),
+                ).close()
+            )
+            return
+        if work.steering is not None and status == "queued":
+            status = "interrupted"
         await self._transaction(
             lambda db: (
                 db.execute("UPDATE ngn_web_inbox SET status = ? WHERE id = ? AND status = 'running'", (status, work.id))

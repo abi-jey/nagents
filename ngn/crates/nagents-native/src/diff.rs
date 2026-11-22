@@ -7,7 +7,7 @@ use similar::TextDiff;
 ///
 /// `old` is `None` for a file that does not exist yet; every line is then an
 /// addition under a header that says so.
-pub(super) fn change(path: &str, old: Option<&str>, new: &str) -> String {
+pub fn change(path: &str, old: Option<&str>, new: &str) -> String {
     let Some(old) = old else {
         return new_file(path, new);
     };

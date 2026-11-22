@@ -91,6 +91,13 @@ def test_core_has_no_runtime_imports_of_the_application_layers() -> None:
     assert not unexpected, f"Application-layer imports in core: {unexpected}"
 
 
+def test_engine_protocol_has_no_runtime_or_transport_imports() -> None:
+    allowed = sys.stdlib_module_names | {"pydantic"}
+    for path in (SOURCE / "protocol").rglob("*.py"):
+        for target, _ in imports(path, annotations=True):
+            assert owner(target) == "nagents.protocol" or target.split(".")[0] in allowed, (path, target)
+
+
 def test_live_package_and_low_level_helpers_do_not_load_routes_or_harness() -> None:
     script = """
 import importlib

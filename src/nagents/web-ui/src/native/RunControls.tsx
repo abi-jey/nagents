@@ -25,8 +25,11 @@ export function RunControls({ client, view }: { client: NativeClient; view: View
           <button type="button" disabled={queueBusy || !queue.entries.length || !connected} onClick={() => void client.controlQueue("clear")}>Clear pending &amp; pause</button>
         </div>
         {!!queue.entries.length && <ol className="native-queue-items">
-          {queue.entries.map(entry => <li key={entry.run.id}><pre>{entry.prompt}</pre>
-            <button type="button" disabled={!!stopping || queueBusy || !connected} onClick={() => void client.cancel(entry.run.id)}>Remove</button></li>)}
+          {queue.entries.map(entry => {
+            const run = entry.run;
+            return <li key={entry.run ? entry.run.id : entry.request_id}><pre>{entry.prompt}</pre>
+              {run && <button type="button" disabled={!!stopping || queueBusy || !connected} onClick={() => void client.cancel(run.id)}>Remove</button>}</li>;
+          })}
         </ol>}
       </div>
     </details>}

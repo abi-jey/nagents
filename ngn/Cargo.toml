@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ngn-protocol", "crates/ngn-core", "crates/ngn"]
+members = ["crates/nagents-native", "crates/ngn-protocol", "crates/ngn-core", "crates/ngn-api", "crates/ngn"]
 resolver = "2"
 
 [workspace.package]
@@ -19,6 +19,8 @@ futures-util = "0.3"
 flate2 = "1"
 fs2 = "0.4"
 ignore = "0.4.34"
+nagents-native = { path = "crates/nagents-native" }
+ngn-api = { path = "crates/ngn-api" }
 ngn-core = { path = "crates/ngn-core" }
 ngn-protocol = { path = "crates/ngn-protocol" }
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }

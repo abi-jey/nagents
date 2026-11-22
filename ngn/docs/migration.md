@@ -69,6 +69,39 @@ restart mid-run, disconnect/reconnect, queue overflow, and an approval resolved
 from another client. Fixture tests do not establish paid-provider eligibility or
 feature parity for features left out of the first contract.
 
+## Trying the opt-in engine from source
+
+From the repository root, install `.[engine]` in a Python 3.13 environment,
+run `npm ci --prefix src/nagents/web-ui`, and build the Rust binary with
+`cargo build --locked --manifest-path ngn/Cargo.toml -p ngn`. Set
+`NGN_ENGINE_PYTHON` to that environment's Python executable. Then use the
+resulting `ngn/target/debug/ngn` with `--engine=python` for the TUI,
+`--engine=python serve` for the browser, or `--standalone` for a private
+child. `--engine-demo` lets an owned engine run without provider credentials.
+
+The [`ngn-api`](../crates/ngn-api/) crate comes from the
+[v1 contract](../../contracts/engine/v1/README.md).
+Source acceptance is in `ngn/scripts/python_engine_smoke.py`. It does not use
+personal state or credentials and can test a registered engine, a private
+lease, or reconnect after a crash without re-running a tool. The optional
+`nagents-native` ABI3 wheel shares the legacy host's diff algorithm and
+workspace Git matcher. For source trials, build and install it in the same
+environment and opt in with `NGN_NATIVE_DISCOVERY=1` before starting an engine:
+
+```bash
+python -m maturin build --release --locked \
+  --manifest-path ngn/crates/nagents-native/Cargo.toml --out ngn/target/native-wheel
+python -m pip install --no-deps ngn/target/native-wheel/nagents_native-*.whl
+NGN_NATIVE_DISCOVERY=1 NGN_ENGINE_PYTHON="$(command -v python)" ngn/target/debug/ngn --engine=python
+python ngn/scripts/native_discovery_bench.py
+```
+
+Discovery and search keep the legacy scan and read budgets. Python supplies
+protected paths and identities and still owns approval and all writes. The
+benchmark compares output and measures both paths on the same 4,200-file
+fixture; it is not a claim of production or cross-platform parity. The release
+bundle and default engine are unchanged.
+
 ## Data and rollback
 
 **Today**, the native host can copy supported Python display history into a
@@ -78,12 +111,26 @@ and [installation and update safety](installation.md) before opening important
 state. Stop the host and back up both stores; downgrade with a compatible state
 directory or backup, never by editing SQLite `user_version`.
 
-**At the cutover**, the import runs in the other direction: copy supported
-`host.sqlite3` state into the Python engine's store, once, leaving the source
-unchanged. Prove interruption and rerun safety on snapshots before enabling it.
-Do not import credentials or treat old approvals or failed runs as work to
-execute. Keep the original store for legacy rollback; changes written to the
-engine after cutover do not automatically flow back.
+**Opt-in source preview:** stop both workspace engines and create a private
+SQLite backup outside the workspace and both state directories. From the
+Python engine environment:
+
+```bash
+(umask 077; sqlite3 -readonly /absolute/legacy/state/host.sqlite3 \
+  ".backup '/absolute/private/host-snapshot.sqlite3'")
+nagents import-host -C /absolute/workspace \
+  --host-snapshot /absolute/private/host-snapshot.sqlite3
+```
+
+Use the same `--state-dir` or trusted configuration as the engine if it
+doesn't use its default path. The importer accepts Rust schema 5 (v0.100.46),
+requires an offline backup without WAL or journal sidecars, and refuses an
+owned destination. It copies root display history as read-only sessions,
+including an interrupted marker where the host recorded no final outcome.
+The same backup is a no-op on retry; a different backup is rejected.
+Keep both the source and its backup: no changes flow back. Provider context,
+child history, credentials, approvals, receipts and queued work are not
+restored. This preview is not authorization to switch defaults.
 
 The generator choice, headless engine dependencies, default shared versus
 standalone lifecycle, and the final native-tool and workspace scope remain
