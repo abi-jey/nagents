@@ -218,25 +218,8 @@ class WebHistory(_HarnessSession):
 
         async def persist() -> int:
             def insert(db: sqlite3.Connection) -> tuple[int, dict[str, object]]:
-                work = ingress.work
-                if (
-                    db.execute(
-                        "SELECT 1 FROM ngn_web_inbox WHERE id = ? AND session_id = ? AND channel = ? "
-                        "AND message_id = ? AND status = 'running'",
-                        (work.id, session_id, work.channel, work.message_id),
-                    ).fetchone()
-                    is None
-                ):
-                    raise RuntimeError("Ingress is no longer owned by this run")
-                cursor = db.execute(
-                    "INSERT INTO v2_messages(session_id, role, content, tool_calls, tool_call_id, name) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    values,
-                )
-                history_id = cursor.lastrowid
-                assert history_id is not None
+                history_id = self._insert_ingress(db, ingress.work, values)
                 db.execute("UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
-                db.execute("INSERT INTO ngn_web_message_origins VALUES (?, ?)", (history_id, work.id))
                 db.row_factory = sqlite3.Row
                 row = db.execute(self._select() + " WHERE m.id = ?", (history_id,)).fetchone()
                 assert row is not None
@@ -249,6 +232,80 @@ class WebHistory(_HarnessSession):
         # A cancellation racing commit still finishes the association and its
         # notification before propagating; restart snapshots never guess IDs.
         return await finish_on_cancel(persist())
+
+    @staticmethod
+    def _insert_ingress(db: sqlite3.Connection, work: Work, values: tuple[str | None, ...]) -> int:
+        if (
+            values[0] != work.session_id
+            or db.execute(
+                "SELECT 1 FROM ngn_web_inbox WHERE id = ? AND session_id = ? AND channel = ? "
+                "AND message_id = ? AND status = 'running'",
+                (work.id, work.session_id, work.channel, work.message_id),
+            ).fetchone()
+            is None
+        ):
+            raise RuntimeError("Ingress is no longer owned by this run")
+        cursor = db.execute(
+            "INSERT INTO v2_messages(session_id, role, content, tool_calls, tool_call_id, name) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            values,
+        )
+        history_id = cursor.lastrowid
+        assert history_id is not None
+        db.execute("INSERT INTO ngn_web_message_origins VALUES (?, ?)", (history_id, work.id))
+        return history_id
+
+    async def commit_steering_batch(
+        self, session_id: str, run_id: str, works: tuple[Work, ...], messages: tuple[Message, ...]
+    ) -> None:
+        """Commit every input and actual origin before any later model request."""
+        if (
+            not works
+            or len(works) != len(messages)
+            or any(entry.role != "user" or entry.tool_calls or entry.tool_call_id for entry in messages)
+        ):
+            raise ValueError("A steering batch requires one prepared user message per claimed input.")
+        values = [self._message_values(session_id, message) for message in messages]
+
+        def insert(db: sqlite3.Connection) -> list[dict[str, object]]:
+            if (
+                db.execute(
+                    "SELECT 1 FROM ngn_web_inbox WHERE engine_run_id = ? AND session_id = ? AND status = 'running'",
+                    (run_id, session_id),
+                ).fetchone()
+                is None
+            ):
+                raise RuntimeError("The steering owner no longer runs this session.")
+            history_ids: list[int] = []
+            for work, prepared in zip(works, values, strict=True):
+                steering = work.steering
+                if (
+                    work.session_id != session_id
+                    or steering is None
+                    or steering.run_id != run_id
+                    or db.execute(
+                        "SELECT 1 FROM ngn_web_inbox WHERE id = ? AND engine_steer_run = ? AND engine_steer_id = ? "
+                        "AND engine_steer_state = 'offered'",
+                        (work.id, run_id, steering.input_id),
+                    ).fetchone()
+                    is None
+                ):
+                    raise RuntimeError("A steering input no longer belongs to this exact offered batch.")
+                history_ids.append(self._insert_ingress(db, work, prepared))
+            db.execute("UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
+            db.row_factory = sqlite3.Row
+            records: list[dict[str, object]] = []
+            for history_id in history_ids:
+                row = db.execute(self._select() + " WHERE m.id = ?", (history_id,)).fetchone()
+                assert row is not None
+                records.append(self._project(row))
+            return records
+
+        async def persist() -> None:
+            for record in await self.store._transaction(insert):
+                self.received(run_id, record)
+
+        await finish_on_cancel(persist())
 
     async def _add_voice(
         self, voice: VoiceInput, values: tuple[str | None, ...], ingress: Ingress | None = None

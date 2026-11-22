@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.10,<2"]
+build-backend = "maturin"
+
+[project]
+name = "nagents-native"
+requires-python = ">=3.12"
+description = "Native primitives for the nagents engine"
+license = "MIT"
+dynamic = ["version"]
+
+[tool.maturin]
+features = ["python"]
+module-name = "nagents_native"

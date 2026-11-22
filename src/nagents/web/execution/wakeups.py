@@ -28,6 +28,7 @@ MAX_ACTIVITY_BYTES = 2 * 1024 * 1024
 class Chain:
     activations: int = 0
     cancelled: bool = False
+    engine_owned: bool = False
 
 
 @dataclass(frozen=True)

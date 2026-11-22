@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import { PanelDivider } from "../app/PanelDivider.js";
 import { useAppViewport } from "../app/useAppViewport.js";
 import { usePanelLayout } from "../app/usePanelLayout.js";
@@ -54,7 +55,8 @@ export function NativeWorkspace() {
     active_run_id: view.runs.find(run => run.session_id === item.id)?.id,
   }));
   const archive = isArchive(session);
-  const model = archive ? "Read-only Python archive" : config?.model ? `Assistant: ${config.model}` : "Assistant";
+  const archiveLabel = session.startsWith("host-archive-") ? "Read-only Rust host archive" : "Read-only Python archive";
+  const model = archive ? archiveLabel : config?.model ? `Assistant: ${config.model}` : "Assistant";
   const submitting = view.bindings.some(binding => binding.session === session && binding.state === "sending");
   const canSubmit = view.connected && !!view.queue && !archive && !child;
   const steering = steeringTarget(view);
@@ -67,12 +69,14 @@ export function NativeWorkspace() {
   async function select(id?: string) {
     if (id) client.select(id);
     else if (!(await client.create())) return;
-    setNavOpen(false);
+    // Close the mobile drawer now: while it is open the composer is inert, so a
+    // focus request that ran before React committed the close would be lost.
+    flushSync(() => setNavOpen(false));
     focusComposer();
   }
-  function submit(text?: string) {
+  function submit(text?: string, steer = false) {
     composer.current?.focus({ preventScroll: true });
-    void client.send(text);
+    void client.send(text, steer);
   }
 
   return <div ref={shell} className={`app-shell panel-layout-shell${sidebarCollapsed ? " rail-collapsed" : ""}`}
@@ -117,16 +121,13 @@ export function NativeWorkspace() {
             <span>Delegated conversations are inspect-only.</span>
             {child.task.status === "running" && <button type="button" disabled={!!view.stopping || !view.connected}
               onClick={() => void client.cancel(child.task.run_id)}>Stop this agent</button>}
-          </div> : archive ? <p className="activity-warning">Read-only Python archive. Start a new session to send messages.</p> : <>
+          </div> : archive ? <p className="activity-warning">{archiveLabel}. Start a new session to send messages.</p> : <>
             <RunControls client={client} view={view} />
             <Composer inputRef={composer} prompt={view.draft} setPrompt={value => client.setDraft(value)} demo={demo}
-              disabled={!config || !session} commandsEnabled={false} deliveryEnabled={false} canSubmit={canSubmit}
-              running={!!run} submitting={submitting} stopping={!!run && view.stopping === run.id} submit={() => submit()}
+              disabled={!config || !session} commandsEnabled={false} deliveryEnabled={!!steering} canSubmit={canSubmit}
+              running={!!run} submitting={submitting} stopping={!!run && view.stopping === run.id} submit={delivery => submit(undefined, delivery === "steer")}
               cancel={() => { if (run) void client.cancel(run.id); }}
               sendLabel={run || view.queue?.paused || view.queue?.entries.length ? "Queue" : "Send"}
-              alternateAction={steering && <button type="button" title="Apply at the next persisted safe point"
-                onMouseDown={event => event.preventDefault()} disabled={submitting || !view.draft.trim()}
-                onClick={() => void client.send(undefined, true)}>Steer active turn</button>}
               status={<span className={`run-status${status === "Ready" ? " sr-only" : ""}`} role="status">{status}</span>} />
           </>}
         </footer>}

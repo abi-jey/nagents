@@ -10,63 +10,39 @@ Their similar command names do not imply matching configuration or HTTP APIs.
 
 - Managed binaries/runtime: `$XDG_DATA_HOME/ngn-harness`, or
   `~/.local/share/ngn-harness`; the command defaults to `~/.local/bin/ngn`.
-- Native host state: `$XDG_DATA_HOME/ngn-rust/workspaces/<workspace-hash>/`, or
-  `~/.local/share/ngn-rust/...`; runtime conversation storage is separately owned.
-- Existing Python client state/config remains separate. Normal native startup
-  on Linux and macOS can make a one-time copy of supported Python transcripts
-  as read-only archives in the selected native workspace. It never opens the
-  original as the native store or imports credentials, tool state, plugins or
-  agent definitions. See [Python session history](https://github.com/abi-jey/nagents/blob/main/ngn/README.md#python-session-history)
-  for supported paths and the manual backup fallback.
+- Sessions, queues and approvals belong to the Python engine and live in the
+  normal ngn data directory, like the Python client's. Releases up to 0.100.46
+  kept a separate Rust host store in `$XDG_DATA_HOME/ngn-rust/workspaces/<hash>/`;
+  0.100.47's engine copies each workspace's old history from there once, as
+  read-only sessions, and leaves the old files untouched.
 - Select a distinct `--bin-dir` if a Python/foreign `ngn` is already installed,
   and use the explicit binary path. Installation never overwrites that command
   or repairs unsafe existing paths with chmod.
 
-Use an explicit native JSON file and `-C` for the native workspace. Python
-`providers.json`, layered preferences, `ngn login`, `/voice` and plugins belong
-to the [Python client](ngn.md), not the native installer guide.
+The native client reads the same `providers.json`, preferences and sign-in as
+the Python client, because both run the same engine.
 
-## Stop and back up before opening important state
+## Back up before upgrading from 0.100.46
 
-The native host uses **SQLite schema 5** for read-only archives in addition to
-schema 4's steering receipts. Before starting a newer host on important data:
-
-1. Stop the existing host and its owned runners cleanly.
-2. Back up the complete selected native workspace state and runtime-owned
-   conversation storage consistently. Preserve any explicit config/auth files
-   separately and privately; do not upload credentials with diagnostics.
-3. Review the release's schema instructions, then start the intended native
-   binary with the intended workspace/state paths.
-
-Older binaries refuse newer schemas. Downgrade only using a separate compatible
-state directory or a consistent pre-upgrade backup; **never edit SQLite
-`user_version`** to force it. The updater retaining an older generation does not
-make an upgraded database backward-compatible. Updates do not migrate a legacy
-Python database, restart a host, replay interrupted runs/tools, or change
-credentials, configuration or workspace files.
+0.100.47 stops using the Rust host database. Before updating, stop running
+`ngn` clients and keep a copy of `~/.local/share/ngn-rust` if its history
+matters to you. The engine only reads it; older binaries can still open it.
+Updates do not restart running clients, replay interrupted runs or tools, or
+change credentials, configuration or workspace files.
 
 ## Native scope and remaining gaps
 
-The current Rust host owns native tools, approvals, lifecycle, event persistence,
-FIFO queues, subagent supervision, TUI and loopback HTTP/WebSocket serving. The optional
-nagents adapter owns provider/model integration and opaque conversation storage;
-it is not the old Python harness embedded behind the Rust UI.
-
-`ngn serve` embeds the shared React workspace, but its transport still uses the
-Rust host. Sharing the frontend does not add full settings/model editors,
-agent definitions, skills/MCP/custom Python plugins, advanced conversation/media
-actions, voice, channels, A2A or remote deployment to that host.
-Do not use Python container/Kubernetes or voice recipes with the native binary,
-and do not replace an existing production installation on a parity assumption.
-
-[ADR 0001](../adr/0001-python-core-rust-tui.md) proposes a single Python engine,
-with Rust clients attached over a generated API. The installation and data
-rules above still apply to the current release; the ADR does not change them.
+Since 0.100.47 the Python engine owns tools, approvals, lifecycle, event
+storage, FIFO queues, steering and subagents. The Rust binary is the terminal
+client and the `ngn serve` browser gateway; see
+[ADR 0001](../adr/0001-python-core-rust-tui.md). The browser workspace still
+lacks some Python web features, such as voice and channels, and
+remote deployment is not supported. Do not replace an existing production
+installation on a parity assumption.
 
 - [Engine migration plan](https://github.com/abi-jey/nagents/blob/main/ngn/docs/migration.md)
 - [Native installation/update contract](https://github.com/abi-jey/nagents/blob/main/ngn/docs/installation.md)
 - [Native 0.100.2 release notes](https://github.com/abi-jey/nagents/blob/main/ngn/docs/releases/0.100.2.md)
-- [Protocol and ownership](https://github.com/abi-jey/nagents/blob/main/ngn/docs/agent-runtime-protocol.md)
 - [Native security boundary](https://github.com/abi-jey/nagents/blob/main/ngn/docs/security.md)
 
 These are GitHub source links because `ngn/docs/` is outside this site's

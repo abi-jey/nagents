@@ -1,20 +1,15 @@
 # ngn
 
-`ngn` (pronounced *"engine"*) is the native **terminal client and local browser
-host**. In the current implementation, the Rust host owns workspace tools and
-approvals and the **`nagents`** (pronounced *"N-agents"*) runtime adapter runs
-the Python model loop through a private, versioned protocol.
+`ngn` (pronounced *"engine"*) is the native **terminal and browser client** for
+the **`nagents`** (pronounced *"N-agents"*) Python engine. There is one engine:
+`nagents engine`, a local loopback server that owns models, tools, approvals,
+sessions, queues and steering behind the versioned `/api/v1` contract. The Rust
+binary is only a client: the Ratatui TUI, `run --json`, and `ngn serve`, which
+serves the React workspace and forwards it to the same engine.
 
-The Rust application lives under `ngn/` in the **same repository** as the Python
-`nagents` library (`../src/nagents/`). The first official monorepo release,
-`v0.100.0`, includes the tested local prototype and its subagent/tool-result fixes.
-The earlier standalone local tags/artifacts were never published and remain
-untouched in their original checkout. This is **not yet full legacy feature
-parity**. See the [migration plan](docs/migration.md) for the proposed unified
-Python engine, and [release notes](docs/releases/) for what has shipped.
-
-`0.100.1` adds durable Rust-owned FIFO input queues with matching TUI/web controls.
-See the [patch notes](docs/releases/0.100.1.md) before upgrading important state.
+The Rust client lives under `ngn/` in the **same repository** as the Python
+`nagents` library (`../src/nagents/`). See [ADR 0001](../docs/adr/0001-python-core-rust-tui.md)
+and the [release notes](docs/releases/).
 
 ## Install and update
 
@@ -40,76 +35,38 @@ cargo build -p ngn
 ./target/debug/ngn -C /path/to/workspace doctor
 ```
 
-`doctor` reports configuration and runtime paths without launching Python or
-making model requests. Configure a provider and runtime before submitting prompts.
+`doctor` prints the Python interpreter that runs the engine, then the engine's
+own diagnostics. It makes no model requests.
 
 The web client is at `http://127.0.0.1:8765`. Web serving is **loopback-only**;
 use the exact printed address. It is a trusted local operator application, not a
-multi-user service or sandbox.
+multi-user service or sandbox. `ngn serve` checks the browser's host, origin and
+token, then forwards requests and events to the engine.
 
-`ngn serve` uses the React workspace from the Python release: the resizable
-Sessions and Team panels, Markdown and code rendering, tool inspection, and
-one-time approval review. It uses Rust's API and session store, not a Python
-web server. Browser appearance settings are supported; Python-only features
-such as voice, channels, attachments, agent profiles, and session
-rename/fork/trash are not. See [migration status](docs/migration.md).
+## Where the engine runs
 
-## Source/small-native integration only
-
-The managed bundle already contains its runtime: **skip this Python setup** for
-that installation. For a source build or an older small native archive, install
-the integration into a **new environment**, never over an existing Python ngn:
+The managed bundle contains a pinned CPython with `nagents[engine]`; nothing
+else is needed. From a source build, ngn uses, in order: `NGN_ENGINE_PYTHON`,
+the bundled runtime, `$VIRTUAL_ENV/bin/python`, then `python3`. That Python
+needs the engine extra:
 
 ```sh
-# From the repository's ngn/ directory; choose another fresh name if it exists.
-if test -e .venv-ngn-runtime || test -L .venv-ngn-runtime; then
-  echo 'Choose a new environment path; do not overwrite an existing venv.' >&2
-  exit 1
-fi
-python3 -m venv .venv-ngn-runtime
-. .venv-ngn-runtime/bin/activate
-python -m pip install -e .. -e integrations/nagents
-
-cp config.example.json config.local.json
-# Edit its provider/model and environment-variable reference for your own account.
-# Export the referenced API key securely in this process's environment.
-cargo run -p ngn -- --config config.local.json
-cargo run -p ngn -- --config config.local.json serve
+python3 -m venv .venv-ngn
+. .venv-ngn/bin/activate
+python -m pip install -e '..[engine]'   # from the repository's ngn/ directory
+cargo run -p ngn                         # TUI
+cargo run -p ngn -- serve                # browser client
 ```
 
-Without `--config`, ngn reads the existing Python ngn provider settings:
-`$XDG_CONFIG_HOME/ngn/` (normally `~/.config/ngn/`), including `providers.json`,
-its per-workspace overlay, `assistant.md` model bindings, and `config.json`'s
-model and `read_only` settings. These files are only read; no new config file is
-needed. `NGN_READ_ONLY=true` (or `1`) and `--read-only` can also tighten native
-permissions; other Python approval or tool settings are not imported.
-Pass `--config FILE` to use an explicit Rust configuration instead.
-Custom Python provider-registry paths are not used implicitly; select the
-intended account with an explicit native configuration.
-For OpenAI `auth: "auto"`, a saved Python ChatGPT login takes precedence over
-local Codex configuration, then the named API-key environment variable. Rust
-stops instead of copying the Python login or substituting a different account:
-select an explicit native ChatGPT config and sign in to the intended account.
-`auth: "codex"` requires local Codex files and uses their configured OAuth or
-API-key policy. `ngn doctor` shows the selected connection or why it cannot run.
+ngn starts one engine per workspace and shares it between terminals and
+browsers; `--standalone` starts a private one that stops with the client. The
+engine reads the normal ngn settings in `$XDG_CONFIG_HOME/ngn/` (normally
+`~/.config/ngn/`): `providers.json`, per-workspace overlays, model bindings and
+`config.json`. `--config FILE` selects an explicit trusted engine configuration;
+`--provider-id`, `--model` and `--read-only` apply to the engine it starts.
 
-The managed bundle automatically uses its embedded runtime when `runner` is
-omitted, as in the examples. For a source/small-native installation, `runner` is
-an argv array. Use an absolute environment interpreter path if the
-host will run without activation, e.g. `['/path/to/.venv-ngn-runtime/bin/python', '-I', '-B', '-m',
-'ngn_nagents']` (use JSON double quotes in configuration). No key value belongs in
-the file, browser, URL or command line. `.env` is not loaded automatically.
-
-The adapter uses public `Agent.run()`, `ToolRegistry.register()` and
-`ToolExecutor.execute()` APIs. **No `nagents.harness`, Textual, FastAPI or Uvicorn
-is imported.** The core agents library remains independently usable; public library
-changes preserve the existing harness import paths rather than embedding that harness.
-
-[ChatGPT device login](docs/chatgpt-auth.md) is an explicit
-`kind: "openai", auth: "chatgpt"` connection with native `auth login|status|logout`
-commands. It requires the matching `nagents` core version; official bundles require that
-matching published core. The API is **not available in nagents
-0.28.5**. Existing API-key connection semantics are unchanged.
+`ngn auth login|status|logout` runs the engine's own sign-in in that Python;
+see [ChatGPT device login](docs/chatgpt-auth.md).
 
 ## Controls
 
@@ -210,23 +167,17 @@ The [UX review](docs/ux-review.md) explains the design principles and roadmap.
 - `run --json PROMPT` emits ordered, versioned NDJSON; mutations **fail closed**.
 
 The terminal footer shows the current activity and selected provider/model and
-uses the legacy default terminal palette. When run without `--config`, the
+uses the default terminal palette. When run without `--config`, the
 native TUI honors `"animations": false` in the personal Python ngn
 `config.json`: footer motion stops and the composer caret stays steady.
 Use `--no-animations` to disable both for one invocation without changing the
 saved setting. `TEXTUAL_ANIMATIONS=none` also disables both regardless of the
 saved setting. Elapsed timers and input still work.
 
-Without `--config`, the native Message editor, caret, and user transcript bubbles
-honor saved painted Python themes: `graphite`, `ocean`, and `ember` with
-`theme_background` set to `auto` (the default) or `theme`, and `terminal` with
-`theme_background: "theme"`.
 With terminal-default colors, on Unix the client asks the terminal for its
 background and uses that color to tint the full width of user-message rows.
 If the terminal does not report a background, the client leaves those rows
-unpainted rather than guessing. Nonempty `NO_COLOR` disables the tint and painted
-colors. The default editor still uses a reverse caret.
-The rest of the UI is not themed by this setting.
+unpainted rather than guessing. Nonempty `NO_COLOR` disables the tint.
 
 The Agents sidebar shows native run status, the displayed child approval, and
 read-only permissions, not Python model activity phases. Its context panel shows
@@ -247,119 +198,40 @@ or interrupted work is never requeued/retried. `run --json` remains immediate an
 fails rather than jumping a paused/pending queue. This is FIFO, not model steering.
 
 ngn also has a separate, explicit
-[active-run steering boundary](docs/steering.md): browser **Steer active turn**,
-TUI **`/steer TEXT`**, and durable receipt inspection. It requires both the runtime's
+[active-run steering boundary](docs/steering.md): **Enter** steers a running turn in
+the browser and TUI (**Ctrl+Enter** queues instead), TUI **`/steer TEXT`**, and
+durable receipt inspection. It requires both the runtime's
 `safe_steering` capability and the host's explicit acknowledgment. Inputs apply
 only after a complete persisted tool batch or final response, never between tools
-or by interrupting model generation. Existing Enter/Send/FIFO controls are unchanged.
+or by interrupting model generation. Idle Enter/Send and FIFO ordering are unchanged.
 Pending/offered/applied/uncertain/undelivered receipts report persistence state,
 not proof of model consumption. Stop/restart never replays steering or tool work.
 
-## Rust-supervised subagents
+## Earlier Rust host history
 
-`to_agent` starts a separate protocol-compatible runner with an isolated session.
-The default is foreground delegation: its final public result returns through the
-same tool call. With `background: true`, it returns a child `run_id` immediately;
-the parent can do other work and later use `agent_status`, `agent_wait`, or
-`agent_cancel`. Only the immediate owning run can receive/control that result.
-
-Limits are shared by the whole root activation, including nested children:
-
-```json
-"subagents": {
-  "max_depth": 2,
-  "max_concurrent": 3,
-  "max_executions": 8,
-  "timeout_seconds": 300
-}
-```
-
-This is a field inside the explicit JSON configuration. `max_depth: 0` disables
-delegation. Saturated slots are rejected, not secretly queued. Completed/failed
-executions do not refund the execution budget. Read-only permissions and
-non-interactive approval denials cannot be relaxed by a child. Children inherit
-the selected provider/runtime; profiles and model overrides are not implemented yet.
-
-Cancelling a parent stops its subtree and joins it before publishing parent
-completion. A model that finishes while background children are still active is
-marked failed and those children are cancelled; use `agent_wait` before finishing.
-Background results are **not** automatically injected into an unrelated model
-generation. Child text/reasoning is not relayed as root assistant output.
-
-Host schema 3 added durable queues and session-scoped events; the development
-steering boundary now upgrades host state to schema **4** for durable receipts.
-Stop the host and back up its workspace state before upgrading important data.
-Older schema-3 binaries cannot open schema 4; downgrade only using a separate
-state directory or that backup, never by changing `user_version`. Runtime-owned
-conversation data is not migrated. Native schema 5 adds read-only Python archives.
-
-### Python session history
-
-On Linux and macOS, normal native startup (`ngn`, `run`, `serve`, or `sessions`)
-tries to copy supported Python transcripts for the selected workspace once into
-its Rust store. It uses the existing Python data path: `$XDG_DATA_HOME/ngn` or
-`~/.local/share/ngn`, overridden by `NGN_DATA_DIR` and then by `data_dir` in the
-personal Python `config.json`. Relative paths use the invocation directory for
-the environment variable and the personal config directory for the file.
-Project or explicitly selected Python config files are not used for discovery.
-Native `--data-dir` selects the destination, which must be separate from the
-Python data root and its workspace database directory.
-
-Archives are labeled in the picker and contain plain user/assistant text only.
-They cannot run prompts, resume model context, replay actions, or grant approvals.
-Existing native sessions and archives are not replaced; the picker lists native
-sessions first, within its existing 200-item limit. Later Python edits are not
-synced. `--continue` selects a native session, never an archive.
-
-The live Python database is read only at the filesystem level, with a nonblocking
-lock; SQLite only opens the private copy. The source must be a user-owned regular
-file of at most 128 MiB, with no sidecars, and its resolved path must not be
-writable by other users. A missing database is ignored. A busy, unsafe,
-unsupported, or WAL database is skipped without stopping native startup.
-Close Python ngn and retry. If needed, make a standalone rollback-journal backup
-(for example with SQLite `VACUUM INTO`) and run
-`ngn -C WORKSPACE upgrade --from BACKUP --data-dir FRESH_DIR` to inspect it in
-separate fresh native state. Diagnostics, help, auth, install and update do not
-attempt the automatic copy.
+Releases up to 0.100.46 ran their own Rust host. The first time the engine
+starts in a workspace, it copies that workspace's old history from
+`$XDG_DATA_HOME/ngn-rust/workspaces/<hash>/host.sqlite3` (or
+`~/.local/share/ngn-rust/...`) into read-only archived sessions. It reads the old
+file through a private SQLite backup and never changes it. Archives can be read
+but not continued. If the copy fails, the engine starts anyway and prints how to
+retry with `nagents import-host --host-snapshot BACKUP`, which also imports a
+backup taken from a non-default location.
 
 ## Boundaries
 
-These boundaries describe the split host that ships today, not the end state
-in the [migration plan](docs/migration.md).
-
-- Rust owns admission, idempotency, run/session lifecycle, event persistence,
-  filesystem/shell tools, approval decisions, TUI, HTTP and WebSocket transport.
-- An agent runtime owns its model integration and opaque conversation storage.
-- Private stdin/stdout carry [Agent Runtime Protocol v1](docs/agent-runtime-protocol.md).
-  This interface can also be implemented by a native Rust or another-language runtime.
-- Rust state defaults to `$XDG_DATA_HOME/ngn-rust/workspaces/<workspace-hash>/`,
-  or `~/.local/share/ngn-rust/...`. It never opens Python ngn's database as a live store.
-- Host and runtime databases are separate; no shared SQLite schema or Python objects.
-- A per-workspace lock prevents a second host from recovering another live host's runs.
-
-Native tools: `read_file`, `list_files`, literal `search`, `write`, literal `edit`,
-and `shell`. Existing file changes require the exact SHA-256 from an inspected
-file and are revalidated after approval. File tools are capability-relative,
-bounded, and reject traversal, symlinks, hard links and common credential paths.
-List/search honor only workspace-root/nested `.gitignore` files, not global/user
-Git configuration or `.git/info/exclude`. Ignored ancestors are checked even for
-explicit search paths; negation cannot override protected/credential/build exclusions.
-Rules use bounded capability-relative reads and a mature Git-ignore matcher. An
-unsafe/unreadable/invalid ignore file fails discovery closed, without leaking its
-contents or returning a misleading partial result. Discovery does not load project
-instructions; nested instruction/skill execution is still a separate migration gap.
-Approved shell commands and a trusted runtime have full access as your user:
-**this is not an OS sandbox**. See [security](docs/security.md).
+- The Python engine owns models, tools, approvals, session and event storage,
+  FIFO queues, steering and subagents. Its state lives in the normal ngn data
+  directory, with one private registration per workspace.
+- The Rust client owns terminal rendering, keyboard and mouse input, and the
+  browser gateway. It stores no sessions and runs no tools.
+- Approved shell commands and project code run as your user: **this is not an
+  OS sandbox**. See [security](docs/security.md).
 
 ## Local diagnostics
 
-The TUI prints its runtime log path on exit. Rust hosts write lifecycle metadata
-under the effective data directory (`--data-dir`, if passed), in
-`logs/tui-<unique>.jsonl`. This log does not contain prompts, tool payloads,
-provider credentials, or runner stderr. Logs stay local; nothing is uploaded.
-If the runtime log cannot be written safely, the host continues normally and the
-TUI reports it as unavailable. Explicit wire capture fails if its private log
-cannot be set up.
+An engine started by ngn writes its diagnostics to the starting terminal's
+stderr. Logs stay local; nothing is uploaded.
 
 Provider HTTP payload capture is **off by default**. Enable it for one invocation
 with `--wire-log` or use `NGN_WIRE_LOG=true|false|1|0` as a default. Use
@@ -381,19 +253,17 @@ From the repository root, on Linux x86_64 with Python 3.13, Rust 1.93+ and a C
 compiler (install the frontend dependencies once with `npm ci --prefix src/nagents/web-ui`):
 
 ```sh
-./ngn/dev                                  # Launch the mouse-enabled TUI
-./ngn/dev --config /path/to/rust-config.json  # Or use an explicit Rust config
-./ngn/dev --config /path/to/rust-config.json serve --port 18768
-./ngn/dev --test                  # Build + actual CLI/HTTP/WebSocket/PTY acceptance
-./ngn/dev --published-core --test # Compatibility with the pinned published core
+./ngn/dev                         # Launch the mouse-enabled TUI
+./ngn/dev --config /path/to/engine-config.json serve --port 18768
+./ngn/dev --test                  # Build, install and run the engine offline
+./ngn/dev --published-core --test # Same, with the pinned published core
 ```
 
 This works with **uncommitted changes**. It builds the optimized, locked Cargo
-binary, builds non-editable Python core/adapter wheels, installs a fresh virtual
+binary, builds a non-editable `nagents[engine]` wheel, installs a fresh virtual
 environment, packs and extracts the binary, then launches its explicit path.
-The runtime never falls back to your installed Python `ngn` or an editable import.
-The configured runner is rebound to that fresh environment; provider and permission
-settings are retained. Export the referenced API key securely; `.env` is not loaded.
+The engine never falls back to your installed Python `ngn` or an editable
+import. Export any referenced API key securely; `.env` is not loaded.
 
 Artifacts and state default to `$XDG_CACHE_HOME/ngn-rust-dev/<checkout-hash>/`
 (or `~/.cache/...`). Development state is separate from installed/legacy state;
@@ -429,44 +299,33 @@ manifest. See [local-work migration](docs/local-work-migration.md).
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-# In the adapter's activated environment, with ruff/mypy/pre-commit installed:
+# In an activated environment with ruff/mypy/pre-commit installed:
 python -m unittest discover -s integrations/nagents/tests -v
-python -m ruff check integrations/nagents
-python -m mypy --strict integrations/nagents/src integrations/nagents/tests
-# Root pre-commit includes both Python-core and Rust-harness gates:
+# Root pre-commit includes both Python-core and Rust-client gates:
 (cd .. && pre-commit run --all-files)
 ```
 
-`scripts/smoke.py` performs real local CLI/HTTP/WebSocket/TUI and nagents-protocol
-checks against a fixture model server, with no paid-provider requests. See its
-`--help`. The integration must be importable in the selected Python environment.
-
-For optional real-browser acceptance, install `playwright` and `aiohttp` into a
-separate testing venv and provide Chromium (or run `python -m playwright install
-chromium`). Reuse the candidate path printed by `./ngn/dev --test`:
+`scripts/python_engine_smoke.py` drives the real TUI (in a PTY) and the browser
+workspace (in Chromium, desktop and touch) against a live engine and a loopback
+fixture model, with no paid requests. Install `playwright` and `aiohttp` and run
+`python -m playwright install chromium` first:
 
 ```sh
-python ngn/scripts/browser_smoke.py --binary CANDIDATE/app/ngn \
-  --runtime-python CANDIDATE/runtime/bin/python --output /path/to/evidence
-# Add --browser /path/to/chromium to use an existing browser executable.
+python ngn/scripts/python_engine_smoke.py --binary ngn/target/release/ngn \
+  --output /path/to/evidence
+# --check private|browser|restart|pty|tasks|import selects phases.
 ```
-
-This runs the embedded React workspace in Chromium at desktop and touch viewport
-sizes against a local fixture. It checks conversation creation, native tools and
-approval review, touch controls, and child attribution without paid requests or
-legacy state.
 
 ## Repository layout
 
 | Path | Responsibility |
 | --- | --- |
-| `crates/ngn-protocol` | Agent wire types and client event schema; no UI dependency |
-| `crates/ngn-core` | Rust harness lifecycle, durable journal, native tools, runtime supervision |
-| `crates/ngn` | Clap CLI, Ratatui TUI, Axum HTTP/WebSocket host |
-| `../src/nagents/web-ui` | Shared React workspace and the native browser entry point, built into the Rust binary |
-| `integrations/nagents` | Optional Python adapter using only the agents library |
+| `crates/ngn` | Clap CLI, Ratatui TUI, browser gateway, installer/updater |
+| `crates/ngn-api` | Client generated from the engine's `/api/v1` contract |
+| `crates/nagents-native` | Optional ABI3 discovery and diff helpers for the engine |
+| `../src/nagents/web-ui` | Shared React workspace, built into the Rust binary |
+| `integrations/nagents` | Compatibility marker that lets ngn 0.100.46 and earlier update |
 | `docs` | Protocol, trust model, architecture and migration inventory |
 
 MIT licensed. Rust development started independently, then its history was imported
-under `ngn/` in the existing nagents repository. The Python core, legacy clients,
-existing history and installed defaults are retained.
+under `ngn/` in the existing nagents repository.

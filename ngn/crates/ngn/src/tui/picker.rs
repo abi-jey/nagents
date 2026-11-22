@@ -1,5 +1,4 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ngn_core::store::{Session, now_ms};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -9,6 +8,7 @@ use ratatui::{
 };
 
 use super::{center, view};
+use crate::{engine::Session, view::now_ms};
 
 const NEW: &str = "+ New session";
 const FILTER_LIMIT: usize = 32_000;

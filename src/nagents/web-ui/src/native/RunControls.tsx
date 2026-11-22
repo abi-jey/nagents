@@ -25,15 +25,18 @@ export function RunControls({ client, view }: { client: NativeClient; view: View
           <button type="button" disabled={queueBusy || !queue.entries.length || !connected} onClick={() => void client.controlQueue("clear")}>Clear pending &amp; pause</button>
         </div>
         {!!queue.entries.length && <ol className="native-queue-items">
-          {queue.entries.map(entry => <li key={entry.run.id}><pre>{entry.prompt}</pre>
-            <button type="button" disabled={!!stopping || queueBusy || !connected} onClick={() => void client.cancel(entry.run.id)}>Remove</button></li>)}
+          {queue.entries.map(entry => {
+            const run = entry.run;
+            return <li key={entry.run ? entry.run.id : entry.request_id}><pre>{entry.prompt}</pre>
+              {run && <button type="button" disabled={!!stopping || queueBusy || !connected} onClick={() => void client.cancel(run.id)}>Remove</button>}</li>;
+          })}
         </ol>}
       </div>
     </details>}
     {(!!steeringTarget(view) || !!receipts.length || !!attempts.length) && <details className="native-controls native-receipts">
       <summary>Input receipts{receipts.length ? ` · ${receipts.length} steering` : ""}{attempts.length ? " · Check submission" : ""}</summary>
       <div className="native-controls-body">
-        {!attempts.length && !receipts.length && <p>Steering targets the active turn at its next persisted safe point. Send and Enter still use the input queue.</p>}
+        {!attempts.length && !receipts.length && <p>Enter steers the active turn at its next persisted safe point. Ctrl+Enter queues the message for after it.</p>}
         {attempts.map(binding => <article className="native-receipt" key={binding.id}>
           <strong>{binding.state === "confirmed" ? "Host confirmed admission" : binding.state === "rejected" ? "Exact turn closed without admitting this input" : "Admission unconfirmed"}</strong>
           <small>{binding.run ? `Steering run ${binding.run}` : "Next-turn input"} · Request {binding.id}</small>

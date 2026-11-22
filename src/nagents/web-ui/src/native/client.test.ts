@@ -40,7 +40,8 @@ async function setup(t: TestContext) {
       const custom = state.handler?.(request);
       if (custom !== undefined) return await custom as T;
       const parts = path.split("/");
-      if (path === "/api/bootstrap") return { token: "host-token", protocol_version: 1 } as T;
+      if (path === "/api/bootstrap") return { token: "host-token", protocol_version: 1,
+        capabilities: ["tasks"] } as T;
       if (path === "/api/sessions") return (body ? { session: { id: "new", title: "New session" } } :
         { sessions: [{ id: "chat", title: "Test" }, { id: "other", title: "Other" }] }) as T;
       if (path === "/api/state") return { runs: state.runs, approvals: state.approvals } as T;
@@ -76,7 +77,7 @@ function capable(id: string, session = "chat"): SteeringState {
   return { run_id: id, session_id: session, run_status: "running", accepting: true, supported: true, receipts: [] };
 }
 
-test("replayed approvals do not open a decision; live child approval and inspection use exact identities", async t => {
+test("replayed approvals do not open a decision; live child approval and cancellation use exact identities", async t => {
   const { client, state, requests, emit, streams } = await setup(t);
   emit({ event: "approval_requested", approval_id: "expired", call: childApproval.call, preview: "" });
   await until(() => requests.filter(request => request.path === "/api/state").length >= 2);
@@ -86,20 +87,38 @@ test("replayed approvals do not open a decision; live child approval and inspect
   state.approvals = [childApproval];
   emit({ event: "task_started", task });
   await until(() => pendingApproval(client.snapshot())?.id === childApproval.id && client.snapshot().tasks.length === 1);
-  client.inspect("child");
-  emit({ event: "text_completed", text: "Child only" }, task.run_id, task.session_id);
-  await until(() => client.snapshot().child?.entries[0]?.text === "Child only");
-  assert(client.snapshot().entries.every(entry => entry.text !== "Child only"));
   await client.cancel(task.run_id);
   assert(requests.some(({ path }) => path === "/api/runs/child-run/cancel"));
   await client.decide({ ...childApproval, run_id: "root" }, true);
   assert(!requests.some(({ path }) => path === "/api/approvals"));
   await client.decide(childApproval, false);
   assert.deepEqual(requests.find(({ path }) => path === "/api/approvals")?.body,
-    { run_id: task.run_id, approval_id: childApproval.id, allow: false });
+    { run_id: task.run_id, approval_id: childApproval.id, allow: false, call_id: childApproval.call.call_id });
   client.select("other");
   assert(streams.filter(stream => stream.id !== "other").every(stream => stream.closed));
   assert(!client.snapshot().child);
+});
+
+test("engine child inspection catches up over HTTP and keeps the root's single event stream", async t => {
+  const { client, state, requests, emit, streams } = await setup(t);
+  state.tasks = [task];
+  emit({ event: "task_started", task });
+  await until(() => client.snapshot().tasks.length === 1);
+  const history = deferred<unknown>();
+  state.handler = ({ path }) => path === "/api/sessions/child/history?after=0" ? history.promise : undefined;
+  client.inspect(task.session_id);
+  assert.equal(streams.filter(stream => !stream.closed).length, 1);
+  const { receive } = streams[0];
+  const scope = { schema_version: 1, timestamp_ms: 0, session_id: task.session_id, run_id: task.run_id };
+  receive({ ...scope, sequence: 11, event: "text_delta", text: "live " });
+  receive({ ...scope, sequence: 12, event: "text_completed", text: "live child" });
+  history.resolve({ cursor: 10, has_more: false, events: [
+    { ...scope, sequence: 10, event: { type: "run.started", prompt: "inspect the child" } },
+  ] });
+  await until(() => client.snapshot().child?.entries.length === 2);
+  assert.equal(client.snapshot().child?.entries[1].text, "live child");
+  assert(client.snapshot().entries.every(entry => entry.text !== "live child"));
+  assert(requests.some(({ path }) => path === "/api/sessions/child/history?after=0"));
 });
 
 test("older state and queue replies do not resurrect an approval or leak queue data into another session", async t => {

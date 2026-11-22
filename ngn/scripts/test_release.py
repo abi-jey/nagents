@@ -377,15 +377,13 @@ class ReleaseTests(unittest.TestCase):
         ):
             release.package(self.output, self.output / "untrusted-binary")
 
-    def test_shared_dev_release_bundle_contains_both_exact_source_examples_only(self) -> None:
+    def test_shared_dev_release_bundle_contains_exact_source_documents_only(self) -> None:
         source = self.output / "source"
         source.mkdir()
         names = (
             "LICENSE",
             "README.md",
             "CHANGELOG.md",
-            "config.example.json",
-            "config.chatgpt.example.json",
         )
         for name in names:
             (source / name).write_bytes((release.NGN / name).read_bytes())

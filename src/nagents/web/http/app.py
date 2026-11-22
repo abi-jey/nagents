@@ -178,11 +178,10 @@ def create_app(
     resume_session: str = "",
     continue_session: bool = False,
     harness_factory: Callable[["HarnessConfig"], Harness] = Harness,
+    headless_routes: Callable[[FastAPI, Callable[[], WebState]], None] | None = None,
 ) -> FastAPI:
-    authority = local_authority(host, port)
-    enforce_authority = is_loopback_host(host)
-    directory = built_assets() if assets is None else assets
-    token = secrets.token_urlsafe(32)
+    """Build one WebState lifespan. A headless caller supplies its own routes and security boundary."""
+    service = "ngn serve" if headless_routes is None else "nagents engine"
     state: WebState
     live: LiveService
     live_settings: LiveSettings
@@ -195,7 +194,8 @@ def create_app(
         harness = harness_factory(copy.deepcopy(config))
         harness.resources.logger = logger
         logger.info(
-            "ngn serve starting: workspace=%s state_dir=%s demo=%s",
+            "%s starting: workspace=%s state_dir=%s demo=%s",
+            service,
             harness.workspace,
             harness.config.data_dir,
             config.demo,
@@ -310,7 +310,8 @@ def create_app(
             await state.session_agents.initialize()
             registry = harness.provider_store.load()
             logger.info(
-                "ngn serve config: workspace=%s config_files=%s global_providers=%s workspace_providers=%s active=%s providers=%s",
+                "%s config: workspace=%s config_files=%s global_providers=%s workspace_providers=%s active=%s providers=%s",
+                service,
                 harness.workspace,
                 [str(path) for path in harness.config.config_paths],
                 harness.provider_store.path,
@@ -319,8 +320,9 @@ def create_app(
                 {name: profile.kind for name, profile in registry.providers.items()},
             )
             logger.info(
-                "ngn serve settings: session_db=%s workspace_settings_row=%s global_db=%s global_settings_row=%s "
+                "%s settings: session_db=%s workspace_settings_row=%s global_db=%s global_settings_row=%s "
                 "workspace_provider_file=%s provider_selection=%s live_source=%s",
+                service,
                 harness.agent.session.db_path,
                 state.settings.persisted,
                 state.settings.global_path,
@@ -346,14 +348,15 @@ def create_app(
                 with state.idle(allow_running=True):
                     await empty_sessions.prune(state, live.active_session_id)
             logger.info(
-                "ngn serve ready: session=%s provider=%s model=%s",
+                "%s ready: session=%s provider=%s model=%s",
+                service,
                 harness.session_id,
                 harness.config.provider or harness.config.provider_profile().kind,
                 harness.agent.provider.model,
             )
             yield
         finally:
-            logger.info("ngn serve stopping: workspace=%s", harness.workspace)
+            logger.info("%s stopping: workspace=%s", service, harness.workspace)
             state.channels.closed = True
             state.channels.management.shutdown()
             state.wakeups.shutdown()
@@ -398,9 +401,19 @@ def create_app(
                 await asyncio.wait({cleanup})
             finally:
                 await _join(cleanup)
-                logger.info("ngn serve stopped: workspace=%s", harness.workspace)
+                logger.info("%s stopped: workspace=%s", service, harness.workspace)
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(
+        lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=headless_routes is None
+    )
+    if headless_routes is not None:
+        headless_routes(app, lambda: state)
+        return app
+
+    authority = local_authority(host, port)
+    enforce_authority = is_loopback_host(host)
+    directory = built_assets() if assets is None else assets
+    token = secrets.token_urlsafe(32)
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_tool_settings(app, lambda: state)
     register_shells(app, lambda: state)

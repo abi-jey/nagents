@@ -126,7 +126,9 @@ class ToolApprovals:
             self._registrations[identifier] = existing
         return ToolBinding(name, existing[3], False)
 
-    def requested_binding(self, harness: Harness, request: ApprovalRequest) -> ToolBinding | None:
+    @staticmethod
+    def active_request_owner(harness: Harness, request: ApprovalRequest) -> Harness | None:
+        """Resolve the exact still-live actor of a host-owned approval request."""
         if harness._closed:
             return None
         if request.session_id:
@@ -156,6 +158,13 @@ class ToolApprovals:
             harness._worker is not None and (harness._worker.done() or harness._worker.cancelling())
         ):
             return None
+        return harness
+
+    def requested_binding(self, harness: Harness, request: ApprovalRequest) -> ToolBinding | None:
+        owner = self.active_request_owner(harness, request)
+        if owner is None:
+            return None
+        harness = owner
         if harness.config.demo or harness.mode == "reviewer" or harness.workspace.resolve() != Path(self.workspace):
             return None
         harness.tool_settings.load()

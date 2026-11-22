@@ -1,7 +1,15 @@
 #![cfg(unix)]
 
-#[path = "../../ngn-core/src/test_support.rs"]
+#[path = "../src/test_support.rs"]
 mod test_support;
+
+/// The client's bundle manifest code, exercised through the real binary below.
+#[allow(dead_code)]
+#[path = "../src/bundle.rs"]
+mod bundle;
+mod model {
+    pub const RUNTIME_PROTOCOL: u16 = 1;
+}
 
 use std::{
     collections::BTreeMap,
@@ -11,8 +19,8 @@ use std::{
     process::{Command, Output},
 };
 
+use bundle::{BundleManifest, PLATFORM, PythonBundle, file_hash};
 use flate2::{Compression, write::GzEncoder};
-use ngn_core::bundle::{BundleManifest, PLATFORM, PythonBundle, file_hash};
 use serde_json::json;
 
 fn private(path: &Path) {
@@ -134,7 +142,7 @@ fn managed(root: &Path) -> (PathBuf, PathBuf, BundleManifest) {
         ngn_version: env!("CARGO_PKG_VERSION").into(),
         nagents_version: "0.28.5".into(),
         adapter_version: env!("CARGO_PKG_VERSION").into(),
-        runtime_protocol: ngn_protocol::VERSION,
+        runtime_protocol: model::RUNTIME_PROTOCOL,
         platform: PLATFORM.into(),
         source_commit: "a".repeat(40),
         official: false,
@@ -170,7 +178,7 @@ fn managed(root: &Path) -> (PathBuf, PathBuf, BundleManifest) {
 }
 
 #[test]
-fn managed_local_check_noop_and_doctor_need_no_python_config_or_host_state() {
+fn managed_local_check_noop_and_doctor_use_the_bundled_python_without_host_state() {
     let root = test_support::private_tempdir().unwrap();
     let (prefix, bin, manifest) = managed(root.path());
     let release = prefix.join("releases").join(&manifest.ngn_version);
@@ -232,11 +240,22 @@ fn managed_local_check_noop_and_doctor_need_no_python_config_or_host_state() {
         .arg("doctor")
         .output()
         .unwrap();
-    succeeded(&output);
+    // Doctor names the exact bundled interpreter, then runs the engine's own
+    // diagnostics in it; this inert fixture cannot execute.
+    assert!(!output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Bundled CPython: 3.13.18"));
-    assert!(text.contains(release.join("runtime/bin/python3").to_str().unwrap()));
+    assert_eq!(
+        text.lines().next(),
+        Some(
+            format!(
+                "Engine Python: {}",
+                release.join("runtime/bin/python3").display()
+            )
+            .as_str()
+        )
+    );
     assert!(!text.contains("prefix/current/runtime"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Could not run Python"));
     no_host_state(root.path());
 }
 

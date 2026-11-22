@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from nagents.harness.runtime.commands import split_command
 from nagents.harness.runtime.followups import RunInput
 from nagents.harness.runtime.followups import RunInputRead
+from nagents.types import AdmittedTextBatch
 
 from .._async import finish_on_cancel
 from .._async import join_owned
@@ -180,6 +181,16 @@ class QueuedInputs:
             or run.agent != state.session_agents.selected(run.session_id)
         ):
             return None
+        if (
+            run.work is not None
+            and run.work.engine is not None
+            and not state.running_harness._remote_profile.configured
+            and not state.running_harness.agent.batch
+            and state.running_harness.agent.session is state.history
+        ):
+            steering = await self._steering_batch(run)
+            if steering is not None:
+                return steering
         while True:
             claim = asyncio.create_task(state.channels.store.claim_work(web_only=True, session_id=run.session_id))
             try:
@@ -229,6 +240,53 @@ class QueuedInputs:
                 voice_session_id=work.voice_session_id,
                 message_id=work.message_id,
             )
+
+    async def _steering_batch(self, run: Run) -> RunInput | RunInputRead | None:
+        state = self.state
+        store = state.channels.store
+        claim = asyncio.create_task(store.claim_steering(run.session_id, run.id))
+        try:
+            works = await asyncio.shield(claim)
+        except FollowupClaimDeferred:
+            return RunInputRead.DEFERRED
+        except asyncio.CancelledError:
+
+            async def interrupt() -> None:
+                try:
+                    offered = await claim
+                except FollowupClaimDeferred:
+                    return
+                for work in offered:
+                    await store.release_work(work)
+
+            await join_owned(asyncio.create_task(interrupt()))
+            raise
+        if not works:
+            return None
+        if (
+            state.active is not run
+            or run.finished
+            or state.channels.closed
+            or run.agent != state.session_agents.selected(run.session_id)
+        ):
+            for work in works:
+                await store.release_work(work)
+            return None
+        self.claimed.setdefault(run.id, []).extend(works)
+        for work in works:
+            self.admitted(run, work, initial=False)
+        # The existing Harness enters this as one model turn. Each prompt's
+        # hooks and exact ingress record still run independently, then their
+        # history/receipts commit together before the next provider request.
+        return RunInput(
+            works[-1].prompt,
+            kind="followup",
+            message_id=works[-1].message_id,
+            admitted_text=AdmittedTextBatch(
+                tuple(work.prompt for work in works),
+                partial(state.history.commit_steering_batch, run.session_id, run.id, works),
+            ),
+        )
 
     async def finish(self, run: Run) -> None:
         status = "interrupted" if run.outcome == "cancelled" else run.outcome

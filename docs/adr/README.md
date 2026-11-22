@@ -8,6 +8,9 @@ old one says so in its status line.
 | --- | --- | --- |
 | [0001](0001-python-core-rust-tui.md) | Python core, Rust TUI client | Proposed |
 
+See [Python engine runtime support](0001-runtime-status.md) for the implemented
+v1 scope and remaining runtime gaps in ADR 0001.
+
 ## Format
 
 ```markdown

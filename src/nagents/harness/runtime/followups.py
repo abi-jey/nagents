@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
+    from nagents.types import AdmittedTextBatch
     from nagents.types import ContentPart
 
     from ..agents.subagents import SubagentManager
@@ -45,6 +46,13 @@ class RunInput:
     voice_session_id: str = ""
     message_id: str = ""
     persisted_notice_id: int = 0
+    admitted_text: AdmittedTextBatch | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.admitted_text is not None and (
+            self.kind != "followup" or self.persisted_notice_id or self.voice_session_id
+        ):
+            raise ValueError("A host text batch cannot also be a shell notice or voice request.")
 
 
 @dataclass(frozen=True)

@@ -18,11 +18,11 @@ from typing import cast
 from zipfile import ZipFile
 
 import bundle
-import protocol_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 NGN = ROOT / "ngn"
 LINUX = "linux-x86_64"
+COORDINATED_CRATES = ("ngn", "ngn-api", "nagents-native")
 
 
 def manifest_name(platform_name: str) -> str:
@@ -69,9 +69,8 @@ def version_check(tag: str = "") -> str:
     bootstrap = re.search(r"(?m)^NGN_BOOTSTRAP_VERSION=([0-9.]+)$", (NGN / "install.sh").read_text())
     assert bootstrap is not None and bootstrap[1] == version, "Installer bootstrap version mismatch"
     lock = tomllib.loads((NGN / "Cargo.lock").read_text())
-    for package in lock["package"]:
-        if package["name"] in {"ngn", "ngn-core", "ngn-protocol"}:
-            assert package["version"] == version, "Cargo lock version mismatch"
+    locked = {package["name"]: package["version"] for package in lock["package"] if "source" not in package}
+    assert all(locked.get(crate) == version for crate in COORDINATED_CRATES), "Cargo lock version mismatch"
     return version
 
 
@@ -107,7 +106,7 @@ def bump(version: str, notes: str, root: Path = ROOT) -> None:
             )
         ),
     ]
-    for crate in ("ngn", "ngn-core", "ngn-protocol"):
+    for crate in COORDINATED_CRATES:
         replacements.append(
             (ngn / "Cargo.lock", rf'(?m)^(name = "{crate}"\n)version = "{old}"$', rf'\g<1>version = "{version}"')
         )
@@ -145,8 +144,6 @@ def binary_archive(destination: Path, binary: Path, source: Path) -> None:
             "LICENSE",
             "README.md",
             "CHANGELOG.md",
-            "config.example.json",
-            "config.chatgpt.example.json",
             "docs",
         ):
             target.add(source / name, arcname=name)
@@ -403,38 +400,17 @@ def verify_bundled_install(output: Path, manifest: dict[str, object], *, require
             text=True,
             timeout=30,
         )
-        assert "runtime/bin/python3" in doctor.stdout, "Installed default runner did not select bundled Python"
-    print("PASS: native installation and bundled default runner with no Python/pip/Rust/Node on PATH")
+        assert "runtime/bin/python3" in doctor.stdout, "Installed ngn did not select the bundled engine Python"
+    print("PASS: native installation and bundled engine Python with no Python/pip/Rust/Node on PATH")
 
 
 def verify_extracted_binary(extracted: Path, version: str) -> None:
+    """The bare client runs without any Python on PATH and offers no other engine."""
     binary = extracted / "ngn"
     environment = {"HOME": str(extracted), "PATH": str(extracted)}
-    config = extracted / "fixture-config.json"
-    protocol_fixture.write_config(config)
-    (extracted / "fixture.txt").write_text("local artifact fixture\n")
     assert subprocess.check_output([str(binary), "--version"], env=environment, text=True).strip() == f"ngn {version}"
-    arguments = [
-        str(binary),
-        "--config",
-        str(config),
-        "--read-only",
-        "-C",
-        str(extracted),
-        "--data-dir",
-        str(extracted / "state"),
-    ]
-    doctor = subprocess.check_output([*arguments, "doctor"], env=environment, text=True, timeout=30)
-    assert f"Config: {config}" in doctor and "Provider: protocol-fixture" in doctor
-
-    # The bare archive has no runtime of its own. Its test-only runner uses an
-    # absolute interpreter, never a provider or Python installed on PATH.
-    output = subprocess.check_output(
-        [*arguments, "run", "--json", protocol_fixture.TOPOLOGY_PROMPT], env=environment, text=True, timeout=45
-    )
-    events = [json.loads(line) for line in output.splitlines()]
-    assert events[-1]["status"] == "completed"
-    assert sum(event["event"] == "task_finished" and event["task"]["status"] == "completed" for event in events) == 2
+    usage = subprocess.check_output([str(binary), "--help"], env=environment, text=True, timeout=30)
+    assert "Python engine" in usage and "--engine " not in usage and "upgrade" not in usage
 
 
 def verify(output: Path, *, require_bundle: bool = False) -> None:
@@ -510,14 +486,13 @@ def verify(output: Path, *, require_bundle: bool = False) -> None:
         extracted = Path(temporary)
         with tarfile.open(output / f"ngn-v{version}-{platform_name}.tar.gz") as archive:
             archive.extractall(extracted, filter="data")
-        for name in ("config.example.json", "config.chatgpt.example.json"):
-            assert (extracted / name).read_bytes() == (NGN / name).read_bytes(), (
-                "Packaged configuration example is not the tested source"
-            )
+        assert (extracted / "README.md").read_bytes() == (NGN / "README.md").read_bytes(), (
+            "Packaged README is not the tested source"
+        )
         verify_extracted_binary(extracted, version)
     print(
-        f"PASS: ngn {version} artifacts bound to {manifest['commit']}; checksums, native doctor and offline "
-        "fixture subagent execution verified with no Python on PATH"
+        f"PASS: ngn {version} artifacts bound to {manifest['commit']}; checksums, installed doctor and "
+        "client binary verified with no Python on PATH"
     )
 
 

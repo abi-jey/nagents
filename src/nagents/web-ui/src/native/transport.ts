@@ -1,10 +1,13 @@
-// The Rust host owns these identities. This is not the Python web API.
+import { engineRequest, readEngineEvent } from "./engine-transport.js";
+
+// Client projections of the Python engine's v1 API, reached through `ngn serve`.
 export type RunStatus = "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted";
 export type Run = { id: string; session_id: string; request_id: string; status: RunStatus };
 export type Session = { id: string; title: string; updated_at_ms: number };
 export type Bootstrap = {
   version: string; protocol_version: number; token: string; workspace: string;
   backend: "demo" | "nagents"; provider: string; model: string | null; read_only: boolean;
+  capabilities?: string[];
 };
 export type Call = { call_id: string; name: string; arguments: unknown };
 export type Approval = {
@@ -18,7 +21,8 @@ export type Task = {
   depth: number; read_only: boolean; status: RunStatus;
 };
 export type TaskLimits = { max_concurrent: number; max_executions: number; max_depth: number };
-export type Queue = { session_id: string; paused: boolean; entries: { run: Run; prompt: string }[] };
+type QueueEntry = { prompt: string } & ({ run: Run } | { run?: undefined; request_id: string });
+export type Queue = { session_id: string; paused: boolean; entries: QueueEntry[] };
 export type QueueAction = "pause" | "resume" | "clear";
 export type SteeringStatus = "pending" | "offered" | "applied" | "uncertain" | "undelivered";
 export type SteeringReceipt = {
@@ -44,22 +48,16 @@ export type Event = {
   | { event: "task_started" | "task_updated"; task: Task }
   | { event: "task_finished"; task: Task; error: string }
   | { event: "run_finished"; status: RunStatus; error: string }
+  | { event: "session_updated"; session: Session }
+  | { event: "unknown" }
 );
 
 export const sessionPath = (session: string) => `/api/sessions/${encodeURIComponent(session)}`;
 export const runPath = (run: string) => `/api/runs/${encodeURIComponent(run)}`;
 
-export function eventsUrl(location: Pick<Location, "protocol" | "host">, session: string, after: number) {
+export function eventsUrl(location: Pick<Location, "protocol" | "host">, session: string, after: number, path = "/api/v1/events") {
   const query = new URLSearchParams({ session_id: session, after: String(after) });
-  return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events?${query}`;
-}
-
-export function acceptEvent(value: unknown, session: string, after: number): value is Event {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Partial<Event>;
-  return record.schema_version === 1 && record.session_id === session && typeof record.run_id === "string"
-    && typeof record.event === "string" && typeof record.sequence === "number"
-    && Number.isSafeInteger(record.sequence) && record.sequence > after;
+  return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}?${query}`;
 }
 
 export interface Transport {
@@ -67,37 +65,40 @@ export interface Transport {
   watch(session: string, token: string, receive: (event: Event) => void, connected: (open: boolean) => void, invalid: () => void): () => void;
 }
 
-export const browserTransport: Transport = {
-  async request<T>(path: string, token?: string, body?: object, signal?: AbortSignal): Promise<T> {
-    const response = await fetch(path, {
-      method: body === undefined ? "GET" : "POST",
-      headers: {
-        ...(token && { "x-ngn-token": token }),
-        ...(body !== undefined && { "content-type": "application/json" }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      credentials: "same-origin",
-      signal,
-    });
-    const value: unknown = await response.json().catch(() => undefined);
-    if (!response.ok || value === undefined) {
-      const detail = value && typeof value === "object" && "detail" in value ? value.detail : undefined;
-      throw new Error(typeof detail === "string" ? detail : `ngn returned HTTP ${response.status}`);
-    }
-    return value as T;
-  },
-  watch(session, token, receive, connected, invalid) {
+async function request<T>(path: string, token?: string, body?: object, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: {
+      ...(token && { "x-ngn-token": token }),
+      ...(body !== undefined && { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: "same-origin",
+    signal,
+  });
+  const value: unknown = await response.json().catch(() => undefined);
+  if (!response.ok || value === undefined) {
+    const detail = value && typeof value === "object" && "detail" in value ? value.detail : undefined;
+    throw new Error(typeof detail === "string" ? detail : `ngn returned HTTP ${response.status}`);
+  }
+  return value as T;
+}
+
+type ReadEvent = (raw: unknown, session: string, after: number) => Event | undefined;
+
+function watch(path: string, read: ReadEvent): Transport["watch"] {
+  return (session, token, receive, connected, invalid) => {
     let stopped = false, after = 0;
     let socket: WebSocket, retry: ReturnType<typeof setTimeout>;
     function connect() {
       if (stopped) return;
-      socket = new WebSocket(eventsUrl(window.location, session, after), ["ngn.events.v1", `ngn.token.${token}`]);
+      socket = new WebSocket(eventsUrl(window.location, session, after, path), ["ngn.events.v1", `ngn.token.${token}`]);
       socket.onopen = () => { if (!stopped) connected(true); };
       socket.onmessage = ({ data }) => {
         if (stopped) return;
         try {
-          const record: unknown = JSON.parse(data);
-          if (!acceptEvent(record, session, after)) return;
+          const record = read(JSON.parse(data), session, after);
+          if (!record) return;
           receive(record);
           after = record.sequence;
         } catch { invalid(); }
@@ -114,5 +115,10 @@ export const browserTransport: Transport = {
       clearTimeout(retry);
       socket?.close();
     };
-  },
+  };
+}
+
+export const browserTransport: Transport = {
+  request: engineRequest(request),
+  watch: watch("/api/v1/events", (raw, session, after) => readEngineEvent(raw, session, after, true)),
 };

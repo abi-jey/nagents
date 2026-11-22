@@ -41,6 +41,7 @@ pub(super) struct Cards {
     seen: i64,
     completions: HashMap<Key, Completion>,
     wipes: Vec<(Position, HeaderCells, Completion)>,
+    shell_timeout: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -92,8 +93,14 @@ impl Cards {
         }
     }
 
+    /// The host's shell deadline in milliseconds, shown in each shell header.
+    pub(super) fn with_shell_timeout(mut self, timeout: Option<u64>) -> Self {
+        self.shell_timeout = timeout;
+        self
+    }
+
     pub(super) fn reset(&mut self) {
-        *self = Self::new(self.animated);
+        *self = Self::new(self.animated).with_shell_timeout(self.shell_timeout);
     }
 
     pub(super) fn skip_completions(&mut self, after: i64) {
@@ -470,7 +477,24 @@ fn shown_status(status: &str) -> &str {
     if status == "complete" { "" } else { status }
 }
 
-fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
+// The Python TUI's right-hand columns: outcome, elapsed and an optional timeout.
+// Every row reserves the same slots so the columns line up down the transcript.
+const OUTCOME_COLUMN: usize = 10;
+const TIME_COLUMN: usize = 8;
+const MIN_LABEL: usize = 12;
+
+fn columns(status: &str, elapsed: Option<&str>, timeout: Option<&str>) -> String {
+    let timeout = timeout.map_or_else(
+        || " ".repeat(TIME_COLUMN + 3),
+        |timeout| format!(" / {timeout:>TIME_COLUMN$}"),
+    );
+    format!(
+        "{status:<OUTCOME_COLUMN$}{:>TIME_COLUMN$}{timeout}",
+        elapsed.unwrap_or_default()
+    )
+}
+
+fn summary(card: &ToolCard<'_>, marker: &str, width: u16, shell_timeout: Option<u64>) -> String {
     let cells = usize::from(width);
     let mut prefix = if marker.is_empty() {
         String::new()
@@ -494,6 +518,20 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     } else {
         shown
     };
+    let timeout = card
+        .timeout
+        .or(shell_timeout.filter(|_| card.shell))
+        .map(duration);
+    let aligned = columns(status, elapsed.as_deref(), timeout.as_deref());
+    let aligned_width = Span::raw(&aligned).width();
+    if available >= MIN_LABEL + 2 + aligned_width {
+        let label = clip(&card.label, available - 2 - aligned_width);
+        let gap = available - aligned_width - Span::raw(&label).width();
+        prefix.push_str(&label);
+        prefix.push_str(&" ".repeat(gap));
+        prefix.push_str(&aligned);
+        return prefix;
+    }
     let mut outcome = suffix(status);
     if Span::raw(&outcome).width() > available && waiting {
         status = "waiting";
@@ -536,12 +574,12 @@ pub(super) enum UserPaint {
 }
 
 impl UserPaint {
-    pub(super) fn new(surface: Option<Style>, background: Option<[u8; 3]>, no_color: bool) -> Self {
+    pub(super) fn new(background: Option<[u8; 3]>, no_color: bool) -> Self {
         if no_color {
             return Self::Monochrome;
         }
-        surface
-            .or_else(|| background.map(terminal_user_surface))
+        background
+            .map(terminal_user_surface)
             .map_or(Self::Plain, Self::Surface)
     }
 }
@@ -716,7 +754,8 @@ impl<'a> Layout<'a> {
                             style = style.add_modifier(Modifier::UNDERLINED);
                         }
                     }
-                    let title = summary(card, marker, width);
+                    let shell_timeout = cards.and_then(|cards| cards.shell_timeout);
+                    let title = summary(card, marker, width, shell_timeout);
                     if cards.is_some()
                         && Some(card.key) == active
                         && card.status == "running"
@@ -971,13 +1010,13 @@ impl<'a> Layout<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ngn_core::host::Approval;
-    use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
     use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
     use serde_json::json;
 
     use super::*;
+    use crate::engine::{Approval, ClientDisplay};
     use crate::tui::footer::Activity;
     use crate::tui::{App, main_transcript};
 
@@ -1094,8 +1133,6 @@ mod tests {
 
     #[test]
     fn user_shade_wraps_wide_text_without_coloring_other_rows() {
-        use ngn_core::legacy::PaintedComposerTheme;
-
         let parts = [
             TranscriptPart::Text("before\n".into()),
             TranscriptPart::User("界界界\n".into()),
@@ -1112,12 +1149,8 @@ mod tests {
                 .unwrap();
             terminal.backend().buffer().clone()
         };
-        let theme = Some(PaintedComposerTheme::Ocean);
-        let shaded = paint(UserPaint::new(
-            super::super::composer::Palette::new(theme, false).user_surface(),
-            None,
-            false,
-        ));
+        // A black terminal background is tinted 10% toward white.
+        let shaded = paint(UserPaint::new(Some([0, 0, 0]), false));
         for (y, columns) in [
             (1, &[0, 1, 2, 4, 6, 7][..]),
             (2, &[0, 1, 2, 4, 5, 6, 7][..]),
@@ -1125,7 +1158,7 @@ mod tests {
             for &x in columns {
                 // Ratatui emits the leading cell of a wide glyph; the same
                 // background is applied by the terminal to its continuation.
-                assert_eq!(shaded[(x, y)].bg, Color::Rgb(29, 44, 54));
+                assert_eq!(shaded[(x, y)].bg, Color::Rgb(25, 25, 25));
             }
         }
         assert_eq!(shaded[(0, 1)].symbol(), "▎");
@@ -1136,11 +1169,7 @@ mod tests {
         assert_eq!(shaded[(0, 3)].symbol(), "a");
         assert_eq!(shaded[(0, 3)].bg, Color::Reset);
 
-        let unshaded = paint(UserPaint::new(
-            super::super::composer::Palette::new(theme, true).user_surface(),
-            Some([0, 0, 0]),
-            true,
-        ));
+        let unshaded = paint(UserPaint::new(Some([0, 0, 0]), true));
         assert_eq!(unshaded, paint(UserPaint::Monochrome));
         // NO_COLOR keeps the user bar and inset, just without colour.
         assert_eq!(unshaded[(0, 1)].symbol(), "▎");
@@ -1158,7 +1187,7 @@ mod tests {
             ([0; 3], Color::Rgb(25, 25, 25)),
             ([255; 3], Color::Rgb(229, 229, 229)),
         ] {
-            let native = paint(UserPaint::new(None, Some(base), false));
+            let native = paint(UserPaint::new(Some(base), false));
             assert!(
                 [0, 1, 2, 4, 6, 7]
                     .into_iter()
@@ -1200,11 +1229,7 @@ mod tests {
                     Some(&app.tools),
                     app.tools_available(),
                     active,
-                    UserPaint::new(
-                        app.composer_palette.user_surface(),
-                        app.terminal_background,
-                        app.no_color,
-                    ),
+                    UserPaint::new(app.terminal_background, app.no_color),
                 );
                 if app.shows_overlay() {
                     layout.hide_wipes();
@@ -1255,17 +1280,7 @@ mod tests {
 
     #[test]
     fn workspace_renders_multiple_turns_and_completed_cards_without_top_chrome() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = ngn_core::Host::open(
-            ngn_core::Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..ngn_core::Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let now = Instant::now();
         let mut app = App {
             session: "synthetic-workspace-session".into(),
@@ -1324,7 +1339,7 @@ mod tests {
                 event(
                     run,
                     Event::RunFinished {
-                        status: ngn_protocol::RunStatus::Completed,
+                        status: crate::model::RunStatus::Completed,
                         error: String::new(),
                     },
                 ),
@@ -1334,7 +1349,7 @@ mod tests {
         let paint = |app: &mut App, width| {
             let mut terminal = Terminal::new(TestBackend::new(width, 36)).unwrap();
             terminal
-                .draw(|frame| super::super::draw(frame, app, &host, now))
+                .draw(|frame| super::super::draw(frame, app, &display, now))
                 .unwrap();
             terminal.backend().buffer().clone()
         };
@@ -1510,7 +1525,7 @@ mod tests {
                 .collect::<String>()
         };
         assert!(lines(&final_frame).contains("shell"));
-        assert!(lines(&final_frame).contains("· 1.25s"));
+        assert!(lines(&final_frame).contains(" 1.25s"));
         for mut frame in [first, middle] {
             for column in 2..60 {
                 frame[(column, row)].fg = final_frame[(column, row)].fg;
@@ -2139,6 +2154,60 @@ mod tests {
     }
 
     #[test]
+    fn headers_align_outcome_elapsed_and_timeout_columns_like_the_python_tui() {
+        use crate::model::ToolCall;
+        let shell = ToolCall {
+            call_id: "a".into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"command": "ls"}),
+        };
+        let fetch = ToolCall {
+            call_id: "b".into(),
+            name: "fetch".into(),
+            arguments: serde_json::json!({"timeout_ms": 1500}),
+        };
+        let read = ToolCall {
+            call_id: "c".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "x"}),
+        };
+        let card = |call, status| ToolCard::for_test(call, status, Some(1250));
+        let shell_timeout = Some(120_000);
+        let rows = [
+            summary(&card(&shell, "running"), "▸", 60, shell_timeout),
+            summary(&card(&fetch, "failed"), "▸", 60, shell_timeout),
+            summary(&card(&read, "complete"), "▸", 60, shell_timeout),
+        ];
+        let pad = |count| " ".repeat(count);
+        assert_eq!(
+            rows[0],
+            format!(
+                "▸ shell · ls{}running{}1.25s /{}2m",
+                pad(19),
+                pad(6),
+                pad(7)
+            )
+        );
+        assert_eq!(
+            rows[1],
+            format!("▸ fetch{}failed{}1.25s /{}1.5s", pad(24), pad(7), pad(5))
+        );
+        // Success shows no word; a call with no deadline keeps the timeout slot blank.
+        assert_eq!(
+            rows[2],
+            format!("▸ read_file · x{}1.25s{}", pad(29), pad(11))
+        );
+        let column = |row: &str| row.find("1.25s").map(|byte| row[..byte].chars().count());
+        assert_eq!(column(&rows[0]), column(&rows[1]));
+        assert_eq!(column(&rows[1]), column(&rows[2]));
+        // Narrow headers fall back to the compact form and keep the tool name.
+        let narrow = summary(&card(&shell, "running"), "▸", 30, shell_timeout);
+        assert!(narrow.starts_with("▸ shell"), "{narrow}");
+        assert!(!narrow.contains(" / "), "{narrow}");
+        assert!(narrow.ends_with("running · 1.25s"), "{narrow}");
+    }
+
+    #[test]
     fn card_focus_and_disclosure_are_independent_by_run_and_call() {
         let mut app = App {
             records: vec![
@@ -2173,7 +2242,10 @@ mod tests {
         let rows = draw(&mut app, &mut terminal).join("\n");
         assert!(rows.contains("▸ shell · first"));
         assert!(rows.contains("▸ shell · neighbor"));
-        assert!(rows.contains("▾ shell · second · 1.25s"));
+        assert!(
+            rows.lines()
+                .any(|row| row.starts_with("▾ shell · second") && row.contains(" 1.25s"))
+        );
         assert!(rows.contains("Result: \"output-second\""));
         assert_eq!(rows.matches("Arguments:").count(), 1);
         let selected = terminal

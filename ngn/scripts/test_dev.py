@@ -22,7 +22,6 @@ from dev import (
     isolated_environment,
     main,
     offline_cache_probe,
-    runtime_config,
     source_snapshot,
 )
 
@@ -79,53 +78,52 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
             self.assertTrue(alias.is_symlink())
             self.assertFalse((existing / "checkout").exists())
 
-    def test_installed_cache_probe_is_always_offline_read_only_and_stage_scoped(self) -> None:
+    def test_installed_engine_probe_is_offline_demo_and_stage_scoped(self) -> None:
+        finished = json.dumps({"event": {"type": "run.finished", "status": "completed", "error": ""}})
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary)
-            state = stage / "offline-probe-state"
-            state.mkdir()
-            (state / "host.sqlite3").touch()
-            with patch("dev.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
-                offline_cache_probe(stage)
-            argv = execute.call_args.args[0]
+            runtime = stage / "runtime"
+            completed = subprocess.CompletedProcess([], 0, f"{{}}\n{finished}\n", "")
+            with patch("dev.subprocess.run", return_value=completed) as execute:
+                offline_cache_probe(stage, runtime)
+            workspace = stage / "offline-probe-workspace"
             self.assertEqual(
-                argv,
+                execute.call_args.args[0],
                 [
                     str(stage / "app/ngn"),
-                    "--config",
-                    str(stage / "offline-probe-config.json"),
-                    "--read-only",
+                    "--standalone",
+                    "--engine-demo",
                     "-C",
-                    str(stage / "offline-probe-workspace"),
+                    str(workspace),
                     "--data-dir",
-                    str(state),
-                    "sessions",
+                    str(stage / "offline-probe-state"),
+                    "run",
+                    "--json",
+                    "offline probe",
                 ],
             )
-            self.assertEqual(json.loads((stage / "offline-probe-config.json").read_text()), {})
             self.assertEqual(
                 execute.call_args.kwargs["env"],
                 {
                     "PATH": str(stage / "app"),
-                    "HOME": str(stage / "offline-probe-workspace"),
-                    "XDG_DATA_HOME": str(stage / "offline-probe-workspace/data"),
-                    "XDG_CONFIG_HOME": str(stage / "offline-probe-workspace/config"),
+                    "VIRTUAL_ENV": str(runtime),
+                    "HOME": str(workspace),
+                    "XDG_DATA_HOME": str(workspace / "data"),
+                    "XDG_CONFIG_HOME": str(workspace / "config"),
                 },
             )
-            self.assertTrue((stage / "offline-probe-workspace").is_dir())
+            self.assertTrue(workspace.is_dir())
 
-    def test_installed_cache_probe_fails_closed_on_permission_rejection_or_missing_completion(self) -> None:
-        for code, stdout, stderr in (
-            (1, "", "Identity ownership requires non-writable parent directories"),
-            (0, "", ""),
-        ):
+    def test_installed_engine_probe_fails_closed_without_a_completed_run(self) -> None:
+        failed = json.dumps({"event": {"type": "run.finished", "status": "failed", "error": "x"}})
+        for code, stdout in ((1, ""), (0, ""), (0, failed + "\n")):
             with (
-                self.subTest(code=code),
+                self.subTest(code=code, stdout=stdout),
                 tempfile.TemporaryDirectory() as temporary,
-                patch("dev.subprocess.run", return_value=subprocess.CompletedProcess([], code, stdout, stderr)),
-                self.assertRaisesRegex(ValueError, "Offline installed cache/state probe"),
+                patch("dev.subprocess.run", return_value=subprocess.CompletedProcess([], code, stdout, "")),
+                self.assertRaisesRegex(ValueError, "Offline installed engine probe failed"),
             ):
-                offline_cache_probe(Path(temporary))
+                offline_cache_probe(Path(temporary), Path(temporary) / "runtime")
 
     def test_cli_paths_are_isolated_without_changing_other_rust_arguments(self) -> None:
         parsed = invocation(
@@ -257,28 +255,6 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
             self.assertEqual(dict(os.environ), process_environment)
             self.assertEqual(list(base.iterdir()), [])
 
-    def test_config_rebinds_only_runner_without_mutating_operator_file(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "config.json"
-            original = {
-                "config_version": 1,
-                "runner": ["/old/python", "-m", "ngn_nagents"],
-                "provider": "chosen",
-                "read_only": True,
-                "providers": {"chosen": {"api_key_env": "MY_PROVIDER_KEY"}},
-            }
-            path.write_text(json.dumps(original))
-            result = runtime_config(path, Path("/fresh/runtime"))
-            self.assertEqual(result["runner"], ["/fresh/runtime/bin/python", "-I", "-m", "ngn_nagents"])
-            self.assertEqual(result["providers"], original["providers"])
-            self.assertIs(result["read_only"], True)
-            self.assertEqual(json.loads(path.read_text()), original)
-            invalid_values: tuple[object, ...] = ([], "old config", {"config_version": 2})
-            for invalid in invalid_values:
-                path.write_text(json.dumps(invalid))
-                with self.assertRaises(ValueError):
-                    runtime_config(path, Path("/fresh/runtime"))
-
     def test_default_leaves_discovery_to_the_native_cli(self) -> None:
         result = command(
             Path("/stage/app/ngn"), Invocation("", "", ["doctor"]), Path("/stage/config.json"), Path("/dev/state")
@@ -320,13 +296,9 @@ print(json.dumps([stat.S_IMODE(path.stat().st_mode) for path in (cache.parent.pa
                 patch("dev.version_check"),
                 patch("dev.build", return_value=(stage, runtime, environment)),
                 patch("dev.offline_cache_probe") as probe,
-                patch("dev.run") as run,
             ):
                 self.assertEqual(main(), 0)
-            probe.assert_called_once_with(stage)
-            self.assertEqual(run.call_args.args[0][0], str(runtime / "bin/python"))
-            self.assertEqual(run.call_args.args[0][-2:], ["--binary", str(stage / "app/ngn")])
-            self.assertEqual(run.call_args.kwargs, {"directory": stage, "environment": environment})
+            probe.assert_called_once_with(stage, runtime)
             self.assertEqual(operator_config.read_text(), "not a config")
             self.assertFalse(operator_state.exists())
             self.assertFalse((stage / "config.json").exists())

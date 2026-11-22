@@ -1,5 +1,9 @@
 # Agent Runtime Protocol · v1
 
+> **Retired in 0.100.47.** The Rust host and its per-run adapter were removed;
+> ngn clients now use the Python engine's `/api/v1` contract. This page records
+> the protocol used by 0.100.0–0.100.46.
+
 **Contract:** the host starts an agent process, sends a run, receives streaming
 events and tool requests, and returns tool results. This is bidirectional IPC,
 not embedded Python and not a wrapper around the old Python harness.

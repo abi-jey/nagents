@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { acceptEvent, eventsUrl, type Event } from "./transport.js";
+import { readEngineEvent } from "./engine-transport.js";
+import { eventsUrl, type Event } from "./transport.js";
 import { NativeTranscript } from "./transcript.js";
 
 type Fields<T> = T extends Event ? Omit<T, "schema_version" | "sequence" | "run_id" | "session_id" | "timestamp_ms"> : never;
@@ -71,14 +72,16 @@ test("Only the rendered Python archive format projects labelled notices into cha
 });
 
 test("Event cursors exclude foreign sessions, unsupported protocol versions and duplicate sequences", () => {
-  const record = event(8, { event: "notice", text: "Hello" });
-  assert(acceptEvent(record, "session", 7));
-  assert.equal(acceptEvent(record, "session", 8), false);
-  assert.equal(acceptEvent(record, "other", 0), false);
-  assert.equal(acceptEvent({ ...record, schema_version: 2 }, "session", 0), false);
+  const record = { schema_version: 1, sequence: 8, run_id: "run", session_id: "session", timestamp_ms: 0,
+    event: { type: "notice", text: "Hello" } };
+  assert.equal(readEngineEvent(record, "session", 7)?.event, "notice");
+  assert.equal(readEngineEvent(record, "session", 8), undefined);
+  assert.equal(readEngineEvent(record, "other", 0), undefined);
+  assert.equal(readEngineEvent({ ...record, schema_version: 2 }, "session", 0), undefined);
   const url = new URL(eventsUrl({ protocol: "http:", host: "127.0.0.1:8765" }, "a&b", 7));
   assert.equal(url.protocol, "ws:");
   assert.equal(url.searchParams.get("session_id"), "a&b");
   assert.equal(url.searchParams.get("after"), "7");
   assert.deepEqual([...url.searchParams.keys()], ["session_id", "after"]);
+  assert.equal(url.pathname, "/api/v1/events");
 });

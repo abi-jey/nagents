@@ -1,95 +1,17 @@
+"""The per-run adapter is retired; ngn runs the `nagents engine` server instead."""
+
 from __future__ import annotations
 
-import asyncio
-import logging
 import sys
-from contextlib import suppress
-
-from nagents.tools import ToolRegistry
-
-from . import auth
-from . import wire
-from .protocol import MAX_FRAME
-from .protocol import HostFrame
-from .protocol import ProtocolError
-from .protocol import fields
-from .protocol import output
-from .protocol import read
-from .runtime import HostExecutor
-from .runtime import Start
-from .runtime import run_agent
-
-
-async def serve() -> int:
-    loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader(limit=MAX_FRAME)
-    transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer)
-    task: asyncio.Task[None] | None = None
-    incoming: asyncio.Task[HostFrame] | None = None
-    try:
-        capabilities = ["host_tools", "cancel", "safe_steering"]
-        if auth.available():
-            capabilities.append("chatgpt_auth")
-        # The local Codex login is discovered by nagents itself (CODEX_HOME/~/.codex).
-        capabilities.append("codex_auth")
-        if wire.available():
-            capabilities.append(wire.CAPABILITY)
-        output("", {"type": "ready", "runtime": "nagents", "capabilities": capabilities})
-        first = await read(reader)
-        start = Start.parse(first.message)
-        executor = HostExecutor(ToolRegistry(), first.run_id, output)
-        task = asyncio.create_task(run_agent(start, executor, output))
-        while not task.done():
-            incoming = asyncio.create_task(read(reader))
-            done, _ = await asyncio.wait((task, incoming), return_when=asyncio.FIRST_COMPLETED)
-            if task in done:
-                incoming.cancel()
-                with suppress(asyncio.CancelledError):
-                    await incoming
-                break
-            frame = await incoming
-            if frame.run_id != first.run_id:
-                raise ProtocolError("Host frame has the wrong run_id")
-            message = frame.message
-            kind = message.get("type")
-            if kind == "tool_result":
-                executor.accept(message)
-            elif kind == "steering_offer":
-                executor.steering.accept(message)
-            elif kind == "cancel":
-                fields(message, {"type"})
-                task.cancel()
-                break
-            else:
-                raise ProtocolError("Unexpected host message")
-        await task
-        return 0
-    finally:
-        if incoming is not None and not incoming.done():
-            incoming.cancel()
-            with suppress(asyncio.CancelledError):
-                await incoming
-        if task is not None and not task.done():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-        transport.close()
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
-    try:
-        if len(sys.argv) > 1:
-            if sys.argv[1] == "auth":
-                return asyncio.run(auth.serve(sys.argv[2:]))
-            print("ngn-nagents: invalid runtime mode", file=sys.stderr)
-            return 2
-        return asyncio.run(serve())
-    except (ProtocolError, EOFError, BrokenPipeError):
-        print("ngn-nagents: invalid/closed host protocol stream", file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        return 130
+    print(
+        "ngn-nagents no longer runs agents. ngn now starts the Python engine "
+        "(`nagents engine`); update ngn with `ngn update`.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

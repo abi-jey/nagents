@@ -47,6 +47,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          components: rustfmt
+
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit

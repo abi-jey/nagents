@@ -1,12 +1,11 @@
 //! The approval panel: wording, colouring, sizing and keys.
 //!
 //! Everything here is presentation. The decision still binds to the exact
-//! pending approval id in the host, never to this text.
+//! pending approval id in the engine, never to this text.
 
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ngn_core::host::Approval;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -14,7 +13,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
-use crate::view;
+use crate::{engine::Approval, view};
 
 /// Plain `y` and `Enter` only count after this long without any keypress
 /// since the panel appeared, so typing aimed at the composer cannot approve.
@@ -232,7 +231,7 @@ mod tests {
             root_session_id: "s".into(),
             agent_title: "Reviewer".into(),
             depth,
-            call: ngn_protocol::ToolCall {
+            call: crate::model::ToolCall {
                 call_id: "c".into(),
                 name: name.into(),
                 arguments,

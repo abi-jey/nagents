@@ -1,10 +1,10 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, VecDeque},
     io::{self, Write, stdout},
-    sync::Arc,
     time::{Duration, Instant},
 };
 
+use crate::model::{Event, EventRecord, TaskInfo};
 use anyhow::{Context, Result, ensure};
 #[cfg(unix)]
 use crossterm::event::{
@@ -19,15 +19,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use futures_util::StreamExt;
-use ngn_core::{
-    ApprovalMode, Host,
-    host::{Approval, IdleTurnChanged, InputAdmission},
-    queues::{QueueAction, QueueState},
-    steering::{SteeringState, SteeringStatus},
-    store::Run,
-};
-use ngn_protocol::{EventRecord, TaskInfo};
+use futures_util::{StreamExt, future::join_all, stream::FusedStream};
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -39,7 +31,14 @@ use ratatui::{
 };
 use uuid::Uuid;
 
-use crate::{animations_enabled, view};
+use crate::{
+    animations_enabled,
+    engine::{
+        Approval, ClientDisplay, Delivery, Engine, FeedNotice, InputAdmission, LiveUpdate,
+        QueueAction, QueueState, Run, SessionSelection, SteeringState, SteeringStatus, Submission,
+    },
+    view,
+};
 
 mod agents;
 mod approval;
@@ -211,6 +210,10 @@ struct SteeringSubmission {
 }
 
 const MAX_UNCONFIRMED_FIFO: usize = 16;
+const MAX_TRANSCRIPT_RECORDS: usize = 5000;
+const MAX_LIVE_RECORDS: usize = 256;
+const MAX_LIVE_BYTES: usize = 256 * 1024;
+const STEERING_READ_BATCH: usize = 8;
 
 #[derive(Clone)]
 struct FifoSubmission {
@@ -229,14 +232,17 @@ struct MouseUpdate {
 struct App {
     session: String,
     records: Vec<EventRecord>,
+    // Live text shares display ordering but never contributes to `after`.
+    live_text: VecDeque<(i64, usize)>,
+    live_text_bytes: usize,
     after: i64,
     input: String,
     caret: composer::Caret,
-    composer_palette: composer::Palette,
     terminal_background: Option<[u8; 3]>,
     no_color: bool,
     completion: completion::Completion,
     status: String,
+    connection_notice: Option<String>,
     /// An admission error, uncertain receipt or dispatch warning, not a hint.
     failure: Option<String>,
     activity: footer::Activity,
@@ -256,6 +262,7 @@ struct App {
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
+    tasks_unavailable: bool,
     agents: agents::Rail,
     task_picker: bool,
     task_index: usize,
@@ -282,74 +289,179 @@ struct App {
 }
 
 impl App {
-    async fn catch_up(&mut self, host: &Host) -> Result<()> {
+    async fn catch_up(&mut self, engine: &impl Engine) -> Result<()> {
         loop {
-            let records = host.store.events(&self.session, self.after).await?;
-            let count = records.len();
-            if let Some(last) = records.last() {
-                self.after = last.sequence;
-            }
-            for record in &records {
-                if matches!(
-                    record.event,
-                    ngn_protocol::Event::TaskStarted { .. }
-                        | ngn_protocol::Event::TaskUpdated { .. }
-                        | ngn_protocol::Event::TaskFinished { .. }
-                ) {
-                    self.agents.invalidate();
-                }
-                if matches!(
-                    record.event,
-                    ngn_protocol::Event::RunStarted { .. }
-                        | ngn_protocol::Event::SteeringUpdated { .. }
-                        | ngn_protocol::Event::RunFinished { .. }
-                ) {
-                    self.steering_dirty = true;
-                    self.steering_runs.insert(record.run_id.clone());
-                }
-            }
-            self.records.extend(records);
-            if self.records.len() > 5000 {
-                self.records.drain(..self.records.len() - 5000);
-            }
-            if count < 1000 {
+            let page = engine.history(&self.session, self.after).await?;
+            ensure!(
+                page.cursor >= self.after && (!page.has_more || page.cursor > self.after),
+                "Engine history cursor did not advance"
+            );
+            self.after = page.cursor;
+            self.remember_committed(page.records);
+            if !page.has_more {
                 break;
             }
         }
         Ok(())
     }
 
-    async fn state(&mut self, host: &Host) {
+    fn remember_committed(&mut self, records: impl IntoIterator<Item = EventRecord>) {
+        let mut reorder = false;
+        for record in records {
+            match &record.event {
+                Event::TaskStarted { .. }
+                | Event::TaskUpdated { .. }
+                | Event::TaskFinished { .. } => {
+                    self.agents.invalidate();
+                }
+                Event::SteeringUpdated { .. } => {
+                    self.steering_dirty = true;
+                    self.steering_runs.insert(record.run_id.clone());
+                }
+                Event::RunFinished { .. }
+                    if self
+                        .steering
+                        .iter()
+                        .any(|state| state.run_id == record.run_id) =>
+                {
+                    self.steering_dirty = true;
+                    self.steering_runs.insert(record.run_id.clone());
+                }
+                _ => (),
+            }
+            reorder |= self
+                .records
+                .last()
+                .is_some_and(|last| last.sequence > record.sequence);
+            self.records.push(record);
+        }
+        if reorder {
+            // A durable catch-up can fill rows before the live suffix.
+            self.records.sort_unstable_by_key(|record| record.sequence);
+        }
+        self.trim_transcript();
+    }
+
+    fn remember_live(&mut self, record: EventRecord) -> bool {
+        let Event::TextDelta { text } = &record.event else {
+            return false;
+        };
+        let bytes = text.len();
+        if record.session_id != self.session
+            || bytes == 0
+            || bytes > MAX_LIVE_BYTES
+            || record.sequence <= self.after
+            || self
+                .records
+                .last()
+                .is_some_and(|last| last.sequence >= record.sequence)
+        {
+            return false;
+        }
+        while self.live_text.len() >= MAX_LIVE_RECORDS
+            || self.live_text_bytes + bytes > MAX_LIVE_BYTES
+        {
+            let (sequence, removed) = self
+                .live_text
+                .pop_front()
+                .expect("nonempty live text buffer");
+            self.live_text_bytes -= removed;
+            if let Ok(index) = self
+                .records
+                .binary_search_by_key(&sequence, |row| row.sequence)
+            {
+                self.records.remove(index);
+            }
+        }
+        self.live_text.push_back((record.sequence, bytes));
+        self.live_text_bytes += bytes;
+        self.records.push(record);
+        self.trim_transcript();
+        true
+    }
+
+    fn trim_transcript(&mut self) {
+        if self.records.len() > MAX_TRANSCRIPT_RECORDS {
+            self.records
+                .drain(..self.records.len() - MAX_TRANSCRIPT_RECORDS);
+            while self
+                .live_text
+                .front()
+                .is_some_and(|(sequence, _)| *sequence < self.records[0].sequence)
+            {
+                let (_, bytes) = self.live_text.pop_front().unwrap();
+                self.live_text_bytes -= bytes;
+            }
+        }
+    }
+
+    fn discard_live_text(&mut self) {
+        if !self.live_text.is_empty() {
+            self.records.retain(|record| {
+                self.live_text
+                    .binary_search_by_key(&record.sequence, |(seq, _)| *seq)
+                    .is_err()
+            });
+            self.live_text.clear();
+            self.live_text_bytes = 0;
+        }
+    }
+
+    async fn state(&mut self, engine: &impl Engine) {
+        if self.connection_notice.is_some() {
+            return;
+        }
         let previous = self.active.as_ref().map(|run| run.id.clone());
-        let (active, child_text) = host.conversation_activity(&self.session).await;
-        self.active = active;
+        let activity = match engine.conversation_activity(&self.session).await {
+            Ok(activity) => activity,
+            Err(error) => {
+                self.status = format!("Cannot load conversation activity: {error}");
+                return;
+            }
+        };
+        self.active = activity.active;
         let changed = previous.as_deref() != self.active.as_ref().map(|run| run.id.as_str());
-        if changed && let Err(error) = self.catch_up(host).await {
+        if changed && let Err(error) = self.catch_up(engine).await {
             self.status = format!("Cannot load conversation: {error}");
         }
         if self.steering_dirty || changed {
-            let mut runs: Vec<String> = self
-                .steering_runs
-                .iter()
-                .cloned()
-                .chain(self.active.iter().map(|run| run.id.clone()))
-                .chain(self.steering.iter().map(|state| state.run_id.clone()))
-                .collect();
-            runs.sort();
-            runs.dedup();
-            for run in runs {
-                match host.steering(&run).await {
+            // Refresh only dirty identities, not every historical run on each
+            // event. A large replay must not block the terminal on a chain of
+            // network calls; drain pending receipts over subsequent ticks.
+            let mut runs: BTreeSet<_> = self.active.iter().map(|run| run.id.clone()).collect();
+            if changed && let Some(previous) = previous {
+                runs.insert(previous);
+            }
+            for run in &runs {
+                self.steering_runs.remove(run);
+            }
+            while runs.len() < STEERING_READ_BATCH
+                && let Some(run) = self.steering_runs.pop_first()
+            {
+                runs.insert(run);
+            }
+            let updates = join_all(runs.into_iter().map(|run| async move {
+                let state = engine.steering(&run).await;
+                (run, state)
+            }))
+            .await;
+            for (run, update) in updates {
+                match update {
                     Ok(state) if state.session_id == self.session => {
                         self.steering.retain(|saved| saved.run_id != run);
-                        self.steering.push(state);
+                        if !state.receipts.is_empty()
+                            || self.active.as_ref().is_some_and(|active| active.id == run)
+                        {
+                            self.steering.push(state);
+                        }
                     }
                     Ok(_) => (),
                     Err(error) => self.status = format!("Cannot inspect steering: {error}"),
                 }
             }
-            self.steering_dirty = false;
+            self.steering_dirty = !self.steering_runs.is_empty();
         }
-        let approvals = host.approvals().await;
+        let approvals = activity.approvals;
         let approval = approvals
             .iter()
             .find(|approval| {
@@ -364,7 +476,7 @@ impl App {
             // The pending modal and durable transcript have separate sources.
             // Pick up a committed decision before drawing the newly exposed row.
             if self.approval.is_some()
-                && let Err(error) = self.catch_up(host).await
+                && let Err(error) = self.catch_up(engine).await
             {
                 self.status = format!("Cannot load conversation: {error}");
             }
@@ -375,8 +487,8 @@ impl App {
             .queue
             .entries
             .get(self.queue_index)
-            .map(|entry| entry.run.id.clone());
-        match host.queue(&self.session).await {
+            .map(|entry| entry.request_id.clone());
+        match engine.queue(&self.session).await {
             Ok(queue) => {
                 self.queue = queue;
                 if self.queue.entries.is_empty() && self.status.starts_with("Input queued · ") {
@@ -387,7 +499,7 @@ impl App {
                         self.queue
                             .entries
                             .iter()
-                            .position(|entry| entry.run.id == id)
+                            .position(|entry| entry.request_id == id)
                     })
                     .unwrap_or(0);
             }
@@ -398,9 +510,10 @@ impl App {
                 .tasks
                 .get(self.task_index)
                 .map(|task| task.run_id.clone());
-            match host.store.tasks(&self.session).await {
+            match engine.tasks(&self.session).await {
                 Ok(tasks) => {
-                    self.tasks = tasks;
+                    self.tasks_unavailable = tasks.is_none();
+                    self.tasks = tasks.unwrap_or_default();
                     self.agents.refresh(&self.tasks);
                     if let Some(selected) = selected {
                         if let Some(index) =
@@ -418,22 +531,22 @@ impl App {
         }
         self.agents.activity.set_animated(self.activity.animated());
         self.agents.activity.sync_approvals(&approvals);
-        self.agents
-            .activity
-            .sync_dispatches(&host.child_tool_dispatches());
-        self.agents.activity.sync_text_phases(&child_text);
+        match engine.child_tool_dispatches().await {
+            Ok(dispatches) => self.agents.activity.sync_dispatches(&dispatches),
+            Err(error) => self.status = format!("Cannot load subagent activity: {error}"),
+        }
+        self.agents.activity.sync_text_phases(&activity.child_text);
         if self.task_picker
             && self.task_detail
             && let Some(task) = self.tasks.get(self.task_index)
         {
-            match host.store.events(&task.session_id, self.task_after).await {
-                Ok(records) => {
-                    if let Some(record) = records.last() {
-                        self.task_after = record.sequence;
-                    }
-                    self.task_records.extend(records);
-                    if self.task_records.len() > 5000 {
-                        self.task_records.drain(..self.task_records.len() - 5000);
+            match engine.history(&task.session_id, self.task_after).await {
+                Ok(page) => {
+                    self.task_after = page.cursor;
+                    self.task_records.extend(page.records);
+                    if self.task_records.len() > MAX_TRANSCRIPT_RECORDS {
+                        self.task_records
+                            .drain(..self.task_records.len() - MAX_TRANSCRIPT_RECORDS);
                     }
                 }
                 Err(error) => self.status = format!("Cannot inspect subagent: {error}"),
@@ -448,7 +561,7 @@ impl App {
             self.failure.is_some(),
             &self.records,
             Instant::now(),
-            ngn_core::store::now_ms(),
+            view::now_ms(),
         );
     }
 
@@ -557,35 +670,51 @@ impl App {
         self.composer_available() && self.completion.key(&mut self.input, key)
     }
 
-    async fn open_picker(&mut self, host: &Host) -> Result<()> {
-        self.picker = Some(picker::Picker::new(host.store.sessions().await?));
+    async fn open_picker(&mut self, engine: &impl Engine) -> Result<()> {
+        self.picker = Some(picker::Picker::new(engine.sessions().await?));
         Ok(())
     }
 
-    async fn picker_key(&mut self, host: &Host, key: KeyEvent) -> Result<()> {
+    async fn picker_key(&mut self, engine: &impl Engine, key: KeyEvent) -> Result<()> {
         match self.picker.as_mut().and_then(|picker| picker.key(key)) {
             Some(picker::Choice::Close) => self.picker = None,
-            Some(picker::Choice::New) => {
-                self.switch(host, host.store.create_session().await?.id)
-                    .await?;
+            Some(picker::Choice::New) => self.switch(engine, SessionSelection::New).await?,
+            Some(picker::Choice::Existing(id)) => {
+                self.switch(engine, SessionSelection::Resume(&id)).await?;
             }
-            Some(picker::Choice::Existing(id)) => self.switch(host, id).await?,
             None => (),
         }
         Ok(())
     }
 
-    async fn switch(&mut self, host: &Host, id: String) -> Result<()> {
-        host.store.session(&id).await?;
-        self.session = id;
+    async fn switch(
+        &mut self,
+        engine: &impl Engine,
+        selection: SessionSelection<'_>,
+    ) -> Result<()> {
+        let session = engine.open_session(selection).await?;
+        if session != self.session {
+            // An unavailable snapshot must not leave another conversation's
+            // run, approval, or queue controls attached to this draft.
+            self.active = None;
+            self.approval = None;
+            self.approval_since.reset();
+            self.preview_scroll = 0;
+            self.queue = QueueState::default();
+            self.queue_index = 0;
+        }
+        self.session = session;
         self.after = 0;
         self.records.clear();
+        self.live_text.clear();
+        self.live_text_bytes = 0;
         self.scroll = None;
         self.tools.reset();
         self.scrollbar = scrollbar::Scrollbar::default();
         self.selection = selection::Selection::default();
         self.picker = None;
         self.tasks.clear();
+        self.tasks_unavailable = false;
         self.agents = agents::Rail::default();
         self.task_picker = false;
         self.task_index = 0;
@@ -599,10 +728,10 @@ impl App {
         self.steering.clear();
         self.steering_runs.clear();
         self.steering_dirty = true;
-        self.catch_up(host).await?;
+        self.catch_up(engine).await?;
         self.tools.skip_completions(self.after);
         self.activity.reset(self.after, Instant::now());
-        self.state(host).await;
+        self.state(engine).await;
         Ok(())
     }
 }
@@ -667,8 +796,8 @@ fn main_transcript<'a>(
     parts
 }
 
-fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
-    let wall_ms = ngn_core::store::now_ms();
+fn draw(frame: &mut Frame, app: &mut App, display: &ClientDisplay, now: Instant) {
+    let wall_ms = view::now_ms();
     let accent = ACCENT;
     let muted = MUTED;
     let area = frame.area();
@@ -690,7 +819,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     );
     transcript_area.height = conversation.height;
     app.agents.clear_motion_rows();
-    let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
+    let context = rail.and_then(|rail| app.draw_agents(frame, rail, display, (accent, muted)));
     app.agents.observe_context(context);
     // Keep the exact waiting child visible next to its approval prompt.
     let approval_dialog = app.approval.as_ref().map(|approval| {
@@ -726,11 +855,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         Some(&app.tools),
         interactive,
         sweep,
-        tool_cards::UserPaint::new(
-            app.composer_palette.user_surface(),
-            app.terminal_background,
-            app.no_color,
-        ),
+        tool_cards::UserPaint::new(app.terminal_background, app.no_color),
     );
     if app.shows_overlay() {
         transcript.hide_wipes();
@@ -739,7 +864,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         transcript.mask_wipes(area);
     }
     if app.records.is_empty() {
-        for line in welcome(&host.config.workspace, text_area.width) {
+        for line in welcome(&display.workspace, text_area.width) {
             transcript.push_decoration(line);
         }
     }
@@ -786,7 +911,6 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         &app.input,
         app.cursor.at(&app.input),
         app.caret_visible(now),
-        app.composer_palette,
         draft_text.as_mut(),
     );
     if app.input.is_empty() && app.composer_available() && input_area.width > 2 {
@@ -808,7 +932,8 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         composer = composer.title_bottom(footer::fit(title, width).right_aligned());
     }
     frame.render_widget(composer, draft);
-    app.activity.draw(frame, footer, app, &host.config, now);
+    app.activity
+        .draw(frame, footer, app, &display.provider, now);
     if app.task_picker {
         let area = center(frame.area(), 110, 30);
         frame.render_widget(Clear, area);
@@ -834,25 +959,30 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
                 None,
                 false,
                 None,
-                tool_cards::UserPaint::new(
-                    app.composer_palette.user_surface(),
-                    app.terminal_background,
-                    app.no_color,
-                ),
+                tool_cards::UserPaint::new(app.terminal_background, app.no_color),
             );
             frame.render_widget(block, area);
             transcript.draw_from_bottom(frame, inner, app.task_scroll);
         } else {
-            let items = app.tasks.iter().map(|task| {
-                ListItem::new(format!(
-                    "{}{} · {:?}{} · {}",
-                    "  ".repeat(task.depth.saturating_sub(1) as usize),
-                    view::plain(&task.title),
-                    task.status,
-                    if task.read_only { " · read only" } else { "" },
-                    task.run_id
-                ))
-            });
+            let items: Vec<_> = if app.tasks_unavailable {
+                vec![ListItem::new(
+                    "This engine does not expose subagent topology.",
+                )]
+            } else {
+                app.tasks
+                    .iter()
+                    .map(|task| {
+                        ListItem::new(format!(
+                            "{}{} · {:?}{} · {}",
+                            "  ".repeat(task.depth.saturating_sub(1) as usize),
+                            view::plain(&task.title),
+                            task.status,
+                            if task.read_only { " · read only" } else { "" },
+                            task.run_id
+                        ))
+                    })
+                    .collect()
+            };
             let mut selected = ListState::default().with_selected(Some(app.task_index));
             frame.render_stateful_widget(
                 List::new(items)
@@ -887,7 +1017,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
                             .chars()
                             .take(100)
                             .collect::<String>(),
-                        entry.run.id
+                        view::plain(&entry.label())
                     ))
                 })
                 .collect()
@@ -974,6 +1104,7 @@ fn steering_status(status: SteeringStatus) -> &'static str {
         SteeringStatus::Undelivered => {
             "undelivered · turn ended before offer; not queued or replayed"
         }
+        SteeringStatus::Unknown => "unrecognized status · inspect the exact receipt; no replay",
     }
 }
 
@@ -1033,7 +1164,7 @@ fn steering_text(app: &App) -> String {
     view::plain(&text)
 }
 
-async fn steer(app: &mut App, host: &Host, prompt: &str) -> Result<()> {
+async fn steer(app: &mut App, engine: &impl Engine, prompt: &str) -> Result<()> {
     ensure!(
         !prompt.trim().is_empty(),
         "Use /steer TEXT; draft retained, not queued"
@@ -1078,13 +1209,13 @@ async fn steer(app: &mut App, host: &Host, prompt: &str) -> Result<()> {
         .find(|binding| binding.session == app.session && binding.prompt == prompt)
         .expect("steering binding initialized");
     app.steering_dirty = true;
-    let receipt = host
+    let status = engine
         .steer(&binding.run, &binding.prompt, &binding.request)
         .await
         .map_err(|error| anyhow::anyhow!("{error}; steering draft retained, not queued"))?;
     app.status = format!(
         "Steering {} · F7 inspect exact run",
-        steering_status(receipt.status)
+        steering_status(status)
     );
     app.steering_submissions
         .retain(|binding| binding.session != app.session || binding.prompt != prompt);
@@ -1102,7 +1233,7 @@ enum SubmissionKey {
     Queue,
 }
 
-async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<bool> {
+async fn submit(app: &mut App, engine: &impl Engine, key: SubmissionKey) -> Result<bool> {
     let input = app.input.trim().to_owned();
     if input.is_empty() {
         return Ok(false);
@@ -1120,18 +1251,18 @@ async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<b
             app.steering_picker = true;
             app.steering_scroll = 0;
             app.steering_dirty = true;
-            app.state(host).await;
+            app.state(engine).await;
         }
         (Some(Command::Steer), args) => {
-            steer(app, host, args.unwrap_or_default().trim_start()).await?;
+            steer(app, engine, args.unwrap_or_default().trim_start()).await?;
         }
         (Some(Command::Tasks), None) => {
             app.open_tasks(false);
-            app.state(host).await;
+            app.state(engine).await;
         }
         (Some(Command::Queue), None) => {
             app.queue_picker = true;
-            app.state(host).await;
+            app.state(engine).await;
         }
         (Some(Command::Queue), Some(action)) => {
             let (verb, request) = action
@@ -1154,12 +1285,13 @@ async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<b
                     app.completion.edited(&app.input);
                     return Ok(false);
                 }
-                match host
+                match engine
                     .input_receipt(&binding.session, &binding.prompt, &binding.request)
                     .await
                 {
                     Ok(Some(receipt)) => {
-                        let message = format!("Original FIFO request confirmed · {}", receipt.id);
+                        let message =
+                            format!("Original FIFO request confirmed · {}", receipt.label());
                         if receipt.status.is_none() {
                             app.failure = Some(format!("{message} · saved run status unreadable"));
                         } else {
@@ -1186,15 +1318,17 @@ async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<b
                 "clear" => QueueAction::Clear,
                 _ => anyhow::bail!("Use /queue pause, resume, clear, retry or verify"),
             };
-            host.control_queue(&app.session, action).await?;
-            app.state(host).await;
+            engine.control_queue(&app.session, action).await?;
+            app.state(engine).await;
         }
         (Some(Command::New), None) => {
-            app.switch(host, host.store.create_session().await?.id)
+            app.switch(engine, SessionSelection::New).await?;
+        }
+        (Some(Command::Sessions | Command::Resume), None) => app.open_picker(engine).await?,
+        (Some(Command::Resume), Some(id)) => {
+            app.switch(engine, SessionSelection::Resume(id.trim()))
                 .await?;
         }
-        (Some(Command::Sessions | Command::Resume), None) => app.open_picker(host).await?,
-        (Some(Command::Resume), Some(id)) => app.switch(host, id.trim().to_owned()).await?,
         (Some(Command::Help), None) => {
             app.help = true;
             app.help_scroll = 0;
@@ -1213,7 +1347,7 @@ async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<b
                 .iter()
                 .any(|binding| binding.prompt == input);
             if key == SubmissionKey::Enter && (app.active.is_some() || bound_to_steering) {
-                steer(app, host, &input).await?;
+                steer(app, engine, &input).await?;
                 app.scroll = None;
                 return Ok(false);
             }
@@ -1244,26 +1378,17 @@ async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<b
                     request: Uuid::new_v4().to_string(),
                 }
             };
-            let outcome = match key {
-                SubmissionKey::Enter => {
-                    host.submit_idle_with_receipt(
-                        &binding.session,
-                        &binding.prompt,
-                        &binding.request,
-                        ApprovalMode::Interactive,
-                    )
-                    .await
-                }
-                SubmissionKey::Queue => {
-                    host.submit_with_receipt(
-                        &binding.session,
-                        &binding.prompt,
-                        &binding.request,
-                        ApprovalMode::Interactive,
-                    )
-                    .await
-                }
-            };
+            let outcome = engine
+                .submit(
+                    &binding.session,
+                    &binding.prompt,
+                    &binding.request,
+                    match key {
+                        SubmissionKey::Enter => Submission::Idle,
+                        SubmissionKey::Queue => Submission::Queue,
+                    },
+                )
+                .await;
             app.scroll = None;
             match outcome {
                 InputAdmission::Accepted { receipt, warning } => {
@@ -1278,22 +1403,25 @@ async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<b
                         app.status.clear();
                     } else {
                         app.status = match receipt.status {
-                            Some(ngn_protocol::RunStatus::Queued) => {
+                            Some(crate::model::RunStatus::Queued) => {
                                 "Input queued · F6 inspect · /queue resume if paused".into()
                             }
-                            Some(ngn_protocol::RunStatus::Running) => String::new(),
+                            Some(crate::model::RunStatus::Running) => String::new(),
                             // A retry can find a run cancelled since the original admission.
-                            _ => format!("Original FIFO request confirmed · {}", receipt.id),
+                            _ => format!("Original FIFO request confirmed · {}", receipt.label()),
                         };
                     }
                 }
-                InputAdmission::Rejected(error) => {
+                InputAdmission::Rejected {
+                    error,
+                    idle_changed,
+                } => {
                     // Exact receipt absent and no input was admitted; editing
                     // or deliberately submitting to another session is safe.
                     if let Some(index) = saved {
                         app.fifo_submissions.remove(index);
                     }
-                    if error.is::<IdleTurnChanged>() {
+                    if idle_changed {
                         app.idle_rejected_draft = Some(binding.prompt);
                     }
                     return Err(error);
@@ -1315,12 +1443,12 @@ async fn submit(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> Result<b
     Ok(false)
 }
 
-async fn submit_from_enter(app: &mut App, host: &Arc<Host>, key: SubmissionKey) -> bool {
+async fn submit_from_enter(app: &mut App, engine: &impl Engine, key: SubmissionKey) -> bool {
     if app.input.trim().is_empty() {
         return false;
     }
     app.failure = None;
-    match submit(app, host, key).await {
+    match submit(app, engine, key).await {
         Ok(quit) => {
             if app.input.is_empty() {
                 app.completion.edited(&app.input);
@@ -1335,29 +1463,36 @@ async fn submit_from_enter(app: &mut App, host: &Arc<Host>, key: SubmissionKey) 
     }
 }
 
-pub async fn run(
-    host: Arc<Host>,
-    resume: Option<&str>,
-    continue_session: bool,
+pub(crate) async fn run(
+    engine: &impl Engine,
+    selection: SessionSelection<'_>,
     no_animations: bool,
 ) -> Result<()> {
-    let mut receiver = host.events.subscribe();
+    let signal = startup::shutdown_signal()?;
+    tokio::pin!(signal);
+    let updates = tokio::select! {
+        biased;
+        _ = &mut signal => return Ok(()),
+        result = engine.subscribe() => result?.fuse(),
+    };
+    tokio::pin!(updates);
+    let display = engine.display();
     let animate = animations_enabled(
         no_animations,
-        host.config.legacy_animations,
+        display.animations,
         std::env::var("TEXTUAL_ANIMATIONS").ok().as_deref(),
     );
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
-    let query_background = !no_color && host.config.legacy_composer_theme.is_none();
+    let query_background = !no_color;
     let mut app = App {
         records: Vec::new(),
         after: 0,
         input: String::new(),
         caret: composer::Caret::new(animate),
-        composer_palette: composer::Palette::new(host.config.legacy_composer_theme, no_color),
         no_color,
         activity: footer::Activity::new(Instant::now(), animate),
-        tools: tool_cards::Cards::new(animate),
+        tools: tool_cards::Cards::new(animate)
+            .with_shell_timeout(display.shell_timeout_seconds.map(|seconds| seconds * 1000)),
         active: None,
         approval: None,
         preview_scroll: 0,
@@ -1375,14 +1510,12 @@ pub async fn run(
         queue_index: 0,
         ..App::default()
     };
-    let signal = startup::shutdown_signal()?;
-    tokio::pin!(signal);
     let initialize = async {
-        app.session = crate::session(&host, resume, continue_session).await?;
-        app.catch_up(&host).await?;
+        app.session = engine.open_session(selection).await?;
+        app.catch_up(engine).await?;
         app.tools.skip_completions(app.after);
         app.activity.reset(app.after, Instant::now());
-        app.state(&host).await;
+        app.state(engine).await;
         Ok(())
     };
     let Some(mut startup_input) =
@@ -1407,7 +1540,7 @@ pub async fn run(
     app.terminal_background = startup_input.background();
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut input = None;
-    let mut ticks = tokio::time::interval(Duration::from_millis(100));
+    let mut ticks = tokio::time::interval(engine.refresh_interval());
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut motion = tokio::time::interval(footer::FRAME);
     motion.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1442,13 +1575,13 @@ pub async fn run(
                         app.tools.paint_motion(frame.buffer_mut(), now);
                         app.agents.paint_motion(frame.buffer_mut(), &app.tasks);
                         frame.render_widget(Clear, area);
-                        app.activity.draw(frame, area, &app, &host.config, now);
+                        app.activity.draw(frame, area, &app, &display.provider, now);
                         if app.no_color {
                             let area = frame.area();
                             strip_color(frame.buffer_mut(), area);
                         }
                     } else {
-                        draw(frame, &mut app, &host, now);
+                        draw(frame, &mut app, display, now);
                         let animate = (activity_motion
                             || app.tools.needs_frame(now)
                             || app.agents.needs_frame())
@@ -1500,35 +1633,79 @@ pub async fn run(
             && !app.shows_overlay();
         tokio::select! {
             _ = &mut signal => break,
-            _ = ticks.tick() => {
+            _ = ticks.tick(), if app.connection_notice.is_none() => {
                 if !app.shows_overlay() {
-                    app.agents.recover_activity(&host.store, &app.tasks);
+                    app.agents.recover_activity(engine, &app.tasks);
                 }
-                app.state(&host).await;
+                app.state(engine).await;
             },
             _ = motion.tick(), if animate => motion_only = true,
-            received = receiver.recv() => {
+            received = updates.next(), if !updates.is_terminated() => {
                 match received {
-                    Ok(record) => {
-                        if record.session_id == app.session {
-                            app.catch_up(&host).await?;
-                        } else {
+                    Some(Ok(LiveUpdate { record, delivery: Delivery::Durable })) => {
+                        if record.session_id != app.session {
                             app.agents.activity.ingest(&record);
-                            if matches!(record.event, ngn_protocol::Event::TextDelta { .. } | ngn_protocol::Event::TextCompleted { .. }) {
-                                // Private streaming text cannot alter the root's
-                                // queue, catalog, or pending approval snapshot.
-                                continue;
+                            if matches!(record.event, Event::ApprovalRequested { .. } | Event::ApprovalResolved { .. })
+                                && app.tasks.iter().any(|task| task.session_id == record.session_id && task.run_id == record.run_id)
+                            {
+                                app.state(engine).await;
                             }
+                            continue;
+                        }
+                        if record.sequence <= app.after {
+                            continue;
+                        }
+                        let refresh = matches!(
+                            record.event,
+                            Event::RunQueued { .. } | Event::RunStarted { .. } | Event::RunFinished { .. }
+                                | Event::QueueUpdated { .. } | Event::SteeringUpdated { .. }
+                                | Event::ApprovalRequested { .. } | Event::ApprovalResolved { .. }
+                                | Event::TaskStarted { .. } | Event::TaskUpdated { .. }
+                                | Event::TaskFinished { .. }
+                        );
+                        app.after = record.sequence;
+                        app.remember_committed(std::iter::once(record));
+                        if !refresh {
+                            app.sync_activity();
+                            continue;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        app.catch_up(&host).await?;
+                    Some(Ok(LiveUpdate { record, delivery: Delivery::Transient })) => {
+                        if record.session_id == app.session {
+                            if app.remember_live(record) {
+                                app.sync_activity();
+                            }
+                        } else {
+                            app.agents.activity.ingest(&record);
+                        }
+                        continue;
+                    }
+                    Some(Err(FeedNotice::ResyncRequired)) => {
+                        app.connection_notice = None;
+                        if let Err(error) = app.catch_up(engine).await {
+                            app.status = format!("Cannot resynchronize conversation: {error}");
+                        }
                         app.tools.skip_completions(app.after);
                         app.agents.activity.invalidate();
+                        app.steering_runs.extend(app.steering.iter().map(|state| state.run_id.clone()));
+                        app.steering_dirty = true;
                     }
-                    _ => ()
+                    Some(Err(notice @ (FeedNotice::Reconnecting | FeedNotice::Disconnected(_)))) => {
+                        app.discard_live_text();
+                        app.agents.activity.invalidate();
+                        app.approval = None;
+                        app.approval_since.reset();
+                        app.preview_scroll = 0;
+                        app.connection_notice = Some(match notice {
+                            FeedNotice::Disconnected(reason) => reason,
+                            _ => "Engine connection lost · reconnecting".into(),
+                        });
+                        app.sync_activity();
+                        continue;
+                    }
+                    None => continue,
                 }
-                app.state(&host).await;
+                app.state(engine).await;
             }
             event = input.next() => {
                 let Some(event) = event else { break; };
@@ -1544,10 +1721,12 @@ pub async fn run(
                         // particular it is not Enter/confirm in a focused picker.
                         if control && key.code == KeyCode::Enter && !app.composer_available() { continue; }
                         if app.picker.is_some() {
-                            app.picker_key(&host, key).await?;
+                            if let Err(error) = app.picker_key(engine, key).await {
+                                app.status = error.to_string();
+                            }
                             continue;
                         }
-                        if key.code == KeyCode::F(7) { app.steering_picker = !app.steering_picker; app.steering_scroll = 0; app.steering_dirty = true; app.state(&host).await; continue; }
+                        if key.code == KeyCode::F(7) { app.steering_picker = !app.steering_picker; app.steering_scroll = 0; app.steering_dirty = true; app.state(engine).await; continue; }
                         if app.steering_picker {
                             match key.code {
                                 KeyCode::Esc => app.steering_picker = false,
@@ -1566,16 +1745,16 @@ pub async fn run(
                                 approval::Action::Allow if !app.approval_fits => true,
                                 approval::Action::Allow | approval::Action::Deny => {
                                     let allow = approval::action(key, Duration::MAX) == approval::Action::Allow;
-                                    if let Err(error) = host.decide(&approval.run_id, &approval.id, allow).await { app.status = error.to_string(); }
+                                    if let Err(error) = engine.decide(&approval.run_id, &approval.id, &approval.call.call_id, allow).await { app.status = error.to_string(); }
                                     true
                                 },
-                                approval::Action::Cancel => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = host.cancel(id).await; true },
+                                approval::Action::Cancel => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = engine.cancel(id).await; true },
                                 approval::Action::ScrollUp => { app.preview_scroll = app.preview_scroll.saturating_sub(10); true },
                                 approval::Action::ScrollDown => { app.preview_scroll = app.preview_scroll.saturating_add(10); true },
                                 approval::Action::Ignore => true,
                                 approval::Action::Pass => false,
                             };
-                            if handled { app.state(&host).await; continue; }
+                            if handled { app.state(engine).await; continue; }
                         }
                         if app.help {
                             match key.code {
@@ -1594,33 +1773,41 @@ pub async fn run(
                                 KeyCode::Char('p') if control => Some(if app.queue.paused { QueueAction::Resume } else { QueueAction::Pause }),
                                 KeyCode::Char('k') if control => Some(QueueAction::Clear),
                                 KeyCode::Char('x') if control => {
-                                    if let Some(entry) = app.queue.entries.get(app.queue_index) && let Err(error) = host.cancel(&entry.run.id).await { app.status = error.to_string(); }
+                                     if let Some(entry) = app.queue.entries.get(app.queue_index) {
+                                         if let Some(run) = &entry.run_id {
+                                             if let Err(error) = engine.cancel(run).await {
+                                                 app.status = error.to_string();
+                                             }
+                                         } else {
+                                             app.status = "This queued input has no cancellable run ID".into();
+                                         }
+                                     }
                                     None
                                 },
                                 _ => None,
                             };
-                            if let Some(action) = action && let Err(error) = host.control_queue(&app.session, action).await { app.status = error.to_string(); }
-                            app.state(&host).await;
+                            if let Some(action) = action && let Err(error) = engine.control_queue(&app.session, action).await { app.status = error.to_string(); }
+                            app.state(engine).await;
                             continue;
                         }
                         if app.task_picker {
-                            app.task_key(&host, key).await;
-                            app.state(&host).await; continue;
+                            app.task_key(engine, key).await;
+                            app.state(engine).await; continue;
                         }
                         if app.agents_key(key, width) {
                             if app.agents.focused { app.tools.blur(); }
-                            if app.task_picker { app.state(&host).await; }
+                            if app.task_picker { app.state(engine).await; }
                             continue;
                         }
                         if app.transcript_key(key) { continue; }
                         if app.completion_key(key) { continue; }
                         match key.code {
-                            KeyCode::Esc => { if let Some(run) = &app.active { let _ = host.cancel(&run.id).await; } },
+                            KeyCode::Esc => { if let Some(run) = &app.active { let _ = engine.cancel(&run.id).await; } },
                             KeyCode::F(1) => { app.help = true; app.help_scroll = 0; },
-                            KeyCode::F(2) => app.open_picker(&host).await?,
-                            KeyCode::F(3) => { app.switch(&host, host.store.create_session().await?.id).await?; },
-                            KeyCode::F(5) => { app.open_tasks(false); app.state(&host).await; },
-                            KeyCode::F(6) => { app.queue_picker = true; app.queue_index = 0; app.state(&host).await; },
+                            KeyCode::F(2) => if let Err(error) = app.open_picker(engine).await { app.status = error.to_string(); },
+                            KeyCode::F(3) => if let Err(error) = app.switch(engine, SessionSelection::New).await { app.status = error.to_string(); },
+                            KeyCode::F(5) => { app.open_tasks(false); app.state(engine).await; },
+                            KeyCode::F(6) => { app.queue_picker = true; app.queue_index = 0; app.state(engine).await; },
                             KeyCode::PageUp | KeyCode::PageDown => app.tools.page(&mut app.scroll, key.code == KeyCode::PageUp),
                             // Approval and overlay shortcuts above retain their routing.
                             // Draft edits and submission require the same focus as the caret.
@@ -1628,8 +1815,8 @@ pub async fn run(
                              KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => { if app.input.len() < 32_000 { app.cursor.insert(&mut app.input, "\n"); app.completion.edited(&app.input); } },
                              KeyCode::Enter if matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::CONTROL) => {
                                  let submission = if control { SubmissionKey::Queue } else { SubmissionKey::Enter };
-                                 if submit_from_enter(&mut app, &host, submission).await { break; }
-                                 app.state(&host).await;
+                                 if submit_from_enter(&mut app, engine, submission).await { break; }
+                                 app.state(engine).await;
                              },
                             KeyCode::Char(character) if !control && !character.is_control() && app.input.len() + character.len_utf8() <= 32_000 => { app.cursor.insert(&mut app.input, character.encode_utf8(&mut [0; 4])); app.completion.edited(&app.input); },
                             _ => {
@@ -1677,24 +1864,27 @@ pub async fn run(
     drop(terminal);
     drop(restore);
     drop(startup_input);
-    host.shutdown().await;
-    println!(
-        "ngn {} · Session {}\nResume with: ngn -C {} --resume {}",
-        env!("CARGO_PKG_VERSION"),
-        app.session,
-        view::plain(&host.config.workspace.display().to_string()),
-        app.session
-    );
-    if let Some(path) = host.runtime_log_path() {
-        println!("Runtime log: {}", view::plain(&path.display().to_string()));
+    engine.shutdown().await;
+    let session = view::plain(&app.session);
+    println!("ngn {} · Session {session}", env!("CARGO_PKG_VERSION"));
+    if let Some(logs) = engine.log_paths() {
+        println!(
+            "Resume with: ngn -C {} --resume {session}",
+            view::plain(&display.workspace.display().to_string()),
+        );
+        if let Some(path) = logs.runtime {
+            println!("Runtime log: {}", view::plain(&path.display().to_string()));
+        } else {
+            println!("Runtime log: unavailable");
+        }
+        if let Some(path) = logs.wire {
+            println!("Wire log: {}", view::plain(&path.display().to_string()));
+            println!("Sensitive request/response payload logging enabled");
+        } else {
+            println!("Wire log off · metadata only; no request/response payloads");
+        }
     } else {
-        println!("Runtime log: unavailable");
-    }
-    if let Some(path) = host.wire_log_path() {
-        println!("Wire log: {}", view::plain(&path.display().to_string()));
-        println!("Sensitive request/response payload logging enabled");
-    } else {
-        println!("Wire log off · metadata only; no request/response payloads");
+        println!("Resume on the same engine with --resume {session}");
     }
     Ok(())
 }
@@ -1702,7 +1892,83 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ngn_core::{Config, config::Backend};
+    use crate::engine::{
+        SteeringReceipt,
+        fake::{Call, FakeEngine, ScriptedSubmit},
+    };
+
+    #[test]
+    fn live_suffix_is_bounded_and_clears_without_moving_the_durable_cursor() {
+        let mut app = App {
+            session: "session".into(),
+            after: 1,
+            ..App::default()
+        };
+        let record = |sequence, event| EventRecord {
+            schema_version: 1,
+            sequence,
+            session_id: "session".into(),
+            run_id: "run".into(),
+            timestamp_ms: 0,
+            event,
+        };
+        let delta = |sequence, text: String| record(sequence, Event::TextDelta { text });
+        app.remember_committed([record(
+            1,
+            Event::RunStarted {
+                prompt: "go".into(),
+            },
+        )]);
+        let mut foreign = delta(2, "other session".into());
+        foreign.session_id = "something-else".into();
+        assert!(!app.remember_live(foreign));
+        assert!(!app.remember_live(delta(1, "replay before cursor".into())));
+        for sequence in 3..=(MAX_LIVE_RECORDS as i64 + 3) {
+            assert!(app.remember_live(delta(sequence, "x".into())));
+        }
+        assert_eq!(app.after, 1);
+        assert_eq!(app.live_text.len(), MAX_LIVE_RECORDS);
+        assert_eq!(app.records[1].sequence, 4);
+
+        let sequence = MAX_LIVE_RECORDS as i64 + 4;
+        assert!(app.remember_live(delta(sequence, "x".repeat(MAX_LIVE_BYTES))));
+        assert_eq!(app.live_text.len(), 1);
+        assert_eq!(app.live_text_bytes, MAX_LIVE_BYTES);
+        assert!(!app.remember_live(delta(sequence, "duplicate".into())));
+
+        // An overlapping fetch can deliver a durable row before the live suffix.
+        app.after = 2;
+        app.remember_committed([record(
+            2,
+            Event::Notice {
+                text: "committed".into(),
+            },
+        )]);
+        assert_eq!(
+            app.records
+                .iter()
+                .map(|row| row.sequence)
+                .collect::<Vec<_>>(),
+            [1, 2, sequence]
+        );
+        app.discard_live_text();
+        assert_eq!(app.records.len(), 2);
+        assert_eq!(app.after, 2);
+        assert_eq!(app.live_text_bytes, 0);
+
+        // The engine's final snapshot, not a lost delta, is what we replay.
+        app.after = sequence + 1;
+        app.remember_committed([record(
+            app.after,
+            Event::TextCompleted {
+                text: "saved".into(),
+            },
+        )]);
+        let display = main_transcript(&app.records, None, 0);
+        assert!(display.iter().any(
+            |part| matches!(part, view::TranscriptPart::Text(text) if text.contains("saved"))
+        ));
+    }
 
     #[test]
     fn cli_saved_motion_and_textual_override_control_footer_and_caret() {
@@ -1733,32 +1999,31 @@ mod tests {
 
     #[tokio::test]
     async fn enter_without_provider_explains_rejection_and_keeps_draft() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let config = Config {
-            workspace: directory.path().into(),
-            data_dir: directory.path().join("state"),
-            ..Config::default()
-        }
-        .resolve()
-        .unwrap();
-        let host = Host::open(config).unwrap();
+        // The engine owns provider configuration and explains the rejection;
+        // the client must show that reason and keep the draft.
+        let engine = FakeEngine::default();
+        engine.script_submit(ScriptedSubmit::Reject {
+            error: "No provider selected · choose one in ~/.config/ngn/providers.json".into(),
+            idle_changed: false,
+        });
         let mut app = App {
-            session: host.store.create_session().await.unwrap().id,
+            session: engine.open_session(SessionSelection::New).await.unwrap(),
             input: "keep this draft".into(),
             ..App::default()
         };
         assert!(!app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         let reason = app.failure.as_deref().unwrap();
         assert!(reason.starts_with("Not sent: No provider selected"));
         assert!(reason.contains("providers.json"));
         assert_eq!(app.input, "keep this draft");
-        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(app.fifo_submissions.is_empty());
         app.sync_activity();
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(28, 32)).unwrap();
         let now = Instant::now();
         terminal
-            .draw(|frame| draw(frame, &mut app, &host, now))
+            .draw(|frame| draw(frame, &mut app, engine.display(), now))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let row = |y| -> String {
@@ -1774,12 +2039,12 @@ mod tests {
         assert!(transcript.contains("providers.json"), "{transcript}");
         assert!((0..30).any(|y| row(y).contains("keep this draft")));
         app.input = "/help".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(app.failure.is_none() && app.help);
         // Shortcuts are in the help overlay, not the two status rows.
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 32)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &mut app, &host, now))
+            .draw(|frame| draw(frame, &mut app, engine.display(), now))
             .unwrap();
         let screen: String = terminal
             .backend()
@@ -1799,7 +2064,7 @@ mod tests {
         }
         app.help_scroll = 10;
         terminal
-            .draw(|frame| draw(frame, &mut app, &host, now))
+            .draw(|frame| draw(frame, &mut app, engine.display(), now))
             .unwrap();
         let screen: String = terminal
             .backend()
@@ -1813,17 +2078,7 @@ mod tests {
 
     #[test]
     fn empty_draft_shows_a_dim_placeholder_that_is_not_part_of_the_draft() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let now = Instant::now();
         for (input, shown) in [("", true), ("draft", false)] {
             let mut app = App {
@@ -1832,7 +2087,7 @@ mod tests {
             };
             let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(80, 16)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &mut app, &host, now))
+                .draw(|frame| draw(frame, &mut app, &display, now))
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let [_, _, composer] = content_rows(buffer.area, 0);
@@ -1846,17 +2101,10 @@ mod tests {
 
     #[test]
     fn empty_transcript_welcome_fits_its_rows_and_does_not_touch_the_draft() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay {
+            workspace: "/path/to/a/long/workspace/directory".into(),
+            ..ClientDisplay::default()
+        };
         let now = Instant::now();
         let mut app = App {
             input: "draft".into(),
@@ -1867,13 +2115,13 @@ mod tests {
             let mut terminal =
                 Terminal::new(ratatui::backend::TestBackend::new(width, 16)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &mut app, &host, now))
+                .draw(|frame| draw(frame, &mut app, &display, now))
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let [transcript, _, composer] = content_rows(buffer.area, 0);
             let (main, _) = agents::split(transcript, false);
             let row = |y| -> String { (0..main.width).map(|x| buffer[(x, y)].symbol()).collect() };
-            let expected = welcome(&host.config.workspace, main.width);
+            let expected = welcome(&display.workspace, main.width);
             for (y, line) in (0..).zip(&expected) {
                 assert_eq!(row(y).trim_end(), line.to_string());
             }
@@ -1912,89 +2160,84 @@ mod tests {
 
     #[tokio::test]
     async fn fifo_dispatch_failure_after_commit_confirms_the_draft_and_shows_a_warning() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let config = Config {
-            workspace: directory.path().into(),
-            data_dir: directory.path().join("state"),
-            backend: Backend::Demo,
-            ..Config::default()
-        }
-        .resolve()
-        .unwrap();
-        let database = config.state_dir().join("host.sqlite3");
-        let host = Host::open(config).unwrap();
+        let engine = FakeEngine::default();
         let mut app = App {
-            session: host.store.create_session().await.unwrap().id,
+            session: engine.create_session(),
             input: "first draft".into(),
             ..App::default()
         };
-        let inject = rusqlite::Connection::open(database).unwrap();
-        inject
-            .execute_batch(
-                "CREATE TRIGGER fail_dispatch BEFORE UPDATE OF status ON runs
-             WHEN OLD.prompt = 'first draft' AND NEW.status = 'running'
-             BEGIN SELECT RAISE(ABORT, 'test: dispatch after durable enqueue'); END;
-             CREATE TRIGGER fail_enqueue BEFORE INSERT ON runs
-             WHEN NEW.prompt = 'rejected draft'
-             BEGIN SELECT RAISE(ABORT, 'test: enqueue rejected'); END;",
-            )
-            .unwrap();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        // Durably admitted, then dispatch failed: the input stays queued.
+        engine.script_submit(ScriptedSubmit::Warn(
+            "test: dispatch after durable enqueue".into(),
+        ));
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         let warning = app.failure.as_deref().unwrap();
         assert!(warning.starts_with("Input accepted"));
         assert!(warning.contains("test: dispatch after durable enqueue"));
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
-        let first = host.queue(&app.session).await.unwrap().entries[0]
-            .run
+        let first = engine.queue(&app.session).await.unwrap().entries[0]
+            .request_id
             .clone();
 
         app.input = "rejected draft".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        engine.script_submit(ScriptedSubmit::Reject {
+            error: "test: enqueue rejected".into(),
+            idle_changed: false,
+        });
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert_eq!(app.input, "rejected draft");
         assert!(app.fifo_submissions.is_empty());
         assert_eq!(
             app.failure.as_deref(),
             Some("Not sent: test: enqueue rejected")
         );
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 1);
 
         app.input = "second draft".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
-        let queue = host.queue(&app.session).await.unwrap();
+        let queue = engine.queue(&app.session).await.unwrap();
         assert_eq!(queue.entries.len(), 2);
-        assert_eq!(queue.entries[0].run.request_id, first.request_id);
+        assert_eq!(queue.entries[0].request_id, first);
         assert_eq!(queue.entries[1].prompt, "second draft");
-        assert!(host.active().await.is_empty());
+        assert!(engine.active().is_empty());
 
         // Retyping an already confirmed prompt is a new, deliberate submission.
         app.input = "first draft".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
-        let queue = host.queue(&app.session).await.unwrap();
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
+        let queue = engine.queue(&app.session).await.unwrap();
         assert_eq!(queue.entries.len(), 3);
-        assert_ne!(queue.entries[2].run.request_id, first.request_id);
-        host.shutdown().await;
+        assert_ne!(queue.entries[2].request_id, first);
+        let submits: Vec<_> = engine
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Submit { prompt, idle, .. } => Some((prompt, idle)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            submits,
+            [
+                ("first draft".to_owned(), true),
+                ("rejected draft".to_owned(), false),
+                ("second draft".to_owned(), false),
+                ("first draft".to_owned(), false),
+            ]
+        );
     }
 
     #[tokio::test]
     async fn fifo_uncertainty_does_not_block_unrelated_inputs_and_reconciles_exactly() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let config = Config {
-            workspace: directory.path().into(),
-            data_dir: directory.path().join("state"),
-            backend: Backend::Demo,
-            ..Config::default()
-        }
-        .resolve()
-        .unwrap();
-        let database = config.state_dir().join("host.sqlite3");
-        let host = Host::open(config).unwrap();
-        let session = host.store.create_session().await.unwrap().id;
-        let other = host.store.create_session().await.unwrap().id;
-        host.control_queue(&session, QueueAction::Pause)
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let other = engine.create_session();
+        engine
+            .control_queue(&session, QueueAction::Pause)
             .await
             .unwrap();
-        host.control_queue(&other, QueueAction::Pause)
+        engine
+            .control_queue(&other, QueueAction::Pause)
             .await
             .unwrap();
         let mut app = App {
@@ -2004,71 +2247,88 @@ mod tests {
         };
         let request = Uuid::new_v4().to_string();
         let prompt = app.input.clone();
-        let run = host
-            .submit(&session, &prompt, &request, ApprovalMode::Interactive)
+        let InputAdmission::Accepted { receipt, .. } = engine
+            .submit(&session, &prompt, &request, Submission::Queue)
             .await
-            .unwrap();
-        // Simulate losing the original response and an unreadable receipt identity.
+        else {
+            panic!("fixture admission failed");
+        };
+        // Simulate losing the original response; the retry's outcome is unknown too.
         app.fifo_submissions.push(FifoSubmission {
             session: session.clone(),
             prompt: prompt.clone(),
             request: request.clone(),
         });
-        let inject = rusqlite::Connection::open(database).unwrap();
-        inject
-            .execute("UPDATE runs SET prompt = X'FF' WHERE id = ?", [&run.id])
-            .unwrap();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        engine.script_submit(ScriptedSubmit::Unconfirmed(
+            "test: receipt identity unreadable".into(),
+        ));
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.failure.as_deref().unwrap().contains("unconfirmed"));
+        assert!(app.failure.as_deref().unwrap().contains(&request));
         assert_eq!(app.input, prompt);
 
         app.input = "different draft".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(app.input.is_empty());
         assert_eq!(app.fifo_submissions[0].request, request);
-        app.switch(&host, other.clone()).await.unwrap();
+        app.switch(&engine, SessionSelection::Resume(&other))
+            .await
+            .unwrap();
         app.input.clone_from(&prompt);
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        let calls = engine.calls().len();
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(
             app.failure
                 .as_deref()
                 .unwrap()
                 .contains("draft is unconfirmed in")
         );
-        assert!(host.queue(&other).await.unwrap().entries.is_empty());
+        assert_eq!(engine.calls().len(), calls); // Never rebound to another session.
+        assert!(engine.queue(&other).await.unwrap().entries.is_empty());
         app.input = "healthy conversation".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
-        assert_eq!(host.queue(&other).await.unwrap().entries.len(), 1);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
+        assert_eq!(engine.queue(&other).await.unwrap().entries.len(), 1);
         assert_eq!(app.fifo_submissions[0].request, request);
 
-        // Terminal state is damaged but identity is readable again. Exact
-        // admission remains authoritative and must not queue a replacement.
-        inject
-            .execute(
-                "UPDATE runs SET prompt = ? WHERE id = ?",
-                rusqlite::params![prompt, run.id],
-            )
-            .unwrap();
-        host.control_queue(&session, QueueAction::Clear)
+        // The original was admitted and later cleared; its saved status is
+        // unreadable. Exact admission remains authoritative and must not queue
+        // a replacement.
+        engine
+            .control_queue(&session, QueueAction::Clear)
             .await
             .unwrap();
-        inject
-            .execute(
-                "UPDATE runs SET status = 'test-unreadable-status' WHERE id = ?",
-                [&run.id],
-            )
+        app.switch(&engine, SessionSelection::Resume(&session))
+            .await
             .unwrap();
-        app.switch(&host, session.clone()).await.unwrap();
         app.input = "/queue retry".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert_eq!(app.input, prompt);
         assert_eq!(app.fifo_submissions[0].request, request);
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        engine.script_submit(ScriptedSubmit::Warn(
+            "Saved run status is unreadable".into(),
+        ));
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
         let warning = app.failure.as_deref().unwrap();
         assert!(warning.starts_with("Input accepted") && warning.contains("status is unreadable"));
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
-        assert!(host.active().await.is_empty());
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
+        assert!(engine.active().is_empty());
+        let retries: Vec<_> = engine
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Submit {
+                    session: target,
+                    prompt: text,
+                    request,
+                    idle: false,
+                } if text == prompt => Some((target, request)),
+                _ => None,
+            })
+            .collect();
+        // Fixture admission plus both retries, all with the original identity.
+        assert_eq!(retries, vec![(session.clone(), request.clone()); 3]);
+        assert_eq!(receipt.request_id, request);
 
         // A positively verified absence releases only that binding, and never sends.
         app.fifo_submissions.push(FifoSubmission {
@@ -2076,64 +2336,42 @@ mod tests {
             prompt: "not admitted".into(),
             request: Uuid::new_v4().to_string(),
         });
-        app.input = format!("/queue verify {}", app.fifo_submissions[0].request);
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        let unknown = app.fifo_submissions[0].request.clone();
+        app.input = format!("/queue verify {unknown}");
+        let calls = engine.calls().len();
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(app.status.contains("was not admitted"));
         assert!(app.fifo_submissions.is_empty());
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        assert_eq!(
+            engine.calls()[calls..],
+            [Call::InputReceipt {
+                session: session.clone(),
+                request: unknown,
+            }]
+        );
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
 
-        app.input = prompt;
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
-        let queue = host.queue(&session).await.unwrap();
+        app.input.clone_from(&prompt);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
+        let queue = engine.queue(&session).await.unwrap();
         assert!(queue.paused);
         assert_eq!(queue.entries.len(), 1);
-        assert_ne!(queue.entries[0].run.request_id, request);
-        host.shutdown().await;
+        assert_ne!(queue.entries[0].request_id, request);
     }
 
     #[tokio::test]
-    #[cfg(unix)]
     async fn unchanged_idle_rejection_never_steers_the_new_capable_root() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let mut config: Config = serde_json::from_value(serde_json::json!({
-            "runner": ["/bin/sh", "-c", r#"
-                printf '%s\n' '{"protocol_version":1,"run_id":"","message":{"type":"ready","runtime":"composer-fixture","capabilities":["host_tools","cancel","safe_steering"]}}'
-                IFS= read -r start || exit
-                IFS= read -r cancel
-            "#],
-            "provider": "fixture",
-            "providers": {"fixture": {"kind": "openai_compatible", "model": "offline",
-                "api": "chat_completions", "base_url": "http://127.0.0.1:1/v1",
-                "api_key_env": "NGN_COMPOSER_FIXTURE_KEY"}},
-        }))
-        .unwrap();
-        config.workspace = directory.path().into();
-        config.data_dir = directory.path().join("state");
-        let host = Host::open(config.resolve().unwrap()).unwrap();
-        let session = host.store.create_session().await.unwrap().id;
-        let root = host
-            .start(
-                &session,
-                "active fixture",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while !host.steering(&root.id).await.unwrap().accepting {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "active fixture");
+        engine.set_steering(&root.id, true, true);
         let mut app = App {
             session: session.clone(),
             input: "typed while idle".into(),
             ..App::default()
         };
 
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(
             app.failure
                 .as_deref()
@@ -2141,9 +2379,10 @@ mod tests {
                 .contains("An active turn started")
         );
         assert_eq!(app.input, "typed while idle");
-        app.state(&host).await;
+        app.state(&engine).await;
         assert_eq!(app.active.as_ref().unwrap().id, root.id);
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        let calls = engine.calls().len();
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(
             app.failure
                 .as_deref()
@@ -2151,14 +2390,15 @@ mod tests {
                 .contains("Draft retained from an idle send")
         );
         assert_eq!(app.input, "typed while idle");
-        assert!(host.steering(&root.id).await.unwrap().receipts.is_empty());
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        assert_eq!(engine.calls().len(), calls);
+        assert!(engine.steering_prompts(&root.id).is_empty());
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
 
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.input.is_empty());
-        assert!(host.steering(&root.id).await.unwrap().receipts.is_empty());
+        assert!(engine.steering_prompts(&root.id).is_empty());
         assert_eq!(
-            host.queue(&session).await.unwrap().entries[0].prompt,
+            engine.queue(&session).await.unwrap().entries[0].prompt,
             "typed while idle"
         );
 
@@ -2166,93 +2406,63 @@ mod tests {
         // repeating Enter. The explicit command still targets the exact root.
         app.active = None;
         app.input = "explicit steering after a race".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
-        app.state(&host).await;
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
+        app.state(&engine).await;
         app.input = "/steer explicit steering after a race".into();
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
-        let receipts = host.steering(&root.id).await.unwrap().receipts;
-        assert_eq!(receipts.len(), 1);
-        assert_eq!(receipts[0].prompt, "explicit steering after a race");
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
+        assert_eq!(
+            engine.steering_prompts(&root.id),
+            ["explicit steering after a race"]
+        );
         assert!(app.idle_rejected_draft.is_none());
-        assert_eq!(host.queue(&session).await.unwrap().entries.len(), 1);
-        host.shutdown().await;
+        assert_eq!(engine.queue(&session).await.unwrap().entries.len(), 1);
+        assert!(engine.calls().iter().all(|call| match call {
+            Call::Steer { run, .. } => run == &root.id,
+            Call::Submit {
+                session: target, ..
+            } => target == &session,
+            _ => false,
+        }));
     }
 
     #[tokio::test]
     async fn unsupported_steering_preserves_draft_and_retries_do_not_rebind_to_a_new_root_or_fifo()
     {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let session = host.store.create_session().await.unwrap().id;
-        let root = host
-            .start(
-                &session,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "hold");
         let mut app = App {
             session: session.clone(),
             input: "retained text".into(),
             ..App::default()
         };
-        app.state(&host).await;
+        app.state(&engine).await;
         assert!(
-            submit(&mut app, &host, SubmissionKey::Enter)
+            submit(&mut app, &engine, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains("has not negotiated safe_steering")
         );
         assert_eq!(app.input, "retained text");
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
         let request = app.steering_submissions[0].request.clone();
         assert_eq!(app.steering_submissions[0].run, root.id);
-        host.cancel(&root.id).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while host.active().await.iter().any(|run| run.id == root.id) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        app.state(&host).await;
+        engine.cancel(&root.id).await.unwrap();
+        app.state(&engine).await;
         assert!(app.active.is_none());
         assert!(
-            submit(&mut app, &host, SubmissionKey::Enter)
+            submit(&mut app, &engine, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains("exact running root")
         );
-        host.control_queue(&session, QueueAction::Resume)
-            .await
-            .unwrap();
-        let replacement = host
-            .start(
-                &session,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
-        app.state(&host).await;
+        let replacement = engine.start(&session, "hold");
+        app.state(&engine).await;
         app.input = "/steer retained text".into();
         assert!(
-            submit(&mut app, &host, SubmissionKey::Enter)
+            submit(&mut app, &engine, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -2264,7 +2474,7 @@ mod tests {
         assert_eq!(app.steering_submissions.len(), 1);
         app.input = "retained text".into();
         assert!(
-            submit(&mut app, &host, SubmissionKey::Queue)
+            submit(&mut app, &engine, SubmissionKey::Queue)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -2273,11 +2483,11 @@ mod tests {
         assert_eq!(app.input, "retained text");
         assert_eq!(app.active.as_ref().unwrap().id, replacement.id);
         assert!(app.fifo_submissions.is_empty());
-        let other = host.store.create_session().await.unwrap().id;
+        let other = engine.create_session();
         app.session = other.clone();
         app.input = "/steer retained text".into();
         assert!(
-            submit(&mut app, &host, SubmissionKey::Enter)
+            submit(&mut app, &engine, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -2285,9 +2495,25 @@ mod tests {
         );
         assert_eq!(app.input, "/steer retained text");
         assert!(steering_text(&app).contains(&root.id));
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
-        assert!(host.queue(&other).await.unwrap().entries.is_empty());
-        host.shutdown().await;
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&other).await.unwrap().entries.is_empty());
+        // Every attempt reused the exact original run and request; none queued.
+        let steered = Call::Steer {
+            run: root.id.clone(),
+            prompt: "retained text".into(),
+            request,
+        };
+        assert_eq!(
+            engine.calls(),
+            [
+                steered.clone(),
+                Call::Cancel {
+                    run: root.id.clone()
+                },
+                steered.clone(),
+                steered,
+            ]
+        );
     }
 
     #[test]
@@ -2296,7 +2522,6 @@ mod tests {
         app.steering.push(SteeringState {
             run_id: "exact-old-root".into(),
             session_id: "session".into(),
-            run_status: ngn_protocol::RunStatus::Cancelled,
             supported: false,
             accepting: false,
             receipts: [
@@ -2308,22 +2533,14 @@ mod tests {
             ]
             .into_iter()
             .enumerate()
-            .map(|(index, status)| ngn_core::steering::SteeringReceipt {
+            .map(|(index, status)| SteeringReceipt {
                 input_id: format!("receipt-{index}"),
-                request_id: Uuid::new_v4().to_string(),
                 run_id: "exact-old-root".into(),
-                session_id: "session".into(),
                 position: index as i64 + 1,
                 prompt: "operator text\x1b[2J".into(),
                 status,
-                boundary_id: String::new(),
-                accepted_at_ms: 0,
-                updated_at_ms: 0,
             })
             .collect(),
-            run_limit: 32,
-            host_limit: 256,
-            prompt_byte_limit: 32_000,
         });
         let text = steering_text(&app);
         for expected in [
@@ -2345,53 +2562,47 @@ mod tests {
 
     #[tokio::test]
     async fn tui_submissions_queue_while_busy_and_controls_do_not_cancel_the_active_run() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let session = host.store.create_session().await.unwrap().id;
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
         let mut app = App {
             session,
             input: "/queue pause".into(),
             ..App::default()
         };
-        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
-        app.input = "demo hold".into();
-        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
-        app.input = "queued before resume".into();
-        let request = Uuid::new_v4().to_string();
-        let receipt = host
-            .submit(
-                &app.session,
-                &app.input,
-                &request,
-                ApprovalMode::Interactive,
-            )
+        submit(&mut app, &engine, SubmissionKey::Enter)
             .await
             .unwrap();
+        app.input = "hold".into();
+        submit(&mut app, &engine, SubmissionKey::Enter)
+            .await
+            .unwrap();
+        app.input = "queued before resume".into();
+        let request = Uuid::new_v4().to_string();
+        let InputAdmission::Accepted { receipt, .. } = engine
+            .submit(&app.session, &app.input, &request, Submission::Queue)
+            .await
+        else {
+            panic!("fixture admission failed");
+        };
         // A retained FIFO draft may retry by Ctrl+Enter without making a duplicate.
         app.fifo_submissions.push(FifoSubmission {
             session: app.session.clone(),
             prompt: app.input.clone(),
             request,
         });
-        submit(&mut app, &host, SubmissionKey::Queue).await.unwrap();
-        app.state(&host).await;
+        submit(&mut app, &engine, SubmissionKey::Queue)
+            .await
+            .unwrap();
+        app.state(&engine).await;
         assert_eq!(app.queue.entries.len(), 2);
-        assert_eq!(app.queue.entries[1].run.id, receipt.id);
+        assert_eq!(app.queue.entries[1].run_id, receipt.run_id);
         assert!(app.queue.paused);
-        let root = app.queue.entries[0].run.id.clone();
+        let root = app.queue.entries[0].run_id.clone().unwrap();
         app.input = "/queue resume".into();
-        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
-        app.state(&host).await;
+        submit(&mut app, &engine, SubmissionKey::Enter)
+            .await
+            .unwrap();
+        app.state(&engine).await;
         assert_eq!(app.active.as_ref().unwrap().id, root);
         app.input = "queued before resume".into();
         app.fifo_submissions.push(FifoSubmission {
@@ -2400,20 +2611,22 @@ mod tests {
             request: receipt.request_id.clone(),
         });
         assert!(
-            submit(&mut app, &host, SubmissionKey::Enter)
+            submit(&mut app, &engine, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
                 .contains("FIFO submission binding")
         );
-        submit(&mut app, &host, SubmissionKey::Queue).await.unwrap();
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+        submit(&mut app, &engine, SubmissionKey::Queue)
+            .await
+            .unwrap();
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 1);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
         app.input = "queued while busy".into();
-        // Simulate a stale idle view: the host must not queue this Enter.
+        // Simulate a stale idle view: the engine must not queue this Enter.
         app.active = None;
         assert!(
-            submit(&mut app, &host, SubmissionKey::Enter)
+            submit(&mut app, &engine, SubmissionKey::Enter)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -2421,16 +2634,20 @@ mod tests {
         );
         assert_eq!(app.input, "queued while busy");
         assert!(app.fifo_submissions.is_empty()); // No receipt existed and no attempt was made.
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
-        app.state(&host).await;
-        submit(&mut app, &host, SubmissionKey::Queue).await.unwrap();
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 1);
+        app.state(&engine).await;
+        submit(&mut app, &engine, SubmissionKey::Queue)
+            .await
+            .unwrap();
         app.input = "/queue".into();
-        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
+        submit(&mut app, &engine, SubmissionKey::Enter)
+            .await
+            .unwrap();
         assert!(app.queue_picker);
         assert_eq!(app.queue.entries.len(), 2);
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(130, 35)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
+            .draw(|frame| draw(frame, &mut app, engine.display(), Instant::now()))
             .unwrap();
         let contents: String = terminal
             .backend()
@@ -2442,26 +2659,29 @@ mod tests {
         assert!(contents.contains("Input queue: RUNNING"));
         assert!(contents.contains("queued while busy"));
         app.input = "/queue clear".into();
-        submit(&mut app, &host, SubmissionKey::Enter).await.unwrap();
+        submit(&mut app, &engine, SubmissionKey::Enter)
+            .await
+            .unwrap();
         assert!(app.queue.paused && app.queue.entries.is_empty());
-        assert!(host.active().await.iter().any(|run| run.id == root));
-        host.shutdown().await;
+        assert!(engine.active().contains(&root));
+        let controls: Vec<_> = engine
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::ControlQueue { action, .. } => Some(action),
+                Call::Cancel { .. } | Call::Steer { .. } => panic!("unexpected {call:?}"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            controls,
+            [QueueAction::Pause, QueueAction::Resume, QueueAction::Clear]
+        );
     }
 
     #[test]
     fn terminal_layout_renders_at_small_and_large_sizes() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let mut app = App {
             session: "ngn-test".into(),
             input: "hello".into(),
@@ -2472,25 +2692,14 @@ mod tests {
             let mut terminal =
                 Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
+                .draw(|frame| draw(frame, &mut app, &display, Instant::now()))
                 .unwrap();
         }
     }
 
     #[test]
     fn transcript_wheel_uses_rendered_bounds_and_preserves_scroll_anchor() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let mut app = App {
             input: "/".into(), // Keep the suggestion menu visible below the transcript.
             // One agent run keeps the rail beside the conversation at 120 columns.
@@ -2505,7 +2714,7 @@ mod tests {
                 title: "child".into(),
                 depth: 1,
                 read_only: true,
-                status: ngn_protocol::RunStatus::Completed,
+                status: crate::model::RunStatus::Completed,
             }],
             ..App::default()
         };
@@ -2516,13 +2725,13 @@ mod tests {
             session_id: "session".into(),
             run_id: "run".into(),
             timestamp_ms: 0,
-            event: ngn_protocol::Event::TextDelta { text },
+            event: crate::model::Event::TextDelta { text },
         };
         app.records.push(lines(1, "history\n".repeat(80)));
         let redraw = |app: &mut App, width, height| {
             Terminal::new(ratatui::backend::TestBackend::new(width, height))
                 .unwrap()
-                .draw(|frame| draw(frame, app, &host, Instant::now()))
+                .draw(|frame| draw(frame, app, &display, Instant::now()))
                 .unwrap();
         };
         let wheel = |column, row, kind| MouseEvent {
@@ -2574,7 +2783,7 @@ mod tests {
             root_session_id: "session".into(),
             agent_title: "Assistant".into(),
             depth: 0,
-            call: ngn_protocol::ToolCall {
+            call: crate::model::ToolCall {
                 call_id: "call".into(),
                 name: "write".into(),
                 arguments: serde_json::json!({}),
@@ -2612,25 +2821,14 @@ mod tests {
         use crossterm::event::MouseButton::Left;
         use ratatui::backend::TestBackend;
 
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let display = ClientDisplay::default();
         let record = |sequence, text| EventRecord {
             schema_version: 1,
             sequence,
             session_id: "session".into(),
             run_id: "run".into(),
             timestamp_ms: 0,
-            event: ngn_protocol::Event::TextDelta { text },
+            event: crate::model::Event::TextDelta { text },
         };
         let mut app = App {
             records: vec![record(1, "short reply".into())],
@@ -2640,7 +2838,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(24, 19)).unwrap();
         let redraw = |terminal: &mut Terminal<TestBackend>, app: &mut App| {
             terminal
-                .draw(|frame| draw(frame, app, &host, Instant::now()))
+                .draw(|frame| draw(frame, app, &display, Instant::now()))
                 .unwrap();
             let text = app.transcript_area;
             let buffer = terminal.backend().buffer();
@@ -2698,43 +2896,34 @@ mod tests {
 
     #[tokio::test]
     async fn composer_header_keeps_its_title_and_pending_count_clear_of_slash_completion() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
+        let engine = FakeEngine::default();
         let mut app = App {
-            session: host.store.create_session().await.unwrap().id,
+            session: engine.create_session(),
             input: "/st".into(),
             ..App::default()
         };
-        host.control_queue(&app.session, QueueAction::Pause)
+        engine
+            .control_queue(&app.session, QueueAction::Pause)
             .await
             .unwrap();
         for pending in [0, 2] {
             for _ in 0..pending {
-                host.submit(
-                    &app.session,
-                    "pending test",
-                    &Uuid::new_v4().to_string(),
-                    ApprovalMode::Interactive,
-                )
-                .await
-                .unwrap();
+                let admission = engine
+                    .submit(
+                        &app.session,
+                        "pending test",
+                        &Uuid::new_v4().to_string(),
+                        Submission::Queue,
+                    )
+                    .await;
+                assert!(matches!(admission, InputAdmission::Accepted { .. }));
             }
-            app.state(&host).await;
+            app.state(&engine).await;
             for (width, height) in [(1, 1), (11, 6), (16, 12), (24, 12), (120, 36)] {
                 let mut terminal =
                     Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
                 terminal
-                    .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
+                    .draw(|frame| draw(frame, &mut app, engine.display(), Instant::now()))
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 let menu_height = app.completion.menu(&app.input).unwrap().height();
@@ -2767,36 +2956,18 @@ mod tests {
         }
         assert!(app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
         assert_eq!(app.input, "/steer ");
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 2);
-        host.shutdown().await;
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 2);
     }
 
     #[tokio::test]
     async fn session_picker_preserves_draft_and_active_work_and_opens_exact_id() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let first = host.store.create_session().await.unwrap();
-        let second = host.store.create_session().await.unwrap();
+        let engine = FakeEngine::default();
+        engine.create_session();
+        engine.create_session();
+        let [first, second] =
+            <[crate::model::Session; 2]>::try_from(engine.sessions().await.unwrap()).unwrap();
         assert_eq!(first.title, second.title);
-        let run = host
-            .start(
-                &first.id,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
+        let run = engine.start(&first.id, "hold");
         let mut app = App {
             session: first.id.clone(),
             input: "unsent draft".into(),
@@ -2804,22 +2975,22 @@ mod tests {
             ..App::default()
         };
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-        app.state(&host).await;
+        app.state(&engine).await;
         let now = Instant::now();
         app.caret.focus(true, now);
-        app.open_picker(&host).await.unwrap(); // F2
+        app.open_picker(&engine).await.unwrap(); // F2
         assert!(!app.caret_visible(now));
-        app.picker_key(&host, key(KeyCode::Char('x')))
+        app.picker_key(&engine, key(KeyCode::Char('x')))
             .await
             .unwrap();
-        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap(); // no match
+        app.picker_key(&engine, key(KeyCode::Enter)).await.unwrap(); // no match
         assert!(app.picker.is_some());
         assert_eq!(app.session, first.id);
-        app.picker_key(&host, key(KeyCode::Esc)).await.unwrap();
+        app.picker_key(&engine, key(KeyCode::Esc)).await.unwrap();
         assert!(app.picker.is_none());
         assert_eq!(app.input, "unsent draft");
         assert_eq!(app.scroll, Some(13));
-        assert!(host.active().await.iter().any(|active| active.id == run.id));
+        assert!(engine.active().contains(&run.id));
 
         for (draft, suggestion, hint) in [
             ("/", "› /help", "Tab/Enter fill"),
@@ -2832,7 +3003,7 @@ mod tests {
                 let mut terminal =
                     Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
                 terminal
-                    .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
+                    .draw(|frame| draw(frame, &mut app, engine.display(), Instant::now()))
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 let row = |y| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
@@ -2858,7 +3029,7 @@ mod tests {
         assert_eq!(app.input, "/se");
         assert!(app.completion.menu(&app.input).is_none());
         assert!(!app.completion_key(key(KeyCode::Tab)));
-        assert!(host.active().await.iter().any(|active| active.id == run.id));
+        assert!(engine.active().contains(&run.id));
         app.input.pop();
         app.completion.edited(&app.input);
         app.input.push('e');
@@ -2866,83 +3037,102 @@ mod tests {
         assert!(app.completion_key(key(KeyCode::Tab)));
         assert_eq!(app.input, "/sessions ");
         assert!(app.picker.is_none());
-        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&app.session).await.unwrap().entries.is_empty());
         assert!(!app.completion_key(key(KeyCode::Enter)));
         assert!(!app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)));
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Queue).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert_eq!(app.input, "/sessions ");
         assert!(app.picker.is_none());
-        assert!(!submit_from_enter(&mut app, &host, SubmissionKey::Enter).await);
+        assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(app.input.is_empty());
         app.picker
             .as_mut()
             .unwrap()
             .paste(&second.id.to_uppercase());
-        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap();
+        app.picker_key(&engine, key(KeyCode::Enter)).await.unwrap();
         assert_eq!(app.session, second.id);
         assert!(app.picker.is_none());
-        assert_eq!(host.store.sessions().await.unwrap().len(), 2);
-        assert!(host.active().await.iter().any(|active| active.id == run.id));
+        assert_eq!(engine.session_count(), 2);
+        assert!(engine.active().contains(&run.id));
 
         app.input = format!("/resume {}", &first.id[..12]);
-        assert!(submit(&mut app, &host, SubmissionKey::Enter).await.is_err());
+        assert!(
+            submit(&mut app, &engine, SubmissionKey::Enter)
+                .await
+                .is_err()
+        );
         assert_eq!(app.session, second.id);
         app.input = format!("/resume {}", first.id);
         assert!(!app.completion_key(key(KeyCode::Enter)));
-        assert!(!submit(&mut app, &host, SubmissionKey::Enter).await.unwrap());
+        assert!(
+            !submit(&mut app, &engine, SubmissionKey::Enter)
+                .await
+                .unwrap()
+        );
         assert_eq!(app.session, first.id);
         assert!(app.picker.is_none());
 
         app.input = "/resume".into();
-        assert!(!submit(&mut app, &host, SubmissionKey::Enter).await.unwrap());
-        app.picker_key(&host, key(KeyCode::Enter)).await.unwrap(); // explicit New row
+        assert!(
+            !submit(&mut app, &engine, SubmissionKey::Enter)
+                .await
+                .unwrap()
+        );
+        app.picker_key(&engine, key(KeyCode::Enter)).await.unwrap(); // explicit New row
         assert_ne!(app.session, first.id);
         assert_ne!(app.session, second.id);
-        assert_eq!(host.store.sessions().await.unwrap().len(), 3);
-        host.shutdown().await;
+        assert_eq!(engine.session_count(), 3);
+        assert!(engine.active().contains(&run.id));
+        assert!(
+            !engine
+                .calls()
+                .iter()
+                .any(|call| matches!(call, Call::Submit { .. } | Call::Cancel { .. }))
+        );
     }
 
     #[tokio::test]
     async fn root_ui_inspects_children_and_approves_only_the_actual_child_call() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let session = host.store.create_session().await.unwrap();
-        let root = host
-            .start(
-                &session.id,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
-        let mut receiver = host.events.subscribe();
-        let child = host.tool(&root, ngn_protocol::ToolCall { call_id:"preview-child".into(), name:"to_agent".into(), arguments:serde_json::json!({"prompt":"demo approval", "title":"Preview child", "background":true}) }).await.unwrap();
-        let child_id = child.result["task"]["run_id"].as_str().unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let record = receiver.recv().await.unwrap();
-                if record.run_id == child_id
-                    && matches!(record.event, ngn_protocol::Event::ApprovalRequested { .. })
-                {
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "hold");
+        let child_id = "child-run";
+        let child_session = "child-session";
+        engine.add_task(TaskInfo {
+            run_id: child_id.into(),
+            session_id: child_session.into(),
+            parent_run_id: root.id.clone(),
+            parent_session_id: session.clone(),
+            root_run_id: root.id.clone(),
+            root_session_id: session.clone(),
+            call_id: "preview-child".into(),
+            title: "Preview child".into(),
+            depth: 1,
+            read_only: false,
+            status: crate::model::RunStatus::Running,
+        });
+        let call = crate::model::ToolCall {
+            call_id: "child-write".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({"path": "demo.txt", "content": "demo"}),
+        };
+        engine.emit(
+            child_session,
+            child_id,
+            crate::model::Event::ToolStarted { call: call.clone() },
+        );
+        engine.request_approval(Approval {
+            id: "approval-1".into(),
+            run_id: child_id.into(),
+            session_id: child_session.into(),
+            root_session_id: session.clone(),
+            agent_title: "Preview child".into(),
+            depth: 1,
+            call,
+            preview: "write demo.txt".into(),
+        });
         let mut app = App {
-            session: session.id.clone(),
+            session: session.clone(),
             records: Vec::new(),
             after: 0,
             input: "/se".into(),
@@ -2964,12 +3154,12 @@ mod tests {
             queue_index: 0,
             ..App::default()
         };
-        app.state(&host).await;
+        app.state(&engine).await;
         let now = Instant::now();
         app.caret.focus(true, now);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         assert_eq!(app.tasks[0].run_id, child_id);
-        assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Running);
+        assert_eq!(app.tasks[0].status, crate::model::RunStatus::Running);
         assert!(!app.agents_key(
             KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
             120
@@ -2989,16 +3179,12 @@ mod tests {
         assert_eq!(approval.run_id, child_id);
         assert_eq!(approval.agent_title, "Preview child");
         assert_eq!(approval.depth, 1);
-        let child_run = host
-            .active()
-            .await
-            .into_iter()
-            .find(|run| run.id == child_id)
-            .unwrap();
-        host.emit(
-            &child_run,
-            ngn_protocol::Event::ToolCompleted {
-                result: ngn_protocol::ToolResult {
+        assert_eq!(approval.call.call_id, "child-write");
+        engine.emit(
+            child_session,
+            child_id,
+            crate::model::Event::ToolCompleted {
+                result: crate::model::ToolResult {
                     call_id: "child-failure".into(),
                     name: "read_file".into(),
                     result: serde_json::Value::Null,
@@ -3006,45 +3192,68 @@ mod tests {
                 },
                 duration_ms: 7,
             },
-        )
-        .await
-        .unwrap();
-        assert!(host.decide(&root.id, &approval.id, true).await.is_err());
-        host.decide(child_id, &approval.id, false).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let record = receiver.recv().await.unwrap();
-                if record.run_id == child_id
-                    && matches!(record.event, ngn_protocol::Event::RunFinished { .. })
-                {
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
-        app.task_key(&host, key(KeyCode::Enter)).await;
-        app.catch_up(&host).await.unwrap();
-        app.state(&host).await;
+        );
+        assert!(
+            engine
+                .decide(&root.id, &approval.id, &approval.call.call_id, true)
+                .await
+                .is_err()
+        );
+        engine
+            .decide(child_id, &approval.id, &approval.call.call_id, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            engine
+                .calls()
+                .into_iter()
+                .filter(|call| matches!(call, Call::Decide { .. }))
+                .collect::<Vec<_>>(),
+            [
+                Call::Decide {
+                    run: root.id.clone(),
+                    approval: "approval-1".into(),
+                    call: "child-write".into(),
+                    allow: true,
+                },
+                Call::Decide {
+                    run: child_id.into(),
+                    approval: "approval-1".into(),
+                    call: "child-write".into(),
+                    allow: false,
+                },
+            ]
+        );
+        engine.emit(
+            child_session,
+            child_id,
+            crate::model::Event::TextCompleted {
+                text: "The demo file was not written.".into(),
+            },
+        );
+        engine.finish_task(child_id, crate::model::RunStatus::Completed);
+        app.task_key(&engine, key(KeyCode::Enter)).await;
+        app.catch_up(&engine).await.unwrap();
+        app.state(&engine).await;
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[app.task_index].run_id, child_id);
-        assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Completed);
+        assert_eq!(app.tasks[0].status, crate::model::RunStatus::Completed);
         assert!(app.task_records.iter().all(
             |record| record.session_id == app.tasks[0].session_id && record.run_id == child_id
         ));
         assert!(
             app.task_records
                 .iter()
-                .any(|record| matches!(record.event, ngn_protocol::Event::TextCompleted { .. }))
+                .any(|record| matches!(record.event, crate::model::Event::TextCompleted { .. }))
         );
         assert!(
             !app.records
                 .iter()
-                .any(|record| matches!(record.event, ngn_protocol::Event::TextDelta { .. }))
+                .any(|record| matches!(record.event, crate::model::Event::TextDelta { .. }))
         );
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &mut app, &host, Instant::now()))
+            .draw(|frame| draw(frame, &mut app, engine.display(), Instant::now()))
             .unwrap();
         let contents: String = terminal
             .backend()
@@ -3054,13 +3263,22 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(contents.contains("Agent: Preview child"));
-        assert!(contents.contains("read_file · failed · 7ms"));
+        let rows: Vec<String> = contents
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(120)
+            .map(|row| row.iter().collect())
+            .collect();
+        assert!(
+            rows.iter().any(|row| row.contains("read_file")
+                && row.contains("failed")
+                && row.contains("failed         7ms")),
+            "{rows:#?}"
+        );
         assert!(contents.contains("Error: child fixture failed: [2Jmissing file"));
         assert!(contents.contains("Error: Tool approval denied, expired or cancelled"));
         assert!(!contents.contains('\x1b'));
         assert!(!contents.contains("Arguments:"));
         assert!(!contents.contains("Result:"));
-        assert!(!directory.path().join("demo.txt").exists());
-        host.shutdown().await;
     }
 }

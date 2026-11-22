@@ -69,7 +69,6 @@ export function Composer({
   maxLength = 32000,
   deliveryEnabled = true,
   sendLabel = "Send",
-  alternateAction,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -100,7 +99,6 @@ export function Composer({
   maxLength?: number;
   deliveryEnabled?: boolean;
   sendLabel?: string;
-  alternateAction?: ReactNode;
 }) {
   const form = useRef<HTMLFormElement>(null);
   const [touch, setTouch] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.("(hover: none) and (pointer: coarse)").matches);
@@ -112,7 +110,10 @@ export function Composer({
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
-  const deliveryChoices = touch && running && deliveryEnabled && !prompt.trimStart().startsWith("/");
+  // While work runs, a message steers the active turn by default; Ctrl/Cmd+Enter
+  // (or Queue on touch) waits until the current work finishes instead.
+  const delivering = running && deliveryEnabled && !prompt.trimStart().startsWith("/");
+  const deliveryChoices = touch && delivering;
   const ready = canSubmit && !submitting && !stopping && !!(prompt.trim() || hasAttachments);
   const keepFocus = (event: MouseEvent) => event.preventDefault();
 
@@ -163,7 +164,7 @@ export function Composer({
       onDrop={(event) => { if (event.dataTransfer.files.length) { event.preventDefault(); if (!attachmentsDisabled) addAttachments?.([...event.dataTransfer.files]); } }}
       onSubmit={(event) => {
         event.preventDefault();
-        if (ready) submit(deliveryChoices ? "steer" : undefined);
+        if (ready) submit(delivering ? "steer" : undefined);
       }}
     >
       {suggesting && (!!matches.length || skillsLoading || skillsError) && <div className="slash-menu">
@@ -221,7 +222,7 @@ export function Composer({
             !event.nativeEvent.isComposing
           ) {
             event.preventDefault();
-            if (ready) submit(deliveryChoices ? "steer" : undefined);
+            if (ready) submit(delivering ? event.ctrlKey || event.metaKey ? "queue" : "steer" : undefined);
           }
         }}
       />
@@ -243,6 +244,7 @@ export function Composer({
         <span id="composer-help" className="sr-only">{touch ? deliveryEnabled
           ? "Return adds a new line. Use Send, or Steer after current tools and Queue after current work."
           : `Return adds a new line. Use ${sendLabel} to submit.`
+          : delivering ? "Enter steers the current work. Ctrl+Enter queues after it. Shift+Enter for a new line."
           : "Enter to submit. Shift+Enter for a new line."}{commandsEnabled && " Type / for commands; use arrows and Tab to choose. Escape closes suggestions."}</span>
         {running && (
           <button type="button" className="cancel" onMouseDown={touch ? keepFocus : undefined} onClick={cancel} disabled={stopping} aria-label="Stop run">
@@ -251,15 +253,15 @@ export function Composer({
         )}
         {deliveryChoices && <button type="button" className="composer-queue" disabled={!ready}
           title="Wait until current work finishes" onMouseDown={keepFocus} onClick={() => { if (ready) submit("queue"); }}>Queue</button>}
-        {alternateAction}
         <button
           type="submit"
           className="primary"
           disabled={!ready}
           onMouseDown={touch ? keepFocus : undefined}
-          title={deliveryChoices ? "Steer after current tools finish, without interrupting" : sendLabel === "Queue" ? "Queue message" : "Send message"}
+          title={delivering ? `Steer after current tools finish, without interrupting${touch ? "" : " (Enter). Ctrl+Enter queues after current work"}`
+            : sendLabel === "Queue" ? "Queue message" : "Send message"}
         >
-          {submitting ? "Sending…" : deliveryChoices ? "Steer" : sendLabel}
+          {submitting ? "Sending…" : delivering ? "Steer" : sendLabel}
         </button>
         {deliveryChoices && <span className="composer-delivery-help">Steer after current tools · Queue after current work</span>}
       </div>

@@ -3,11 +3,7 @@ use std::{
     time::Instant,
 };
 
-use ngn_core::{
-    host::{Approval, ChildTextPhase, ChildToolDispatch},
-    store::Store,
-};
-use ngn_protocol::{Event, EventRecord, RunStatus, TaskInfo};
+use crate::model::{Event, EventRecord, RunStatus, TaskInfo};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -15,6 +11,7 @@ use ratatui::{
 use tokio::sync::oneshot;
 
 use super::super::footer::{Field, Phase, WIDTH};
+use crate::engine::{Approval, ChildTextPhase, ChildToolDispatch, Engine, TaskIdentity};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Progress {
@@ -256,12 +253,11 @@ impl Child {
     }
 }
 
-type Identity = (String, String); // session, run
 const RECOVERY_BATCH: usize = 4;
 const PENDING_LIMIT: usize = 256;
 
 struct Pending {
-    identity: Identity,
+    identity: TaskIdentity,
     sequence: i64,
     signal: Signal,
 }
@@ -274,7 +270,7 @@ struct Recovery {
 
 #[derive(Clone)]
 struct RecoveryTarget {
-    identity: Identity,
+    identity: TaskIdentity,
     registration: u64,
     revision: u64,
 }
@@ -423,7 +419,7 @@ impl Activity {
 
     pub(super) fn recover<'a>(
         &mut self,
-        store: &Store,
+        engine: &impl Engine,
         visible: impl Iterator<Item = &'a TaskInfo>,
     ) {
         // Called only on the existing 100ms state tick; a busy stream never
@@ -468,13 +464,13 @@ impl Activity {
             return;
         }
         let (send, result) = oneshot::channel();
-        let store = store.clone();
         let requested = targets
             .iter()
             .map(|target| target.identity.clone())
             .collect();
+        let load = engine.task_activity_tail(requested);
         tokio::spawn(async move {
-            let _ = send.send(store.task_activity_tail(requested).await.ok());
+            let _ = send.send(load.await.ok());
         });
         self.recovery = Some(Recovery {
             targets,
@@ -609,7 +605,7 @@ impl Activity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ngn_protocol::{ToolCall, VERSION};
+    use crate::model::{ToolCall, VERSION};
 
     fn task(index: usize) -> TaskInfo {
         TaskInfo {
@@ -1028,52 +1024,34 @@ mod tests {
 
     #[tokio::test]
     async fn live_text_snapshot_closes_completion_dropped_behind_an_exact_noisy_tail() {
-        use ngn_core::{ApprovalMode, Config, Host, config::Backend};
-        use tokio::sync::broadcast::error::TryRecvError;
+        use crate::engine::fake::FakeEngine;
 
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let session = host.store.create_session().await.unwrap();
-        let root = host
-            .start(
-                &session.id,
-                "demo hold",
-                &uuid::Uuid::new_v4().to_string(),
-                ApprovalMode::Deny,
-            )
-            .await
-            .unwrap();
-        for title in ["closed", "held"] {
-            let result = host
-                .tool(
-                    &root,
-                    ToolCall {
-                        call_id: title.into(),
-                        name: "to_agent".into(),
-                        arguments: serde_json::json!({
-                            "title": title, "prompt": "demo hold", "background": true
-                        }),
-                    },
-                )
-                .await
-                .unwrap();
-            assert!(result.error.is_empty(), "{}", result.error);
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "hold");
+        let tasks: Vec<_> = ["closed", "held"]
+            .into_iter()
+            .map(|title| TaskInfo {
+                run_id: format!("run-{title}"),
+                session_id: format!("session-{title}"),
+                parent_run_id: root.id.clone(),
+                parent_session_id: session.clone(),
+                root_run_id: root.id.clone(),
+                root_session_id: session.clone(),
+                call_id: title.into(),
+                title: title.into(),
+                depth: 1,
+                read_only: true,
+                status: RunStatus::Running,
+            })
+            .collect();
+        for task in &tasks {
+            engine.add_task(task.clone());
         }
-        let tasks = host.store.tasks(&session.id).await.unwrap();
+        let tasks = engine.tasks(&session).await.unwrap().unwrap();
         let closed = tasks.iter().find(|task| task.title == "closed").unwrap();
         let held = tasks.iter().find(|task| task.title == "held").unwrap();
-        let active = host.active().await;
-        let run = |task: &TaskInfo| active.iter().find(|run| run.id == task.run_id).unwrap();
+        let emit = |task: &TaskInfo, event| engine.emit(&task.session_id, &task.run_id, event);
         let delta = || Event::TextDelta {
             text: "stream".into(),
         };
@@ -1081,39 +1059,35 @@ mod tests {
             text: "not a phase".into(),
         };
 
-        let mut receiver = host.events.subscribe();
         let mut activity = Activity::default();
         activity.catalog(&tasks);
         let mut old = Vec::new();
         for task in [closed, held] {
-            host.emit(run(task), delta()).await.unwrap();
-            let record = receiver.try_recv().unwrap();
+            let record = emit(task, delta());
             activity.ingest(&record);
             old.push(record);
             assert_eq!(activity.indicator(task, Color::Reset).1, " · Responding");
         }
-        let (_, old_phases) = host.conversation_activity(&session.id).await;
-        host.emit(
-            run(closed),
+        let old_phases = engine
+            .conversation_activity(&session)
+            .await
+            .unwrap()
+            .child_text;
+        // The live feed lags and drops the exact child's committed close; only
+        // the noise behind it is delivered later.
+        emit(
+            closed,
             Event::TextCompleted {
                 text: "stream".into(),
             },
-        )
-        .await
-        .unwrap();
+        );
+        let mut noise = Vec::new();
         for task in [closed, held] {
             for _ in 0..8 {
-                host.emit(run(task), notice()).await.unwrap();
+                noise.push(emit(task, notice()));
             }
         }
-        // Overrun the production 1024-slot receiver by exactly one: the oldest
-        // unseen record is the actual committed close from the exact child.
-        for _ in 0..1008 {
-            host.events.send(record(held, 0, notice())).unwrap();
-        }
-        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Lagged(1))));
-        let tails = host
-            .store
+        let tails = engine
             .task_activity_tail(
                 [closed, held]
                     .into_iter()
@@ -1130,7 +1104,11 @@ mod tests {
         }));
 
         activity.invalidate();
-        let (_, phases) = host.conversation_activity(&session.id).await;
+        let phases = engine
+            .conversation_activity(&session)
+            .await
+            .unwrap()
+            .child_text;
         assert_eq!(phases.len(), 2);
         for (task, tail) in [closed, held].into_iter().zip(tails) {
             activity.apply_tail(target(&activity, task), &tail);
@@ -1146,9 +1124,8 @@ mod tests {
         assert_eq!(activity.child(closed).unwrap().after, watermark);
         assert_eq!(activity.indicator(closed, Color::Reset).1, "");
         assert_eq!(activity.indicator(held, Color::Reset).1, " · Responding");
-        while let Ok(record) = receiver.try_recv() {
-            assert!(!matches!(record.event, Event::TextCompleted { .. }));
-            activity.ingest(&record);
+        for record in &noise {
+            activity.ingest(record);
         }
         // Old evidence and the right run paired with the wrong session cannot
         // undo authoritative closure or clear a still-open sibling.
@@ -1171,34 +1148,36 @@ mod tests {
         ]);
         assert_eq!(activity.indicator(closed, Color::Reset).1, "");
         assert_eq!(activity.indicator(held, Color::Reset).1, " · Responding");
-        host.emit(run(closed), delta()).await.unwrap();
-        let (_, reopened) = host.conversation_activity(&session.id).await;
+        emit(closed, delta());
+        let reopened = engine
+            .conversation_activity(&session)
+            .await
+            .unwrap()
+            .child_text;
         activity.sync_text_phases(&reopened);
         assert_eq!(activity.child(closed).unwrap().after, watermark);
         assert_eq!(activity.indicator(closed, Color::Reset).1, " · Responding");
-        host.shutdown().await;
     }
 
     #[tokio::test]
     async fn hidden_and_reduced_motion_never_start_recovery_and_batch_is_bounded() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let store = Store::open(dir.path()).unwrap();
+        let engine = crate::engine::fake::FakeEngine::default();
         let tasks: Vec<_> = (0..24).map(task).collect();
         let mut activity = Activity::default();
         activity.catalog(&tasks);
-        activity.recover(&store, tasks.iter()); // Reduced motion.
+        activity.recover(&engine, tasks.iter()); // Reduced motion.
         assert!(activity.recovery.is_none());
         activity.set_animated(true);
-        activity.recover(&store, std::iter::empty()); // Hidden or clipped.
+        activity.recover(&engine, std::iter::empty()); // Hidden or clipped.
         assert!(activity.recovery.is_none());
 
-        activity.recover(&store, tasks.iter().skip(5)); // Viewport scroll/resize.
+        activity.recover(&engine, tasks.iter().skip(5)); // Viewport scroll/resize.
         let queued = activity.recovery.as_ref().unwrap();
         assert_eq!(queued.targets.len(), 4);
         assert_eq!(queued.targets[0].identity.0, "session-5");
         activity.invalidate(); // Even lag must wait for the in-flight result.
         assert!(activity.recovery.as_ref().unwrap().stale);
-        activity.recover(&store, tasks.iter());
+        activity.recover(&engine, tasks.iter());
         if let Some(queued) = &activity.recovery {
             assert!(queued.stale);
             assert_eq!(queued.targets[0].identity.0, "session-5");

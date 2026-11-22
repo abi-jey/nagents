@@ -135,6 +135,7 @@ class TaskInfo:
     parent_response_id: str = ""
     parent_response_session_id: str = ""
     agent_name: str = ""
+    _parent_activation: int | None = None
 
     @property
     def label(self) -> str:
@@ -638,6 +639,8 @@ class SubagentManager:
             )
         accepted_root = self.root._session_id
         accepted_parent = self.harness.session_id
+        accepted_actor = self.harness._agent_session_id
+        accepted_activation = self.harness._activation
         activation_origin = self._activation_origin()
         profiles = {name: replace(value) for name, value in self.harness.delegation_profiles().items()}
         source_profiles = {name: replace(value) for name, value in self.harness.delegation_source_profiles().items()}
@@ -664,7 +667,12 @@ class SubagentManager:
                 self._check_start_admission(admission)
                 if not self.harness.can_delegate:
                     raise PermissionError("Delegation was disabled while accepting this request")
-                if self.root._session_id != accepted_root or self.harness.session_id != accepted_parent:
+                if (
+                    self.root._session_id != accepted_root
+                    or self.harness.session_id != accepted_parent
+                    or self.harness._agent_session_id != accepted_actor
+                    or self.harness._activation != accepted_activation
+                ):
                     raise RuntimeError("The parent conversation changed while accepting this request")
             finally:
                 self.root._starting -= 1
@@ -675,8 +683,9 @@ class SubagentManager:
                 root_session_id=accepted_root,
                 prompt=prompt,
                 _storage_id=identity.storage_id,
-                parent_session_id=self.harness._agent_session_id,
+                parent_session_id=accepted_actor,
                 _parent_storage_id=accepted_parent,
+                _parent_activation=accepted_activation if accepted_actor else None,
                 depth=self.harness.subagent_depth + 1,
                 profile=agent,
                 agent_name=self.harness.agent_identities()[agent].name,
@@ -795,6 +804,37 @@ class SubagentManager:
         if info is None or info.root_session_id != self.root.harness.session_id or not self._belongs(info):
             raise ValueError("Unknown or unavailable child session in the current root tree; workers are not restored")
         return info
+
+    async def cancel_activation(self, task_id: str, activation: int) -> TaskInfo:
+        """Stop one exact worker; never reinterpret a stale ID as a new activation."""
+        if self is not self.root:
+            raise PermissionError("Only the owning root can stop a child activation.")
+        info = self._lookup(task_id)
+        worker = self._workers.get(info.session_id)
+        if info.activation != activation:
+            raise ValueError("This child has a different activation.")
+        if info.status == "running":
+            if worker is None or worker.done():
+                raise RuntimeError("This child is starting or finishing.")
+            if not worker.cancelling():
+                worker.cancel()
+        if worker is not None:
+            await asyncio.gather(worker, return_exceptions=True)
+        if self._infos.get(info.session_id) is not info or info.activation != activation:
+            raise ValueError("This child activation closed while it was being stopped.")
+        if info.status == "running":
+            # A worker cancelled before its admission gate opened never
+            # entered _run_child and therefore had no completion callback.
+            if worker is None or not worker.cancelled():
+                raise RuntimeError("The child did not acknowledge cancellation.")
+            info.status = "cancelled"
+            info.phase = "cancelled"
+            info.error = "Subagent cancelled before it began; it will not be replayed."
+            info.updated_at = info.completed_at = time.time()
+            self._inputs.pop(info.session_id, None)
+            self._admitted.pop(info.session_id, None)
+            self._admission_changed()
+        return copy.deepcopy(info)
 
     async def history(self, session_id: str, limit: int = 100) -> builtins.list[Message]:
         """Detached child context, newest 1..200 messages in chronological order.
@@ -1228,6 +1268,7 @@ class SubagentManager:
         if title:
             info.title = title
         activation_origin.apply(info)
+        info._parent_activation = self._infos[info.parent_session_id].activation if info.parent_session_id else None
         info.activation += 1
         info.trigger = trigger
         if trigger in {"human", "agent"}:
@@ -1271,6 +1312,8 @@ class SubagentManager:
             info.activation_run_id,
             info.activation_call_id,
             info.activation_call_position,
+            parent_activation=info._parent_activation,
+            read_only=info.mode == "reviewer",
         )
 
     def _create_child(self, agent: str, info: TaskInfo | None = None, *, continuing: bool = False) -> Harness:

@@ -1,6 +1,18 @@
-use std::{collections::HashMap, iter::Peekable, ops::Range};
+use std::{
+    collections::HashMap,
+    iter::Peekable,
+    ops::Range,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
+use crate::model::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
+
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// Compact, bounded units; the wire continues to carry integer milliseconds.
 pub fn duration(milliseconds: u64) -> String {
@@ -54,6 +66,22 @@ pub fn duration(milliseconds: u64) -> String {
     "1m".into()
 }
 
+/// Only explicit, unit-bearing deadline arguments, as in the Python TUI. Nested
+/// payloads and free-form strings are never parsed for a deadline.
+fn argument_timeout(call: &ToolCall) -> Option<u64> {
+    [
+        ("timeout", 1000.0),
+        ("timeout_seconds", 1000.0),
+        ("timeout_ms", 1.0),
+    ]
+    .into_iter()
+    .find_map(|(key, scale)| {
+        let value = call.arguments.get(key)?.as_f64()?;
+        (value.is_finite() && value > 0.0 && value * scale < u64::MAX as f64)
+            .then(|| (value * scale).round() as u64)
+    })
+}
+
 pub fn target(call: &ToolCall) -> String {
     let key = match call.name.as_str() {
         "shell" => "command",
@@ -87,6 +115,14 @@ fn plain_chars(text: &str) -> impl Iterator<Item = char> {
     })
 }
 
+fn bounded_detail(text: &str) -> String {
+    const LIMIT: usize = 4096;
+    if text.len() <= LIMIT {
+        return text.to_owned();
+    }
+    format!("{}\n[truncated]", &text[..text.floor_char_boundary(LIMIT)])
+}
+
 enum ToolState<'a> {
     Running {
         since_ms: u64,
@@ -117,10 +153,32 @@ pub struct ToolCard<'a> {
     pub label: String,
     pub status: &'static str,
     pub elapsed: Option<u64>,
+    /// The call's own deadline in milliseconds, when its arguments name one.
+    pub timeout: Option<u64>,
+    /// A native shell call, whose deadline is the host's configured shell timeout.
+    pub shell: bool,
     pub success: bool,
     pub success_transition: Option<i64>,
     call: Option<&'a ToolCall>,
     result: Option<&'a ToolResult>,
+}
+
+impl<'a> ToolCard<'a> {
+    #[cfg(test)]
+    pub fn for_test(call: &'a ToolCall, status: &'static str, elapsed: Option<u64>) -> Self {
+        Self {
+            key: ("run", call.call_id.as_str()),
+            label: format!("{}{}", call.name, target(call)),
+            status,
+            elapsed,
+            timeout: argument_timeout(call),
+            shell: call.name == "shell",
+            success: status == "complete",
+            success_transition: None,
+            call: Some(call),
+            result: None,
+        }
+    }
 }
 
 impl ToolCard<'_> {
@@ -128,24 +186,22 @@ impl ToolCard<'_> {
         self.result
             .filter(|result| !result.error.is_empty())
             .map(|result| {
-                let error = ngn_core::tools::bounded(&result.error, 4096);
+                let error = bounded_detail(&result.error);
                 format!("  Error: {}", plain(&error))
             })
     }
 
     pub fn details(&self) -> impl Iterator<Item = String> {
-        use ngn_core::tools::bounded;
-
         let arguments = self.call.map(|call| {
             format!(
                 "  Arguments: {}",
-                bounded(&call.arguments.to_string(), 4096)
+                bounded_detail(&call.arguments.to_string())
             )
         });
         let result = self
             .result
             .filter(|result| !result.result.is_null())
-            .map(|result| format!("  Result: {}", bounded(&result.result.to_string(), 4096)));
+            .map(|result| format!("  Result: {}", bounded_detail(&result.result.to_string())));
         [arguments, result]
             .into_iter()
             .flatten()
@@ -235,6 +291,8 @@ impl<'a> ToolRow<'a> {
             ),
             status,
             elapsed,
+            timeout: self.call.and_then(argument_timeout),
+            shell: name == "shell",
             success,
             success_transition,
             call: self.call,

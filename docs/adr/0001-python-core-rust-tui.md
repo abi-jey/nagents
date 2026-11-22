@@ -1,6 +1,6 @@
 # 0001. Python core, Rust TUI client
 
-- Status: Proposed
+- Status: Accepted; implemented in ngn 0.100.47
 - Date: 2026-11-22
 
 ## Context

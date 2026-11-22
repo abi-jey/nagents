@@ -1,0 +1,682 @@
+{
+  "$defs": {
+    "ApprovalRequested": {
+      "properties": {
+        "approval_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "call": {
+          "$ref": "#/$defs/ToolCall"
+        },
+        "preview": {
+          "title": "Preview",
+          "type": "string"
+        },
+        "type": {
+          "const": "approval.requested",
+          "default": "approval.requested",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "call",
+        "preview"
+      ],
+      "title": "ApprovalRequested",
+      "type": "object"
+    },
+    "ApprovalResolved": {
+      "properties": {
+        "allowed": {
+          "title": "Allowed",
+          "type": "boolean"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "approval.resolved",
+          "default": "approval.resolved",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "allowed"
+      ],
+      "title": "ApprovalResolved",
+      "type": "object"
+    },
+    "Counter": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Cursor": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "EngineConnected": {
+      "properties": {
+        "engine": {
+          "$ref": "#/$defs/EngineInfo"
+        },
+        "type": {
+          "const": "engine.connected",
+          "default": "engine.connected",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "engine"
+      ],
+      "title": "EngineConnected",
+      "type": "object"
+    },
+    "EngineEvent": {
+      "discriminator": {
+        "mapping": {
+          "approval.requested": "#/$defs/ApprovalRequested",
+          "approval.resolved": "#/$defs/ApprovalResolved",
+          "engine.connected": "#/$defs/EngineConnected",
+          "notice": "#/$defs/Notice",
+          "queue.updated": "#/$defs/QueueUpdated",
+          "run.finished": "#/$defs/RunFinished",
+          "run.queued": "#/$defs/RunQueued",
+          "run.started": "#/$defs/RunStarted",
+          "session.updated": "#/$defs/SessionUpdated",
+          "steering.updated": "#/$defs/SteeringUpdated",
+          "task.finished": "#/$defs/TaskFinished",
+          "task.started": "#/$defs/TaskStarted",
+          "task.updated": "#/$defs/TaskUpdated",
+          "text.completed": "#/$defs/TextCompleted",
+          "text.delta": "#/$defs/TextDelta",
+          "tool.approval_timing": "#/$defs/ToolApprovalTiming",
+          "tool.completed": "#/$defs/ToolCompleted",
+          "tool.started": "#/$defs/ToolStarted"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RunQueued"
+        },
+        {
+          "$ref": "#/$defs/QueueUpdated"
+        },
+        {
+          "$ref": "#/$defs/RunStarted"
+        },
+        {
+          "$ref": "#/$defs/SteeringUpdated"
+        },
+        {
+          "$ref": "#/$defs/TextDelta"
+        },
+        {
+          "$ref": "#/$defs/TextCompleted"
+        },
+        {
+          "$ref": "#/$defs/ToolStarted"
+        },
+        {
+          "$ref": "#/$defs/ToolCompleted"
+        },
+        {
+          "$ref": "#/$defs/ToolApprovalTiming"
+        },
+        {
+          "$ref": "#/$defs/ApprovalRequested"
+        },
+        {
+          "$ref": "#/$defs/ApprovalResolved"
+        },
+        {
+          "$ref": "#/$defs/Notice"
+        },
+        {
+          "$ref": "#/$defs/TaskStarted"
+        },
+        {
+          "$ref": "#/$defs/TaskUpdated"
+        },
+        {
+          "$ref": "#/$defs/TaskFinished"
+        },
+        {
+          "$ref": "#/$defs/RunFinished"
+        },
+        {
+          "$ref": "#/$defs/SessionUpdated"
+        },
+        {
+          "$ref": "#/$defs/EngineConnected"
+        }
+      ]
+    },
+    "EngineInfo": {
+      "properties": {
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "protocol_revision": {
+          "$ref": "#/$defs/Counter"
+        },
+        "protocol_version": {
+          "minimum": 1,
+          "title": "Protocol Version",
+          "type": "integer"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "protocol_revision",
+        "version",
+        "capabilities"
+      ],
+      "title": "EngineInfo",
+      "type": "object"
+    },
+    "Identifier": {
+      "maxLength": 200,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "type": "string"
+    },
+    "JsonValue": {},
+    "Notice": {
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "notice",
+          "default": "notice",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "Notice",
+      "type": "object"
+    },
+    "QueueUpdated": {
+      "properties": {
+        "paused": {
+          "title": "Paused",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "queue.updated",
+          "default": "queue.updated",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "paused"
+      ],
+      "title": "QueueUpdated",
+      "type": "object"
+    },
+    "RunFinished": {
+      "properties": {
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "type": {
+          "const": "run.finished",
+          "default": "run.finished",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "error"
+      ],
+      "title": "RunFinished",
+      "type": "object"
+    },
+    "RunQueued": {
+      "properties": {
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "type": {
+          "const": "run.queued",
+          "default": "run.queued",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "title": "RunQueued",
+      "type": "object"
+    },
+    "RunStarted": {
+      "properties": {
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "type": {
+          "const": "run.started",
+          "default": "run.started",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "title": "RunStarted",
+      "type": "object"
+    },
+    "RunStatus": {
+      "enum": [
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "Session": {
+      "properties": {
+        "archived": {
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "updated_at_ms",
+        "archived"
+      ],
+      "title": "Session",
+      "type": "object"
+    },
+    "SessionUpdated": {
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Session"
+        },
+        "type": {
+          "const": "session.updated",
+          "default": "session.updated",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "title": "SessionUpdated",
+      "type": "object"
+    },
+    "SteeringUpdated": {
+      "properties": {
+        "input_id": {
+          "title": "Input Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "steering.updated",
+          "default": "steering.updated",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_id"
+      ],
+      "title": "SteeringUpdated",
+      "type": "object"
+    },
+    "TaskFinished": {
+      "properties": {
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskInfo"
+        },
+        "type": {
+          "const": "task.finished",
+          "default": "task.finished",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task",
+        "error"
+      ],
+      "title": "TaskFinished",
+      "type": "object"
+    },
+    "TaskInfo": {
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "depth": {
+          "$ref": "#/$defs/Counter"
+        },
+        "parent_run_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "parent_session_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "read_only": {
+          "title": "Read Only",
+          "type": "boolean"
+        },
+        "root_run_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "root_session_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "session_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "session_id",
+        "parent_run_id",
+        "parent_session_id",
+        "root_run_id",
+        "root_session_id",
+        "call_id",
+        "title",
+        "depth",
+        "read_only",
+        "status"
+      ],
+      "title": "TaskInfo",
+      "type": "object"
+    },
+    "TaskStarted": {
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/TaskInfo"
+        },
+        "type": {
+          "const": "task.started",
+          "default": "task.started",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "title": "TaskStarted",
+      "type": "object"
+    },
+    "TaskUpdated": {
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/TaskInfo"
+        },
+        "type": {
+          "const": "task.updated",
+          "default": "task.updated",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "title": "TaskUpdated",
+      "type": "object"
+    },
+    "TextCompleted": {
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "text.completed",
+          "default": "text.completed",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextCompleted",
+      "type": "object"
+    },
+    "TextDelta": {
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "text.delta",
+          "default": "text.delta",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextDelta",
+      "type": "object"
+    },
+    "ToolApprovalTiming": {
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "elapsed_ms": {
+          "$ref": "#/$defs/Counter"
+        },
+        "type": {
+          "const": "tool.approval_timing",
+          "default": "tool.approval_timing",
+          "title": "Type",
+          "type": "string"
+        },
+        "waiting": {
+          "title": "Waiting",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "call_id",
+        "elapsed_ms",
+        "waiting"
+      ],
+      "title": "ToolApprovalTiming",
+      "type": "object"
+    },
+    "ToolCall": {
+      "properties": {
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Arguments",
+          "type": "object"
+        },
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "name",
+        "arguments"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    },
+    "ToolCompleted": {
+      "properties": {
+        "duration_ms": {
+          "$ref": "#/$defs/Counter"
+        },
+        "result": {
+          "$ref": "#/$defs/ToolResult"
+        },
+        "type": {
+          "const": "tool.completed",
+          "default": "tool.completed",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "duration_ms"
+      ],
+      "title": "ToolCompleted",
+      "type": "object"
+    },
+    "ToolResult": {
+      "properties": {
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "call_id",
+        "name",
+        "result",
+        "error"
+      ],
+      "title": "ToolResult",
+      "type": "object"
+    },
+    "ToolStarted": {
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolCall"
+        },
+        "type": {
+          "const": "tool.started",
+          "default": "tool.started",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call"
+      ],
+      "title": "ToolStarted",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "event": {
+      "$ref": "#/$defs/EngineEvent"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sequence": {
+      "$ref": "#/$defs/Cursor",
+      "description": "Increasing event ID; gaps can occur in durable replay."
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "timestamp_ms": {
+      "$ref": "#/$defs/Counter"
+    }
+  },
+  "required": [
+    "schema_version",
+    "sequence",
+    "session_id",
+    "run_id",
+    "timestamp_ms",
+    "event"
+  ],
+  "title": "EventRecord",
+  "type": "object"
+}

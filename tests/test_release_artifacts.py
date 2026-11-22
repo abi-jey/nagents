@@ -144,8 +144,7 @@ def test_shared_version_tag_publishes_pypi_before_the_single_version_only_github
         "--bundle --published-core",
         "--require-bundle",
         "install_smoke.py",
-        "browser_smoke.py",
-        "steering_clients_smoke.py",
+        "python_engine_smoke.py",
         "playwright install --with-deps chromium",
     ):
         assert gate in build_runs
