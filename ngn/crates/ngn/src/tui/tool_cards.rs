@@ -460,13 +460,10 @@ fn clip(text: &str, cells: usize) -> String {
 
 /// The status glyph shown before the tool name. A completed call needs no
 /// word: the check mark and its colour say it.
-fn status_icon(status: &str) -> (&'static str, &str) {
-    match status {
-        "complete" => ("✓ ", ""),
-        "failed" | "denied" => ("✗ ", status),
-        "cancelled" => ("⊘ ", status),
-        _ => ("", status),
-    }
+/// The header's status words. Success needs none: the label turns green.
+/// No icon is prefixed, so a finishing call never shifts its label sideways.
+fn shown_status(status: &str) -> &str {
+    if status == "complete" { "" } else { status }
 }
 
 fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
@@ -478,10 +475,7 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     } else {
         return clip(marker, cells);
     };
-    let (icon, shown) = status_icon(card.status);
-    if Span::raw(&prefix).width() + Span::raw(icon).width() < cells {
-        prefix.push_str(icon);
-    }
+    let shown = shown_status(card.status);
     let available = cells.saturating_sub(Span::raw(&prefix).width());
     let waiting = card.status == "Approval waiting";
     // A waiting call's time is not progress; it would only look frozen.
@@ -1362,7 +1356,7 @@ mod tests {
                 if item.starts_with("lookup ") {
                     assert!(
                         left.iter()
-                            .any(|row| row.contains(item) && row.contains("✓"))
+                            .any(|row| row.contains(item) && !row.contains("running"))
                     );
                 }
             }
@@ -1416,21 +1410,21 @@ mod tests {
         let above = app.tools.headers[0].1 as u16;
         let across = app.tools.headers[1].1 as u16;
         let full = terminal.backend().buffer().area;
-        assert_eq!(terminal.backend().buffer()[(12, across)].symbol(), "工");
+        assert_eq!(terminal.backend().buffer()[(10, across)].symbol(), "工");
 
         // Start the dialog on the continuation column of a two-column glyph.
-        let dialog = Rect::new(13, across, 12, 2);
+        let dialog = Rect::new(11, across, 12, 2);
         let initial = render_masked(&mut app, &mut terminal, None, start, Some(dialog)).clone();
-        assert_eq!(initial[(13, across)].symbol(), "A");
-        assert_eq!(initial[(13, across)].fg, Color::Yellow);
-        assert_eq!(initial[(13, across)].bg, Color::Red);
-        assert!(initial[(13, across)].modifier.contains(Modifier::BOLD));
+        assert_eq!(initial[(11, across)].symbol(), "A");
+        assert_eq!(initial[(11, across)].fg, Color::Yellow);
+        assert_eq!(initial[(11, across)].bg, Color::Red);
+        assert!(initial[(11, across)].modifier.contains(Modifier::BOLD));
         assert!(app.tools.needs_frame(middle));
         let mut cached = initial.clone();
         app.tools.paint_motion(&mut cached, middle);
         assert_ne!(cached[(2, above)].fg, initial[(2, above)].fg);
         assert_ne!(cached[(2, across)].fg, initial[(2, across)].fg);
-        assert_ne!(cached[(25, across)].fg, initial[(25, across)].fg);
+        assert_ne!(cached[(23, across)].fg, initial[(23, across)].fg);
 
         // A completely covered transcript must not schedule motion of its own.
         let fully_covered =
@@ -1445,7 +1439,7 @@ mod tests {
         let unmasked = terminal.backend().buffer();
         let mut expected = initial.clone();
         for pos in full.positions() {
-            if !dialog.contains(pos) && pos != Position::new(12, across) {
+            if !dialog.contains(pos) && pos != Position::new(10, across) {
                 expected[pos].fg = unmasked[pos].fg;
             }
         }
@@ -1511,7 +1505,7 @@ mod tests {
                 .map(|column| buffer[(column, row)].symbol())
                 .collect::<String>()
         };
-        assert!(lines(&final_frame).contains("✓ shell"));
+        assert!(lines(&final_frame).contains("shell"));
         assert!(lines(&final_frame).contains("· 1.25s"));
         for mut frame in [first, middle] {
             for column in 2..60 {
@@ -1813,7 +1807,7 @@ mod tests {
         assert!(key(&mut app, KeyCode::F(4)));
         assert!(key(&mut app, KeyCode::Enter));
         let before = draw(&mut app, &mut terminal);
-        assert!(before[1].starts_with("▾ ✗ shell"));
+        assert!(before[1].starts_with("▾ shell"));
         assert!(before.iter().any(|row| row.starts_with("plain tool error")));
         assert!(before.iter().all(|row| !row.starts_with('│')));
         assert!(key(&mut app, KeyCode::Esc));
@@ -1984,7 +1978,7 @@ mod tests {
             ),
             (
                 finished("r", "c", json!("ok"), "").event,
-                "✓ shell",
+                "shell",
                 Color::Reset,
             ),
         ] {
@@ -2046,9 +2040,9 @@ mod tests {
         assert!(
             compact.contains(concat!(
                 "before\n\nprose\n\n",
-                "▸ ✓ shell · 甲 · 1.25s\n▸ ✓ shell · 乙 · 1.25s\n",
-                "between\n\n▸ ✗ shell · 丙 · failed · 1.25s\n",
-                "▸ ✓ shell · 丁 · 1.25s\n\n▸ ✓ shell · 戊 · 1.25s",
+                "▸ shell · 甲 · 1.25s\n▸ shell · 乙 · 1.25s\n",
+                "between\n\n▸ shell · 丙 · failed · 1.25s\n",
+                "▸ shell · 丁 · 1.25s\n\n▸ shell · 戊 · 1.25s",
             )),
             "{compact}"
         );
@@ -2058,11 +2052,11 @@ mod tests {
         let expanded = rows(&mut app, &mut terminal);
         assert!(
             // Expanding a call never pushes its own header down a row.
-            expanded.contains("▸ ✓ shell · 甲 · 1.25s\n▾ ✓ shell · 乙 · 1.25s"),
+            expanded.contains("▸ shell · 甲 · 1.25s\n▾ shell · 乙 · 1.25s"),
             "{expanded}"
         );
         assert!(
-            expanded.contains("Error: detail\n\nstill here\n\n▸ ✓ shell · 丁 · 1.25s"),
+            expanded.contains("Error: detail\n\nstill here\n\n▸ shell · 丁 · 1.25s"),
             "{expanded}"
         );
     }
@@ -2081,7 +2075,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
         let row = draw(&mut app, &mut terminal)
             .iter()
-            .position(|line| line.starts_with("▸ ✓ shell · second"))
+            .position(|line| line.starts_with("▸ shell · second"))
             .unwrap() as u16;
         let mouse = |kind| MouseEvent {
             column: 0,
@@ -2113,7 +2107,7 @@ mod tests {
         click(&mut app);
         let rows = draw(&mut app, &mut terminal).join("\n");
         assert!(rows.contains("▸ shell · first"));
-        assert!(rows.contains("▾ ✓ shell · second"));
+        assert!(rows.contains("▾ shell · second"));
         assert!(rows.contains("second output"));
         assert!(app.composer_available());
         assert_eq!(app.input, "unsent");
@@ -2166,7 +2160,7 @@ mod tests {
         let collapsed = draw(&mut app, &mut terminal);
         let row = collapsed
             .iter()
-            .position(|row| row.starts_with("▸ ✓ shell · second"))
+            .position(|row| row.starts_with("▸ shell · second"))
             .unwrap();
         let marker = &terminal.backend().buffer()[(0, row as u16)];
         assert!(marker.modifier.contains(Modifier::UNDERLINED));
@@ -2175,7 +2169,7 @@ mod tests {
         let rows = draw(&mut app, &mut terminal).join("\n");
         assert!(rows.contains("▸ shell · first"));
         assert!(rows.contains("▸ shell · neighbor"));
-        assert!(rows.contains("▾ ✓ shell · second · 1.25s"));
+        assert!(rows.contains("▾ shell · second · 1.25s"));
         assert!(rows.contains("Result: \"output-second\""));
         assert_eq!(rows.matches("Arguments:").count(), 1);
         let selected = terminal
@@ -2198,14 +2192,14 @@ mod tests {
         assert!(key(&mut app, KeyCode::Char(' ')));
         let rows = draw(&mut app, &mut terminal).join("\n");
         assert!(rows.contains("▾ shell · first"));
-        assert!(rows.contains("▾ ✓ shell · second"));
+        assert!(rows.contains("▾ shell · second"));
         assert!(rows.contains("▸ shell · neighbor"));
         assert!(key(&mut app, KeyCode::Enter));
         assert!(key(&mut app, KeyCode::Esc));
         assert!(!key(&mut app, KeyCode::Char(' ')));
         let rows = draw(&mut app, &mut terminal).join("\n");
         assert!(rows.contains("▸ shell · first"));
-        assert!(rows.contains("▾ ✓ shell · second"));
+        assert!(rows.contains("▾ shell · second"));
         assert!(
             !terminal
                 .backend()
@@ -2314,14 +2308,14 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
         let rows = draw(&mut app, &mut terminal);
-        assert!(rows[1].starts_with("▸ ✗ shell"));
+        assert!(rows[1].starts_with("▸ shell"));
         assert!(rows[1].contains("failed · 1.25s"));
         assert!(rows[2].trim().is_empty()); // Header never wraps.
         assert_eq!(terminal.backend().buffer()[(0, 1)].fg, Color::Red);
         assert!(key(&mut app, KeyCode::F(4)));
         assert!(key(&mut app, KeyCode::Enter));
         let rows = draw(&mut app, &mut terminal);
-        assert!(rows[1].starts_with("▾ ✗ shell"));
+        assert!(rows[1].starts_with("▾ shell"));
         assert!(rows[2].contains("Arguments:"));
         assert_eq!(app.tools.rendered_top, 0);
         let parts = crate::view::transcript(

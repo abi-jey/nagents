@@ -119,9 +119,11 @@ The [UX review](docs/ux-review.md) explains the design principles and roadmap.
   to know; the empty composer shows a hint that is never part of the draft.
 - Assistant replies render Markdown: headings, emphasis, lists, quotes, links,
   rules and code fences. Copying a wrapped paragraph gives back one line.
-- Tool calls show one header each: **▸**/**▾** for collapsed/expanded, then
-  **✓** done, **✗** failed or denied, **⊘** cancelled, or no icon while
-  running. A call waiting for you reads *waiting for approval*. Finished turns
+- Tool calls show one header each: **▸**/**▾** for collapsed/expanded. A
+  finished call's label turns green; failed, denied and cancelled calls are
+  coloured and say so. Nothing is prefixed when a call finishes, so a header
+  never shifts while you read it. A call waiting for you reads *waiting for
+  approval*. Finished turns
   only get a line when something went wrong: **✗ Failed: reason**,
   **⊘ Stopped** or **⚠ Interrupted before the turn finished**. Provider errors
   say what happened (for example HTTP 429 after its retries) and what to do.
