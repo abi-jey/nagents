@@ -309,6 +309,15 @@ async def inspect_child(browser: Browser, url: str, fixture: EngineFixture, outp
         fixture.release_child.set()
         await expect(child.get_by_text(CHILD_TEXT, exact=True)).to_be_visible()
         assert len(sockets) == socket_count, "Inspection opened another WebSocket"
+        identity = inspect.locator(".team-agent-session-id")
+        status = inspect.locator(".team-state")
+        await expect(identity).to_have_attribute("title", re.compile("^child-[a-f0-9]{32}$"))
+        await expect(identity).to_have_css("text-overflow", "ellipsis")
+        await expect(status).to_have_text("Done")
+        identity_box, status_box = await identity.bounding_box(), await status.bounding_box()
+        assert identity_box and status_box and identity_box["x"] + identity_box["width"] <= status_box["x"], (
+            "A long child ID covered the agent's state"
+        )
         await page.screenshot(path=str(output / "python-child-inspection.png"))
         await child.get_by_role("button", name="Assistant", exact=True).click()
         await expect(root_conversation(page).get_by_text(ROOT_TEXT, exact=True).first).to_be_visible()
