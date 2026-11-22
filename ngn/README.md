@@ -102,6 +102,11 @@ matching published core. The API is **not available in nagents
 
 ## Controls
 
+See the [native TUI UX review and roadmap](docs/ux-review.md) for the design
+principles behind these controls and what is planned next.
+
+The [UX review](docs/ux-review.md) explains the design principles and roadmap.
+
 - In the terminal, **Enter** sends when idle and steers the active turn if supported.
   **Ctrl+Enter** explicitly submits to the next-turn FIFO (it can start immediately
   when idle and unpaused). A paused queue remains paused. **Shift+Enter** inserts a
@@ -110,6 +115,16 @@ matching published core. The API is **not available in nagents
 - On touch/coarse-pointer browsers, **Return inserts a newline**; tap Send/Queue
   (or use Ctrl/Meta+Enter) to submit. Mobile conversation controls remain visible;
   Send and Stop preserve composer focus and Stop retains an unsent draft.
+- A new conversation opens with the version, the workspace and the first keys
+  to know; the empty composer shows a hint that is never part of the draft.
+- Assistant replies render Markdown: headings, emphasis, lists, quotes, links,
+  rules and code fences. Copying a wrapped paragraph gives back one line.
+- Tool calls show one header each: **▸**/**▾** for collapsed/expanded, then
+  **✓** done, **✗** failed or denied, **⊘** cancelled, or no icon while
+  running. A call waiting for you reads *waiting for approval*. Finished turns
+  only get a line when something went wrong: **✗ Failed: reason**,
+  **⊘ Stopped** or **⚠ Interrupted before the turn finished**. Provider errors
+  say what happened (for example HTTP 429 after its retries) and what to do.
 - In the terminal, type **`/`** to discover native commands. **↑/↓** selects;
   **Tab** or **Enter** fills the command without running it. Press **Enter**
   again to run it, or type any arguments first. **Esc** dismisses suggestions
@@ -156,9 +171,18 @@ matching published core. The API is **not available in nagents
   **F7** or **`/steering`** inspects exact-run receipts, including while approval waits.
 - **PageUp/PageDown** scroll the conversation or approval preview.
 - Click a tool header to expand or collapse its details, and use the mouse wheel
-  to scroll the conversation. To select and copy text, use your terminal's
-  mouse override (often **Shift+drag**) and its usual copy shortcut.
-- **Ctrl+Y** allows the displayed exact call once; **Ctrl+D** denies it.
+  to scroll the conversation. Drag within the conversation (including visible
+  tool details and code) or the Message draft to select text. A drag from a tool
+  header selects text instead of toggling it. Selection does not edit a draft.
+- Release to copy the selection automatically. This sends an OSC 52 request
+  that replaces the clipboard contents when the terminal accepts it.
+  **Copy requested** does not confirm acceptance. For terminal-native selection,
+  use your terminal's mouse override (often **Shift+drag**) and usual Copy shortcut.
+- **Esc** clears the highlight without changing the clipboard. Selecting
+  conversation text holds the current view; scroll to the bottom to follow
+  new output again. If the selected text moves or changes before release,
+  select it again.
+- When a tool asks permission, press **y** (or **Enter**) to allow it once and **n** to deny it. **Ctrl+Y** and **Ctrl+D** still work. Keys pressed in the first moment after the prompt appears are ignored so typing cannot approve by accident.
 - **Ctrl+C** or **Ctrl+Q** quits; **Esc** cancels active work without quitting.
 - `/new`, `/sessions`, `/resume ID`, `/tasks`, `/queue [pause|resume|clear|retry|verify]`, `/steer TEXT`, `/steering`, `/help`, `/quit` are supported.
 - `--resume ID`, `--continue`, `sessions`, and `doctor` work from the CLI.

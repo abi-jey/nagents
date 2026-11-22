@@ -33,8 +33,10 @@ pub(super) fn is_wide(width: u16) -> bool {
     width > BREAKPOINT
 }
 
-pub(super) fn split(body: Rect) -> (Rect, Option<Rect>) {
-    if !is_wide(body.width) {
+/// The rail only appears beside the conversation once there is an agent run to
+/// show. An empty tree would otherwise permanently take 31 columns.
+pub(super) fn split(body: Rect, has_agents: bool) -> (Rect, Option<Rect>) {
+    if !has_agents || !is_wide(body.width) {
         return (body, None);
     }
     let main = Rect::new(body.x, body.y, body.width - WIDTH, body.height);
@@ -593,6 +595,16 @@ impl Rail {
 }
 
 impl App {
+    /// Wide terminals show the rail once agents exist, or while Ctrl+T has
+    /// focused it (its context panel is useful even before any delegation).
+    pub(super) fn has_rail_content(&self) -> bool {
+        !self.tasks.is_empty() || self.agents.focused
+    }
+
+    pub(super) fn shows_rail(&self, width: u16) -> bool {
+        is_wide(width) && self.has_rail_content()
+    }
+
     pub(super) fn draw_agents(
         &mut self,
         frame: &mut Frame,
@@ -632,7 +644,7 @@ impl App {
             }
             return true;
         }
-        if !is_wide(width) || !self.rail_has_focus() || matches!(key.code, KeyCode::F(_)) {
+        if !self.shows_rail(width) || !self.rail_has_focus() || matches!(key.code, KeyCode::F(_)) {
             return false;
         }
         if self.agents.context.viewport.is_some()
@@ -956,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn breakpoint_leaves_composer_full_width_and_renders_empty_rail() {
+    fn breakpoint_leaves_composer_full_width_and_shows_rail_only_with_agents() {
         let dir = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
@@ -972,7 +984,12 @@ mod tests {
             input: "draft".into(),
             ..App::default()
         };
-        for width in [110, 111] {
+        for (width, agents) in [(110, false), (111, false), (110, true), (111, true)] {
+            app.tasks = if agents {
+                vec![task("child", "root", RunStatus::Running)]
+            } else {
+                Vec::new()
+            };
             let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
             terminal
                 .draw(|frame| super::super::draw(frame, &mut app, &host, Instant::now()))
@@ -980,17 +997,17 @@ mod tests {
             let buffer = terminal.backend().buffer();
             assert_eq!(buffer[(width - 1, 13)].symbol(), "┐"); // Composer top-right.
             assert!(row(buffer, 14, 0..width).contains("draft"));
-            if width == 111 {
+            if width == 111 && agents {
                 assert_eq!(buffer[(80, 0)].symbol(), "╭");
                 assert_eq!(buffer[(110, 0)].symbol(), "╮");
                 assert_eq!(buffer[(110, 12)].symbol(), "╯");
                 assert!(row(buffer, 0, 80..111).contains("Agents / Ctrl+T"));
-                assert!(row(buffer, 1, 82..109).starts_with("Agents / 0"));
-                assert!(row(buffer, 11, 82..109).trim().is_empty());
+                assert!(row(buffer, 1, 82..109).starts_with("Agents / 1"));
                 assert!(!(1..11).any(|y| row(buffer, y, 80..111).contains("WORKSPACE")));
             } else {
-                assert!(!(0..13).any(|y| row(buffer, y, 0..110).contains("Agents /")));
-                assert!(!(0..13).any(|y| row(buffer, y, 0..110).contains("Context")));
+                // No empty tree permanently narrows the conversation.
+                assert!(!(0..13).any(|y| row(buffer, y, 0..width).contains("Agents /")));
+                assert!(!(0..13).any(|y| row(buffer, y, 0..width).contains("Context")));
             }
         }
     }
@@ -1302,6 +1319,8 @@ mod tests {
             KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
             111
         ));
+        // Focus reveals the otherwise hidden empty rail and its context panel.
+        draw(&mut app, 40);
         assert!(app.agents_key(key(KeyCode::Tab), 111));
         assert!(app.agents_key(key(KeyCode::Enter), 111));
         draw(&mut app, 40);

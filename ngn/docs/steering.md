@@ -91,7 +91,7 @@ does not become steering on another bare Enter. Edit the draft, explicitly
 queue it with Ctrl+Enter, or deliberately use `/steer TEXT`.
 **F7** (or **`/steering`**) opens receipts with exact run, status and original text;
 **PgUp/PgDn** scroll, **F7/Esc** closes the view. F2–F6 sessions/new/tools/agents/queue,
-Ctrl+Y/Ctrl+D approvals and Esc/Ctrl+C Stop retain their roles. A pending approval
+y/n approvals (Ctrl+Y/Ctrl+D still work) and Esc/Ctrl+C Stop retain their roles. A pending approval
 keeps the composer visible but blocks both Enter submission shortcuts. Failed
 steering keeps its command/draft and its own retry UUID/run
 binding, separate from FIFO submission identity. Retrying the same text reuses that

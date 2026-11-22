@@ -34,7 +34,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span, Text},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use uuid::Uuid;
@@ -42,42 +42,116 @@ use uuid::Uuid;
 use crate::{animations_enabled, view};
 
 mod agents;
+mod approval;
+mod clipboard;
 mod code_fences;
 mod completion;
 mod composer;
 mod footer;
+mod markdown;
 mod picker;
+mod selection;
 mod shimmer;
 mod startup;
+mod text_layout;
 mod tool_cards;
+
+// Shared by the draw pass and Markdown rendering.
+const ACCENT: Color = Color::Rgb(190, 224, 163);
+const MUTED: Color = Color::Rgb(148, 158, 144);
 
 use completion::Command;
 
 const HELP: &str = "\
-F2  Conversations (/sessions, /resume; /resume ID opens directly)
-F3  New conversation (/new)
- F4  Focus tool cards · Up/Down select · Enter/Space toggle · Esc back
-F5  Subagents (/tasks)
-Ctrl+T  Focus Agents rail at wide widths; otherwise open inspector
- Agents: Tab/Shift+Tab  Focus context · Enter/Space  Toggle
-Context: ↑/↓, PgUp/PgDn, Home/End  Scroll · Esc  Return to draft
-F6  Input queue (/queue [pause|resume|clear])
-F7  Steering receipts (/steering)
-F8  Focus long code blocks · Left/Right pan · Up/Down select
-Code: Home/End  Pan to edge · Esc or F8  Return to draft
-Enter  Send when idle; steer the active turn if supported
-Ctrl+Enter  Queue for a later turn if busy · Shift+Enter  Newline
-/  Show commands · Up/Down select · Tab/Enter fill · Esc close
-/steer TEXT  Steer the active turn explicitly
-Ctrl+Y  Approve once · Ctrl+D  Deny
-Esc  Cancel active work (completed actions are not rolled back)
-PgUp/PgDn  Scroll · Ctrl+Q  Quit (/quit)
- /queue retry or /queue verify  Restore a FIFO draft or check its exact receipt
- Mouse  Click tool headers · Wheel scroll
- For terminal selection, use your terminal's override (often Shift+drag)
- Ctrl+C  Quit";
+Basics
+  Enter          Send · while a turn runs, steer it
+  Shift+Enter    New line
+  Ctrl+Enter     Queue the message for after the current turn
+  Esc            Stop the current turn (finished actions stay done)
+  /              Commands · ↑/↓ select · Tab/Enter fill · Esc close
+  Ctrl+Q         Quit (/quit) · Ctrl+C also quits
 
-const EMPTY_TIP: &str = "Tip: F1 for shortcuts · /sessions to resume";
+Approvals
+  y or Enter     Allow a pending tool call once
+  n              Deny it · Esc stops the turn · PgUp/PgDn scroll
+
+Conversations
+  F2             Past conversations (/sessions, /resume ID)
+  F3             New conversation (/new)
+
+Reading
+  PgUp/PgDn      Scroll · the mouse wheel also scrolls
+  Click a tool   Show or hide its details
+  F4             Tool cards by keyboard · ↑/↓ select · Enter toggle
+  F8             Pan wide code blocks · ←/→ · Home/End · Esc back
+  Drag           Select text; release copies it · Esc clears
+                 Your terminal's own selection is often Shift+drag
+
+Agents and queue
+  F5             Subagents (/tasks) · Ctrl+X cancels one
+  Ctrl+T         Agents sidebar on wide screens · Tab for context
+  F6             Pending messages (/queue pause|resume|clear)
+                 /queue retry or /queue verify for an unconfirmed send
+  F7             Steering receipts (/steering) · /steer TEXT";
+
+/// Section headings are the unindented lines of `HELP`.
+fn help_text() -> Text<'static> {
+    HELP.lines()
+        .map(|line| {
+            if line.starts_with(' ') || line.is_empty() {
+                Line::raw(line)
+            } else {
+                Line::styled(line, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
+            }
+        })
+        .collect()
+}
+
+const PLACEHOLDER: &str = "Ask anything · / for commands · F1 for shortcuts";
+
+const WELCOME_HINT: &str = "Describe a task or ask a question · / for commands";
+const WELCOME_KEYS: &str = "F1 shortcuts · F2 past conversations · Esc stops a turn";
+
+/// The first screen of a new conversation. Rows that do not fit are left out
+/// rather than wrapped, so a narrow terminal stays uncluttered.
+fn welcome(workspace: &std::path::Path, width: u16) -> Vec<Line<'static>> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let place = match home
+        .as_deref()
+        .and_then(|home| workspace.strip_prefix(home).ok())
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => workspace.display().to_string(),
+    };
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let version = format!("ngn {}", env!("CARGO_PKG_VERSION"));
+    // Keep the end of a long path, which names the project, behind an ellipsis.
+    let mut place = view::plain(&place);
+    let budget = usize::from(width).saturating_sub(Span::raw(&version).width() + 3);
+    if Span::raw(&place).width() > budget && budget > 1 {
+        let mut tail: Vec<char> = Vec::new();
+        for c in place.chars().rev() {
+            tail.insert(0, c);
+            if Span::raw(tail.iter().collect::<String>()).width() + 1 > budget {
+                tail.remove(0);
+                break;
+            }
+        }
+        place = format!("…{}", tail.into_iter().collect::<String>());
+    }
+    [
+        Line::from(vec![
+            Span::styled(version, Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" · {place}"), dim),
+        ]),
+        Line::styled(WELCOME_HINT, dim),
+        Line::styled(WELCOME_KEYS, dim),
+    ]
+    .into_iter()
+    .filter(|line| line.width() <= usize::from(width))
+    .collect()
+}
 
 #[derive(Default)]
 struct Restore {
@@ -142,6 +216,12 @@ struct FifoSubmission {
 }
 
 #[derive(Default)]
+struct MouseUpdate {
+    redraw: bool,
+    selection_released: bool,
+}
+
+#[derive(Default)]
 struct App {
     session: String,
     records: Vec<EventRecord>,
@@ -160,7 +240,12 @@ struct App {
     approval: Option<Approval>,
     scroll: Option<usize>,
     transcript_area: Rect,
+    selection: selection::Selection,
     preview_scroll: u16,
+    /// When the visible approval first appeared (guards against early keys).
+    approval_since: approval::Since,
+    /// Whether the approval panel shows enough to decide; Allow waits for it.
+    approval_fits: bool,
     tools: tool_cards::Cards,
     picker: Option<picker::Picker>,
     tasks: Vec<TaskInfo>,
@@ -268,6 +353,7 @@ impl App {
             != approval.as_ref().map(|approval| &approval.id)
         {
             self.preview_scroll = 0;
+            self.approval_since.reset();
             // The pending modal and durable transcript have separate sources.
             // Pick up a committed decision before drawing the newly exposed row.
             if self.approval.is_some()
@@ -390,12 +476,13 @@ impl App {
         }
     }
 
-    fn transcript_wheel(&mut self, mouse: MouseEvent) {
+    fn transcript_wheel(&mut self, mouse: MouseEvent) -> bool {
         let up = match mouse.kind {
             MouseEventKind::ScrollUp => true,
             MouseEventKind::ScrollDown => false,
-            _ => return,
+            _ => return false,
         };
+        let previous = self.scroll;
         if self.tools_available()
             // Textual interprets Shift/Ctrl+wheel as horizontal scrolling.
             && !mouse.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL)
@@ -403,18 +490,45 @@ impl App {
         {
             self.tools.scroll_rows(&mut self.scroll, up, 2);
         }
+        self.scroll != previous
     }
 
-    fn transcript_mouse(&mut self, mouse: MouseEvent) -> bool {
+    fn transcript_mouse(&mut self, mouse: MouseEvent) -> MouseUpdate {
         if !self.tools_available() {
             self.tools.clear_pointer();
-            return false;
+            return MouseUpdate {
+                redraw: self.selection.clear(),
+                ..MouseUpdate::default()
+            };
         }
-        let changed = self
-            .tools
-            .mouse(mouse, self.transcript_area, &mut self.scroll);
-        self.transcript_wheel(mouse);
-        changed
+        let position = Position::new(mouse.column, mouse.row);
+        let hover = self.tools.hover(self.transcript_area, position);
+        let target = self.tools.header_at(self.transcript_area, position);
+        let effect = self.selection.mouse(mouse, target);
+        let clicked = effect.click.is_some();
+        if let Some(key) = effect.click {
+            self.tools.click(key, &mut self.scroll);
+        }
+        if effect.hold_transcript {
+            self.tools.hold_view(&mut self.scroll);
+        }
+        let scrolled = self.transcript_wheel(mouse);
+        MouseUpdate {
+            redraw: hover || effect.redraw || clicked || scrolled,
+            selection_released: effect.selection_released,
+        }
+    }
+
+    fn copy_selection(&mut self) {
+        let feedback = match self.selection.copy_text() {
+            None => return,
+            Some(selection::CopyText::TooLarge) => " Selection exceeds 64 KiB ",
+            Some(selection::CopyText::Text(text)) => match clipboard::request_copy(text) {
+                Ok(()) => " Copy requested ",
+                Err(_) => " Copy failed ",
+            },
+        };
+        self.selection.feedback(feedback);
     }
 
     fn completion_key(&mut self, key: KeyEvent) -> bool {
@@ -446,6 +560,7 @@ impl App {
         self.records.clear();
         self.scroll = None;
         self.tools.reset();
+        self.selection = selection::Selection::default();
         self.picker = None;
         self.tasks.clear();
         self.agents = agents::Rail::default();
@@ -531,8 +646,8 @@ fn main_transcript<'a>(
 
 fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     let wall_ms = ngn_core::store::now_ms();
-    let accent = Color::Rgb(190, 224, 163);
-    let muted = Color::Rgb(148, 158, 144);
+    let accent = ACCENT;
+    let muted = MUTED;
     let area = frame.area();
     let footer = footer_area(area);
     let menu = app
@@ -543,19 +658,31 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         content_rows(area, menu.as_ref().map_or(0, completion::Menu::height));
     // Suggestions occupy the bottom of the left column, not rows of the
     // adjacent tree. The tree's height is independent of the draft/menu.
-    let (mut transcript_area, rail) = agents::split(Rect {
-        height: conversation.height + suggestions.height,
-        ..conversation
-    });
+    let (mut transcript_area, rail) = agents::split(
+        Rect {
+            height: conversation.height + suggestions.height,
+            ..conversation
+        },
+        app.has_rail_content(),
+    );
     transcript_area.height = conversation.height;
     app.agents.clear_motion_rows();
     let context = rail.and_then(|rail| app.draw_agents(frame, rail, &host.config, (accent, muted)));
     app.agents.observe_context(context);
     // Keep the exact waiting child visible next to its approval prompt.
-    let approval_dialog = app
-        .approval
-        .as_ref()
-        .map(|approval| (approval, center(transcript_area, 110, 32)));
+    let approval_dialog = app.approval.as_ref().map(|approval| {
+        let body = approval::content(approval, app.no_color);
+        let mut area = approval::panel(transcript_area, &body);
+        if !approval::fits(area, &body) {
+            // Cover the composer too rather than ask for a blind decision.
+            area = approval::panel(frame.area(), &body);
+        }
+        (approval, area, body)
+    });
+    if let Some((_, area, body)) = &approval_dialog {
+        app.approval_fits = approval::fits(*area, body);
+        app.preview_scroll = app.preview_scroll.min(approval::max_scroll(*area, body));
+    }
     let parts = main_transcript(&app.records, app.approval.as_ref(), wall_ms);
     app.tools.observe_completions(&parts, app.after, now);
     let interactive = app.tools_available();
@@ -576,23 +703,21 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
     );
     if app.shows_overlay() {
         transcript.hide_wipes();
-    } else if let Some((_, area)) = approval_dialog {
+    } else if let Some((_, area, _)) = &approval_dialog {
+        let area = *area;
         transcript.mask_wipes(area);
     }
     if app.records.is_empty() {
-        let tip = Line::styled(EMPTY_TIP, Style::new().add_modifier(Modifier::DIM));
-        if tip.width() <= usize::from(transcript_area.width) {
-            transcript.push(tip);
+        for line in welcome(&host.config.workspace, transcript_area.width) {
+            transcript.push_decoration(line);
         }
     }
     if let Some(reason) = &app.failure {
         // Keep the complete rejection in the scrollable conversation as well
         // as the one-line footer. It remains visible without submitting again.
-        for line in footer::failure_lines(reason, transcript_area.width) {
-            transcript.push(line);
-        }
+        transcript.push(footer::failure_text(reason));
     }
-    app.transcript_area = app.tools.draw(
+    let (drawn_area, transcript_text) = app.tools.draw(
         frame,
         transcript_area,
         transcript,
@@ -600,6 +725,7 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         now,
         Some(Style::new().fg(muted)),
     );
+    app.transcript_area = drawn_area;
     if let Some(menu) = menu {
         menu.draw(
             frame,
@@ -611,16 +737,39 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
             muted,
         );
     }
-    let composer = composer::border(draft.width, app.queue.entries.len(), accent, muted);
+    let mut composer = composer::border(draft.width, app.queue.entries.len(), accent, muted);
     let input_area = composer.inner(draft);
-    frame.render_widget(composer, draft);
+    let mut draft_text = interactive.then(|| selection::Pane::new(input_area));
     let _ = composer::draw(
         frame.buffer_mut(),
         input_area,
         &app.input,
         app.caret_visible(now),
         app.composer_palette,
+        draft_text.as_mut(),
     );
+    if app.input.is_empty() && app.composer_available() && input_area.width > 2 {
+        // Drawn after the draft pane is recorded, so it is never selectable.
+        // The first cell stays free for the caret.
+        let hint = Line::styled(
+            PLACEHOLDER,
+            Style::new().fg(MUTED).add_modifier(Modifier::DIM),
+        );
+        frame
+            .buffer_mut()
+            .set_line(input_area.x + 1, input_area.y, &hint, input_area.width - 1);
+    }
+    app.selection
+        .frame(transcript_text, draft_text.unwrap_or_default());
+    if let Some(hint) = app.selection.hint()
+        && draft.width > 2
+    {
+        let width = usize::from(draft.width - 2);
+        let title = Line::styled(hint, Style::new().fg(muted));
+        composer = composer.title_bottom(footer::fit(title, width).right_aligned());
+    }
+    frame.render_widget(composer, draft);
+    app.selection.paint(frame.buffer_mut());
     app.activity.draw(frame, footer, app, &host.config, now);
     if app.task_picker {
         let area = center(frame.area(), 110, 30);
@@ -712,38 +861,25 @@ fn draw(frame: &mut Frame, app: &mut App, host: &Host, now: Instant) {
         ))).highlight_style(Style::new().fg(accent)), area, &mut selection);
     }
     if app.help {
-        let area = center(frame.area(), 76, 18);
+        let area = center(frame.area(), 76, 36);
         frame.render_widget(Clear, area);
         frame.render_widget(
-            Paragraph::new(HELP)
-                .block(Block::bordered().title(" Help · F1/Esc close "))
-                .wrap(Wrap { trim: true })
+            Paragraph::new(help_text())
+                .block(Block::bordered().title(" Keyboard shortcuts · Esc close · PgUp/PgDn "))
+                .wrap(Wrap { trim: false })
                 .scroll((app.help_scroll, 0)),
             area,
         );
     }
-    if let Some((approval, area)) = approval_dialog {
+    if let Some((approval, area, body)) = approval_dialog {
+        let more = app.preview_scroll < approval::max_scroll(area, &body);
         frame.render_widget(Clear, area);
-        let title = format!(
-            " Approval: depth {} · {} / {} ",
-            approval.depth,
-            view::plain(&approval.agent_title),
-            view::plain(&approval.call.name)
-        );
-        const KEYS: &str = "Ctrl+Y allow once · Ctrl+D deny · Esc cancel";
-        let block = Block::bordered().border_style(Style::new().fg(Color::Yellow));
-        let block = if rail.is_some() {
-            // The dialog is narrower alongside the rail. Keep the controls
-            // visible even when a long agent title fills the top border.
-            block.title(title).title_bottom(format!(" {KEYS} "))
-        } else {
-            block.title(format!("{title}· {KEYS} "))
-        };
         frame.render_widget(
-            Paragraph::new(view::plain(&approval.preview))
-                .wrap(Wrap { trim: false })
-                .scroll((app.preview_scroll, 0))
-                .block(block),
+            body.scroll((app.preview_scroll, 0)).block(approval::block(
+                approval,
+                app.approval_fits,
+                more,
+            )),
             area,
         );
     }
@@ -1181,6 +1317,8 @@ pub async fn run(
         active: None,
         approval: None,
         preview_scroll: 0,
+        approval_since: approval::Since::default(),
+        approval_fits: true,
         tasks: Vec::new(),
         task_picker: false,
         task_index: 0,
@@ -1351,10 +1489,12 @@ pub async fn run(
                 let Some(event) = event else { break; };
                 match event? {
                     TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
-                        app.tools.cancel_click();
-                        if app.composer_available() { app.caret.restart(Instant::now()); }
                         let control = key.modifiers.contains(KeyModifiers::CONTROL);
                         if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('c' | 'C' | 'q')) { break; }
+                        if app.selection.clear() && key.code == KeyCode::Esc && key.modifiers.is_empty() {
+                            continue;
+                        }
+                        if app.composer_available() { app.caret.restart(Instant::now()); }
                         // The FIFO shortcut belongs only to the composer. In
                         // particular it is not Enter/confirm in a focused picker.
                         if control && key.code == KeyCode::Enter && !app.composer_available() { continue; }
@@ -1373,12 +1513,22 @@ pub async fn run(
                             continue;
                         }
                         if let Some(approval) = &app.approval {
-                            let handled = match key.code {
-                                KeyCode::Char('y') | KeyCode::Char('d') if control => { let result = host.decide(&approval.run_id, &approval.id, key.code == KeyCode::Char('y')).await; if let Err(error) = result { app.status = error.to_string(); } true },
-                                KeyCode::Esc => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = host.cancel(id).await; true },
-                                KeyCode::PageUp => { app.preview_scroll = app.preview_scroll.saturating_sub(10); true },
-                                KeyCode::PageDown => { app.preview_scroll = app.preview_scroll.saturating_add(10); true },
-                                _ => false,
+                            let quiet = app.approval_since.elapsed();
+                            // Every key restarts the quiet period, so a y or
+                            // Enter in the middle of typing never approves.
+                            app.approval_since.reset();
+                            let handled = match approval::action(key, quiet) {
+                                approval::Action::Allow if !app.approval_fits => true,
+                                approval::Action::Allow | approval::Action::Deny => {
+                                    let allow = approval::action(key, Duration::MAX) == approval::Action::Allow;
+                                    if let Err(error) = host.decide(&approval.run_id, &approval.id, allow).await { app.status = error.to_string(); }
+                                    true
+                                },
+                                approval::Action::Cancel => { let id = app.active.as_ref().map_or(approval.run_id.as_str(), |run| run.id.as_str()); let _ = host.cancel(id).await; true },
+                                approval::Action::ScrollUp => { app.preview_scroll = app.preview_scroll.saturating_sub(10); true },
+                                approval::Action::ScrollDown => { app.preview_scroll = app.preview_scroll.saturating_add(10); true },
+                                approval::Action::Ignore => true,
+                                approval::Action::Pass => false,
                             };
                             if handled { app.state(&host).await; continue; }
                         }
@@ -1442,6 +1592,7 @@ pub async fn run(
                         }
                     }
                     TerminalEvent::Paste(text) => {
+                        app.selection.clear();
                         if let Some(picker) = &mut app.picker {
                             picker.paste(&text);
                         } else if app.composer_available() {
@@ -1456,13 +1607,16 @@ pub async fn run(
                         }
                     }
                     TerminalEvent::Mouse(event) => {
-                        let changed = app.transcript_mouse(event);
-                        // A motion-reporting terminal emits many positions
-                        // while the pointer stays on the same header.
-                        skip_draw = !changed && event.kind == MouseEventKind::Moved;
+                        let update = app.transcript_mouse(event);
+                        if update.selection_released {
+                            app.copy_selection();
+                        }
+                        // No redraw for a steady press or unchanged hover.
+                        skip_draw = !update.redraw;
                     }
                     TerminalEvent::Resize(..) => {
                         app.tools.clear_pointer();
+                        app.selection.clear();
                     }
                     _ => (),
                 }
@@ -1585,12 +1739,11 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         for expected in [
-            "F2  Conversations",
-            "F7  Steering receipts",
-            "F8  Focus long code blocks",
-            "Enter  Send when idle; steer the active turn if supported",
-            "Ctrl+Enter  Queue for a later turn if busy",
-            "Ctrl+Y  Approve once",
+            "Basics",
+            "Enter          Send · while a turn runs, steer it",
+            "Ctrl+Enter     Queue the message for after the current turn",
+            "y or Enter     Allow a pending tool call once",
+            "F2             Past conversations",
         ] {
             assert!(screen.contains(expected), "missing help entry: {expected}");
         }
@@ -1605,11 +1758,44 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(screen.contains("Mouse  Click tool headers · Wheel scroll"));
+        assert!(screen.contains("Click a tool   Show or hide its details"));
     }
 
     #[test]
-    fn empty_transcript_tip_uses_at_most_one_dim_row_and_does_not_touch_the_draft() {
+    fn empty_draft_shows_a_dim_placeholder_that_is_not_part_of_the_draft() {
+        let dir = crate::test_support::private_tempdir().unwrap();
+        let host = Host::open(
+            Config {
+                workspace: dir.path().into(),
+                data_dir: dir.path().join("state"),
+                ..Config::default()
+            }
+            .resolve()
+            .unwrap(),
+        )
+        .unwrap();
+        let now = Instant::now();
+        for (input, shown) in [("", true), ("draft", false)] {
+            let mut app = App {
+                input: input.into(),
+                ..App::default()
+            };
+            let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(80, 16)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut app, &host, now))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let [_, _, composer] = content_rows(buffer.area, 0);
+            let row: String = (0..80)
+                .map(|x| buffer[(x, composer.y + 1)].symbol())
+                .collect();
+            assert_eq!(row.contains(PLACEHOLDER), shown, "{row}");
+            assert_eq!(app.input, input);
+        }
+    }
+
+    #[test]
+    fn empty_transcript_welcome_fits_its_rows_and_does_not_touch_the_draft() {
         let dir = crate::test_support::private_tempdir().unwrap();
         let host = Host::open(
             Config {
@@ -1635,12 +1821,30 @@ mod tests {
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let [transcript, _, composer] = content_rows(buffer.area, 0);
-            let (main, _) = agents::split(transcript);
+            let (main, _) = agents::split(transcript, false);
             let row = |y| -> String { (0..main.width).map(|x| buffer[(x, y)].symbol()).collect() };
-            let fits = width >= 43;
-            assert_eq!(row(0).trim_end(), if fits { EMPTY_TIP } else { "" });
-            assert_eq!(buffer[(0, 0)].modifier.contains(Modifier::DIM), fits);
-            assert!((1..transcript.height).all(|y| row(y).trim().is_empty()));
+            let expected = welcome(&host.config.workspace, main.width);
+            for (y, line) in (0..).zip(&expected) {
+                assert_eq!(row(y).trim_end(), line.to_string());
+            }
+            if width >= 80 {
+                assert_eq!(expected.len(), 3);
+                assert!(row(0).starts_with("ngn "));
+                assert_eq!(row(1).trim_end(), WELCOME_HINT);
+                assert!(buffer[(0, 1)].modifier.contains(Modifier::DIM));
+            }
+            if width <= 20 {
+                // Only the version line survives, its path shortened with "…".
+                assert!(expected.len() <= 1);
+            }
+            if width == 20 {
+                assert!(row(0).starts_with("ngn "));
+                assert!(row(0).contains('…'));
+            }
+            assert!(
+                (u16::try_from(expected.len()).unwrap()..transcript.height)
+                    .all(|y| row(y).trim().is_empty())
+            );
             if width >= 20 {
                 assert!(row(composer.y + 1).contains("draft"));
                 assert!(
@@ -2239,6 +2443,20 @@ mod tests {
         .unwrap();
         let mut app = App {
             input: "/".into(), // Keep the suggestion menu visible below the transcript.
+            // One agent run keeps the rail beside the conversation at 120 columns.
+            tasks: vec![TaskInfo {
+                run_id: "child".into(),
+                session_id: "session-child".into(),
+                parent_run_id: "run".into(),
+                parent_session_id: "session".into(),
+                root_run_id: "run".into(),
+                root_session_id: "session".into(),
+                call_id: "call-child".into(),
+                title: "child".into(),
+                depth: 1,
+                read_only: true,
+                status: ngn_protocol::RunStatus::Completed,
+            }],
             ..App::default()
         };
         app.completion.edited(&app.input);
@@ -2484,7 +2702,7 @@ mod tests {
                 ); // slash suggestions keep composer focus
                 let status = row(height - 2);
                 assert!(status.contains("Esc"), "{width} columns: {status}");
-                let menu_rows = height - 12..height - 7;
+                let menu_rows = 0..height - 7;
                 assert!(menu_rows.clone().any(|y| row(y).contains(hint)));
                 if !suggestion.is_empty() {
                     assert!(menu_rows.clone().any(|y| row(y).contains(suggestion)));
@@ -2590,6 +2808,8 @@ mod tests {
             active: None,
             approval: None,
             preview_scroll: 0,
+            approval_since: approval::Since::default(),
+            approval_fits: true,
             tasks: Vec::new(),
             task_picker: false,
             task_index: 0,

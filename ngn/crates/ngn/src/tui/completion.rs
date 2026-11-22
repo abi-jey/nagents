@@ -22,18 +22,22 @@ pub(super) enum Command {
 
 // Also used by submit: don't suggest commands the native TUI cannot run.
 const COMMANDS: &[(&str, Command, &str)] = &[
-    ("/help", Command::Help, "Show keyboard shortcuts"),
-    ("/new", Command::New, "New conversation"),
+    ("/help", Command::Help, "Keyboard shortcuts"),
+    ("/new", Command::New, "Start a new conversation"),
+    ("/sessions", Command::Sessions, "Find a past conversation"),
+    (
+        "/resume",
+        Command::Resume,
+        "[ID] Reopen a past conversation",
+    ),
+    ("/tasks", Command::Tasks, "Subagents and their progress"),
     (
         "/queue",
         Command::Queue,
-        "[pause|resume|clear|retry|verify] Input queue",
+        "[pause|resume|clear|retry|verify] Queued messages",
     ),
-    ("/resume", Command::Resume, "[ID] Resume a conversation"),
-    ("/sessions", Command::Sessions, "Find a conversation"),
-    ("/steer", Command::Steer, "TEXT  Steer the active turn"),
-    ("/steering", Command::Steering, "Inspect steering receipts"),
-    ("/tasks", Command::Tasks, "Inspect subagents"),
+    ("/steer", Command::Steer, "TEXT  Redirect the running turn"),
+    ("/steering", Command::Steering, "Steering receipts"),
     ("/quit", Command::Exit, "Quit"),
     ("/exit", Command::Exit, "Quit (alias)"),
 ];
@@ -126,7 +130,8 @@ impl Completion {
 
 impl Menu {
     pub(super) fn height(&self) -> u16 {
-        1 + self.rows.len().min(4) as u16
+        // Every command fits; the layout clamps this to the space available.
+        1 + self.rows.len().min(COMMANDS.len()) as u16
     }
 
     pub(super) fn draw(&self, frame: &mut Frame, area: Rect, accent: Color, muted: Color) {
@@ -145,10 +150,10 @@ impl Menu {
             let selected = index == self.selected;
             let line = Line::from(vec![
                 Span::styled(
-                    format!("{} {name}", if selected { "›" } else { " " }),
+                    format!("{} {name:<10}", if selected { "›" } else { " " }),
                     Style::new().fg(accent).add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!("  {description}")),
+                Span::raw(format!(" {description}")),
             ]);
             lines.push(if selected {
                 line.style(Style::new().add_modifier(Modifier::REVERSED))

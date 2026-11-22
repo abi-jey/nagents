@@ -27,13 +27,17 @@ def terminal_rows(output: bytes, rows: int, columns: int) -> list[str]:
     screen = [[" " for _ in range(columns)] for _ in range(rows)]
     text = output.decode("utf-8", errors="replace")
     cursor = re.compile(r"\x1b\[([0-?]*)([ -/]*)([@-~])")
+    osc = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
     row = column = index = 0
     saved_cursor = (0, 0)
     normal_screen: tuple[list[list[str]], int, int, tuple[int, int]] | None = None
     while index < len(text):
         if text[index] == "\x1b":
-            if text.startswith("\x1b]11;?\x1b\\", index):
-                index += len("\x1b]11;?\x1b\\")
+            if text.startswith("\x1b]", index):
+                match = osc.match(text, index)
+                if match is None:
+                    break  # Replay from the start when the next read completes the OSC.
+                index = match.end()
                 continue
             if text.startswith("\x1b7", index):
                 saved_cursor = (row, column)

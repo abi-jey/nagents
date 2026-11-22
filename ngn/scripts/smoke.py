@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import aiohttp
@@ -25,6 +27,14 @@ from protocol_fixture import write_config as write_protocol_fixture_config
 from pty_smoke import COMPOSER_TITLE, WorkspaceReady
 
 ROOT = Path(__file__).resolve().parent.parent
+TOOL_REPLY = "The tool result was returned through the Rust host boundary."
+TUI_WRITE_PROMPT = "write a file for mouse selection"
+TUI_REPLY = (
+    f"{TOOL_REPLY} Select this café sample, then keep the next few words connected in one sentence "
+    "without copying margins or neighboring text."
+)
+OSC52_PREFIX = b"\x1b]52;"
+OSC52_CLIPBOARD = re.compile(rb"\x1b\]52;c;([^\x07\x1b]*)\x1b\\")
 
 
 def require(condition: object, message: str) -> None:
@@ -132,7 +142,7 @@ async def fixture(request: web.Request) -> web.StreamResponse:
             )
             reason = "tool_calls"
         else:
-            delta = {"content": "The tool result was returned through the Rust host boundary."}
+            delta = {"content": TUI_REPLY if user_prompt == TUI_WRITE_PROMPT else TOOL_REPLY}
             reason = "stop"
     for choice in [
         {"index": 0, "delta": delta, "finish_reason": None},
@@ -351,7 +361,9 @@ async def http_checks(binary: Path, config: Path, workspace: Path) -> None:
         require(process.returncode == 0, "HTTP host did not shut down cleanly")
 
 
-def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, external_shutdown: bool) -> None:
+def tui_check(
+    binary: Path, config: Path, workspace: Path, data: Path, *, external_shutdown: bool, quit_key: bytes = b"\x11"
+) -> None:
     import fcntl
     import pty
     import select
@@ -375,84 +387,130 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
     os.close(slave)
     try:
         output = b""
+        ready = WorkspaceReady(master)
 
         def visible() -> bytes:
-            # Ratatui optimizes spaces into cursor-position commands. This is a
-            # real PTY, not a plain text pipe; normalize CSI boundaries for assertions.
-            return b" ".join(re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b" ", output).split())
+            return terminal_text(output, ready.rows, ready.columns)
 
-        ready = WorkspaceReady(master)
-        deadline = time.monotonic() + 10
-        while not ready.observe(output, COMPOSER_TITLE in visible()) and time.monotonic() < deadline:
-            if select.select([master], [], [], 0.1)[0]:
+        def read_pty(timeout: float) -> None:
+            nonlocal output
+            if select.select([master], [], [], timeout)[0]:
                 output += os.read(master, 65536)
-        require(
-            ready.observe(output, COMPOSER_TITLE in visible()),
+
+        def wait_for(predicate: Callable[[], bool], message: str, *, timeout: float = 10) -> None:
+            deadline = time.monotonic() + timeout
+            while not predicate():
+                remaining = deadline - time.monotonic()
+                require(remaining > 0, message)
+                read_pty(min(remaining, 0.05))
+
+        wait_for(
+            lambda: ready.observe(output, COMPOSER_TITLE in visible()),
             "Native TUI did not render and repaint at the resized PTY dimensions",
         )
         require(b"\x1b[?1003h\x1b[?1006h" in output, "Plain TUI launch did not enable mouse reporting")
         destination = workspace / "changed.txt"
         require(not destination.exists(), "Approval fixture destination already exists")
-        os.write(master, b"write a file\r")
-        deadline = time.monotonic() + 10
-        while b"Approval:" not in visible() and time.monotonic() < deadline:
-            if select.select([master], [], [], 0.1)[0]:
-                output += os.read(master, 65536)
-        require(b"Approval:" in visible(), "TUI approval preview did not render")
+        os.write(master, TUI_WRITE_PROMPT.encode() + b"\r")
+        wait_for(lambda: b"Allow write" in visible(), "TUI approval preview did not render")
         require(not destination.exists(), "TUI wrote before approval")
         os.write(master, b"\x19")  # Ctrl+Y: explicit one-time approval.
         database = next(data.rglob("host.sqlite3"))
-        completed = False
-        settled = False
-        pane = ""
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if select.select([master], [], [], 0.05)[0]:
-                output += os.read(master, 65536)
+
+        def completed() -> bool:
             with sqlite3.connect(database) as connection:
-                completed = (
-                    connection.execute("SELECT COUNT(*) FROM runs WHERE status = 'completed'").fetchone()[0] == 1
-                )
-            if completed:
-                pane = terminal_text(output, ready.rows, ready.columns).decode()
-                settled = "The tool result was returned through the Rust host boundary." in pane and bool(
-                    re.search(r"\bassistant(?: · [0-9:]+)? fixture · fixture-model\b", pane)
-                )
-                if settled:
-                    break
-        require(completed, "TUI fixture run did not complete after approving")
-        require(settled, "TUI did not paint the final reply and settled footer")
-        require("— Completed" not in pane, "TUI showed a redundant successful turn marker")
-        require("changed.txt · complete" in pane, "TUI lost the completed tool badge")
+                return connection.execute("SELECT COUNT(*) FROM runs WHERE status = 'completed'").fetchone()[0] == 1
+
+        def settled() -> bool:
+            pane = visible().decode()
+            return (
+                TOOL_REPLY in pane
+                and "without copying margins" in pane
+                and bool(re.search(r"\bassistant(?: · [0-9:]+)? fixture · fixture-model\b", pane))
+            )
+
+        wait_for(completed, "TUI fixture run did not complete after approving")
+        wait_for(settled, "TUI did not paint the final reply and settled footer")
+        pane = visible().decode()
+        require("✓ Done" not in pane, "TUI showed a redundant successful turn marker")
+        require("✓ write · changed.txt" in pane, "TUI lost the completed tool badge")
         require(
             destination.read_text() == "written by an approved Rust host tool\n",
             "TUI did not execute its approved native Rust tool",
         )
-        # Use visible terminal coordinates and real SGR press/release reports,
+        # Use painted terminal coordinates and real SGR mouse reports,
         # rather than invoking the tool-card handler directly.
-        card = " write · changed.txt · complete"
+        card = " ✓ write · changed.txt"
 
-        def disclosed(rows: list[str], marker: str) -> bool:
+        def disclosed(marker: str) -> bool:
+            rows = terminal_rows(output, ready.rows, ready.columns)
             has_details = any(line.lstrip().startswith("Arguments:") for line in rows)
-            return any(line.startswith(marker + card) for line in rows) and has_details == (marker == "v")
+            return any(line.startswith(marker + card) for line in rows) and has_details == (marker == "▾")
 
-        rows = terminal_rows(output, ready.rows, ready.columns)
-        for before, after in ((">", "v"), ("v", ">")):
-            row = next((index for index, line in enumerate(rows, 1) if line.startswith(before + card)), 0)
-            require(row > 0, f"Missing tool card before mouse click: {before + card}")
-            os.write(master, f"\x1b[<0;1;{row}M\x1b[<0;1;{row}m".encode())
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                if select.select([master], [], [], 0.05)[0]:
-                    output += os.read(master, 65536)
-                    rows = terminal_rows(output, ready.rows, ready.columns)
-                    if disclosed(rows, after):
-                        break
-            require(disclosed(rows, after), f"Mouse click did not toggle {before + card}")
+        def locate(text: str) -> tuple[int, int]:
+            for row, line in enumerate(terminal_rows(output, ready.rows, ready.columns), 1):
+                if (column := line.find(text)) >= 0:
+                    return column + 1, row
+            raise AssertionError(f"TUI selection fixture text was not visible: {text!r}")
+
+        def mouse(button: int, cell: tuple[int, int], *, release: bool = False) -> bytes:
+            column, row = cell
+            return f"\x1b[<{button};{column};{row}{'m' if release else 'M'}".encode()
+
+        marker = locate("▸" + card)
+        os.write(master, mouse(0, marker) + mouse(0, marker, release=True))
+        wait_for(lambda: disclosed("▾"), "Mouse click did not expand the tool card", timeout=5)
+        column, row = locate("▾" + card)
+        letter = (column + 4, row)  # The "w" after the marker and status icon.
+        os.write(master, mouse(0, letter) + mouse(32, letter) + mouse(0, letter, release=True))
+        wait_for(lambda: disclosed("▸"), "Same-cell motion did not preserve the collapse click", timeout=5)
+
+        def drag_and_copy(
+            start: tuple[int, int],
+            via: tuple[int, int],
+            end: tuple[int, int],
+            expected: bytes,
+            label: str,
+        ) -> None:
+            start_at = len(output)
+            # The drag stops short of the release position. A premature copy
+            # would contain different bytes. OSC 52 stays in this private PTY.
+            reports = mouse(0, start) + mouse(32, via) + mouse(0, end, release=True)
+            os.write(master, reports + mouse(35, (ready.columns, ready.rows)))
+            wait_for(
+                lambda: OSC52_CLIPBOARD.search(output, start_at) is not None,
+                f"Releasing the {label} drag did not emit a complete OSC 52 clipboard request",
+                timeout=5,
+            )
+            match = OSC52_CLIPBOARD.search(output, start_at)
+            assert match is not None
+            require(base64.b64decode(match[1], validate=True) == expected, f"Release copied incorrect {label} bytes")
+            wait_for(lambda: b"Copy requested" in visible(), "TUI did not paint clipboard request feedback", timeout=5)
+
+        column, row = locate("▸" + card)
+        # Skip the marker and status icon ("▸ ✓ ") to start on "w".
+        drag_and_copy((column + 4, row), (column + 5, row), (column + 7, row), b"writ", "tool label")
+        require(disclosed("▸"), "Dragging across the tool label disclosed its card")
+
+        # Both endpoints are inside words on adjacent rows of a single logical
+        # line; copying must neither add a newline nor include pane padding.
+        first, last = "afé", "witho"
+        start = locate(first)
+        column, row = locate(last)
+        require(row == start[1] + 1, "Selection fixture did not soft-wrap between the drag endpoints")
+        expected = TUI_REPLY[TUI_REPLY.index(first) : TUI_REPLY.index(last) + len(last)].encode()
+        drag_and_copy(
+            start,
+            (start[0] + 1, start[1]),
+            (column + len(last) - 1, row),
+            expected,
+            "soft-wrapped prose",
+        )
+
         if external_shutdown:
             process.send_signal(signal.SIGTERM)  # External shutdown must restore terminal state too.
         else:
-            os.write(master, b"\x11")  # Ctrl+Q: cleanup and terminal restoration.
+            os.write(master, quit_key)  # Ctrl+Q or Ctrl+C must quit even with a selection.
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if select.select([master], [], [], 0.05)[0]:
@@ -467,6 +525,7 @@ def tui_check(binary: Path, config: Path, workspace: Path, data: Path, *, extern
                 break
         process.wait(timeout=2)
         require(process.returncode == 0, "TUI did not exit cleanly")
+        require(output.count(OSC52_PREFIX) == 2, "TUI emitted an unexpected extra OSC 52 request")
         require(b"\x1b[?1006l\x1b[?1003l" in output, "TUI did not disable mouse reporting on exit")
         restored_mode = termios.tcgetattr(master)
         mask = termios.ICANON | termios.ECHO | termios.ISIG
@@ -591,7 +650,11 @@ async def main() -> None:
                 "Stop/clear, protocol-runner crash recovery and explicit resume without replay"
             )
             if not arguments.skip_tui:
-                for label, external_shutdown in (("ctrl-q", False), ("sigterm", True)):
+                for label, external_shutdown, quit_key in (
+                    ("ctrl-q", False, b"\x11"),
+                    ("ctrl-c", False, b"\x03"),
+                    ("sigterm", True, b""),
+                ):
                     tui_workspace = root / f"tui-{label}"
                     tui_workspace.mkdir()
                     await asyncio.to_thread(
@@ -601,9 +664,11 @@ async def main() -> None:
                         tui_workspace,
                         root / f"tui-{label}-data",
                         external_shutdown=external_shutdown,
+                        quit_key=quit_key,
                     )
                 print(
-                    "PASS: real-PTY TUI approved native Rust write, mouse tool disclosure and Ctrl+Q/SIGTERM restoration"
+                    "PASS: real-PTY TUI approved native Rust write, mouse tool disclosure, selection-release OSC 52 copy "
+                    "and Ctrl+Q/Ctrl+C/SIGTERM restoration"
                 )
                 await asyncio.to_thread(
                     subagent_tui_check,

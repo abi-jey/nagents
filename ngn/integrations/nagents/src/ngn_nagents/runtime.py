@@ -19,6 +19,7 @@ from nagents import SessionManager
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import FinishReason
+from nagents.events import RateLimitEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolResultEvent
@@ -33,6 +34,8 @@ from .auth import auth_factory
 from .auth import identity_guard
 from .auth import joined_cleanup
 from .auth import store_path
+from .errors import provider_error_text
+from .errors import retry_notice_text
 from .protocol import Emitter
 from .protocol import Json
 from .protocol import ProtocolError
@@ -317,15 +320,17 @@ async def run_agent(start: Start, executor: HostExecutor, emit: Emitter) -> None
                         emit(executor.run_id, {"type": "text_delta", "text": event.chunk})
                     elif isinstance(event, TextDoneEvent):
                         emit(executor.run_id, {"type": "text_completed", "text": event.text})
+                    elif isinstance(event, RateLimitEvent):
+                        emit(executor.run_id, {"type": "notice", "text": retry_notice_text(event)})
                     elif isinstance(event, ErrorEvent):
-                        failed |= not event.recoverable
-                        emit(
-                            executor.run_id,
-                            {
-                                "type": "notice",
-                                "text": "Agent/provider reported an error. Check the selected provider, model and credentials; upstream payloads are not exposed.",
-                            },
-                        )
+                        # The provider has already applied its own bounded
+                        # retries. Agent.run would otherwise repeat the whole
+                        # round for a "recoverable" error, up to
+                        # max_tool_rounds times, leaving the run stuck for
+                        # many minutes. Stop and say exactly what failed.
+                        failed = True
+                        error = provider_error_text(event)
+                        break
                     elif isinstance(event, DoneEvent):
                         completed = event.finish_reason is FinishReason.STOP
             if not completed or failed:

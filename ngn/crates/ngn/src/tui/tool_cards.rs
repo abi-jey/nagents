@@ -3,30 +3,30 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     buffer::Buffer,
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
 };
 
 use crate::view::{FenceKey, ToolCard, ToolKey, TranscriptPart, duration};
 
 use super::{
-    code_fences,
+    code_fences, markdown,
+    selection::Pane,
     shimmer::{COMPLETE, COMPLETION_DURATION, Sweep, Wipe},
+    text_layout::{Wrapped, glyph},
 };
 
-type Key = (String, String);
+pub(super) type Key = (String, String);
 
 #[derive(Default)]
 pub(super) struct Cards {
     expanded: HashSet<Key>,
     selected: Option<Key>,
-    pressed: Option<(Position, Key)>,
     pointer: Option<Position>,
     focused: bool,
     reveal: bool,
@@ -265,11 +265,7 @@ impl Cards {
         *scroll = Some(self.rendered_top);
     }
 
-    pub(super) fn cancel_click(&mut self) {
-        self.pressed = None;
-    }
-
-    fn header_at(&self, area: Rect, position: Position) -> Option<&Key> {
+    pub(super) fn header_at(&self, area: Rect, position: Position) -> Option<&Key> {
         if !area.contains(position) {
             return None;
         }
@@ -281,47 +277,29 @@ impl Cards {
     }
 
     pub(super) fn clear_pointer(&mut self) {
-        self.cancel_click();
         self.pointer = None;
     }
 
-    pub(super) fn mouse(
-        &mut self,
-        event: MouseEvent,
-        area: Rect,
-        scroll: &mut Option<usize>,
-    ) -> bool {
-        let pressed = self.pressed.take();
-        let position = Position::new(event.column, event.row);
+    pub(super) fn hover(&mut self, area: Rect, position: Position) -> bool {
         let pointer = area.contains(position).then_some(position);
         let hover_changed = self.pointer.and_then(|p| self.header_at(area, p))
             != pointer.and_then(|p| self.header_at(area, p));
         self.pointer = pointer;
-        if !matches!(
-            event.kind,
-            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-        ) || !event.modifiers.is_empty()
-        {
-            return hover_changed;
-        }
-        let Some(key) = self.header_at(area, position) else {
-            return hover_changed;
-        };
-        if event.kind == MouseEventKind::Down(MouseButton::Left) {
-            self.pressed = Some((position, key.clone()));
-        } else if let Some((origin, pressed_key)) = pressed
-            && origin == position
-            && &pressed_key == key
-        {
-            // Mouse disclosure keeps the current focus. If F4 already owns
-            // input, its selection follows the card that was clicked.
-            if self.focused {
-                self.selected = Some(pressed_key.clone());
-            }
-            self.toggle(pressed_key, scroll);
-            return true;
-        }
         hover_changed
+    }
+
+    pub(super) fn click(&mut self, key: Key, scroll: &mut Option<usize>) {
+        // Mouse disclosure keeps the current focus. If F4 already owns input,
+        // its selection follows the card that was clicked.
+        if self.focused {
+            self.selected = Some(key.clone());
+        }
+        self.toggle(key, scroll);
+    }
+
+    pub(super) fn hold_view(&self, scroll: &mut Option<usize>) {
+        // Do not let a streaming tail slide out from under an active selection.
+        scroll.get_or_insert(self.rendered_top);
     }
 
     fn nearest(&self) -> Option<usize> {
@@ -340,7 +318,7 @@ impl Cards {
         scroll: &mut Option<usize>,
         now: Instant,
         hint_style: Option<Style>,
-    ) -> Rect {
+    ) -> (Rect, Pane) {
         if !layout.interactive {
             self.clear_pointer();
         }
@@ -392,7 +370,7 @@ impl Cards {
         }
         self.rendered_top = top;
         self.height = height;
-        layout.render(frame, area, top, Some(&self.code), layout.interactive);
+        let pane = layout.render(frame, area, top, Some(&self.code), layout.interactive);
         if let Some(pointer) = self.pointer.filter(|&pointer| area.contains(pointer))
             && layout
                 .headers
@@ -428,7 +406,7 @@ impl Cards {
             self.expanded.retain(|key| retained.contains(key));
         }
         self.headers = layout.headers;
-        area
+        (area, pane)
     }
 
     pub(super) fn paint_motion(&mut self, buffer: &mut Buffer, now: Instant) {
@@ -480,6 +458,17 @@ fn clip(text: &str, cells: usize) -> String {
     clipped
 }
 
+/// The status glyph shown before the tool name. A completed call needs no
+/// word: the check mark and its colour say it.
+fn status_icon(status: &str) -> (&'static str, &str) {
+    match status {
+        "complete" => ("✓ ", ""),
+        "failed" | "denied" => ("✗ ", status),
+        "cancelled" => ("⊘ ", status),
+        _ => ("", status),
+    }
+}
+
 fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     let cells = usize::from(width);
     let mut prefix = if marker.is_empty() {
@@ -489,23 +478,26 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     } else {
         return clip(marker, cells);
     };
-    let available = cells.saturating_sub(prefix.len());
-    let elapsed = card.elapsed.map(duration);
-    let suffix = |status: &str| match elapsed.as_deref() {
-        Some(elapsed) => format!("{status} · {elapsed}"),
+    let (icon, shown) = status_icon(card.status);
+    if Span::raw(&prefix).width() + Span::raw(icon).width() < cells {
+        prefix.push_str(icon);
+    }
+    let available = cells.saturating_sub(Span::raw(&prefix).width());
+    let waiting = card.status == "Approval waiting";
+    // A waiting call's time is not progress; it would only look frozen.
+    let elapsed = card.elapsed.filter(|_| !waiting).map(duration);
+    let suffix = |status: &str| match (status.is_empty(), elapsed.as_deref()) {
+        (false, Some(elapsed)) => format!("{status} · {elapsed}"),
+        (true, Some(elapsed)) => elapsed.to_owned(),
         _ => status.to_owned(),
     };
-    let mut status = if card.status == "Approval waiting" && available >= 36 {
-        "Approval waiting · active"
+    let mut status = if waiting {
+        "waiting for approval"
     } else {
-        card.status
+        shown
     };
     let mut outcome = suffix(status);
-    if Span::raw(&outcome).width() > available && status == "Approval waiting · active" {
-        status = card.status;
-        outcome = suffix(status);
-    }
-    if Span::raw(&outcome).width() > available && status.starts_with("Approval") {
+    if Span::raw(&outcome).width() > available && waiting {
         status = "waiting";
         outcome = suffix(status);
     }
@@ -518,6 +510,8 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     let outcome_width = Span::raw(&outcome).width();
     if outcome_width > available {
         prefix.push_str(&clip(status, available));
+    } else if outcome.is_empty() {
+        prefix.push_str(&clip(&card.label, available));
     } else {
         let label_width = available.saturating_sub(outcome_width + 3);
         if label_width > 0 && !card.label.is_empty() {
@@ -529,19 +523,24 @@ fn summary(card: &ToolCard<'_>, marker: &str, width: u16) -> String {
     prefix
 }
 
+const COLLAPSED: &str = "▸";
+const EXPANDED: &str = "▾";
+
 // The disclosure glyph and its following space are not part of the Python label.
 const DISCLOSURE_WIDTH: usize = 2;
 
 #[derive(Clone, Copy)]
 pub(super) enum UserPaint {
     Plain,
+    /// `NO_COLOR`: keep the user-message bar, without colour.
+    Monochrome,
     Surface(Style),
 }
 
 impl UserPaint {
     pub(super) fn new(surface: Option<Style>, background: Option<[u8; 3]>, no_color: bool) -> Self {
         if no_color {
-            return Self::Plain;
+            return Self::Monochrome;
         }
         surface
             .or_else(|| background.map(terminal_user_surface))
@@ -570,13 +569,84 @@ pub(super) struct Layout<'a> {
 }
 
 enum Row<'a> {
-    Plain(Line<'a>, bool),
+    Plain(PlainRow<'a>),
     Code(FenceKey, &'a str),
+}
+
+struct PlainRow<'a> {
+    visual: Wrapped<'a>,
+    user: bool,
+    copy_from: Option<u16>,
+    joins_next: bool,
+}
+
+impl PlainRow<'_> {
+    fn draw(
+        &self,
+        buffer: &mut Buffer,
+        area: Rect,
+        row: usize,
+        pane: &mut Pane,
+        padding: u16,
+        paint: UserPaint,
+    ) {
+        let width = area.width - padding;
+        // A user bar occupies the first cell; text starts after one space.
+        let left = area.x + if padding > 0 { USER_TEXT_INSET } else { 0 };
+        let mut column = 0;
+        if self.copy_from.is_some() {
+            pane.line(area.y, row + 1 < self.visual.height() || self.joins_next);
+        }
+        'spans: for span in self.visual.spans(row) {
+            for styled in span.styled_graphemes(Style::default()) {
+                let glyph = glyph(styled.symbol, width);
+                if glyph.width == 0 {
+                    continue;
+                }
+                if glyph.width > width - column {
+                    break 'spans;
+                }
+                let x = left + column;
+                buffer[(x, area.y)]
+                    .set_symbol(glyph.drawn)
+                    .set_style(styled.style);
+                if self
+                    .copy_from
+                    .is_some_and(|start| row > 0 || column >= start)
+                {
+                    pane.glyph(x, area.y, glyph.width, glyph.copied);
+                }
+                column += glyph.width;
+            }
+        }
+        if self.user
+            && let UserPaint::Surface(surface) = paint
+        {
+            // Include wide-glyph continuation cells and wrap slack.
+            buffer.set_style(area, surface);
+        }
+        // After the surface fill, so a themed foreground cannot recolour it.
+        if self.user && padding > 0 && row_is_visible(area) {
+            let bar = match paint {
+                UserPaint::Monochrome => Style::new(),
+                _ => Style::new().fg(USER_BAR),
+            };
+            buffer[(area.x, area.y)].set_symbol("▎").set_style(bar);
+        }
+    }
 }
 
 // Match the Python user bubble's horizontal padding, but drop the inset if
 // it would leave fewer than two cells for a wide grapheme.
 const USER_PADDING: u16 = 3;
+const USER_TEXT_INSET: u16 = 2;
+// Matches the TUI accent so user turns are distinguishable without a tinted
+// background (tmux, terminals that don't report colours, or NO_COLOR).
+const USER_BAR: Color = Color::Rgb(190, 224, 163);
+
+fn row_is_visible(area: Rect) -> bool {
+    area.width > 0 && area.height > 0
+}
 
 impl<'a> Layout<'a> {
     pub(super) fn new(
@@ -617,10 +687,10 @@ impl<'a> Layout<'a> {
                         // calls. Keep other text and expanded-detail boundaries.
                         continue;
                     }
-                    layout.text(text, false);
+                    layout.prose(text);
                 }
                 TranscriptPart::User(text) => {
-                    layout.text(text, !matches!(user_paint, UserPaint::Plain));
+                    layout.text(text, true);
                 }
                 TranscriptPart::Code(key, text) => layout.code(*key, text, cards.is_some()),
                 TranscriptPart::Card(card) => {
@@ -633,9 +703,9 @@ impl<'a> Layout<'a> {
                     let marker = if cards.is_none() {
                         ""
                     } else if expanded {
-                        "v"
+                        EXPANDED
                     } else {
-                        ">"
+                        COLLAPSED
                     };
                     let mut style = Style::default();
                     if cards.is_some() {
@@ -661,9 +731,16 @@ impl<'a> Layout<'a> {
                             Duration::from_millis(elapsed),
                         ));
                     }
+                    // The marker glyph is multi-byte; split on a char boundary.
+                    let split = title
+                        .char_indices()
+                        .nth(DISCLOSURE_WIDTH)
+                        .map(|(index, _)| index);
                     let line = if let Some(cards) = cards
                         && card.success
-                        && let Some(label) = title.get(DISCLOSURE_WIDTH..).filter(|s| !s.is_empty())
+                        && let Some(split) = split
+                        && let (disclosure, label) = title.split_at(split)
+                        && !label.is_empty()
                     {
                         if let Some(completion) = cards.completions.get(&key) {
                             layout
@@ -671,7 +748,7 @@ impl<'a> Layout<'a> {
                                 .push((layout.rows, HeaderCells::new(label), *completion));
                         }
                         Line::from(vec![
-                            Span::raw(title[..DISCLOSURE_WIDTH].to_owned()),
+                            Span::raw(disclosure.to_owned()),
                             Span::styled(label.to_owned(), Style::new().fg(COMPLETE)),
                         ])
                     } else {
@@ -680,7 +757,15 @@ impl<'a> Layout<'a> {
                     if cards.is_some() {
                         layout.headers.push((key, layout.rows));
                     }
-                    layout.push(line.style(style));
+                    layout.push_plain(
+                        line.style(style),
+                        false,
+                        Some(if marker.is_empty() {
+                            0
+                        } else {
+                            DISCLOSURE_WIDTH as u16
+                        }),
+                    );
                     if expanded {
                         for detail in card.details() {
                             layout.detail(&detail);
@@ -713,68 +798,39 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn text(&mut self, text: &'a str, user: bool) {
-        for mut line in text.lines() {
-            if user {
-                self.user_line(line);
-                continue;
-            }
-            // Keep any one logical line below Paragraph's u16 offset even in
-            // a one-column viewport. Ordinary prose uses native word wrapping.
-            while line.len() > 24_000 {
-                let mut end = 24_000;
-                while !line.is_char_boundary(end) {
-                    end -= 1;
-                }
-                let (chunk, rest) = line.split_at(end);
-                self.push(Line::raw(chunk));
-                line = rest;
-            }
-            self.push(Line::raw(line));
+    /// Assistant and notice text: Markdown, wrapped here so list and quote
+    /// prefixes hang correctly. Surrounding blank rows are kept verbatim
+    /// because they separate cards and user messages.
+    fn prose(&mut self, text: &'a str) {
+        let lines: Vec<&str> = text.lines().collect();
+        let lead = lines
+            .iter()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        if lead == lines.len() || self.width == 0 {
+            self.text(text, false);
+            return;
+        }
+        let trail = lines
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        for _ in 0..lead {
+            self.push(Line::raw(""));
+        }
+        let body = lines[lead..lines.len() - trail].join("\n");
+        for row in markdown::render_cached(&body, self.width).iter() {
+            self.push_rendered(row);
+        }
+        for _ in 0..trail {
+            self.push(Line::raw(""));
         }
     }
 
-    fn user_line(&mut self, mut line: &'a str) {
-        let width = usize::from(self.width - self.padding(true));
-        if width == 0 {
-            return;
-        }
-        // Wrap before rendering so an overlong word cannot paint a wide
-        // glyph into the inset. Prefer word boundaries when possible.
-        loop {
-            let span = Span::raw(line);
-            let mut end = 0;
-            let mut cells = 0;
-            let mut word_end = 0;
-            let mut overflow = None;
-            for grapheme in span.styled_graphemes(Style::default()) {
-                let columns = Span::raw(grapheme.symbol).width();
-                if cells + columns > width {
-                    overflow = Some(grapheme.symbol.len());
-                    break;
-                }
-                cells += columns;
-                end += grapheme.symbol.len();
-                if grapheme.symbol.chars().all(char::is_whitespace) {
-                    word_end = end;
-                }
-            }
-            let Some(glyph_bytes) = overflow else {
-                self.push_plain(Line::raw(line), true);
-                break;
-            };
-            if end == 0 {
-                // One cell cannot display a two-cell symbol.
-                self.push_plain(Line::raw("�"), true);
-                line = &line[glyph_bytes..];
-            } else {
-                let split = if word_end > 0 { word_end } else { end };
-                self.push_plain(Line::raw(&line[..split]), true);
-                line = &line[split..];
-            }
-            if line.is_empty() {
-                break;
-            }
+    fn text(&mut self, text: &'a str, user: bool) {
+        for line in text.lines() {
+            self.push_plain(Line::raw(line), user, Some(0));
         }
     }
 
@@ -804,28 +860,48 @@ impl<'a> Layout<'a> {
     }
 
     pub(super) fn push(&mut self, line: Line<'a>) {
-        self.push_plain(line, false);
+        self.push_plain(line, false, Some(0));
+    }
+
+    pub(super) fn push_decoration(&mut self, line: Line<'a>) {
+        self.push_plain(line, false, None);
     }
 
     fn padding(&self, user: bool) -> u16 {
-        match self.user_paint {
-            UserPaint::Surface(_) if user && self.width >= USER_PADDING + 2 => USER_PADDING,
-            _ => 0,
+        if user && self.width >= USER_PADDING + 2 {
+            USER_PADDING
+        } else {
+            0
         }
     }
 
-    fn push_plain(&mut self, line: Line<'a>, user: bool) {
+    fn push_plain(&mut self, line: Line<'a>, user: bool, copy_from: Option<u16>) {
+        self.push_row(line, user, copy_from, false);
+    }
+
+    /// A Markdown row is already wrapped. Keep its paragraph joined and its
+    /// gutter out of copied text.
+    fn push_rendered(&mut self, row: &markdown::Row) {
+        self.push_row(row.line.clone(), false, Some(row.copy_from), row.joins_next);
+    }
+
+    fn push_row(&mut self, line: Line<'a>, user: bool, copy_from: Option<u16>, joins_next: bool) {
         let width = self.width - self.padding(user);
         if width == 0 {
             return;
         }
-        let height = if line.width() <= usize::from(width) {
-            1
-        } else {
-            paragraph(line.clone()).line_count(width)
-        };
-        self.lines.push((self.rows, Row::Plain(line, user)));
-        self.rows += height;
+        let visual = Wrapped::new(line, width);
+        let start = self.rows;
+        self.rows += visual.height();
+        self.lines.push((
+            start,
+            Row::Plain(PlainRow {
+                visual,
+                user,
+                copy_from,
+                joins_next,
+            }),
+        ));
     }
 
     pub(super) fn draw_from_bottom(&self, frame: &mut Frame, area: Rect, scroll: u16) {
@@ -846,9 +922,14 @@ impl<'a> Layout<'a> {
         top: usize,
         pan: Option<&code_fences::Pan>,
         interactive: bool,
-    ) {
+    ) -> Pane {
+        let mut pane = if interactive {
+            Pane::new(area)
+        } else {
+            Pane::default()
+        };
         if area.is_empty() || self.lines.is_empty() {
-            return;
+            return pane;
         }
         let start = self
             .lines
@@ -858,83 +939,44 @@ impl<'a> Layout<'a> {
             .lines
             .partition_point(|(row, _)| *row < top + usize::from(area.height));
         let bottom = top + usize::from(area.height);
-        let mut first = start;
-        // Keep native word wrapping for plain runs; code has one row per line.
-        for group in self.lines[start..end].chunk_by(|(_, a), (_, b)| match (a, b) {
-            (Row::Plain(_, a), Row::Plain(_, b)) => a == b,
-            (Row::Code(..), Row::Code(..)) => true,
-            _ => false,
-        }) {
-            match &group[0].1 {
-                Row::Plain(_, user) => {
-                    let first_row = group[0].0;
-                    let visible_start = first_row.max(top);
-                    let skip = (visible_start - first_row) as u16;
-                    let last = first + group.len();
-                    let visible_end = self
-                        .lines
-                        .get(last)
-                        .map_or(self.rows, |line| line.0)
-                        .min(bottom);
-                    let height = ((visible_end - visible_start) as u16).min(u16::MAX - skip);
-                    let lines = group
-                        .iter()
-                        .filter_map(|(_, row)| match row {
-                            Row::Plain(line, _) => Some(line.clone()),
-                            Row::Code(..) => None,
-                        })
-                        .collect::<Vec<_>>();
-                    let row_area = Rect::new(
-                        area.x,
-                        area.y + (visible_start - top) as u16,
-                        area.width,
-                        height,
-                    );
-                    let padding = self.padding(*user);
-                    frame.render_widget(
-                        paragraph(lines).scroll((skip, 0)),
-                        Rect::new(
-                            row_area.x + u16::from(padding > 0),
-                            row_area.y,
-                            row_area.width - padding,
-                            row_area.height,
-                        ),
-                    );
-                    if *user && let UserPaint::Surface(surface) = self.user_paint {
-                        // Include wide-glyph continuation cells and wrap slack.
-                        frame.buffer_mut().set_style(row_area, surface);
+        for (first, row) in &self.lines[start..end] {
+            match row {
+                Row::Plain(plain) => {
+                    for index in (*first).max(top)..(*first + plain.visual.height()).min(bottom) {
+                        plain.draw(
+                            frame.buffer_mut(),
+                            Rect::new(area.x, area.y + (index - top) as u16, area.width, 1),
+                            index - first,
+                            &mut pane,
+                            self.padding(plain.user),
+                            self.user_paint,
+                        );
                     }
                 }
-                Row::Code(..) => {
-                    for (index, row) in group {
-                        if let Row::Code(key, text) = row {
-                            code_fences::draw(
-                                frame.buffer_mut(),
-                                area,
-                                (*index - top) as u16,
-                                text,
-                                pan.map_or(0, |pan| pan.offset(*key)),
-                                interactive && pan.is_some_and(|pan| pan.selected(*key)),
-                            );
-                        }
-                    }
+                Row::Code(key, text) if *first >= top => {
+                    code_fences::draw(
+                        frame.buffer_mut(),
+                        area,
+                        (*first - top) as u16,
+                        text,
+                        pan.map_or(0, |pan| pan.offset(*key)),
+                        interactive && pan.is_some_and(|pan| pan.selected(*key)),
+                        interactive.then_some(&mut pane),
+                    );
                 }
+                Row::Code(..) => (),
             }
-            first += group.len();
         }
+        pane
     }
-}
-
-fn paragraph<'a>(text: impl Into<ratatui::text::Text<'a>>) -> Paragraph<'a> {
-    Paragraph::new(text).wrap(Wrap { trim: false })
 }
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ngn_core::host::Approval;
     use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
     use serde_json::json;
 
     use super::*;
@@ -989,6 +1031,70 @@ mod tests {
     }
 
     #[test]
+    fn copying_a_wrapped_failure_keeps_the_path_on_one_logical_line() {
+        use crate::tui::selection::{CopyText, Selection};
+
+        let reason = "Cannot open /very/long/providers.json";
+        let area = Rect::new(0, 0, 10, 8);
+        let mut layout = Layout::new(&[], area.width, None, true, None, UserPaint::Plain);
+        layout.push(crate::tui::footer::failure_text(reason));
+        assert!(layout.rows > 1);
+        let mut pane = Pane::default();
+        Terminal::new(TestBackend::new(area.width, area.height))
+            .unwrap()
+            .draw(|frame| pane = layout.render(frame, area, 0, None, true))
+            .unwrap();
+        let mut selection = Selection::default();
+        selection.frame(pane, Pane::default());
+        for (kind, column, row) in [
+            (MouseEventKind::Down(MouseButton::Left), 0, 0),
+            (MouseEventKind::Up(MouseButton::Left), 9, 7),
+        ] {
+            selection.mouse(
+                MouseEvent {
+                    kind,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                None,
+            );
+        }
+        assert!(matches!(selection.copy_text(), Some(CopyText::Text(text)) if text == reason));
+    }
+
+    #[test]
+    fn assistant_markdown_is_rendered_but_user_text_stays_verbatim() {
+        let parts = [
+            TranscriptPart::User("# mine\n".into()),
+            TranscriptPart::Text("\n# Title\n\n- **one** two three four five six\n".into()),
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(16, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let layout = Layout::new(&parts, area.width, None, false, None, UserPaint::Plain);
+                assert_eq!(layout.rows, 6);
+                layout.render(frame, area, 0, None, false);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| {
+            (0..16)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        assert_eq!(row(0), "▎ # mine");
+        assert_eq!(row(1), "");
+        assert_eq!(row(2), "Title");
+        assert_eq!(row(3), "");
+        assert_eq!(row(4), "• one two three");
+        assert_eq!(row(5), "  four five six");
+    }
+
+    #[test]
     fn user_shade_wraps_wide_text_without_coloring_other_rows() {
         use ngn_core::legacy::PaintedComposerTheme;
 
@@ -1015,8 +1121,8 @@ mod tests {
             false,
         ));
         for (y, columns) in [
-            (1, &[0, 1, 3, 5, 6, 7][..]),
-            (2, &[0, 1, 3, 4, 5, 6, 7][..]),
+            (1, &[0, 1, 2, 4, 6, 7][..]),
+            (2, &[0, 1, 2, 4, 5, 6, 7][..]),
         ] {
             for &x in columns {
                 // Ratatui emits the leading cell of a wide glyph; the same
@@ -1024,8 +1130,10 @@ mod tests {
                 assert_eq!(shaded[(x, y)].bg, Color::Rgb(29, 44, 54));
             }
         }
-        assert_eq!(shaded[(1, 1)].symbol(), "界");
-        assert_eq!(shaded[(1, 2)].symbol(), "界");
+        assert_eq!(shaded[(0, 1)].symbol(), "▎");
+        assert_eq!(shaded[(0, 1)].fg, USER_BAR);
+        assert_eq!(shaded[(2, 1)].symbol(), "界");
+        assert_eq!(shaded[(2, 2)].symbol(), "界");
         assert_eq!(shaded[(0, 0)].bg, Color::Reset);
         assert_eq!(shaded[(0, 3)].symbol(), "a");
         assert_eq!(shaded[(0, 3)].bg, Color::Reset);
@@ -1035,10 +1143,18 @@ mod tests {
             Some([0, 0, 0]),
             true,
         ));
-        assert_eq!(unshaded, paint(UserPaint::Plain));
-        assert_eq!(unshaded[(0, 1)].symbol(), "界");
-        assert_eq!(unshaded[(0, 2)].symbol(), "a");
+        assert_eq!(unshaded, paint(UserPaint::Monochrome));
+        // NO_COLOR keeps the user bar and inset, just without colour.
+        assert_eq!(unshaded[(0, 1)].symbol(), "▎");
+        assert_eq!(unshaded[(0, 1)].fg, Color::Reset);
+        assert_eq!(unshaded[(2, 1)].symbol(), "界");
+        assert_eq!(unshaded[(0, 3)].symbol(), "a");
         assert!(unshaded.content.iter().all(|cell| cell.bg == Color::Reset));
+        // Without a tinted surface, the bar alone marks the user turn.
+        let plain = paint(UserPaint::Plain);
+        assert_eq!(plain[(0, 1)].symbol(), "▎");
+        assert_eq!(plain[(0, 1)].fg, USER_BAR);
+        assert_eq!(plain[(0, 0)].symbol(), "b");
 
         for (base, shade) in [
             ([0; 3], Color::Rgb(25, 25, 25)),
@@ -1046,12 +1162,12 @@ mod tests {
         ] {
             let native = paint(UserPaint::new(None, Some(base), false));
             assert!(
-                [0, 1, 3, 5, 6, 7]
+                [0, 1, 2, 4, 6, 7]
                     .into_iter()
                     .all(|x| native[(x, 1)].bg == shade)
             );
-            assert_eq!(native[(1, 1)].symbol(), "界");
-            assert_eq!(native[(1, 1)].fg, Color::Reset);
+            assert_eq!(native[(2, 1)].symbol(), "界");
+            assert_eq!(native[(2, 1)].fg, Color::Reset);
             assert_eq!(native[(0, 3)].bg, Color::Reset);
         }
     }
@@ -1097,9 +1213,12 @@ mod tests {
                 } else if let Some(area) = dialog {
                     layout.mask_wipes(area);
                 }
-                app.transcript_area =
+                let (transcript_area, pane) =
                     app.tools
                         .draw(frame, area, layout, &mut app.scroll, now, None);
+                app.transcript_area = transcript_area;
+                app.selection.frame(pane, Pane::default());
+                app.selection.paint(frame.buffer_mut());
                 if let Some(area) = dialog {
                     frame.render_widget(ratatui::widgets::Clear, area);
                     frame.render_widget(
@@ -1226,7 +1345,8 @@ mod tests {
                 .map(|y| (0..left_width).map(|x| buffer[(x, y)].symbol()).collect())
                 .collect()
         };
-        for (width, left_width) in [(110, 110), (111, 80)] {
+        // Without agents, no rail narrows even a wide conversation.
+        for (width, left_width) in [(110, 110), (111, 111)] {
             let buffer = paint(&mut app, width);
             let left = rows(&buffer, left_width);
             assert_eq!(left[0].trim(), "Tools · F4 focus");
@@ -1242,7 +1362,7 @@ mod tests {
                 if item.starts_with("lookup ") {
                     assert!(
                         left.iter()
-                            .any(|row| row.contains(item) && row.contains("complete"))
+                            .any(|row| row.contains(item) && row.contains("✓"))
                     );
                 }
             }
@@ -1256,16 +1376,13 @@ mod tests {
                 assert!(!screen.contains(old));
             }
             assert!(screen.contains("› /sessions"));
-            assert_eq!(
-                rows(&buffer, width)[0].contains("Agents / Ctrl+T"),
-                width == 111
-            );
+            assert!(!rows(&buffer, width)[0].contains("Agents / Ctrl+T"));
             assert_eq!(buffer[(width - 1, 29)].symbol(), "┐");
         }
 
         assert!(key(&mut app, KeyCode::F(4)));
         assert!(key(&mut app, KeyCode::Enter));
-        let focused = rows(&paint(&mut app, 111), 80);
+        let focused = rows(&paint(&mut app, 111), 111);
         assert!(focused[0].contains("Enter/Space toggle"));
         assert!(focused.iter().any(|row| row.contains("synthetic result")));
         assert!(key(&mut app, KeyCode::Esc));
@@ -1299,21 +1416,21 @@ mod tests {
         let above = app.tools.headers[0].1 as u16;
         let across = app.tools.headers[1].1 as u16;
         let full = terminal.backend().buffer().area;
-        assert_eq!(terminal.backend().buffer()[(10, across)].symbol(), "工");
+        assert_eq!(terminal.backend().buffer()[(12, across)].symbol(), "工");
 
         // Start the dialog on the continuation column of a two-column glyph.
-        let dialog = Rect::new(11, across, 12, 2);
+        let dialog = Rect::new(13, across, 12, 2);
         let initial = render_masked(&mut app, &mut terminal, None, start, Some(dialog)).clone();
-        assert_eq!(initial[(11, across)].symbol(), "A");
-        assert_eq!(initial[(11, across)].fg, Color::Yellow);
-        assert_eq!(initial[(11, across)].bg, Color::Red);
-        assert!(initial[(11, across)].modifier.contains(Modifier::BOLD));
+        assert_eq!(initial[(13, across)].symbol(), "A");
+        assert_eq!(initial[(13, across)].fg, Color::Yellow);
+        assert_eq!(initial[(13, across)].bg, Color::Red);
+        assert!(initial[(13, across)].modifier.contains(Modifier::BOLD));
         assert!(app.tools.needs_frame(middle));
         let mut cached = initial.clone();
         app.tools.paint_motion(&mut cached, middle);
         assert_ne!(cached[(2, above)].fg, initial[(2, above)].fg);
         assert_ne!(cached[(2, across)].fg, initial[(2, across)].fg);
-        assert_ne!(cached[(23, across)].fg, initial[(23, across)].fg);
+        assert_ne!(cached[(25, across)].fg, initial[(25, across)].fg);
 
         // A completely covered transcript must not schedule motion of its own.
         let fully_covered =
@@ -1328,7 +1445,7 @@ mod tests {
         let unmasked = terminal.backend().buffer();
         let mut expected = initial.clone();
         for pos in full.positions() {
-            if !dialog.contains(pos) && pos != Position::new(10, across) {
+            if !dialog.contains(pos) && pos != Position::new(12, across) {
                 expected[pos].fg = unmasked[pos].fg;
             }
         }
@@ -1371,7 +1488,7 @@ mod tests {
         assert_eq!(running[(2, old_row)].fg, COMPLETE);
         assert!(running[(2, row)].modifier.contains(Modifier::UNDERLINED));
         assert_eq!(running[(2, row)].bg, Color::Blue);
-        assert_eq!(running[(0, row)].symbol(), "v");
+        assert_eq!(running[(0, row)].symbol(), "▾");
         push(&mut app, finished("live", "shared", json!("ok"), ""));
         render(&mut app, &mut term, None, start);
         assert!(app.tools.needs_frame(start));
@@ -1394,7 +1511,8 @@ mod tests {
                 .map(|column| buffer[(column, row)].symbol())
                 .collect::<String>()
         };
-        assert!(lines(&final_frame).contains("complete · 1.25s"));
+        assert!(lines(&final_frame).contains("✓ shell"));
+        assert!(lines(&final_frame).contains("· 1.25s"));
         for mut frame in [first, middle] {
             for column in 2..60 {
                 frame[(column, row)].fg = final_frame[(column, row)].fg;
@@ -1626,7 +1744,7 @@ mod tests {
         assert!(key(&mut app, KeyCode::Enter));
         assert!(key(&mut app, KeyCode::Esc));
         let before = draw(&mut app, &mut terminal);
-        assert!(before.iter().any(|row| row.starts_with("v ")));
+        assert!(before.iter().any(|row| row.starts_with("▾ ")));
 
         assert!(key(&mut app, KeyCode::F(8)));
         assert!(key(&mut app, KeyCode::End));
@@ -1695,7 +1813,7 @@ mod tests {
         assert!(key(&mut app, KeyCode::F(4)));
         assert!(key(&mut app, KeyCode::Enter));
         let before = draw(&mut app, &mut terminal);
-        assert!(before[1].starts_with("v shell"));
+        assert!(before[1].starts_with("▾ ✗ shell"));
         assert!(before.iter().any(|row| row.starts_with("plain tool error")));
         assert!(before.iter().all(|row| !row.starts_with('│')));
         assert!(key(&mut app, KeyCode::Esc));
@@ -1848,7 +1966,7 @@ mod tests {
                     call: call("c", "active"),
                     preview: String::new(),
                 },
-                "Approval waiting",
+                "waiting for approval",
                 Color::Reset,
             ),
             (
@@ -1866,7 +1984,7 @@ mod tests {
             ),
             (
                 finished("r", "c", json!("ok"), "").event,
-                "complete",
+                "✓ shell",
                 Color::Reset,
             ),
         ] {
@@ -1928,9 +2046,9 @@ mod tests {
         assert!(
             compact.contains(concat!(
                 "before\n\nprose\n\n",
-                "> shell · 甲 · complete · 1.25s\n> shell · 乙 · complete · 1.25s\n",
-                "between\n\n> shell · 丙 · failed · 1.25s\n",
-                "> shell · 丁 · complete · 1.25s\n\n> shell · 戊 · complete · 1.25s",
+                "▸ ✓ shell · 甲 · 1.25s\n▸ ✓ shell · 乙 · 1.25s\n",
+                "between\n\n▸ ✗ shell · 丙 · failed · 1.25s\n",
+                "▸ ✓ shell · 丁 · 1.25s\n\n▸ ✓ shell · 戊 · 1.25s",
             )),
             "{compact}"
         );
@@ -1939,11 +2057,11 @@ mod tests {
         app.tools.expanded.insert(("r".into(), "c".into()));
         let expanded = rows(&mut app, &mut terminal);
         assert!(
-            expanded.contains("> shell · 甲 · complete · 1.25s\n\nv shell · 乙 · complete · 1.25s"),
+            expanded.contains("▸ ✓ shell · 甲 · 1.25s\n\n▾ ✓ shell · 乙 · 1.25s"),
             "{expanded}"
         );
         assert!(
-            expanded.contains("Error: detail\n\nstill here\n\n> shell · 丁 · complete · 1.25s"),
+            expanded.contains("Error: detail\n\nstill here\n\n▸ ✓ shell · 丁 · 1.25s"),
             "{expanded}"
         );
     }
@@ -1962,7 +2080,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
         let row = draw(&mut app, &mut terminal)
             .iter()
-            .position(|line| line.starts_with("> shell · second"))
+            .position(|line| line.starts_with("▸ ✓ shell · second"))
             .unwrap() as u16;
         let mouse = |kind| MouseEvent {
             column: 0,
@@ -1971,14 +2089,14 @@ mod tests {
             kind,
         };
         let left = MouseButton::Left;
-        assert!(app.transcript_mouse(mouse(MouseEventKind::Moved)));
+        assert!(app.transcript_mouse(mouse(MouseEventKind::Moved)).redraw);
         draw(&mut app, &mut terminal);
         assert!(
             terminal.backend().buffer()[(0, row)]
                 .modifier
                 .contains(Modifier::BOLD)
         );
-        assert!(!app.transcript_mouse(mouse(MouseEventKind::Moved)));
+        assert!(!app.transcript_mouse(mouse(MouseEventKind::Moved)).redraw);
         app.transcript_mouse(mouse(MouseEventKind::Down(left)));
         app.transcript_mouse(MouseEvent {
             column: 5,
@@ -1993,8 +2111,8 @@ mod tests {
         };
         click(&mut app);
         let rows = draw(&mut app, &mut terminal).join("\n");
-        assert!(rows.contains("> shell · first"));
-        assert!(rows.contains("v shell · second"));
+        assert!(rows.contains("▸ shell · first"));
+        assert!(rows.contains("▾ ✓ shell · second"));
         assert!(rows.contains("second output"));
         assert!(app.composer_available());
         assert_eq!(app.input, "unsent");
@@ -2037,7 +2155,7 @@ mod tests {
         assert_eq!(
             draw(&mut app, &mut terminal)
                 .iter()
-                .filter(|row| row.starts_with("> "))
+                .filter(|row| row.starts_with("▸ "))
                 .count(),
             3
         );
@@ -2047,16 +2165,16 @@ mod tests {
         let collapsed = draw(&mut app, &mut terminal);
         let row = collapsed
             .iter()
-            .position(|row| row.starts_with("> shell · second"))
+            .position(|row| row.starts_with("▸ ✓ shell · second"))
             .unwrap();
         let marker = &terminal.backend().buffer()[(0, row as u16)];
         assert!(marker.modifier.contains(Modifier::UNDERLINED));
         assert!(!marker.modifier.contains(Modifier::REVERSED));
         assert!(key(&mut app, KeyCode::Enter)); // This Enter cannot submit.
         let rows = draw(&mut app, &mut terminal).join("\n");
-        assert!(rows.contains("> shell · first"));
-        assert!(rows.contains("> shell · neighbor"));
-        assert!(rows.contains("v shell · second · complete · 1.25s"));
+        assert!(rows.contains("▸ shell · first"));
+        assert!(rows.contains("▸ shell · neighbor"));
+        assert!(rows.contains("▾ ✓ shell · second · 1.25s"));
         assert!(rows.contains("Result: \"output-second\""));
         assert_eq!(rows.matches("Arguments:").count(), 1);
         let selected = terminal
@@ -2064,7 +2182,7 @@ mod tests {
             .buffer()
             .content
             .iter()
-            .find(|cell| cell.symbol() == "v")
+            .find(|cell| cell.symbol() == "▾")
             .unwrap();
         assert!(selected.modifier.contains(Modifier::UNDERLINED));
 
@@ -2078,15 +2196,15 @@ mod tests {
         assert!(key(&mut app, KeyCode::Up));
         assert!(key(&mut app, KeyCode::Char(' ')));
         let rows = draw(&mut app, &mut terminal).join("\n");
-        assert!(rows.contains("v shell · first"));
-        assert!(rows.contains("v shell · second"));
-        assert!(rows.contains("> shell · neighbor"));
+        assert!(rows.contains("▾ shell · first"));
+        assert!(rows.contains("▾ ✓ shell · second"));
+        assert!(rows.contains("▸ shell · neighbor"));
         assert!(key(&mut app, KeyCode::Enter));
         assert!(key(&mut app, KeyCode::Esc));
         assert!(!key(&mut app, KeyCode::Char(' ')));
         let rows = draw(&mut app, &mut terminal).join("\n");
-        assert!(rows.contains("> shell · first"));
-        assert!(rows.contains("v shell · second"));
+        assert!(rows.contains("▸ shell · first"));
+        assert!(rows.contains("▾ ✓ shell · second"));
         assert!(
             !terminal
                 .backend()
@@ -2129,7 +2247,7 @@ mod tests {
         render(&mut app, &mut terminal, Some(("r", "c")), Instant::now());
         assert!(app.tools.sweep.is_none());
         let rows = draw(&mut app, &mut terminal);
-        assert!(rows[1].contains("Approval waiting"));
+        assert!(rows[1].contains("waiting"));
         assert!(!rows[1].contains("running"));
         app.approval = None;
         assert!(key(&mut app, KeyCode::Enter));
@@ -2195,15 +2313,14 @@ mod tests {
         };
         let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
         let rows = draw(&mut app, &mut terminal);
-        assert!(rows[1].starts_with("> shell"));
-        assert!(rows[1].contains("工"));
+        assert!(rows[1].starts_with("▸ ✗ shell"));
         assert!(rows[1].contains("failed · 1.25s"));
         assert!(rows[2].trim().is_empty()); // Header never wraps.
         assert_eq!(terminal.backend().buffer()[(0, 1)].fg, Color::Red);
         assert!(key(&mut app, KeyCode::F(4)));
         assert!(key(&mut app, KeyCode::Enter));
         let rows = draw(&mut app, &mut terminal);
-        assert!(rows[1].starts_with("v shell"));
+        assert!(rows[1].starts_with("▾ ✗ shell"));
         assert!(rows[2].contains("Arguments:"));
         assert_eq!(app.tools.rendered_top, 0);
         let parts = crate::view::transcript(

@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ngn-nagents"
-version = "0.100.43"
+version = "0.100.44"
 description = "Agent Runtime Protocol v1 adapter for the nagents Python library"
 requires-python = ">=3.12, <4.0"
 license = "MIT"
-dependencies = ["nagents>=0.100.43,<0.101"]
+dependencies = ["nagents>=0.100.44,<0.101"]
 
 [project.scripts]
 ngn-nagents = "ngn_nagents.__main__:main"
