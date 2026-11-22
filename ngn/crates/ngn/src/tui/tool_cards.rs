@@ -513,13 +513,15 @@ const DISCLOSURE_WIDTH: usize = 2;
 #[derive(Clone, Copy)]
 pub(super) enum UserPaint {
     Plain,
+    /// `NO_COLOR`: keep the user-message bar, without colour.
+    Monochrome,
     Surface(Style),
 }
 
 impl UserPaint {
     pub(super) fn new(surface: Option<Style>, background: Option<[u8; 3]>, no_color: bool) -> Self {
         if no_color {
-            return Self::Plain;
+            return Self::Monochrome;
         }
         surface
             .or_else(|| background.map(terminal_user_surface))
@@ -569,7 +571,8 @@ impl PlainRow<'_> {
         paint: UserPaint,
     ) {
         let width = area.width - padding;
-        let left = area.x + u16::from(padding > 0);
+        // A user bar occupies the first cell; text starts after one space.
+        let left = area.x + if padding > 0 { USER_TEXT_INSET } else { 0 };
         let mut column = 0;
         if self.copy_from.is_some() {
             pane.line(area.y, row + 1 < self.visual.height());
@@ -602,12 +605,28 @@ impl PlainRow<'_> {
             // Include wide-glyph continuation cells and wrap slack.
             buffer.set_style(area, surface);
         }
+        // After the surface fill, so a themed foreground cannot recolour it.
+        if self.user && padding > 0 && row_is_visible(area) {
+            let bar = match paint {
+                UserPaint::Monochrome => Style::new(),
+                _ => Style::new().fg(USER_BAR),
+            };
+            buffer[(area.x, area.y)].set_symbol("▎").set_style(bar);
+        }
     }
 }
 
 // Match the Python user bubble's horizontal padding, but drop the inset if
 // it would leave fewer than two cells for a wide grapheme.
 const USER_PADDING: u16 = 3;
+const USER_TEXT_INSET: u16 = 2;
+// Matches the TUI accent so user turns are distinguishable without a tinted
+// background (tmux, terminals that don't report colours, or NO_COLOR).
+const USER_BAR: Color = Color::Rgb(190, 224, 163);
+
+fn row_is_visible(area: Rect) -> bool {
+    area.width > 0 && area.height > 0
+}
 
 impl<'a> Layout<'a> {
     pub(super) fn new(
@@ -651,7 +670,7 @@ impl<'a> Layout<'a> {
                     layout.text(text, false);
                 }
                 TranscriptPart::User(text) => {
-                    layout.text(text, !matches!(user_paint, UserPaint::Plain));
+                    layout.text(text, true);
                 }
                 TranscriptPart::Code(key, text) => layout.code(*key, text, cards.is_some()),
                 TranscriptPart::Card(card) => {
@@ -792,9 +811,10 @@ impl<'a> Layout<'a> {
     }
 
     fn padding(&self, user: bool) -> u16 {
-        match self.user_paint {
-            UserPaint::Surface(_) if user && self.width >= USER_PADDING + 2 => USER_PADDING,
-            _ => 0,
+        if user && self.width >= USER_PADDING + 2 {
+            USER_PADDING
+        } else {
+            0
         }
     }
 
@@ -1002,8 +1022,8 @@ mod tests {
             false,
         ));
         for (y, columns) in [
-            (1, &[0, 1, 3, 5, 6, 7][..]),
-            (2, &[0, 1, 3, 4, 5, 6, 7][..]),
+            (1, &[0, 1, 2, 4, 6, 7][..]),
+            (2, &[0, 1, 2, 4, 5, 6, 7][..]),
         ] {
             for &x in columns {
                 // Ratatui emits the leading cell of a wide glyph; the same
@@ -1011,8 +1031,10 @@ mod tests {
                 assert_eq!(shaded[(x, y)].bg, Color::Rgb(29, 44, 54));
             }
         }
-        assert_eq!(shaded[(1, 1)].symbol(), "界");
-        assert_eq!(shaded[(1, 2)].symbol(), "界");
+        assert_eq!(shaded[(0, 1)].symbol(), "▎");
+        assert_eq!(shaded[(0, 1)].fg, USER_BAR);
+        assert_eq!(shaded[(2, 1)].symbol(), "界");
+        assert_eq!(shaded[(2, 2)].symbol(), "界");
         assert_eq!(shaded[(0, 0)].bg, Color::Reset);
         assert_eq!(shaded[(0, 3)].symbol(), "a");
         assert_eq!(shaded[(0, 3)].bg, Color::Reset);
@@ -1022,10 +1044,18 @@ mod tests {
             Some([0, 0, 0]),
             true,
         ));
-        assert_eq!(unshaded, paint(UserPaint::Plain));
-        assert_eq!(unshaded[(0, 1)].symbol(), "界");
-        assert_eq!(unshaded[(0, 2)].symbol(), "a");
+        assert_eq!(unshaded, paint(UserPaint::Monochrome));
+        // NO_COLOR keeps the user bar and inset, just without colour.
+        assert_eq!(unshaded[(0, 1)].symbol(), "▎");
+        assert_eq!(unshaded[(0, 1)].fg, Color::Reset);
+        assert_eq!(unshaded[(2, 1)].symbol(), "界");
+        assert_eq!(unshaded[(0, 3)].symbol(), "a");
         assert!(unshaded.content.iter().all(|cell| cell.bg == Color::Reset));
+        // Without a tinted surface, the bar alone marks the user turn.
+        let plain = paint(UserPaint::Plain);
+        assert_eq!(plain[(0, 1)].symbol(), "▎");
+        assert_eq!(plain[(0, 1)].fg, USER_BAR);
+        assert_eq!(plain[(0, 0)].symbol(), "b");
 
         for (base, shade) in [
             ([0; 3], Color::Rgb(25, 25, 25)),
@@ -1033,12 +1063,12 @@ mod tests {
         ] {
             let native = paint(UserPaint::new(None, Some(base), false));
             assert!(
-                [0, 1, 3, 5, 6, 7]
+                [0, 1, 2, 4, 6, 7]
                     .into_iter()
                     .all(|x| native[(x, 1)].bg == shade)
             );
-            assert_eq!(native[(1, 1)].symbol(), "界");
-            assert_eq!(native[(1, 1)].fg, Color::Reset);
+            assert_eq!(native[(2, 1)].symbol(), "界");
+            assert_eq!(native[(2, 1)].fg, Color::Reset);
             assert_eq!(native[(0, 3)].bg, Color::Reset);
         }
     }
