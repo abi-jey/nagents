@@ -1,9 +1,35 @@
-//! Discover or start the opt-in engine. Only an owned child is stopped.
+//! Discover or start the Python engine. Only an owned child is stopped.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ngn_api::Client;
+use tokio::process::Command;
+
+use crate::bundle::BundledRuntime;
+
+/// The engine's Python: `NGN_ENGINE_PYTHON`, the verified bundled runtime next
+/// to this binary, the active virtualenv, or `python3`, in that order.
+pub(crate) fn python_command() -> Result<Command> {
+    let override_python = std::env::var_os("NGN_ENGINE_PYTHON").filter(|value| !value.is_empty());
+    let bundled = if override_python.is_none() {
+        BundledRuntime::detect(&std::env::current_exe()?)?
+    } else {
+        None
+    };
+    let python = override_python
+        .map(PathBuf::from)
+        .or_else(|| bundled.as_ref().map(BundledRuntime::python))
+        .or_else(|| {
+            std::env::var_os("VIRTUAL_ENV").map(|value| PathBuf::from(value).join("bin/python"))
+        })
+        .unwrap_or_else(|| PathBuf::from("python3"));
+    let mut command = Command::new(python);
+    if let Some(runtime) = bundled {
+        runtime.environment(&mut command);
+    }
+    Ok(command)
+}
 
 pub(crate) struct EngineProcess {
     pub(crate) client: Client,
@@ -14,19 +40,6 @@ pub(crate) struct EngineProcess {
 }
 
 impl EngineProcess {
-    pub(crate) async fn attach(url: &str) -> Result<Self> {
-        let token = std::env::var("NGN_ENGINE_TOKEN")
-            .context("Set NGN_ENGINE_TOKEN to the selected engine's bearer token")?;
-        let client = Client::connect(url, &token).await?;
-        Ok(Self {
-            client,
-            #[cfg(unix)]
-            owner: None,
-            #[cfg(unix)]
-            watch: None,
-        })
-    }
-
     pub(crate) async fn local(options: Launch<'_>) -> Result<Self> {
         #[cfg(unix)]
         {
@@ -35,9 +48,7 @@ impl EngineProcess {
         #[cfg(not(unix))]
         {
             let _ = options;
-            anyhow::bail!(
-                "Starting a local Python engine currently needs a POSIX host; use --engine <url>"
-            );
+            anyhow::bail!("Starting the Python engine currently needs a POSIX host");
         }
     }
 
@@ -95,7 +106,6 @@ mod local {
 
     use anyhow::{Context, Result, bail, ensure};
     use ngn_api::{Client, Error, PROTOCOL_VERSION};
-    use ngn_core::bundle::BundledRuntime;
     use rustix::fs::{Mode, OFlags, open, openat};
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
@@ -301,21 +311,7 @@ mod local {
     }
 
     fn command(options: &Launch<'_>, workspace: &Path) -> Result<Command> {
-        let override_python =
-            std::env::var_os("NGN_ENGINE_PYTHON").filter(|value| !value.is_empty());
-        let bundled = if override_python.is_none() {
-            BundledRuntime::detect(&std::env::current_exe()?)?
-        } else {
-            None
-        };
-        let python = override_python
-            .map(PathBuf::from)
-            .or_else(|| bundled.as_ref().map(BundledRuntime::python))
-            .or_else(|| {
-                std::env::var_os("VIRTUAL_ENV").map(|value| PathBuf::from(value).join("bin/python"))
-            })
-            .unwrap_or_else(|| PathBuf::from("python3"));
-        let mut command = Command::new(python);
+        let mut command = super::python_command()?;
         command
             .args([
                 "-I",
@@ -330,9 +326,6 @@ mod local {
             .stderr(Stdio::inherit())
             .env_remove("NGN_ENGINE_TOKEN")
             .kill_on_drop(true);
-        if let Some(runtime) = bundled {
-            runtime.environment(&mut command);
-        }
         if let Some(config) = options.config {
             command.arg("--config").arg(config);
         }

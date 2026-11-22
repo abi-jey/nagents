@@ -5,10 +5,10 @@ mod tests;
 
 use std::{future::Future, time::Duration};
 
+use crate::model::{Event, EventRecord, RunStatus, TaskInfo, ToolCall, ToolResult, VERSION};
 use anyhow::{Context, Result, ensure};
 use futures_util::{Stream, future::try_join_all, stream};
 use ngn_api::{Client, Error, Events, models as wire};
-use ngn_protocol::{Event, EventRecord, RunStatus, TaskInfo, ToolCall, ToolResult, VERSION};
 use reqwest::StatusCode;
 use tokio::time::Instant;
 

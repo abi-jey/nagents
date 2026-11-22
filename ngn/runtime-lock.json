@@ -69,6 +69,36 @@
       }
     },
     {
+      "name": "annotated-doc",
+      "version": "0.0.7",
+      "artifact": {
+        "filename": "annotated_doc-0.0.7-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/5e/b1/9530d6bee606979d54501adcc767d958a38929827f11a524b0d93429d2ad/annotated_doc-0.0.7-py3-none-any.whl",
+        "size": 5286,
+        "sha256": "6bc31bbbec6dfaaedc1676dbc11dbda96fe22a2b5c400e9ebad113fec44a9dc6"
+      }
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.8.0",
+      "artifact": {
+        "filename": "annotated_types-0.8.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl",
+        "size": 13427,
+        "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"
+      }
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.1",
+      "artifact": {
+        "filename": "anyio-4.15.1-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/12/b8/4bd346e22b28902df4d651910f5242c28d84e4a5c2435ca5c3f797ed7e2e/anyio-4.15.1-py3-none-any.whl",
+        "size": 132079,
+        "sha256": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101"
+      }
+    },
+    {
       "name": "attrs",
       "version": "26.1.0",
       "artifact": {
@@ -89,6 +119,26 @@
       }
     },
     {
+      "name": "click",
+      "version": "8.5.1",
+      "artifact": {
+        "filename": "click-8.5.1-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/31/7d/164b7ffc8624fe9efb4221bf9af485d5c1e41b9ae118045d2b6dc5457d8b/click-8.5.1-py3-none-any.whl",
+        "size": 126163,
+        "sha256": "8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37"
+      }
+    },
+    {
+      "name": "fastapi",
+      "version": "0.162.2",
+      "artifact": {
+        "filename": "fastapi-0.162.2-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/d6/fb/0dc0f819163bc6b7f9e6802d7d0b1ac180fbbe4e75dbd10655c6a4d77796/fastapi-0.162.2-py3-none-any.whl",
+        "size": 151671,
+        "sha256": "d0584f9662317e01140df94c64f4bed1d8b059fe35496e30c9c92f70e6e5ff15"
+      }
+    },
+    {
       "name": "frozenlist",
       "version": "1.8.0",
       "artifact": {
@@ -96,6 +146,16 @@
         "url": "https://files.pythonhosted.org/packages/d5/4e/e4691508f9477ce67da2015d8c00acd751e6287739123113a9fca6f1604e/frozenlist-1.8.0-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
         "size": 234391,
         "sha256": "fb30f9626572a76dfe4293c7194a09fb1fe93ba94c7d4f720dfae3b646b45027"
+      }
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "artifact": {
+        "filename": "h11-0.16.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl",
+        "size": 37515,
+        "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"
       }
     },
     {
@@ -119,6 +179,16 @@
       }
     },
     {
+      "name": "opentelemetry-api",
+      "version": "1.45.2",
+      "artifact": {
+        "filename": "opentelemetry_api-1.45.2-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/a9/2d/610db864d7513158cebb8f36cc88e67e73bd6c7aa1905ef18d89e1281c81/opentelemetry_api-1.45.2-py3-none-any.whl",
+        "size": 60335,
+        "sha256": "2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34"
+      }
+    },
+    {
       "name": "propcache",
       "version": "0.5.4",
       "artifact": {
@@ -129,6 +199,26 @@
       }
     },
     {
+      "name": "pydantic",
+      "version": "2.14.4",
+      "artifact": {
+        "filename": "pydantic-2.14.4-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/8a/8c/824a686c4ba815ddb0722f9e66272088bccd4e1ae1d2f7015375e4a4fc7f/pydantic-2.14.4-py3-none-any.whl",
+        "size": 494865,
+        "sha256": "653a2ad9f6d8858529c77c72717d0ea991d6c6837fe683246b2f4b2bbfc3fadc"
+      }
+    },
+    {
+      "name": "pydantic_core",
+      "version": "2.50.5",
+      "artifact": {
+        "filename": "pydantic_core-2.50.5-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/13/c2/62015187d0e986dafc530ea4df390fce3d3379c744959148806668d40ab9/pydantic_core-2.50.5-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "size": 2264332,
+        "sha256": "cbfde3ad127786f1dea1a6cd89a5eb824a16203f24743ad2b4e07506f43bc844"
+      }
+    },
+    {
       "name": "PyYAML",
       "version": "6.0.3",
       "artifact": {
@@ -136,6 +226,56 @@
         "url": "https://files.pythonhosted.org/packages/74/27/e5b8f34d02d9995b80abcef563ea1f8b56d20134d8f4e5e81733b1feceb2/pyyaml-6.0.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
         "size": 801626,
         "sha256": "0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6"
+      }
+    },
+    {
+      "name": "starlette",
+      "version": "1.10.0",
+      "artifact": {
+        "filename": "starlette-1.10.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/88/2e/947cfe02def9371c07cd5bf5b6b61c829e9aecb9904db02a66cfafbc1eec/starlette-1.10.0-py3-none-any.whl",
+        "size": 80571,
+        "sha256": "478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4"
+      }
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.5",
+      "artifact": {
+        "filename": "typing_inspection-0.4.5-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/de/0c/ea2544850a7c135e15033a5c7a8e7211136184b7ae63e2239d557c2b3019/typing_inspection-0.4.5-py3-none-any.whl",
+        "size": 14874,
+        "sha256": "bc210535442b39e1bf2805e0c7a17dfd6a4ace760c84c7f7d16245d23a6b1c39"
+      }
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "artifact": {
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "size": 45571,
+        "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+      }
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.52.4",
+      "artifact": {
+        "filename": "uvicorn-0.52.4-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/f1/79/4a20b54ab0491485ccd8c077db2d39187c7f12b3e15485d38a7be37c81b4/uvicorn-0.52.4-py3-none-any.whl",
+        "size": 79871,
+        "sha256": "f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1"
+      }
+    },
+    {
+      "name": "websockets",
+      "version": "16.1.1",
+      "artifact": {
+        "filename": "websockets-16.1.1-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/b5/c2/c676c69444d9db448b3f0a55a98dcc534affce0bce961d9d2f0b8499b10a/websockets-16.1.1-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+        "size": 187197,
+        "sha256": "f5d497865f05bb222cab7016c6034542e84e5f29f49c6fd3f4939cda7197b5b8"
       }
     },
     {

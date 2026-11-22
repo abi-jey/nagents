@@ -37,7 +37,7 @@ jobs:
       - name: Isolated release environment
         run: |
           python -m venv "$RUNNER_TEMP/ngn-release-venv"
-          "$RUNNER_TEMP/ngn-release-venv/bin/python" -m pip install -e . -e ngn/integrations/nagents ruff mypy pre-commit playwright 'build>=1.2'
+          "$RUNNER_TEMP/ngn-release-venv/bin/python" -m pip install -e '.[engine]' -e ngn/integrations/nagents ruff mypy pre-commit playwright 'build>=1.2'
           echo "$RUNNER_TEMP/ngn-release-venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$RUNNER_TEMP/ngn-release-venv" >> "$GITHUB_ENV"
       - name: Require a release from main, with matching component versions
@@ -54,12 +54,9 @@ jobs:
           cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
           git diff --exit-code
           python ngn/scripts/release.py package --output artifacts --binary ngn/target/release/ngn --bundle --published-core
-      - name: Test packaged binary and adapter wheel
+      - name: Verify the packaged candidate
         working-directory: ngn
-        run: |
-          export PYTHONPATH="$(find "$GITHUB_WORKSPACE/artifacts" -name 'ngn_nagents-*.whl' -print):$GITHUB_WORKSPACE/src"
-          python scripts/smoke.py --binary target/release/ngn
-          python scripts/release.py verify --output ../artifacts --require-bundle
+        run: python scripts/release.py verify --output ../artifacts --require-bundle
       - name: Require the matching published core and non-editable auth integration
         env:
           NGN_TEST_BINARY: ${{ github.workspace }}/ngn/target/release/ngn
@@ -67,10 +64,10 @@ jobs:
           unset PYTHONPATH PYTHONHOME
           core_version=$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')
           python -m venv "$RUNNER_TEMP/ngn-published-runtime"
-          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m pip --isolated install --disable-pip-version-check --index-url https://pypi.org/simple --only-binary=:all: "artifacts/nagents-$core_version-py3-none-any.whl" artifacts/ngn_nagents-*.whl
+          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m pip --isolated install --disable-pip-version-check --index-url https://pypi.org/simple --only-binary=:all: "artifacts/nagents-$core_version-py3-none-any.whl[engine]" artifacts/ngn_nagents-*.whl
           "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m pip check
           "$RUNNER_TEMP/ngn-published-runtime/bin/python" -I -c 'from ngn_nagents.auth import available; assert available(), "Release blocked: publish the core with its public device-auth API and coordinate the adapter dependency first"'
-          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m unittest discover -s ngn/integrations/nagents/tests -p test_native_auth.py -v
+          "$RUNNER_TEMP/ngn-published-runtime/bin/python" -m unittest discover -s ngn/integrations/nagents/tests -v
       - name: Accept the complete bundled runtime and native installer with empty PATH
         run: |
           python ngn/scripts/install_smoke.py --installer artifacts/ngn-installer-linux-x86_64 \
@@ -87,13 +84,8 @@ jobs:
           tar -xzf artifacts/ngn-v*-linux-x86_64.tar.gz -C "$RUNNER_TEMP/ngn-packaged-app" ngn
           cmp "$candidate/app/ngn" "$RUNNER_TEMP/ngn-packaged-app/ngn"
           bundled_binary=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"ngn-bundled-acceptance/evidence.json").read_text())["command"])')
-          bundled_python=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"ngn-bundled-acceptance/evidence.json").read_text())["runtime_python"])')
           cmp "$RUNNER_TEMP/ngn-packaged-app/ngn" "$bundled_binary"
-          python ngn/scripts/browser_smoke.py --binary "$bundled_binary" \
-            --runtime-python "$bundled_python" \
-            --output "$RUNNER_TEMP/ngn-browser-evidence"
-          python ngn/scripts/steering_clients_smoke.py --binary "$bundled_binary" \
-            --runtime-python "$bundled_python" --installed-runtime \
+          python ngn/scripts/python_engine_smoke.py --binary "$bundled_binary" \
             --output "$RUNNER_TEMP/ngn-browser-evidence"
       - name: Save real-browser evidence
         if: always()
@@ -158,12 +150,9 @@ jobs:
           chmod +x ngn/target/release/ngn
           git diff --exit-code
           python ngn/scripts/release.py package --output artifacts --binary ngn/target/release/ngn --bundle --published-core
-      - name: Test packaged binary and adapter wheel
+      - name: Verify the packaged candidate
         working-directory: ngn
-        run: |
-          export PYTHONPATH="$(find "$GITHUB_WORKSPACE/artifacts" -name 'ngn_nagents-*.whl' -print):$GITHUB_WORKSPACE/src"
-          python scripts/smoke.py --binary target/release/ngn
-          python scripts/release.py verify --output ../artifacts --require-bundle
+        run: python scripts/release.py verify --output ../artifacts --require-bundle
       - name: Accept the complete bundled runtime and native installer with empty PATH
         run: |
           python ngn/scripts/install_smoke.py --installer artifacts/ngn-installer-${{ matrix.platform }} \

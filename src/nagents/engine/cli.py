@@ -1,4 +1,4 @@
-"""The opt-in `nagents engine` entry point."""
+"""The `nagents engine` entry point: the server behind every ngn client."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ _ENGINE_DEPENDENCIES = {"aiortc", "anyio", "av", "fastapi", "pydantic", "starlet
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="nagents", description="The opt-in local Python engine.")
+    parser = argparse.ArgumentParser(prog="nagents", description="The local Python engine behind ngn.")
     parser.add_argument("--version", action="version", version=f"nagents {framework_version()}")
     commands = parser.add_subparsers(dest="command", required=True)
     engine = commands.add_parser("engine", help="Start the authenticated loopback API")
@@ -151,8 +151,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "Install the optional engine dependencies with `pip install 'nagents[engine]'`."
             ) from error
+        launch = _launch_config(args)
+        if not launch.demo:
+            from nagents.harness.runtime.core import session_database_path
+
+            from .host_import import import_legacy_once
+
+            notice = import_legacy_once(
+                launch.workspace, launch.data_dir, session_database_path(launch.workspace, launch.data_dir)
+            )
+            if notice:
+                print(f"nagents: {notice}", file=sys.stderr)
         with private_stdio() if args.stdio else nullcontext() as lease:
-            asyncio.run(serve_engine(_launch_config(args), port=args.port, lease=lease))
+            asyncio.run(serve_engine(launch, port=args.port, lease=lease))
         return 0
     except KeyboardInterrupt:
         return 130

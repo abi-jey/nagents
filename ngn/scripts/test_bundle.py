@@ -76,7 +76,7 @@ class BundleTests(unittest.TestCase):
     def test_runtime_lock_is_complete_and_hashes_all_vendored_notices(self) -> None:
         lock = bundle._load_lock()
         self.assertEqual(bundle._object(lock["python"])["version"], "3.13.18")
-        self.assertEqual(len(bundle._items(lock["wheels"])), 12)
+        self.assertEqual(len(bundle._items(lock["wheels"])), 26)
         notices = bundle._notices(lock)
         self.assertEqual(len(notices), 46)
         metadata = bundle._json(notices["PYTHON.json"])

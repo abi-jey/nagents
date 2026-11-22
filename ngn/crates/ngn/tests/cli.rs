@@ -1,4 +1,4 @@
-#[path = "../../ngn-core/src/test_support.rs"]
+#[path = "../src/test_support.rs"]
 mod test_support;
 
 use std::process::Command;
@@ -29,103 +29,6 @@ fn help_does_not_advertise_demo() {
 }
 
 #[test]
-fn doctor_uses_explicit_config_without_starting_a_runtime() {
-    let workspace = test_support::private_tempdir().unwrap();
-    let config = workspace.path().join("rust.json");
-    std::fs::write(
-        &config,
-        r#"{"backend":"nagents","runner":["unavailable-runtime"]}"#,
-    )
-    .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
-        .arg("-C")
-        .arg(workspace.path())
-        .arg("--config")
-        .arg(&config)
-        .arg("doctor")
-        .env("PATH", workspace.path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        report.contains(&format!("Config: {}", config.display())),
-        "{report}"
-    );
-    assert!(report.contains("Backend: Nagents"), "{report}");
-    assert!(report.contains("Provider: none"), "{report}");
-    assert!(
-        report.contains("Provider setup: No provider selected"),
-        "{report}"
-    );
-    assert!(report.contains("Runner: unavailable-runtime"), "{report}");
-    assert!(!report.contains("--demo"), "{report}");
-}
-
-#[test]
-fn implicit_read_only_is_a_ceiling_and_native_state_stays_separate() {
-    let root = test_support::private_tempdir().unwrap();
-    let config_home = root.path().join("config");
-    let data_home = root.path().join("data");
-    let python_data = data_home.join("ngn");
-    let python_settings = config_home.join("ngn/config.json");
-    std::fs::create_dir_all(python_settings.parent().unwrap()).unwrap();
-    let doctor = |options: &[&str], env_read_only: &str| {
-        Command::new(env!("CARGO_BIN_EXE_ngn"))
-            .env("HOME", root.path())
-            .env("XDG_CONFIG_HOME", &config_home)
-            .env("XDG_DATA_HOME", &data_home)
-            .env("NGN_READ_ONLY", env_read_only)
-            .env_remove("NGN_PROVIDER_ID")
-            .args(options)
-            .arg("doctor")
-            .output()
-            .unwrap()
-    };
-    for (file_read_only, env_read_only, arguments, expected) in [
-        (true, "false", &[][..], true),
-        (false, "true", &[][..], true),
-        (false, "false", &["--read-only"], true),
-        (false, "false", &[][..], false),
-    ] {
-        let settings = format!(r#"{{"read_only":{file_read_only}}}"#);
-        std::fs::write(&python_settings, &settings).unwrap();
-        let output = doctor(arguments, env_read_only);
-        assert!(output.status.success(), "{output:?}");
-        let report = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            report.contains(&format!("Read only: {expected}")),
-            "{report}"
-        );
-        assert_eq!(std::fs::read_to_string(&python_settings).unwrap(), settings);
-    }
-    let output = doctor(&["--data-dir", python_data.to_str().unwrap()], "false");
-    assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("separate data directory"));
-    assert!(!python_data.exists());
-}
-
-#[test]
-fn rejects_demo_backend_in_config_even_in_the_test_build() {
-    let workspace = test_support::private_tempdir().unwrap();
-    let config = workspace.path().join("rust.json");
-    std::fs::write(&config, r#"{"backend":"demo"}"#).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
-        .arg("--config")
-        .arg(&config)
-        .arg("doctor")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    let error = String::from_utf8(output.stderr).unwrap();
-    assert!(error.contains("Invalid Rust ngn configuration"), "{error}");
-}
-
-#[test]
 fn version_is_the_requested_first_rust_release() {
     let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
         .arg("--version")
@@ -135,4 +38,83 @@ fn version_is_the_requested_first_rust_release() {
         String::from_utf8(output.stdout).unwrap().trim(),
         format!("ngn {}", env!("CARGO_PKG_VERSION"))
     );
+}
+
+#[test]
+fn there_is_no_engine_choice_or_rust_host_command() {
+    for args in [
+        &["--engine", "legacy", "sessions"][..],
+        &["--engine=python", "sessions"],
+        &["upgrade", "--from", "backup.db"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("Python engine"), "{help}");
+    for removed in ["--engine ", "legacy", "upgrade"] {
+        assert!(!help.contains(removed), "{removed}: {help}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn auth_and_doctor_run_in_the_engine_python_with_this_workspace() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = test_support::private_tempdir().unwrap();
+    let python = root.path().join("python");
+    let log = root.path().join("argv");
+    std::fs::write(
+        &python,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nexit 3\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for (args, expected) in [
+        (
+            &["auth", "login"][..],
+            &["login", "chatgpt", "--device-auth"][..],
+        ),
+        (
+            &["auth", "login", "openrouter", "--key-stdin"],
+            &["login", "openrouter", "--key-stdin"],
+        ),
+        (&["auth", "status"], &["login", "--status"]),
+        (&["auth", "logout"], &["logout"]),
+        (&["doctor"], &["doctor"]),
+    ] {
+        std::fs::write(&log, "").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_ngn"))
+            .arg("-C")
+            .arg(root.path())
+            .args(args)
+            .env("NGN_ENGINE_PYTHON", &python)
+            .output()
+            .unwrap();
+        // The Python command's exit status is ngn's.
+        assert_eq!(output.status.code(), Some(3), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            stdout.contains(&format!("Engine Python: {}", python.display())),
+            args == ["doctor"],
+            "{args:?}: {stdout}"
+        );
+        let argv = std::fs::read_to_string(&log).unwrap();
+        let mut want = vec!["-I", "-B", "-m", "nagents.cli"];
+        want.extend_from_slice(expected);
+        let workspace = root.path().to_string_lossy();
+        want.extend(["--workspace", workspace.as_ref()]);
+        assert_eq!(argv.lines().collect::<Vec<_>>(), want, "{args:?}");
+    }
 }

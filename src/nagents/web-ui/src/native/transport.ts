@@ -1,13 +1,12 @@
 import { engineRequest, readEngineEvent } from "./engine-transport.js";
 
-// Client projections shared by the compatibility and engine v1 transports.
+// Client projections of the Python engine's v1 API, reached through `ngn serve`.
 export type RunStatus = "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted";
 export type Run = { id: string; session_id: string; request_id: string; status: RunStatus };
 export type Session = { id: string; title: string; updated_at_ms: number };
 export type Bootstrap = {
   version: string; protocol_version: number; token: string; workspace: string;
   backend: "demo" | "nagents"; provider: string; model: string | null; read_only: boolean;
-  transport?: "engine-v1";
   capabilities?: string[];
 };
 export type Call = { call_id: string; name: string; arguments: unknown };
@@ -56,17 +55,9 @@ export type Event = {
 export const sessionPath = (session: string) => `/api/sessions/${encodeURIComponent(session)}`;
 export const runPath = (run: string) => `/api/runs/${encodeURIComponent(run)}`;
 
-export function eventsUrl(location: Pick<Location, "protocol" | "host">, session: string, after: number, path = "/api/events") {
+export function eventsUrl(location: Pick<Location, "protocol" | "host">, session: string, after: number, path = "/api/v1/events") {
   const query = new URLSearchParams({ session_id: session, after: String(after) });
   return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}?${query}`;
-}
-
-export function acceptEvent(value: unknown, session: string, after: number): value is Event {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Partial<Event>;
-  return record.schema_version === 1 && record.session_id === session && typeof record.run_id === "string"
-    && typeof record.event === "string" && typeof record.sequence === "number"
-    && Number.isSafeInteger(record.sequence) && record.sequence > after;
 }
 
 export interface Transport {
@@ -128,11 +119,6 @@ function watch(path: string, read: ReadEvent): Transport["watch"] {
 }
 
 export const browserTransport: Transport = {
-  request,
-  watch: watch("/api/events", (raw, session, after) => acceptEvent(raw, session, after) ? raw : undefined),
-};
-
-export const pythonEngineTransport: Transport = {
   request: engineRequest(request),
   watch: watch("/api/v1/events", (raw, session, after) => readEngineEvent(raw, session, after, true)),
 };

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import { PanelDivider } from "../app/PanelDivider.js";
 import { useAppViewport } from "../app/useAppViewport.js";
 import { usePanelLayout } from "../app/usePanelLayout.js";
@@ -68,7 +69,9 @@ export function NativeWorkspace() {
   async function select(id?: string) {
     if (id) client.select(id);
     else if (!(await client.create())) return;
-    setNavOpen(false);
+    // Close the mobile drawer now: while it is open the composer is inert, so a
+    // focus request that ran before React committed the close would be lost.
+    flushSync(() => setNavOpen(false));
     focusComposer();
   }
   function submit(text?: string, steer = false) {

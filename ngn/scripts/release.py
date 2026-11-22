@@ -18,12 +18,11 @@ from typing import cast
 from zipfile import ZipFile
 
 import bundle
-import protocol_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 NGN = ROOT / "ngn"
 LINUX = "linux-x86_64"
-COORDINATED_CRATES = ("ngn", "ngn-core", "ngn-protocol", "ngn-api", "nagents-native")
+COORDINATED_CRATES = ("ngn", "ngn-api", "nagents-native")
 
 
 def manifest_name(platform_name: str) -> str:
@@ -408,33 +407,12 @@ def verify_bundled_install(output: Path, manifest: dict[str, object], *, require
 
 
 def verify_extracted_binary(extracted: Path, version: str) -> None:
+    """The bare client runs without any Python on PATH and offers no other engine."""
     binary = extracted / "ngn"
     environment = {"HOME": str(extracted), "PATH": str(extracted)}
-    config = extracted / "fixture-config.json"
-    protocol_fixture.write_config(config)
-    (extracted / "fixture.txt").write_text("local artifact fixture\n")
     assert subprocess.check_output([str(binary), "--version"], env=environment, text=True).strip() == f"ngn {version}"
-    arguments = [
-        str(binary),
-        "--config",
-        str(config),
-        "--read-only",
-        "-C",
-        str(extracted),
-        "--data-dir",
-        str(extracted / "state"),
-    ]
-    doctor = subprocess.check_output([*arguments, "doctor"], env=environment, text=True, timeout=30)
-    assert f"Config: {config}" in doctor and "Provider: protocol-fixture" in doctor
-
-    # The bare archive has no runtime of its own. Its test-only runner uses an
-    # absolute interpreter, never a provider or Python installed on PATH.
-    output = subprocess.check_output(
-        [*arguments, "run", "--json", protocol_fixture.TOPOLOGY_PROMPT], env=environment, text=True, timeout=45
-    )
-    events = [json.loads(line) for line in output.splitlines()]
-    assert events[-1]["status"] == "completed"
-    assert sum(event["event"] == "task_finished" and event["task"]["status"] == "completed" for event in events) == 2
+    usage = subprocess.check_output([str(binary), "--help"], env=environment, text=True, timeout=30)
+    assert "Python engine" in usage and "--engine " not in usage and "upgrade" not in usage
 
 
 def verify(output: Path, *, require_bundle: bool = False) -> None:

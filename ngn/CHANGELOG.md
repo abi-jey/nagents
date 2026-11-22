@@ -2,7 +2,7 @@
 
 ## 0.100.47
 
-- Opt-in Python engine, Enter-to-steer in the browser, and elapsed/timeout columns in TUI tool headers.
+- One Python engine behind the Rust TUI and browser: the Rust host is removed, old history is imported once, Enter steers in the browser, and TUI tool headers show elapsed/timeout columns.
 
 ## 0.100.46
 

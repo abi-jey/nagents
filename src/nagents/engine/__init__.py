@@ -1,1 +1,1 @@
-"""Opt-in Python engine process for local clients."""
+"""The Python engine process that every ngn client uses."""

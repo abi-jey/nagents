@@ -1189,8 +1189,6 @@ dependencies = [
  "fs2",
  "futures-util",
  "ngn-api",
- "ngn-core",
- "ngn-protocol",
  "nix",
  "pulldown-cmark",
  "ratatui",
@@ -1221,35 +1219,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "ngn-core"
-version = "0.100.47"
-dependencies = [
- "anyhow",
- "cap-std",
- "fs2",
- "nagents-native",
- "ngn-protocol",
- "nix",
- "rusqlite",
- "rustix 1.1.6",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
-name = "ngn-protocol"
-version = "0.100.47"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

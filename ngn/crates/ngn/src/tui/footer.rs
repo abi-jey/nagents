@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ngn_protocol::{Event, EventRecord, RunStatus};
+use crate::model::{Event, EventRecord, RunStatus};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -595,7 +595,7 @@ impl Activity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ngn_protocol::{ProviderAuth, ToolCall, ToolResult, VERSION};
+    use crate::model::{ProviderAuth, ToolCall, ToolResult, VERSION};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     fn event(sequence: i64, run_id: &str, timestamp_ms: u64, event: Event) -> EventRecord {

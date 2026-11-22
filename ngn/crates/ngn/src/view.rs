@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
+use crate::model::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
 
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()

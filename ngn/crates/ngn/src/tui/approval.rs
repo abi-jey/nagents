@@ -231,7 +231,7 @@ mod tests {
             root_session_id: "s".into(),
             agent_title: "Reviewer".into(),
             depth,
-            call: ngn_protocol::ToolCall {
+            call: crate::model::ToolCall {
                 call_id: "c".into(),
                 name: name.into(),
                 arguments,

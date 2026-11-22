@@ -64,25 +64,20 @@ jobs:
         run: |
           python ngn/scripts/python_engine_smoke.py --binary ngn/target/release/ngn \
             --output "$RUNNER_TEMP/ngn-python-engine"
-      - name: Save opt-in engine acceptance evidence
+      - name: Save engine acceptance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-engine-${{ github.sha }}
           path: ${{ runner.temp }}/ngn-python-engine/
           if-no-files-found: warn
-      - name: Exercise native authentication with a synthetic issuer and no skipped cases
-        env:
-          NGN_TEST_BINARY: ${{ github.workspace }}/ngn/target/release/ngn
+      - name: Keep the update probe of earlier ngn releases satisfied
         run: |
           python -I -c 'from ngn_nagents.auth import available; assert available(), "The source core must expose public device authentication for this gate"'
-          python -m unittest discover -s ngn/integrations/nagents/tests -p test_native_auth.py -v
-      - name: Test the packaged binary and adapter, not editable adapter imports
+          python -m unittest discover -s ngn/integrations/nagents/tests -v
+      - name: Verify the packaged candidate
         working-directory: ngn
-        run: |
-          export PYTHONPATH="$(find "$GITHUB_WORKSPACE/artifacts" -name 'ngn_nagents-*.whl' -print):$GITHUB_WORKSPACE/src"
-          python scripts/smoke.py --binary target/release/ngn
-          python scripts/release.py verify --output ../artifacts
+        run: python scripts/release.py verify --output ../artifacts
       - name: Accept a relocated self-contained installation without host Python or package tools
         run: |
           bundled="$RUNNER_TEMP/ngn-bundled-artifacts"
@@ -101,13 +96,8 @@ jobs:
           tar -xzf artifacts/ngn-v*-linux-x86_64.tar.gz -C "$RUNNER_TEMP/ngn-packaged-app" ngn
           cmp "$candidate/app/ngn" "$RUNNER_TEMP/ngn-packaged-app/ngn"
           bundled_binary=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"ngn-bundled-acceptance/evidence.json").read_text())["command"])')
-          bundled_python=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"ngn-bundled-acceptance/evidence.json").read_text())["runtime_python"])')
           cmp "$RUNNER_TEMP/ngn-packaged-app/ngn" "$bundled_binary"
-          python ngn/scripts/browser_smoke.py --binary "$bundled_binary" \
-            --runtime-python "$bundled_python" \
-            --output "$RUNNER_TEMP/ngn-browser-evidence"
-          python ngn/scripts/steering_clients_smoke.py --binary "$bundled_binary" \
-            --runtime-python "$bundled_python" --installed-runtime \
+          python ngn/scripts/python_engine_smoke.py --binary "$bundled_binary" --check browser \
             --output "$RUNNER_TEMP/ngn-browser-evidence"
       - name: Save real-browser evidence
         if: always()
@@ -181,9 +171,6 @@ jobs:
         run: |
           cargo build --manifest-path ngn/Cargo.toml --release --locked -p ngn
           python ngn/scripts/release.py package --output artifacts --binary ngn/target/release/ngn
-          cd ngn
-          export PYTHONPATH="$(find "$GITHUB_WORKSPACE/artifacts" -name 'ngn_nagents-*.whl' -print):$GITHUB_WORKSPACE/src"
-          python scripts/smoke.py --binary target/release/ngn
       - name: Accept a relocated self-contained installation without host Python or package tools
         run: |
           bundled="$RUNNER_TEMP/ngn-bundled-artifacts"

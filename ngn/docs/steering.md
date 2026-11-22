@@ -1,6 +1,13 @@
 # Bounded active-run steering · 0.100.2
 
-This is an explicit host/API/client boundary, **not legacy UI parity**. Both the
+> **Since 0.100.47** the Python engine owns this boundary and serves it as
+> `GET`/`POST /api/v1/runs/{run_id}/steer`; `ngn serve` forwards the browser to
+> it. The receipt states, limits, idempotency and safe points below are
+> unchanged. Passages about the Rust host, `Host::steer`, the per-run adapter
+> and its NDJSON acknowledgment describe the 0.100.2–0.100.46 implementation,
+> which has been removed.
+
+This is an explicit engine/API/client boundary, **not legacy UI parity**. Both the
 browser and the TUI steer on active-turn **Enter**, with **Ctrl+Enter** for the FIFO. `run --json`
 still starts one activation; it does not consume additional steering from stdin.
 
@@ -163,52 +170,23 @@ when switching back. Versions newer than 4 are rejected without downgrade.
 
 ## Evidence and remaining gates
 
-Rust and adapter regressions cover full two-tool-batch ordering, FIFO identities,
-retry mismatch, absent capability, child/foreign targeting, final-empty/admission
-races, wrong acknowledgments, limits, and failure/cancel/crash recovery without
-replay. `scripts/steering_smoke.py` exercises the real adapter, native Rust
-tools, explicit approval, HTTP receipts, final continuation, cancellation and
-restart idempotency against a **loopback-only fixture**, not a live provider.
-It also runs a baseline v1 runtime without the capability, rejects a synthetic
-wrong acknowledgment, and SIGKILLs its own host in the offer/ack window to verify
-`uncertain`/`undelivered` recovery without replay. The existing `scripts/smoke.py`
-still covers local CLI, HTTP/WebSocket and real-PTY TUI/FIFO/subagent regressions.
-Legacy-host checks run the actual new adapter without the Start acknowledgment
-through both no-tool finals and ordinary tool/results to Finished without hanging.
-
-Run it in an explicit venv with a private `TMPDIR`. Default mode pins the source
-core/adapter; installed mode clears editable import overrides, verifies module
-paths inside the selected runtime, and launches it with `-I`:
+Engine tests (`tests/engine/test_runtime.py`) check that steering is a durable
+follow-up of only the chosen run and that queued inputs commit before the next
+model request. The Rust
+client's unit tests run the TUI against a scripted engine: active-turn Enter
+steers the exact root, Ctrl+Enter queues, retries reuse the original request ID,
+and nothing falls back to the FIFO. `scripts/python_engine_smoke.py` drives real
+Chromium (desktop and touch) and a real PTY against a live engine and a
+**loopback-only fixture** model with two approval-gated write tools. It checks
+that the next model request holds the full persisted tool batch followed by both
+steering messages in order, that a busy Send stays FIFO, Stop leaves receipts
+undelivered, receipts survive reload without POST replay, and `/steer` with F7
+inspects the exact root. It makes no paid-provider requests.
 
 ```sh
-python ngn/scripts/steering_smoke.py --binary /path/to/target/debug/ngn
-# Against the extracted ./ngn/dev --test candidate and its non-editable runtime:
-python ngn/scripts/steering_smoke.py --binary CANDIDATE/app/ngn \
-  --runtime-python CANDIDATE/runtime/bin/python --installed-runtime
+# In a venv with nagents[engine], aiohttp and Playwright installed:
+python ngn/scripts/python_engine_smoke.py --binary ngn/target/release/ngn \
+  --output /path/to/private-evidence --check browser --check pty
 ```
 
-`scripts/steering_clients_smoke.py` adds actual Chromium desktop/touch and real-PTY
-acceptance, using the selected core/adapter and two **native write tools**, each
-requiring approval. It admits steering through the actual controls during the
-first approval, checks pending state before/between both results, and verifies the
-next fixture model request contains the full persisted batch followed by both
-steering user messages in order. Separate busy Send remains FIFO. It also checks
-Stop/undelivered, wrong-ack failure/uncertain, receipt restoration without POST
-replay, `/steer` + F7 exact-root inspection and terminal-mode restoration. Evidence
-includes real screenshots, PTY bytes and fixture request payloads, not a mock DOM.
-
-```sh
-# Activate an explicit venv containing aiohttp and Playwright; use private caches.
-python ngn/scripts/steering_clients_smoke.py \
-  --binary /path/to/private-target/debug/ngn \
-  --runtime-python /path/to/runtime-venv/bin/python \
-  --browser /usr/bin/google-chrome --output /path/to/private-evidence
-# Add --installed-runtime with the extracted candidate/runtime paths to require
-# actual installed core/adapter imports, rather than the default source pin.
-```
-
-Synthetic legacy/wrong-ack/crash runtimes remain checked-in test fixtures in both
-modes; they intentionally do not execute an agent/provider. Installed mode tests
-the extracted binary and installed adapter for actual model-loop paths. These are
-offline local-client gates, not full legacy parity, headless stdin steering or
-live-provider/Codex validation.
+These are offline local-client gates, not live-provider validation.

@@ -171,11 +171,11 @@ uv run --no-project --active ngn run --demo "Hello"
 Without activation, prefer the explicit `--python .venv/bin/python` form.
 `--active` does not create or identify the intended environment for you.
 
-### Opt-in Python engine (development)
+### The Python engine
 
-The headless engine from [ADR 0001](../adr/0001-python-core-rust-tui.md) is
-opt-in. The released v0.100.46 Rust binary and the Python `ngn serve` command
-do not switch their defaults.
+Since 0.100.47 the native `ngn` client always runs the headless engine from
+[ADR 0001](../adr/0001-python-core-rust-tui.md); the self-contained bundle
+ships it with its own CPython. To run the engine yourself from source:
 
 ```bash
 uv pip install --python .venv/bin/python -e '.[engine]'
@@ -218,8 +218,8 @@ does not resolve to the Python `ngn` entry point in the virtual environment:
 ```bash
 cargo build --locked --manifest-path ngn/Cargo.toml -p ngn
 export NGN_ENGINE_PYTHON="$PWD/.venv/bin/python"
-ngn/target/debug/ngn --engine=python --engine-demo -C /path/to/project
-ngn/target/debug/ngn --engine=python --engine-demo -C /path/to/project serve
+ngn/target/debug/ngn --engine-demo -C /path/to/project
+ngn/target/debug/ngn --engine-demo -C /path/to/project serve
 ngn/target/debug/ngn --standalone --engine-demo -C /path/to/project run --json "Hello"
 ```
 
@@ -227,17 +227,15 @@ Use one of these launches at a time for the same demo workspace. To test
 multiple clients, start `nagents engine --demo -C /path/to/project` first and
 omit `--engine-demo` from the Rust client commands so they attach to it.
 An attached client never stops the registered engine. `--standalone` starts
-its own engine, which exits when that client's stdin lease closes. To attach
-to an explicit URL, use `--engine <url>` with `NGN_ENGINE_TOKEN` set privately.
+its own engine, which exits when that client's stdin lease closes.
 The Rust browser gateway holds the engine token; the browser receives a
 different, same-origin credential.
 
-Starting the preview does not read or modify `host.sqlite3`.
-`nagents import-host` is a separate, offline command for read-only archive
-imports; it does not restore provider context or queued work. See
-[the runtime status](../adr/0001-runtime-status.md) for the migration limits.
-`--engine=legacy` is still the default. The v0.100.46 installer does not bundle
-the Python engine or its prerequisites.
+On its first start in a workspace, the engine imports that workspace's
+history from the retired Rust host (`ngn-rust/.../host.sqlite3`) once, as
+read-only sessions, and never modifies the old file. `nagents import-host`
+imports a backup from another location by hand; neither restores provider
+context or queued work. See [the runtime status](../adr/0001-runtime-status.md).
 
 ### Explicit environment files
 

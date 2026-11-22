@@ -24,9 +24,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from aiohttp import ClientSession, web
-from browser_smoke import approval_dialog, connected, root_conversation
 from playwright.async_api import Browser, async_playwright, expect
 from pty_smoke import COMPOSER_TITLE, WorkspaceReady
+from smoke_support import approval_dialog, connected, root_conversation
 from steering_clients_smoke import Fixture, browser_checks
 
 TIMEOUT = 20
@@ -39,13 +39,12 @@ ROOT_TEXT = "The root completed the delegation."
 PTY_DELEGATE = "delegate for terminal stop"
 PTY_CHILD_PROMPT = "terminal child inspection input"
 PTY_ROOT_TEXT = "The root survived stopping its child."
-IMPORT_PROMPT = "Legacy fixture for offline history import"
-IMPORT_REPLY = "This response was saved by the legacy host."
+IMPORT_PROMPT = "Prompt saved by ngn 0.100.46"
+IMPORT_REPLY = "This response was saved by the retired Rust host."
 
 
 class EngineFixture(Fixture):
     crash_requests = 0
-    import_requests = 0
 
     def __init__(self) -> None:
         super().__init__()
@@ -70,9 +69,6 @@ class EngineFixture(Fixture):
         if request.method == "POST":
             messages = (await request.json())["messages"]
             latest = messages[-1].get("content")
-            if latest == IMPORT_PROMPT:
-                self.import_requests += 1
-                return await self.reply(request, {"content": IMPORT_REPLY}, "stop")
             if latest in (CRASH_PROMPT, DELEGATE, PTY_DELEGATE):
                 crash = latest == CRASH_PROMPT
                 terminal = latest == PTY_DELEGATE
@@ -219,7 +215,7 @@ async def browser_phase(
         original, registered = await stack.enter_async_context(engine(env, workspace, output / "engine-initial.log"))
         log = output / "gateway.log"
         gateway = await stack.enter_async_context(
-            process([str(binary), "--engine=python", "-C", str(workspace), "serve", "--port", "0"], env, log)
+            process([str(binary), "-C", str(workspace), "serve", "--port", "0"], env, log)
         )
 
         def location() -> str | None:
@@ -228,7 +224,7 @@ async def browser_phase(
 
         url = await wait_for(location, gateway, "Rust browser gateway did not start")
         if "browser" in checks:
-            await browser_checks(browser, url, workspace, fixture, output, engine_v1=True)
+            await browser_checks(browser, url, workspace, fixture, output)
         if "tasks" in checks:
             await inspect_child(browser, url, fixture, output)
         if "restart" not in checks:
@@ -340,7 +336,7 @@ def pty_phase(
     termios.tcsetwinsize(slave, (42, 132))
     original = termios.tcgetattr(slave)
     child = subprocess.Popen(
-        [str(binary), "--engine=python", "-C", str(workspace), "--no-animations"],
+        [str(binary), "-C", str(workspace), "--no-animations"],
         env=env,
         stdin=slave,
         stdout=slave,
@@ -402,6 +398,9 @@ def pty_phase(
         until(lambda: b"pty-batch-1.txt" in clean(at), "second tool")
         assert (workspace / "pty-batch-0.txt").read_text() == "tool 0\n"
         assert not (workspace / "pty-batch-1.txt").exists()
+        until(lambda: b"Allow write to pty-batch-1.txt?" in clean(at), "second approval prompt")
+        # The TUI ignores keys for 300 ms after a prompt appears so typing cannot approve.
+        time.sleep(0.6)
         os.write(master, b"\x19")  # Ctrl+Y, not a direct API decision this time.
         until(
             lambda: [entry for entry in call(steering)["receipts"] if entry["status"] == "applied"][1:],
@@ -438,7 +437,9 @@ def pty_phase(
         assert task["title"] == "Terminal fixture" and task["parent_session_id"] == session
         at = len(terminal)
         os.write(master, b"\x1b[15~")  # F5
-        until(lambda: b"Enter inspect" in clean(at), "agent picker")
+        # The picker lists children as their task records load; Enter on an
+        # empty list would close it instead of inspecting the delegation.
+        until(lambda: b"Enter inspect" in clean(at) and b"Terminal fixture" in clean(at), "agent picker")
         at = len(terminal)
         os.write(master, b"\r")
         until(lambda: PTY_CHILD_PROMPT.encode() in clean(at), "isolated child history")
@@ -484,71 +485,45 @@ async def private_run(binary: Path, env: dict[str, str], workspace: Path, output
     write_object(output / "standalone-events.json", result)
 
 
-async def import_phase(
-    browser: Browser, binary: Path, env: dict[str, str], root: Path, fixture: EngineFixture, output: Path
-) -> Path:
+def legacy_database(env: dict[str, str], workspace: Path, prompt: str, reply: str) -> Path:
+    """Write a schema-5 `host.sqlite3` where ngn <= 0.100.46 kept this workspace's history."""
+    digest = hashlib.sha256(str(workspace.resolve()).encode()).hexdigest()
+    folder = Path(env["XDG_DATA_HOME"]) / "ngn-rust" / "workspaces" / digest
+    folder.mkdir(parents=True, mode=0o700)
+    (folder / "host.lock").touch(mode=0o600)
+    database = folder / "host.sqlite3"
+    with closing(sqlite3.connect(database)) as db, db:
+        db.executescript(
+            "PRAGMA user_version=5;"
+            "CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, updated_at_ms INTEGER);"
+            "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, request_id TEXT, prompt TEXT, status TEXT);"
+            "CREATE TABLE events(sequence INTEGER PRIMARY KEY, run_id TEXT, session_id TEXT, "
+            "timestamp_ms INTEGER, payload TEXT);"
+            "CREATE TABLE subagents(child_session_id TEXT PRIMARY KEY);"
+            "INSERT INTO sessions VALUES ('legacy', 'Earlier ngn session', 1700000000000);"
+        )
+        db.execute("INSERT INTO runs VALUES ('r1', 'legacy', 'old-1', ?, 'completed')", (prompt,))
+        for payload in (
+            {"event": "run_started", "prompt": prompt},
+            {"event": "text_completed", "text": reply},
+            {"event": "run_finished", "status": "completed", "error": ""},
+        ):
+            db.execute(
+                "INSERT INTO events(run_id, session_id, timestamp_ms, payload) VALUES ('r1', 'legacy', 1700000000000, ?)",
+                (json.dumps(payload),),
+            )
+    database.chmod(0o600)
+    return database
+
+
+async def import_phase(browser: Browser, binary: Path, env: dict[str, str], root: Path, output: Path) -> Path:
+    """An upgraded user's old Rust host history appears read-only on first start."""
     workspace = root / "import-workspace"
     workspace.mkdir()
-    config = root / "legacy-config.json"
-    with (Path(env["XDG_CONFIG_HOME"]) / "ngn/providers.json").open() as registry:
-        provider = json.load(registry)["providers"]["fixture"]
-    source = Path(__file__).resolve().parents[2]
-    legacy_env = {
-        **env,
-        "PYTHONPATH": os.pathsep.join(map(str, (source / "src", source / "ngn/integrations/nagents/src"))),
-    }
-    write_object(
-        config,
-        {
-            "data_dir": str(root / "legacy-state"),
-            "runner": [sys.executable, "-m", "ngn_nagents"],
-            "provider": "fixture",
-            "providers": {"fixture": {**provider, "model": "client-fixture"}},
-        },
-    )
-    argv = [
-        str(binary),
-        "--engine=legacy",
-        "--config",
-        str(config),
-        "-C",
-        str(workspace),
-        "run",
-        "--json",
-        IMPORT_PROMPT,
-    ]
-    async with process(argv, legacy_env, output / "legacy-before-import.log") as old:
-        assert await asyncio.wait_for(old.wait(), TIMEOUT) == 0
-    (legacy,) = (root / "legacy-state").rglob("host.sqlite3")
+    legacy = legacy_database(env, workspace, IMPORT_PROMPT, IMPORT_REPLY)
     original = legacy.read_bytes()
-    snapshot = root / "offline-snapshot.sqlite3"
-    snapshot.touch(mode=0o600)
-    with (
-        closing(sqlite3.connect(legacy.as_uri() + "?mode=ro", uri=True)) as live,
-        closing(sqlite3.connect(snapshot)) as copy,
-    ):
-        live.backup(copy)
-    snapshot_bytes = snapshot.read_bytes()
-    importer = [
-        sys.executable,
-        "-m",
-        "nagents.engine.cli",
-        "import-host",
-        "-C",
-        str(workspace),
-        "--host-snapshot",
-        str(snapshot),
-    ]
-    for attempt, expected in enumerate(("Imported", "Already imported")):
-        log = output / f"host-import-{attempt}.log"
-        async with process(importer, env, log) as command:
-            assert await asyncio.wait_for(command.wait(), TIMEOUT) == 0, log.read_text(encoding="utf-8")
-        assert log.read_text(encoding="utf-8").startswith(f"{expected}: 1 read-only sessions, ")
-
     log = output / "host-import-gateway.log"
-    async with process(
-        [str(binary), "--engine=python", "-C", str(workspace), "serve", "--port", "0"], env, log
-    ) as gateway:
+    async with process([str(binary), "-C", str(workspace), "serve", "--port", "0"], env, log) as gateway:
 
         def location() -> str | None:
             match = re.search(r"Open (http://127\.0\.0\.1:\d+)", log.read_text(encoding="utf-8"))
@@ -570,7 +545,7 @@ async def import_phase(
             await page.screenshot(path=str(output / "python-host-archive.png"))
         finally:
             await page.close()
-    assert fixture.import_requests == 1 and legacy.read_bytes() == original and snapshot.read_bytes() == snapshot_bytes
+    assert legacy.read_bytes() == original, "Importing modified the old Rust host database"
     return legacy
 
 
@@ -603,7 +578,7 @@ async def main(binary: Path, output: Path, chromium: str, checks: set[str]) -> N
                         if checks & {"browser", "restart", "tasks"}:
                             await browser_phase(browser, binary, env, browser_workspace, fixture, output, checks)
                         if "import" in checks:
-                            expected_legacy.add(await import_phase(browser, binary, env, root, fixture, output))
+                            expected_legacy.add(await import_phase(browser, binary, env, root, output))
                     finally:
                         await browser.close()
             if "pty" in checks:
@@ -615,16 +590,15 @@ async def main(binary: Path, output: Path, chromium: str, checks: set[str]) -> N
 
                     await asyncio.to_thread(pty_phase, binary, env, pty_workspace, registered, fixture, release, output)
                     assert owner.returncode is None, "An attached terminal stopped someone else's engine"
-            assert set(root.rglob("host.sqlite3")) == expected_legacy, "Python mode opened legacy state"
+            assert set(root.rglob("host.sqlite3")) == expected_legacy, "The engine created Rust host state"
         write_object(
             output / "evidence.json",
             {
                 "clients": sorted(fixture.checked),
                 "crash_model_requests": fixture.crash_requests,
-                "legacy_import_model_requests": fixture.import_requests,
                 "checked": sorted(
                     checks
-                    | {"no legacy SQLite store in Python mode"}
+                    | {"no Rust host state created"}
                     | ({"terminal child inspection and cancellation"} if "pty" in checks else set())
                 ),
             },

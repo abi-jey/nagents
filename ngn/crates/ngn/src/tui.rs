@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::model::{Event, EventRecord, TaskInfo};
 use anyhow::{Context, Result, ensure};
 #[cfg(unix)]
 use crossterm::event::{
@@ -19,7 +20,6 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures_util::{StreamExt, future::join_all, stream::FusedStream};
-use ngn_protocol::{Event, EventRecord, TaskInfo};
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -238,7 +238,6 @@ struct App {
     after: i64,
     input: String,
     caret: composer::Caret,
-    composer_palette: composer::Palette,
     terminal_background: Option<[u8; 3]>,
     no_color: bool,
     completion: completion::Completion,
@@ -856,11 +855,7 @@ fn draw(frame: &mut Frame, app: &mut App, display: &ClientDisplay, now: Instant)
         Some(&app.tools),
         interactive,
         sweep,
-        tool_cards::UserPaint::new(
-            app.composer_palette.user_surface(),
-            app.terminal_background,
-            app.no_color,
-        ),
+        tool_cards::UserPaint::new(app.terminal_background, app.no_color),
     );
     if app.shows_overlay() {
         transcript.hide_wipes();
@@ -916,7 +911,6 @@ fn draw(frame: &mut Frame, app: &mut App, display: &ClientDisplay, now: Instant)
         &app.input,
         app.cursor.at(&app.input),
         app.caret_visible(now),
-        app.composer_palette,
         draft_text.as_mut(),
     );
     if app.input.is_empty() && app.composer_available() && input_area.width > 2 {
@@ -965,11 +959,7 @@ fn draw(frame: &mut Frame, app: &mut App, display: &ClientDisplay, now: Instant)
                 None,
                 false,
                 None,
-                tool_cards::UserPaint::new(
-                    app.composer_palette.user_surface(),
-                    app.terminal_background,
-                    app.no_color,
-                ),
+                tool_cards::UserPaint::new(app.terminal_background, app.no_color),
             );
             frame.render_widget(block, area);
             transcript.draw_from_bottom(frame, inner, app.task_scroll);
@@ -1413,10 +1403,10 @@ async fn submit(app: &mut App, engine: &impl Engine, key: SubmissionKey) -> Resu
                         app.status.clear();
                     } else {
                         app.status = match receipt.status {
-                            Some(ngn_protocol::RunStatus::Queued) => {
+                            Some(crate::model::RunStatus::Queued) => {
                                 "Input queued · F6 inspect · /queue resume if paused".into()
                             }
-                            Some(ngn_protocol::RunStatus::Running) => String::new(),
+                            Some(crate::model::RunStatus::Running) => String::new(),
                             // A retry can find a run cancelled since the original admission.
                             _ => format!("Original FIFO request confirmed · {}", receipt.label()),
                         };
@@ -1493,13 +1483,12 @@ pub(crate) async fn run(
         std::env::var("TEXTUAL_ANIMATIONS").ok().as_deref(),
     );
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
-    let query_background = !no_color && display.composer_theme.is_none();
+    let query_background = !no_color;
     let mut app = App {
         records: Vec::new(),
         after: 0,
         input: String::new(),
         caret: composer::Caret::new(animate),
-        composer_palette: composer::Palette::new(display.composer_theme, no_color),
         no_color,
         activity: footer::Activity::new(Instant::now(), animate),
         tools: tool_cards::Cards::new(animate)
@@ -1653,18 +1642,6 @@ pub(crate) async fn run(
             _ = motion.tick(), if animate => motion_only = true,
             received = updates.next(), if !updates.is_terminated() => {
                 match received {
-                    Some(Ok(LiveUpdate { record, delivery: Delivery::Hint })) => {
-                        if record.session_id == app.session {
-                            app.catch_up(engine).await?;
-                        } else {
-                            app.agents.activity.ingest(&record);
-                            if matches!(record.event, Event::TextDelta { .. } | Event::TextCompleted { .. }) {
-                                // Private streaming text cannot alter the root's
-                                // queue, catalog, or pending approval snapshot.
-                                continue;
-                            }
-                        }
-                    }
                     Some(Ok(LiveUpdate { record, delivery: Delivery::Durable })) => {
                         if record.session_id != app.session {
                             app.agents.activity.ingest(&record);
@@ -1914,10 +1891,11 @@ pub(crate) async fn run(
 
 #[cfg(test)]
 mod tests {
-    use ngn_core::{ApprovalMode, Config, Host, config::Backend};
-
     use super::*;
-    use crate::engine::{InProcess, SteeringReceipt};
+    use crate::engine::{
+        SteeringReceipt,
+        fake::{Call, FakeEngine, ScriptedSubmit},
+    };
 
     #[test]
     fn live_suffix_is_bounded_and_clears_without_moving_the_durable_cursor() {
@@ -2021,16 +1999,13 @@ mod tests {
 
     #[tokio::test]
     async fn enter_without_provider_explains_rejection_and_keeps_draft() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let config = Config {
-            workspace: directory.path().into(),
-            data_dir: directory.path().join("state"),
-            ..Config::default()
-        }
-        .resolve()
-        .unwrap();
-        let host = Host::open(config).unwrap();
-        let engine = InProcess::new(host.clone());
+        // The engine owns provider configuration and explains the rejection;
+        // the client must show that reason and keep the draft.
+        let engine = FakeEngine::default();
+        engine.script_submit(ScriptedSubmit::Reject {
+            error: "No provider selected · choose one in ~/.config/ngn/providers.json".into(),
+            idle_changed: false,
+        });
         let mut app = App {
             session: engine.open_session(SessionSelection::New).await.unwrap(),
             input: "keep this draft".into(),
@@ -2042,7 +2017,8 @@ mod tests {
         assert!(reason.starts_with("Not sent: No provider selected"));
         assert!(reason.contains("providers.json"));
         assert_eq!(app.input, "keep this draft");
-        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(app.fifo_submissions.is_empty());
         app.sync_activity();
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(28, 32)).unwrap();
         let now = Instant::now();
@@ -2184,44 +2160,30 @@ mod tests {
 
     #[tokio::test]
     async fn fifo_dispatch_failure_after_commit_confirms_the_draft_and_shows_a_warning() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let config = Config {
-            workspace: directory.path().into(),
-            data_dir: directory.path().join("state"),
-            backend: Backend::Demo,
-            ..Config::default()
-        }
-        .resolve()
-        .unwrap();
-        let database = config.state_dir().join("host.sqlite3");
-        let host = Host::open(config).unwrap();
-        let engine = InProcess::new(host.clone());
+        let engine = FakeEngine::default();
         let mut app = App {
-            session: host.store.create_session().await.unwrap().id,
+            session: engine.create_session(),
             input: "first draft".into(),
             ..App::default()
         };
-        let inject = rusqlite::Connection::open(database).unwrap();
-        inject
-            .execute_batch(
-                "CREATE TRIGGER fail_dispatch BEFORE UPDATE OF status ON runs
-             WHEN OLD.prompt = 'first draft' AND NEW.status = 'running'
-             BEGIN SELECT RAISE(ABORT, 'test: dispatch after durable enqueue'); END;
-             CREATE TRIGGER fail_enqueue BEFORE INSERT ON runs
-             WHEN NEW.prompt = 'rejected draft'
-             BEGIN SELECT RAISE(ABORT, 'test: enqueue rejected'); END;",
-            )
-            .unwrap();
+        // Durably admitted, then dispatch failed: the input stays queued.
+        engine.script_submit(ScriptedSubmit::Warn(
+            "test: dispatch after durable enqueue".into(),
+        ));
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         let warning = app.failure.as_deref().unwrap();
         assert!(warning.starts_with("Input accepted"));
         assert!(warning.contains("test: dispatch after durable enqueue"));
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
-        let first = host.queue(&app.session).await.unwrap().entries[0]
-            .run
+        let first = engine.queue(&app.session).await.unwrap().entries[0]
+            .request_id
             .clone();
 
         app.input = "rejected draft".into();
+        engine.script_submit(ScriptedSubmit::Reject {
+            error: "test: enqueue rejected".into(),
+            idle_changed: false,
+        });
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert_eq!(app.input, "rejected draft");
         assert!(app.fifo_submissions.is_empty());
@@ -2229,46 +2191,53 @@ mod tests {
             app.failure.as_deref(),
             Some("Not sent: test: enqueue rejected")
         );
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 1);
 
         app.input = "second draft".into();
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
-        let queue = host.queue(&app.session).await.unwrap();
+        let queue = engine.queue(&app.session).await.unwrap();
         assert_eq!(queue.entries.len(), 2);
-        assert_eq!(queue.entries[0].run.request_id, first.request_id);
+        assert_eq!(queue.entries[0].request_id, first);
         assert_eq!(queue.entries[1].prompt, "second draft");
-        assert!(host.active().await.is_empty());
+        assert!(engine.active().is_empty());
 
         // Retyping an already confirmed prompt is a new, deliberate submission.
         app.input = "first draft".into();
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
-        let queue = host.queue(&app.session).await.unwrap();
+        let queue = engine.queue(&app.session).await.unwrap();
         assert_eq!(queue.entries.len(), 3);
-        assert_ne!(queue.entries[2].run.request_id, first.request_id);
-        host.shutdown().await;
+        assert_ne!(queue.entries[2].request_id, first);
+        let submits: Vec<_> = engine
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Submit { prompt, idle, .. } => Some((prompt, idle)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            submits,
+            [
+                ("first draft".to_owned(), true),
+                ("rejected draft".to_owned(), false),
+                ("second draft".to_owned(), false),
+                ("first draft".to_owned(), false),
+            ]
+        );
     }
 
     #[tokio::test]
     async fn fifo_uncertainty_does_not_block_unrelated_inputs_and_reconciles_exactly() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let config = Config {
-            workspace: directory.path().into(),
-            data_dir: directory.path().join("state"),
-            backend: Backend::Demo,
-            ..Config::default()
-        }
-        .resolve()
-        .unwrap();
-        let database = config.state_dir().join("host.sqlite3");
-        let host = Host::open(config).unwrap();
-        let engine = InProcess::new(host.clone());
-        let session = host.store.create_session().await.unwrap().id;
-        let other = host.store.create_session().await.unwrap().id;
-        host.control_queue(&session, QueueAction::Pause)
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let other = engine.create_session();
+        engine
+            .control_queue(&session, QueueAction::Pause)
             .await
             .unwrap();
-        host.control_queue(&other, QueueAction::Pause)
+        engine
+            .control_queue(&other, QueueAction::Pause)
             .await
             .unwrap();
         let mut app = App {
@@ -2278,22 +2247,24 @@ mod tests {
         };
         let request = Uuid::new_v4().to_string();
         let prompt = app.input.clone();
-        let run = host
-            .submit(&session, &prompt, &request, ApprovalMode::Interactive)
+        let InputAdmission::Accepted { receipt, .. } = engine
+            .submit(&session, &prompt, &request, Submission::Queue)
             .await
-            .unwrap();
-        // Simulate losing the original response and an unreadable receipt identity.
+        else {
+            panic!("fixture admission failed");
+        };
+        // Simulate losing the original response; the retry's outcome is unknown too.
         app.fifo_submissions.push(FifoSubmission {
             session: session.clone(),
             prompt: prompt.clone(),
             request: request.clone(),
         });
-        let inject = rusqlite::Connection::open(database).unwrap();
-        inject
-            .execute("UPDATE runs SET prompt = X'FF' WHERE id = ?", [&run.id])
-            .unwrap();
+        engine.script_submit(ScriptedSubmit::Unconfirmed(
+            "test: receipt identity unreadable".into(),
+        ));
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.failure.as_deref().unwrap().contains("unconfirmed"));
+        assert!(app.failure.as_deref().unwrap().contains(&request));
         assert_eq!(app.input, prompt);
 
         app.input = "different draft".into();
@@ -2304,6 +2275,7 @@ mod tests {
             .await
             .unwrap();
         app.input.clone_from(&prompt);
+        let calls = engine.calls().len();
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(
             app.failure
@@ -2311,28 +2283,19 @@ mod tests {
                 .unwrap()
                 .contains("draft is unconfirmed in")
         );
-        assert!(host.queue(&other).await.unwrap().entries.is_empty());
+        assert_eq!(engine.calls().len(), calls); // Never rebound to another session.
+        assert!(engine.queue(&other).await.unwrap().entries.is_empty());
         app.input = "healthy conversation".into();
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
-        assert_eq!(host.queue(&other).await.unwrap().entries.len(), 1);
+        assert_eq!(engine.queue(&other).await.unwrap().entries.len(), 1);
         assert_eq!(app.fifo_submissions[0].request, request);
 
-        // Terminal state is damaged but identity is readable again. Exact
-        // admission remains authoritative and must not queue a replacement.
-        inject
-            .execute(
-                "UPDATE runs SET prompt = ? WHERE id = ?",
-                rusqlite::params![prompt, run.id],
-            )
-            .unwrap();
-        host.control_queue(&session, QueueAction::Clear)
+        // The original was admitted and later cleared; its saved status is
+        // unreadable. Exact admission remains authoritative and must not queue
+        // a replacement.
+        engine
+            .control_queue(&session, QueueAction::Clear)
             .await
-            .unwrap();
-        inject
-            .execute(
-                "UPDATE runs SET status = 'test-unreadable-status' WHERE id = ?",
-                [&run.id],
-            )
             .unwrap();
         app.switch(&engine, SessionSelection::Resume(&session))
             .await
@@ -2341,12 +2304,31 @@ mod tests {
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert_eq!(app.input, prompt);
         assert_eq!(app.fifo_submissions[0].request, request);
+        engine.script_submit(ScriptedSubmit::Warn(
+            "Saved run status is unreadable".into(),
+        ));
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
         let warning = app.failure.as_deref().unwrap();
         assert!(warning.starts_with("Input accepted") && warning.contains("status is unreadable"));
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
-        assert!(host.active().await.is_empty());
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
+        assert!(engine.active().is_empty());
+        let retries: Vec<_> = engine
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Submit {
+                    session: target,
+                    prompt: text,
+                    request,
+                    idle: false,
+                } if text == prompt => Some((target, request)),
+                _ => None,
+            })
+            .collect();
+        // Fixture admission plus both retries, all with the original identity.
+        assert_eq!(retries, vec![(session.clone(), request.clone()); 3]);
+        assert_eq!(receipt.request_id, request);
 
         // A positively verified absence releases only that binding, and never sends.
         app.fifo_submissions.push(FifoSubmission {
@@ -2354,58 +2336,35 @@ mod tests {
             prompt: "not admitted".into(),
             request: Uuid::new_v4().to_string(),
         });
-        app.input = format!("/queue verify {}", app.fifo_submissions[0].request);
+        let unknown = app.fifo_submissions[0].request.clone();
+        app.input = format!("/queue verify {unknown}");
+        let calls = engine.calls().len();
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(app.status.contains("was not admitted"));
         assert!(app.fifo_submissions.is_empty());
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        assert_eq!(
+            engine.calls()[calls..],
+            [Call::InputReceipt {
+                session: session.clone(),
+                request: unknown,
+            }]
+        );
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
 
-        app.input = prompt;
+        app.input.clone_from(&prompt);
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
-        let queue = host.queue(&session).await.unwrap();
+        let queue = engine.queue(&session).await.unwrap();
         assert!(queue.paused);
         assert_eq!(queue.entries.len(), 1);
-        assert_ne!(queue.entries[0].run.request_id, request);
-        host.shutdown().await;
+        assert_ne!(queue.entries[0].request_id, request);
     }
 
     #[tokio::test]
-    #[cfg(unix)]
     async fn unchanged_idle_rejection_never_steers_the_new_capable_root() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let mut config: Config = serde_json::from_value(serde_json::json!({
-            "runner": ["/bin/sh", "-c", r#"
-                printf '%s\n' '{"protocol_version":1,"run_id":"","message":{"type":"ready","runtime":"composer-fixture","capabilities":["host_tools","cancel","safe_steering"]}}'
-                IFS= read -r start || exit
-                IFS= read -r cancel
-            "#],
-            "provider": "fixture",
-            "providers": {"fixture": {"kind": "openai_compatible", "model": "offline",
-                "api": "chat_completions", "base_url": "http://127.0.0.1:1/v1",
-                "api_key_env": "NGN_COMPOSER_FIXTURE_KEY"}},
-        }))
-        .unwrap();
-        config.workspace = directory.path().into();
-        config.data_dir = directory.path().join("state");
-        let host = Host::open(config.resolve().unwrap()).unwrap();
-        let engine = InProcess::new(host.clone());
-        let session = host.store.create_session().await.unwrap().id;
-        let root = host
-            .start(
-                &session,
-                "active fixture",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while !host.steering(&root.id).await.unwrap().accepting {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "active fixture");
+        engine.set_steering(&root.id, true, true);
         let mut app = App {
             session: session.clone(),
             input: "typed while idle".into(),
@@ -2422,6 +2381,7 @@ mod tests {
         assert_eq!(app.input, "typed while idle");
         app.state(&engine).await;
         assert_eq!(app.active.as_ref().unwrap().id, root.id);
+        let calls = engine.calls().len();
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
         assert!(
             app.failure
@@ -2430,14 +2390,15 @@ mod tests {
                 .contains("Draft retained from an idle send")
         );
         assert_eq!(app.input, "typed while idle");
-        assert!(host.steering(&root.id).await.unwrap().receipts.is_empty());
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        assert_eq!(engine.calls().len(), calls);
+        assert!(engine.steering_prompts(&root.id).is_empty());
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
 
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
         assert!(app.input.is_empty());
-        assert!(host.steering(&root.id).await.unwrap().receipts.is_empty());
+        assert!(engine.steering_prompts(&root.id).is_empty());
         assert_eq!(
-            host.queue(&session).await.unwrap().entries[0].prompt,
+            engine.queue(&session).await.unwrap().entries[0].prompt,
             "typed while idle"
         );
 
@@ -2449,40 +2410,27 @@ mod tests {
         app.state(&engine).await;
         app.input = "/steer explicit steering after a race".into();
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Enter).await);
-        let receipts = host.steering(&root.id).await.unwrap().receipts;
-        assert_eq!(receipts.len(), 1);
-        assert_eq!(receipts[0].prompt, "explicit steering after a race");
+        assert_eq!(
+            engine.steering_prompts(&root.id),
+            ["explicit steering after a race"]
+        );
         assert!(app.idle_rejected_draft.is_none());
-        assert_eq!(host.queue(&session).await.unwrap().entries.len(), 1);
-        host.shutdown().await;
+        assert_eq!(engine.queue(&session).await.unwrap().entries.len(), 1);
+        assert!(engine.calls().iter().all(|call| match call {
+            Call::Steer { run, .. } => run == &root.id,
+            Call::Submit {
+                session: target, ..
+            } => target == &session,
+            _ => false,
+        }));
     }
 
     #[tokio::test]
     async fn unsupported_steering_preserves_draft_and_retries_do_not_rebind_to_a_new_root_or_fifo()
     {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let engine = InProcess::new(host.clone());
-        let session = host.store.create_session().await.unwrap().id;
-        let root = host
-            .start(
-                &session,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "hold");
         let mut app = App {
             session: session.clone(),
             input: "retained text".into(),
@@ -2497,17 +2445,10 @@ mod tests {
                 .contains("has not negotiated safe_steering")
         );
         assert_eq!(app.input, "retained text");
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
         let request = app.steering_submissions[0].request.clone();
         assert_eq!(app.steering_submissions[0].run, root.id);
-        host.cancel(&root.id).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while host.active().await.iter().any(|run| run.id == root.id) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        engine.cancel(&root.id).await.unwrap();
         app.state(&engine).await;
         assert!(app.active.is_none());
         assert!(
@@ -2517,18 +2458,7 @@ mod tests {
                 .to_string()
                 .contains("exact running root")
         );
-        host.control_queue(&session, QueueAction::Resume)
-            .await
-            .unwrap();
-        let replacement = host
-            .start(
-                &session,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
+        let replacement = engine.start(&session, "hold");
         app.state(&engine).await;
         app.input = "/steer retained text".into();
         assert!(
@@ -2553,7 +2483,7 @@ mod tests {
         assert_eq!(app.input, "retained text");
         assert_eq!(app.active.as_ref().unwrap().id, replacement.id);
         assert!(app.fifo_submissions.is_empty());
-        let other = host.store.create_session().await.unwrap().id;
+        let other = engine.create_session();
         app.session = other.clone();
         app.input = "/steer retained text".into();
         assert!(
@@ -2565,9 +2495,25 @@ mod tests {
         );
         assert_eq!(app.input, "/steer retained text");
         assert!(steering_text(&app).contains(&root.id));
-        assert!(host.queue(&session).await.unwrap().entries.is_empty());
-        assert!(host.queue(&other).await.unwrap().entries.is_empty());
-        host.shutdown().await;
+        assert!(engine.queue(&session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&other).await.unwrap().entries.is_empty());
+        // Every attempt reused the exact original run and request; none queued.
+        let steered = Call::Steer {
+            run: root.id.clone(),
+            prompt: "retained text".into(),
+            request,
+        };
+        assert_eq!(
+            engine.calls(),
+            [
+                steered.clone(),
+                Call::Cancel {
+                    run: root.id.clone()
+                },
+                steered.clone(),
+                steered,
+            ]
+        );
     }
 
     #[test]
@@ -2616,20 +2562,8 @@ mod tests {
 
     #[tokio::test]
     async fn tui_submissions_queue_while_busy_and_controls_do_not_cancel_the_active_run() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let engine = InProcess::new(host.clone());
-        let session = host.store.create_session().await.unwrap().id;
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
         let mut app = App {
             session,
             input: "/queue pause".into(),
@@ -2638,21 +2572,18 @@ mod tests {
         submit(&mut app, &engine, SubmissionKey::Enter)
             .await
             .unwrap();
-        app.input = "demo hold".into();
+        app.input = "hold".into();
         submit(&mut app, &engine, SubmissionKey::Enter)
             .await
             .unwrap();
         app.input = "queued before resume".into();
         let request = Uuid::new_v4().to_string();
-        let receipt = host
-            .submit(
-                &app.session,
-                &app.input,
-                &request,
-                ApprovalMode::Interactive,
-            )
+        let InputAdmission::Accepted { receipt, .. } = engine
+            .submit(&app.session, &app.input, &request, Submission::Queue)
             .await
-            .unwrap();
+        else {
+            panic!("fixture admission failed");
+        };
         // A retained FIFO draft may retry by Ctrl+Enter without making a duplicate.
         app.fifo_submissions.push(FifoSubmission {
             session: app.session.clone(),
@@ -2664,10 +2595,7 @@ mod tests {
             .unwrap();
         app.state(&engine).await;
         assert_eq!(app.queue.entries.len(), 2);
-        assert_eq!(
-            app.queue.entries[1].run_id.as_deref(),
-            Some(receipt.id.as_str())
-        );
+        assert_eq!(app.queue.entries[1].run_id, receipt.run_id);
         assert!(app.queue.paused);
         let root = app.queue.entries[0].run_id.clone().unwrap();
         app.input = "/queue resume".into();
@@ -2692,10 +2620,10 @@ mod tests {
         submit(&mut app, &engine, SubmissionKey::Queue)
             .await
             .unwrap();
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 1);
         assert!(app.input.is_empty() && app.fifo_submissions.is_empty());
         app.input = "queued while busy".into();
-        // Simulate a stale idle view: the host must not queue this Enter.
+        // Simulate a stale idle view: the engine must not queue this Enter.
         app.active = None;
         assert!(
             submit(&mut app, &engine, SubmissionKey::Enter)
@@ -2706,7 +2634,7 @@ mod tests {
         );
         assert_eq!(app.input, "queued while busy");
         assert!(app.fifo_submissions.is_empty()); // No receipt existed and no attempt was made.
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 1);
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 1);
         app.state(&engine).await;
         submit(&mut app, &engine, SubmissionKey::Queue)
             .await
@@ -2735,8 +2663,20 @@ mod tests {
             .await
             .unwrap();
         assert!(app.queue.paused && app.queue.entries.is_empty());
-        assert!(host.active().await.iter().any(|run| run.id == root));
-        host.shutdown().await;
+        assert!(engine.active().contains(&root));
+        let controls: Vec<_> = engine
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::ControlQueue { action, .. } => Some(action),
+                Call::Cancel { .. } | Call::Steer { .. } => panic!("unexpected {call:?}"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            controls,
+            [QueueAction::Pause, QueueAction::Resume, QueueAction::Clear]
+        );
     }
 
     #[test]
@@ -2774,7 +2714,7 @@ mod tests {
                 title: "child".into(),
                 depth: 1,
                 read_only: true,
-                status: ngn_protocol::RunStatus::Completed,
+                status: crate::model::RunStatus::Completed,
             }],
             ..App::default()
         };
@@ -2785,7 +2725,7 @@ mod tests {
             session_id: "session".into(),
             run_id: "run".into(),
             timestamp_ms: 0,
-            event: ngn_protocol::Event::TextDelta { text },
+            event: crate::model::Event::TextDelta { text },
         };
         app.records.push(lines(1, "history\n".repeat(80)));
         let redraw = |app: &mut App, width, height| {
@@ -2843,7 +2783,7 @@ mod tests {
             root_session_id: "session".into(),
             agent_title: "Assistant".into(),
             depth: 0,
-            call: ngn_protocol::ToolCall {
+            call: crate::model::ToolCall {
                 call_id: "call".into(),
                 name: "write".into(),
                 arguments: serde_json::json!({}),
@@ -2888,7 +2828,7 @@ mod tests {
             session_id: "session".into(),
             run_id: "run".into(),
             timestamp_ms: 0,
-            event: ngn_protocol::Event::TextDelta { text },
+            event: crate::model::Event::TextDelta { text },
         };
         let mut app = App {
             records: vec![record(1, "short reply".into())],
@@ -2956,37 +2896,27 @@ mod tests {
 
     #[tokio::test]
     async fn composer_header_keeps_its_title_and_pending_count_clear_of_slash_completion() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let engine = InProcess::new(host.clone());
+        let engine = FakeEngine::default();
         let mut app = App {
-            session: host.store.create_session().await.unwrap().id,
+            session: engine.create_session(),
             input: "/st".into(),
             ..App::default()
         };
-        host.control_queue(&app.session, QueueAction::Pause)
+        engine
+            .control_queue(&app.session, QueueAction::Pause)
             .await
             .unwrap();
         for pending in [0, 2] {
             for _ in 0..pending {
-                host.submit(
-                    &app.session,
-                    "pending test",
-                    &Uuid::new_v4().to_string(),
-                    ApprovalMode::Interactive,
-                )
-                .await
-                .unwrap();
+                let admission = engine
+                    .submit(
+                        &app.session,
+                        "pending test",
+                        &Uuid::new_v4().to_string(),
+                        Submission::Queue,
+                    )
+                    .await;
+                assert!(matches!(admission, InputAdmission::Accepted { .. }));
             }
             app.state(&engine).await;
             for (width, height) in [(1, 1), (11, 6), (16, 12), (24, 12), (120, 36)] {
@@ -3026,37 +2956,18 @@ mod tests {
         }
         assert!(app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
         assert_eq!(app.input, "/steer ");
-        assert_eq!(host.queue(&app.session).await.unwrap().entries.len(), 2);
-        host.shutdown().await;
+        assert_eq!(engine.queue(&app.session).await.unwrap().entries.len(), 2);
     }
 
     #[tokio::test]
     async fn session_picker_preserves_draft_and_active_work_and_opens_exact_id() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let engine = InProcess::new(host.clone());
-        let first = host.store.create_session().await.unwrap();
-        let second = host.store.create_session().await.unwrap();
+        let engine = FakeEngine::default();
+        engine.create_session();
+        engine.create_session();
+        let [first, second] =
+            <[crate::model::Session; 2]>::try_from(engine.sessions().await.unwrap()).unwrap();
         assert_eq!(first.title, second.title);
-        let run = host
-            .start(
-                &first.id,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
+        let run = engine.start(&first.id, "hold");
         let mut app = App {
             session: first.id.clone(),
             input: "unsent draft".into(),
@@ -3079,7 +2990,7 @@ mod tests {
         assert!(app.picker.is_none());
         assert_eq!(app.input, "unsent draft");
         assert_eq!(app.scroll, Some(13));
-        assert!(host.active().await.iter().any(|active| active.id == run.id));
+        assert!(engine.active().contains(&run.id));
 
         for (draft, suggestion, hint) in [
             ("/", "› /help", "Tab/Enter fill"),
@@ -3118,7 +3029,7 @@ mod tests {
         assert_eq!(app.input, "/se");
         assert!(app.completion.menu(&app.input).is_none());
         assert!(!app.completion_key(key(KeyCode::Tab)));
-        assert!(host.active().await.iter().any(|active| active.id == run.id));
+        assert!(engine.active().contains(&run.id));
         app.input.pop();
         app.completion.edited(&app.input);
         app.input.push('e');
@@ -3126,7 +3037,7 @@ mod tests {
         assert!(app.completion_key(key(KeyCode::Tab)));
         assert_eq!(app.input, "/sessions ");
         assert!(app.picker.is_none());
-        assert!(host.queue(&app.session).await.unwrap().entries.is_empty());
+        assert!(engine.queue(&app.session).await.unwrap().entries.is_empty());
         assert!(!app.completion_key(key(KeyCode::Enter)));
         assert!(!app.completion_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)));
         assert!(!submit_from_enter(&mut app, &engine, SubmissionKey::Queue).await);
@@ -3141,8 +3052,8 @@ mod tests {
         app.picker_key(&engine, key(KeyCode::Enter)).await.unwrap();
         assert_eq!(app.session, second.id);
         assert!(app.picker.is_none());
-        assert_eq!(host.store.sessions().await.unwrap().len(), 2);
-        assert!(host.active().await.iter().any(|active| active.id == run.id));
+        assert_eq!(engine.session_count(), 2);
+        assert!(engine.active().contains(&run.id));
 
         app.input = format!("/resume {}", &first.id[..12]);
         assert!(
@@ -3170,52 +3081,58 @@ mod tests {
         app.picker_key(&engine, key(KeyCode::Enter)).await.unwrap(); // explicit New row
         assert_ne!(app.session, first.id);
         assert_ne!(app.session, second.id);
-        assert_eq!(host.store.sessions().await.unwrap().len(), 3);
-        host.shutdown().await;
+        assert_eq!(engine.session_count(), 3);
+        assert!(engine.active().contains(&run.id));
+        assert!(
+            !engine
+                .calls()
+                .iter()
+                .any(|call| matches!(call, Call::Submit { .. } | Call::Cancel { .. }))
+        );
     }
 
     #[tokio::test]
     async fn root_ui_inspects_children_and_approves_only_the_actual_child_call() {
-        let directory = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: directory.path().into(),
-                data_dir: directory.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let engine = InProcess::new(host.clone());
-        let session = host.store.create_session().await.unwrap();
-        let root = host
-            .start(
-                &session.id,
-                "demo hold",
-                &Uuid::new_v4().to_string(),
-                ApprovalMode::Interactive,
-            )
-            .await
-            .unwrap();
-        let mut receiver = host.events.subscribe();
-        let child = host.tool(&root, ngn_protocol::ToolCall { call_id:"preview-child".into(), name:"to_agent".into(), arguments:serde_json::json!({"prompt":"demo approval", "title":"Preview child", "background":true}) }).await.unwrap();
-        let child_id = child.result["task"]["run_id"].as_str().unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let record = receiver.recv().await.unwrap();
-                if record.run_id == child_id
-                    && matches!(record.event, ngn_protocol::Event::ApprovalRequested { .. })
-                {
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "hold");
+        let child_id = "child-run";
+        let child_session = "child-session";
+        engine.add_task(TaskInfo {
+            run_id: child_id.into(),
+            session_id: child_session.into(),
+            parent_run_id: root.id.clone(),
+            parent_session_id: session.clone(),
+            root_run_id: root.id.clone(),
+            root_session_id: session.clone(),
+            call_id: "preview-child".into(),
+            title: "Preview child".into(),
+            depth: 1,
+            read_only: false,
+            status: crate::model::RunStatus::Running,
+        });
+        let call = crate::model::ToolCall {
+            call_id: "child-write".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({"path": "demo.txt", "content": "demo"}),
+        };
+        engine.emit(
+            child_session,
+            child_id,
+            crate::model::Event::ToolStarted { call: call.clone() },
+        );
+        engine.request_approval(Approval {
+            id: "approval-1".into(),
+            run_id: child_id.into(),
+            session_id: child_session.into(),
+            root_session_id: session.clone(),
+            agent_title: "Preview child".into(),
+            depth: 1,
+            call,
+            preview: "write demo.txt".into(),
+        });
         let mut app = App {
-            session: session.id.clone(),
+            session: session.clone(),
             records: Vec::new(),
             after: 0,
             input: "/se".into(),
@@ -3242,7 +3159,7 @@ mod tests {
         app.caret.focus(true, now);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         assert_eq!(app.tasks[0].run_id, child_id);
-        assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Running);
+        assert_eq!(app.tasks[0].status, crate::model::RunStatus::Running);
         assert!(!app.agents_key(
             KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
             120
@@ -3262,16 +3179,12 @@ mod tests {
         assert_eq!(approval.run_id, child_id);
         assert_eq!(approval.agent_title, "Preview child");
         assert_eq!(approval.depth, 1);
-        let child_run = host
-            .active()
-            .await
-            .into_iter()
-            .find(|run| run.id == child_id)
-            .unwrap();
-        host.emit(
-            &child_run,
-            ngn_protocol::Event::ToolCompleted {
-                result: ngn_protocol::ToolResult {
+        assert_eq!(approval.call.call_id, "child-write");
+        engine.emit(
+            child_session,
+            child_id,
+            crate::model::Event::ToolCompleted {
+                result: crate::model::ToolResult {
                     call_id: "child-failure".into(),
                     name: "read_file".into(),
                     result: serde_json::Value::Null,
@@ -3279,9 +3192,7 @@ mod tests {
                 },
                 duration_ms: 7,
             },
-        )
-        .await
-        .unwrap();
+        );
         assert!(
             engine
                 .decide(&root.id, &approval.id, &approval.call.call_id, true)
@@ -3292,36 +3203,53 @@ mod tests {
             .decide(child_id, &approval.id, &approval.call.call_id, false)
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let record = receiver.recv().await.unwrap();
-                if record.run_id == child_id
-                    && matches!(record.event, ngn_protocol::Event::RunFinished { .. })
-                {
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
+        assert_eq!(
+            engine
+                .calls()
+                .into_iter()
+                .filter(|call| matches!(call, Call::Decide { .. }))
+                .collect::<Vec<_>>(),
+            [
+                Call::Decide {
+                    run: root.id.clone(),
+                    approval: "approval-1".into(),
+                    call: "child-write".into(),
+                    allow: true,
+                },
+                Call::Decide {
+                    run: child_id.into(),
+                    approval: "approval-1".into(),
+                    call: "child-write".into(),
+                    allow: false,
+                },
+            ]
+        );
+        engine.emit(
+            child_session,
+            child_id,
+            crate::model::Event::TextCompleted {
+                text: "The demo file was not written.".into(),
+            },
+        );
+        engine.finish_task(child_id, crate::model::RunStatus::Completed);
         app.task_key(&engine, key(KeyCode::Enter)).await;
         app.catch_up(&engine).await.unwrap();
         app.state(&engine).await;
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[app.task_index].run_id, child_id);
-        assert_eq!(app.tasks[0].status, ngn_protocol::RunStatus::Completed);
+        assert_eq!(app.tasks[0].status, crate::model::RunStatus::Completed);
         assert!(app.task_records.iter().all(
             |record| record.session_id == app.tasks[0].session_id && record.run_id == child_id
         ));
         assert!(
             app.task_records
                 .iter()
-                .any(|record| matches!(record.event, ngn_protocol::Event::TextCompleted { .. }))
+                .any(|record| matches!(record.event, crate::model::Event::TextCompleted { .. }))
         );
         assert!(
             !app.records
                 .iter()
-                .any(|record| matches!(record.event, ngn_protocol::Event::TextDelta { .. }))
+                .any(|record| matches!(record.event, crate::model::Event::TextDelta { .. }))
         );
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
         terminal
@@ -3352,7 +3280,5 @@ mod tests {
         assert!(!contents.contains('\x1b'));
         assert!(!contents.contains("Arguments:"));
         assert!(!contents.contains("Result:"));
-        assert!(!directory.path().join("demo.txt").exists());
-        host.shutdown().await;
     }
 }

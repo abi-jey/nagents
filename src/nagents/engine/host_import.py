@@ -1,4 +1,9 @@
-"""One-way import of display evidence from an offline Rust host snapshot."""
+"""One-way import of display evidence from the retired Rust host's database.
+
+The engine imports a workspace's old `host.sqlite3` automatically, once, on
+its first start (`import_legacy_once`). `nagents import-host` remains for
+backups taken from a non-default location.
+"""
 
 from __future__ import annotations
 
@@ -230,3 +235,48 @@ def import_host(source: Path, state_dir: Path, database: Path) -> ImportReport:
         raise ValueError(
             "Invalid or unreadable Rust host snapshot or engine database; no archive was committed."
         ) from error
+
+
+def legacy_host_database(workspace: Path) -> Path:
+    """The default location the Rust host (ngn <= 0.100.46) used for `workspace`."""
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local/share")
+    digest = hashlib.sha256(str(workspace.resolve()).encode()).hexdigest()
+    return Path(base) / "ngn-rust" / "workspaces" / digest / "host.sqlite3"
+
+
+def _imported(database: Path) -> bool:
+    if not database.is_file():
+        return False
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        try:
+            return connection.execute("SELECT 1 FROM ngn_engine_host_import WHERE id = 1").fetchone() is not None
+        except sqlite3.OperationalError:
+            return False
+
+
+def import_legacy_once(workspace: Path, state_dir: Path, database: Path) -> str:
+    """Archive this workspace's Rust host history the first time the engine starts.
+
+    Returns a one-line notice for stderr, or "" when there was nothing to do.
+    The legacy file is only read, through a private SQLite backup beside it.
+    """
+    legacy = legacy_host_database(workspace)
+    if os.name != "posix" or not legacy.is_file() or _imported(database):
+        return ""
+    root = legacy.parents[2]
+    try:
+        with TemporaryDirectory(prefix=".import-", dir=root) as temporary:
+            snapshot = Path(temporary) / "host.sqlite3"
+            snapshot.touch(mode=0o600)
+            with (
+                closing(sqlite3.connect(legacy.as_uri() + "?mode=ro", uri=True)) as live,
+                closing(sqlite3.connect(snapshot)) as copy,
+            ):
+                live.backup(copy)
+            report = import_host(snapshot, state_dir, database)
+    except (ValueError, OSError, sqlite3.Error) as error:
+        return (
+            f"Could not import earlier ngn history from {legacy}: {error} "
+            "Retry with `nagents import-host --host-snapshot <backup>`."
+        )
+    return f"Imported {report.sessions} earlier ngn sessions as read-only history."

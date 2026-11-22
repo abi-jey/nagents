@@ -2,8 +2,8 @@
 //! bundle acceptance run. Only the private SyntheticProbe bypasses execution.
 
 use super::*;
+use crate::bundle::{PLATFORM, PythonBundle};
 use flate2::{Compression, write::GzEncoder};
-use ngn_core::bundle::{PLATFORM, PythonBundle};
 use nix::{
     poll::{PollFd, PollFlags, PollTimeout, poll},
     pty::openpty,
@@ -47,7 +47,7 @@ fn metadata(version: &str, official: bool) -> BundleManifest {
         ngn_version: version.into(),
         nagents_version: "0.28.5".into(),
         adapter_version: version.into(),
-        runtime_protocol: ngn_protocol::VERSION,
+        runtime_protocol: crate::model::VERSION,
         platform: PLATFORM.into(),
         source_commit: "a".repeat(40),
         official,
@@ -171,7 +171,7 @@ fn release(manifest: &BundleManifest, archive: &[u8]) -> ReleaseManifest {
         commit: manifest.source_commit.clone(),
         ngn_version: manifest.ngn_version.clone(),
         nagents_version: manifest.nagents_version.clone(),
-        runtime_protocol: ngn_protocol::VERSION,
+        runtime_protocol: crate::model::VERSION,
         platform: PLATFORM.into(),
         bundle: name.clone(),
         artifacts: [(name, format!("{:x}", Sha256::digest(archive)))].into(),

@@ -3,7 +3,7 @@ use std::{
     time::Instant,
 };
 
-use ngn_protocol::{Event, EventRecord, RunStatus, TaskInfo};
+use crate::model::{Event, EventRecord, RunStatus, TaskInfo};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -605,7 +605,7 @@ impl Activity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ngn_protocol::{ToolCall, VERSION};
+    use crate::model::{ToolCall, VERSION};
 
     fn task(index: usize) -> TaskInfo {
         TaskInfo {
@@ -1024,55 +1024,34 @@ mod tests {
 
     #[tokio::test]
     async fn live_text_snapshot_closes_completion_dropped_behind_an_exact_noisy_tail() {
-        use ngn_core::{ApprovalMode, Config, Host, config::Backend};
-        use tokio::sync::broadcast::error::TryRecvError;
+        use crate::engine::fake::FakeEngine;
 
-        use crate::engine::{InProcess, SessionSelection};
-
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                backend: Backend::Demo,
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let engine = InProcess::new(host.clone());
-        let session = engine.open_session(SessionSelection::New).await.unwrap();
-        let root = host
-            .start(
-                &session,
-                "demo hold",
-                &uuid::Uuid::new_v4().to_string(),
-                ApprovalMode::Deny,
-            )
-            .await
-            .unwrap();
-        for title in ["closed", "held"] {
-            let result = host
-                .tool(
-                    &root,
-                    ToolCall {
-                        call_id: title.into(),
-                        name: "to_agent".into(),
-                        arguments: serde_json::json!({
-                            "title": title, "prompt": "demo hold", "background": true
-                        }),
-                    },
-                )
-                .await
-                .unwrap();
-            assert!(result.error.is_empty(), "{}", result.error);
+        let engine = FakeEngine::default();
+        let session = engine.create_session();
+        let root = engine.start(&session, "hold");
+        let tasks: Vec<_> = ["closed", "held"]
+            .into_iter()
+            .map(|title| TaskInfo {
+                run_id: format!("run-{title}"),
+                session_id: format!("session-{title}"),
+                parent_run_id: root.id.clone(),
+                parent_session_id: session.clone(),
+                root_run_id: root.id.clone(),
+                root_session_id: session.clone(),
+                call_id: title.into(),
+                title: title.into(),
+                depth: 1,
+                read_only: true,
+                status: RunStatus::Running,
+            })
+            .collect();
+        for task in &tasks {
+            engine.add_task(task.clone());
         }
         let tasks = engine.tasks(&session).await.unwrap().unwrap();
         let closed = tasks.iter().find(|task| task.title == "closed").unwrap();
         let held = tasks.iter().find(|task| task.title == "held").unwrap();
-        let active = host.active().await;
-        let run = |task: &TaskInfo| active.iter().find(|run| run.id == task.run_id).unwrap();
+        let emit = |task: &TaskInfo, event| engine.emit(&task.session_id, &task.run_id, event);
         let delta = || Event::TextDelta {
             text: "stream".into(),
         };
@@ -1080,13 +1059,11 @@ mod tests {
             text: "not a phase".into(),
         };
 
-        let mut receiver = host.events.subscribe();
         let mut activity = Activity::default();
         activity.catalog(&tasks);
         let mut old = Vec::new();
         for task in [closed, held] {
-            host.emit(run(task), delta()).await.unwrap();
-            let record = receiver.try_recv().unwrap();
+            let record = emit(task, delta());
             activity.ingest(&record);
             old.push(record);
             assert_eq!(activity.indicator(task, Color::Reset).1, " · Responding");
@@ -1096,25 +1073,20 @@ mod tests {
             .await
             .unwrap()
             .child_text;
-        host.emit(
-            run(closed),
+        // The live feed lags and drops the exact child's committed close; only
+        // the noise behind it is delivered later.
+        emit(
+            closed,
             Event::TextCompleted {
                 text: "stream".into(),
             },
-        )
-        .await
-        .unwrap();
+        );
+        let mut noise = Vec::new();
         for task in [closed, held] {
             for _ in 0..8 {
-                host.emit(run(task), notice()).await.unwrap();
+                noise.push(emit(task, notice()));
             }
         }
-        // Overrun the production 1024-slot receiver by exactly one: the oldest
-        // unseen record is the actual committed close from the exact child.
-        for _ in 0..1008 {
-            host.events.send(record(held, 0, notice())).unwrap();
-        }
-        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Lagged(1))));
         let tails = engine
             .task_activity_tail(
                 [closed, held]
@@ -1152,9 +1124,8 @@ mod tests {
         assert_eq!(activity.child(closed).unwrap().after, watermark);
         assert_eq!(activity.indicator(closed, Color::Reset).1, "");
         assert_eq!(activity.indicator(held, Color::Reset).1, " · Responding");
-        while let Ok(record) = receiver.try_recv() {
-            assert!(!matches!(record.event, Event::TextCompleted { .. }));
-            activity.ingest(&record);
+        for record in &noise {
+            activity.ingest(record);
         }
         // Old evidence and the right run paired with the wrong session cannot
         // undo authoritative closure or clear a still-open sibling.
@@ -1177,7 +1148,7 @@ mod tests {
         ]);
         assert_eq!(activity.indicator(closed, Color::Reset).1, "");
         assert_eq!(activity.indicator(held, Color::Reset).1, " · Responding");
-        host.emit(run(closed), delta()).await.unwrap();
+        emit(closed, delta());
         let reopened = engine
             .conversation_activity(&session)
             .await
@@ -1186,23 +1157,11 @@ mod tests {
         activity.sync_text_phases(&reopened);
         assert_eq!(activity.child(closed).unwrap().after, watermark);
         assert_eq!(activity.indicator(closed, Color::Reset).1, " · Responding");
-        engine.shutdown().await;
     }
 
     #[tokio::test]
     async fn hidden_and_reduced_motion_never_start_recovery_and_batch_is_bounded() {
-        use ngn_core::{Config, Host};
-
-        use crate::engine::InProcess;
-
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(Config {
-            workspace: dir.path().into(),
-            data_dir: dir.path().join("state"),
-            ..Config::default()
-        })
-        .unwrap();
-        let engine = InProcess::new(host);
+        let engine = crate::engine::fake::FakeEngine::default();
         let tasks: Vec<_> = (0..24).map(task).collect();
         let mut activity = Activity::default();
         activity.catalog(&tasks);

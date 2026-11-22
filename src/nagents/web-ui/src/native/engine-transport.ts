@@ -22,6 +22,8 @@ export function engineRequest(request: Transport["request"]): Transport["request
     const call = <R>(endpoint: string, input = body) => request<R>(`/api/v1${endpoint}`, token, input, signal);
     const endpoint = path.slice("/api".length);
     let result: unknown;
+    // The gateway's own bootstrap carries the browser token; everything else is the engine's.
+    if (path === "/api/bootstrap") return request<T>(path, token, body, signal);
     if (endpoint === "/sessions") {
       result = body ? { session: await call<Session>(endpoint) } : { sessions: await call<Session[]>(endpoint) };
     } else if (/^\/sessions\/[^/]+\/queue$/.test(endpoint)) {

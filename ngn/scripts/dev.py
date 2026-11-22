@@ -17,7 +17,6 @@ import tomllib
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from release import binary_archive, version_check
 
@@ -75,19 +74,6 @@ def isolated_environment(runtime: Path, environ: dict[str, str]) -> dict[str, st
     return environment
 
 
-def runtime_config(source: Path, runtime: Path) -> dict[str, object]:
-    if source.stat().st_size > 262_144:
-        raise ValueError("Rust configuration exceeds 256 KiB")
-    value: object = json.loads(source.read_text())
-    if not isinstance(value, dict):
-        raise ValueError("Rust configuration must be a JSON object")
-    settings = cast("dict[str, object]", value)
-    if settings.get("config_version", 1) != 1:
-        raise ValueError("Unsupported Rust config_version; legacy configurations are not imported")
-    settings["runner"] = [str(runtime / "bin/python"), "-I", "-m", "ngn_nagents"]
-    return settings
-
-
 def command(binary: Path, settings: Invocation, config: Path, state: Path) -> list[str]:
     config_args = ["--config", str(config)] if settings.config else []
     return [str(binary), *config_args, "--data-dir", str(state), *settings.arguments]
@@ -135,29 +121,29 @@ def ensure_private_cache(path: Path) -> None:
                 )
 
 
-def offline_cache_probe(stage: Path) -> None:
-    """Check real launcher ancestry, not only smoke fixtures; never use operator state."""
+def offline_cache_probe(stage: Path, runtime: Path) -> None:
+    """Run the installed client and engine offline in a private, stage-scoped home."""
     workspace = stage / "offline-probe-workspace"
     workspace.mkdir(mode=0o700)
-    config = stage / "offline-probe-config.json"
-    config.write_text("{}\n")
     state = stage / "offline-probe-state"
     result = subprocess.run(
         [
             str(stage / "app/ngn"),
-            "--config",
-            str(config),
-            "--read-only",
+            "--standalone",
+            "--engine-demo",
             "-C",
             str(workspace),
             "--data-dir",
             str(state),
-            "sessions",
+            "run",
+            "--json",
+            "offline probe",
         ],
-        # `sessions` opens real native state. Pin absent Python paths so neither
-        # HOME fallback nor an inherited override can find operator history.
+        # The demo engine makes no model requests. Pin HOME/XDG so no operator
+        # providers, credentials or history can be found.
         env={
             "PATH": str(stage / "app"),
+            "VIRTUAL_ENV": str(runtime),
             "HOME": str(workspace),
             "XDG_DATA_HOME": str(workspace / "data"),
             "XDG_CONFIG_HOME": str(workspace / "config"),
@@ -165,16 +151,13 @@ def offline_cache_probe(stage: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=60,
     )
-    if result.returncode:
-        raise ValueError(f"Offline installed cache/state probe failed: {result.stderr[:4096]}")
-    if result.stdout.strip() or not any(state.rglob("host.sqlite3")):
-        raise ValueError("Offline installed cache/state probe did not initialize fresh session state")
-    print(
-        "PASS: extracted native session store initialized in actual cache ancestry, without Python or model access",
-        flush=True,
-    )
+    lines = result.stdout.splitlines()
+    finished = json.loads(lines[-1]).get("event") if lines and not result.returncode else None
+    if finished != {"type": "run.finished", "status": "completed", "error": ""}:
+        raise ValueError(f"Offline installed engine probe failed: {result.stderr[:4096]}")
+    print("PASS: installed client started the installed Python engine offline", flush=True)
 
 
 def source_snapshot(root: Path) -> tuple[str, str, bool]:
@@ -225,33 +208,29 @@ def build(root: Path, cache: Path, *, published_core: bool) -> tuple[Path, Path,
         raise ValueError("The freshly built binary has a different version; do not reuse stale artifacts")
     wheels = stage / "wheels"
     wheels.mkdir()
-    sources = [str(root / "ngn/integrations/nagents")]
-    if not published_core:
-        sources.insert(0, str(root))
-    run(
-        [
-            python,
-            "-m",
-            "pip",
-            "wheel",
-            "--disable-pip-version-check",
-            "--no-deps",
-            "--wheel-dir",
-            str(wheels),
-            *sources,
-        ],
-        directory=stage,
-        environment=environment,
-    )
+    sources = [] if published_core else [str(root)]
+    if sources:
+        run(
+            [
+                python,
+                "-m",
+                "pip",
+                "wheel",
+                "--disable-pip-version-check",
+                "--no-deps",
+                "--wheel-dir",
+                str(wheels),
+                *sources,
+            ],
+            directory=stage,
+            environment=environment,
+        )
     artifacts = sorted(wheels.glob("*.whl"))
-    expected = {f"ngn_nagents-{version}-py3-none-any.whl"}
-    if not published_core:
-        expected.add(f"nagents-{core_version}-py3-none-any.whl")
+    expected = set() if published_core else {f"nagents-{core_version}-py3-none-any.whl"}
     if {path.name for path in artifacts} != expected:
         raise ValueError("Wheel versions do not match this checkout")
-    packages = [str(path) for path in artifacts]
-    if published_core:
-        packages.insert(0, f"nagents=={core_version}")
+    # The engine extra is the server ngn starts; nothing else is installed.
+    packages = [f"{path}[engine]" for path in artifacts] or [f"nagents[engine]=={core_version}"]
     run(
         [python, "-m", "pip", "install", "--disable-pip-version-check", *packages],
         directory=stage,
@@ -263,7 +242,7 @@ def build(root: Path, cache: Path, *, published_core: bool) -> tuple[Path, Path,
             python,
             "-I",
             "-c",
-            "import pathlib,sys,nagents,ngn_nagents; root=pathlib.Path(sys.prefix).resolve(); assert all(pathlib.Path(m.__file__).resolve().is_relative_to(root) for m in (nagents,ngn_nagents)), 'Editable or external runtime imports detected'",
+            "import pathlib,sys,nagents,nagents.engine.lifecycle as e; root=pathlib.Path(sys.prefix).resolve(); assert all(pathlib.Path(m.__file__).resolve().is_relative_to(root) for m in (nagents,e)), 'Editable or external runtime imports detected'",
         ],
         directory=stage,
         environment=environment,
@@ -328,22 +307,12 @@ def main() -> int:
     cache = Path(os.environ.get("NGN_DEV_CACHE", str(cache_home / "ngn-rust-dev" / identity))).expanduser().resolve()
     state = Path(settings.data_dir).expanduser().resolve() if settings.data_dir else cache / "state"
     stage, runtime, environment = build(ROOT, cache, published_core=options.published_core)
-    python = str(runtime / "bin/python")
     if options.test:
-        offline_cache_probe(stage)
-        run(
-            [python, str(ROOT / "ngn/scripts/smoke.py"), "--binary", str(stage / "app/ngn")],
-            directory=stage,
-            environment=environment,
-        )
+        offline_cache_probe(stage, runtime)
         print("PASS: release-shaped local installation acceptance", flush=True)
         return 0
     print(f"Development state: {state}", flush=True)
-    config = stage / "config.json"
-    if original_config is not None:
-        config.write_text(json.dumps(runtime_config(original_config, runtime), indent=2) + "\n")
-        config.chmod(0o600)
-    argv = command(stage / "app/ngn", settings, config, state)
+    argv = command(stage / "app/ngn", settings, original_config or Path(), state)
     os.execve(argv[0], argv, environment)
     return 0
 

@@ -1,13 +1,14 @@
 # Migration to one Python engine and a Rust client
 
 [ADR 0001: Python core, Rust TUI client](https://github.com/abi-jey/nagents/blob/main/docs/adr/0001-python-core-rust-tui.md)
-is **Proposed**. This is the rollout plan for that architecture, not a claim
-that the new engine has shipped. The Rust host stays supported until the
-replacement passes the cutover gates below.
+is in effect from **0.100.47**. The Python engine is the only engine; the Rust
+host, the per-run adapter, `ngn-core`, `ngn-protocol` and the `--engine`
+choice are gone. Phase 5 skipped its one-release `--engine=legacy` escape
+hatch at the owner's direction. This page keeps the rollout record.
 
-## Shipped baseline and target
+## Before and after
 
-| Concern | Shipped split host | ADR target |
+| Concern | Split host (up to 0.100.46) | Engine (0.100.47) |
 | --- | --- | --- |
 | Agent runtime | Rust `ngn-core` owns admission, queues, steering, subagents, tools and approvals. `ngn_nagents` runs the Python model loop and provider integration in a subprocess per run. | One long-lived `nagents engine`, built on `src/nagents/harness` and the headless FastAPI API in `src/nagents/web`, owns the whole run. |
 | Sessions and events | `host.sqlite3` holds the Rust host's sessions, runs and journal; `nagents.sqlite3` holds runtime conversation history. The Python web application has its own state. | One engine-owned SQLite database. Clients cache projections and persist only client preferences. |
@@ -59,8 +60,8 @@ checks pass.
 | **2. Decouple the TUI** | Wrap today's `Host` behind an `Engine` trait and an `InProcess` implementation; add `Remote` over `ngn-api`. Feed a bounded client store from events instead of handing host objects to views. | No direct `Host` calls remain in `tui.rs`, `tui/` or `view.rs`. The existing TUI tests and terminal smoke pass with `InProcess`. |
 | **3. Offer the Python engine** | Serve `/api/v1` from the existing Python runtime, with token, discovery and private lease mode. Implement durable event replay, queue/steering and approval semantics. Opt in via `ngn --engine=python` and `ngn serve --engine=python`; switch the browser transport to the engine through the proxy. | Public-API conformance, terminal and browser acceptance pass on the Python engine. Restart and reconnect recover the session and its history without repeating an interrupted tool or replaying an approval. |
 | **4. Move tools** | Keep light tools in Python. Move heavy workspace discovery and diff previews first to `nagents-native`; follow with search and large reads where benchmarks justify it. Retain workspace path restrictions and approval behavior. | Parity fixtures agree, discovery/search on a large workspace are within 10% of the Rust host, and tool timing and approvals pass end-to-end. |
-| **5. Switch and retire** | Make the Python engine the default for one release with an explicit `--engine=legacy` escape hatch. Import Rust host state once into the engine store. After the transition, remove the Rust host, per-run adapter, handwritten `ngn-protocol` and direct `Host` web handlers. | A release ships without the legacy engine path. Dependency tests prevent `ngn` from reaching tool/provider code and prevent Python protocol/engine modules from depending on clients. |
-| **6. Package and lay out** | Ship the client, CPython, engine wheel and platform-specific native tool wheel. Move the Rust workspace to root `crates/` when release and development tooling are ready. | Clean Linux and macOS installs and `ngn update` verify and run the packaged engine and clients. |
+| **5. Switch and retire** (done in 0.100.47) | Remove the Rust host, per-run adapter, handwritten `ngn-protocol` and direct `Host` web handlers, with no legacy escape hatch. The engine imports each workspace's Rust host history once on first start. | A release ships without the legacy engine path. The `ngn` crate no longer depends on any tool or provider code. |
+| **6. Package and lay out** (bundle done in 0.100.47) | Ship the client, CPython, engine wheel and platform-specific native tool wheel. The 0.100.47 bundle carries CPython and `nagents[engine]`; the native tool wheel is not bundled yet. Move the Rust workspace to root `crates/` when release and development tooling are ready. | Clean Linux and macOS installs and `ngn update` verify and run the packaged engine and clients. |
 
 Use a fixture provider for repeatable terminal and browser flows: session
 history, copy and scrolling, Markdown and tool inspection, one-time approvals,
@@ -69,51 +70,42 @@ restart mid-run, disconnect/reconnect, queue overflow, and an approval resolved
 from another client. Fixture tests do not establish paid-provider eligibility or
 feature parity for features left out of the first contract.
 
-## Trying the opt-in engine from source
+## Running the engine from source
 
 From the repository root, install `.[engine]` in a Python 3.13 environment,
 run `npm ci --prefix src/nagents/web-ui`, and build the Rust binary with
-`cargo build --locked --manifest-path ngn/Cargo.toml -p ngn`. Set
-`NGN_ENGINE_PYTHON` to that environment's Python executable. Then use the
-resulting `ngn/target/debug/ngn` with `--engine=python` for the TUI,
-`--engine=python serve` for the browser, or `--standalone` for a private
-child. `--engine-demo` lets an owned engine run without provider credentials.
+`cargo build --locked --manifest-path ngn/Cargo.toml -p ngn`. With that
+environment active (or `NGN_ENGINE_PYTHON` set to its Python), run
+`ngn/target/debug/ngn` for the TUI, `serve` for the browser, or `--standalone`
+for a private engine. `--engine-demo` lets an owned engine run without provider
+credentials.
 
 The [`ngn-api`](../crates/ngn-api/) crate comes from the
-[v1 contract](../../contracts/engine/v1/README.md).
-Source acceptance is in `ngn/scripts/python_engine_smoke.py`. It does not use
-personal state or credentials and can test a registered engine, a private
-lease, or reconnect after a crash without re-running a tool. The optional
-`nagents-native` ABI3 wheel shares the legacy host's diff algorithm and
-workspace Git matcher. For source trials, build and install it in the same
-environment and opt in with `NGN_NATIVE_DISCOVERY=1` before starting an engine:
+[v1 contract](../../contracts/engine/v1/README.md). Acceptance is in
+`ngn/scripts/python_engine_smoke.py`; it uses no personal state or credentials.
+The optional `nagents-native` ABI3 wheel provides discovery and diff helpers.
+Build and install it in the same environment and opt in with
+`NGN_NATIVE_DISCOVERY=1` before starting an engine:
 
 ```bash
 python -m maturin build --release --locked \
   --manifest-path ngn/crates/nagents-native/Cargo.toml --out ngn/target/native-wheel
 python -m pip install --no-deps ngn/target/native-wheel/nagents_native-*.whl
-NGN_NATIVE_DISCOVERY=1 NGN_ENGINE_PYTHON="$(command -v python)" ngn/target/debug/ngn --engine=python
-python ngn/scripts/native_discovery_bench.py
+NGN_NATIVE_DISCOVERY=1 ngn/target/debug/ngn
 ```
 
-Discovery and search keep the legacy scan and read budgets. Python supplies
-protected paths and identities and still owns approval and all writes. The
-benchmark compares output and measures both paths on the same 4,200-file
-fixture; it is not a claim of production or cross-platform parity. The release
-bundle and default engine are unchanged.
+## Data
 
-## Data and rollback
+The first time the engine starts in a workspace, it imports that workspace's
+Rust host history (schema 5, written by 0.100.46) from the default
+`ngn-rust` data directory. It reads a private SQLite backup taken beside the
+old file, never changes the original, and records the import so it runs once.
+Root display history becomes read-only sessions, with an interrupted marker
+where the host recorded no final outcome. Provider context, child history,
+credentials, approvals, receipts and queued work are not restored.
 
-**Today**, the native host can copy supported Python display history into a
-separate read-only archive. Host schema 5 adds archives alongside schema 4
-steering receipts. See [Python session history](../README.md#python-session-history)
-and [installation and update safety](installation.md) before opening important
-state. Stop the host and back up both stores; downgrade with a compatible state
-directory or backup, never by editing SQLite `user_version`.
-
-**Opt-in source preview:** stop both workspace engines and create a private
-SQLite backup outside the workspace and both state directories. From the
-Python engine environment:
+If the old state lived elsewhere (a custom `data_dir`), or the automatic copy
+failed, import a backup by hand:
 
 ```bash
 (umask 077; sqlite3 -readonly /absolute/legacy/state/host.sqlite3 \
@@ -122,16 +114,6 @@ nagents import-host -C /absolute/workspace \
   --host-snapshot /absolute/private/host-snapshot.sqlite3
 ```
 
-Use the same `--state-dir` or trusted configuration as the engine if it
-doesn't use its default path. The importer accepts Rust schema 5 (v0.100.46),
-requires an offline backup without WAL or journal sidecars, and refuses an
-owned destination. It copies root display history as read-only sessions,
-including an interrupted marker where the host recorded no final outcome.
-The same backup is a no-op on retry; a different backup is rejected.
-Keep both the source and its backup: no changes flow back. Provider context,
-child history, credentials, approvals, receipts and queued work are not
-restored. This preview is not authorization to switch defaults.
-
-The generator choice, headless engine dependencies, default shared versus
-standalone lifecycle, and the final native-tool and workspace scope remain
-open in the ADR. The React restoration does not decide them.
+An engine imports one snapshot; the same backup is a no-op on retry and a
+different one is rejected. Older Rust host files are left in place for you to
+delete when you no longer need them.

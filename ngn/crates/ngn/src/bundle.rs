@@ -196,7 +196,7 @@ impl ReleaseManifest {
             "Release version mismatch"
         );
         ensure!(
-            self.platform == PLATFORM && self.runtime_protocol == ngn_protocol::VERSION,
+            self.platform == PLATFORM && self.runtime_protocol == crate::model::RUNTIME_PROTOCOL,
             "Release platform/protocol mismatch"
         );
         ensure!(
@@ -253,7 +253,7 @@ impl BundleManifest {
             "Bundle component version mismatch"
         );
         ensure!(
-            self.runtime_protocol == ngn_protocol::VERSION && self.platform == PLATFORM,
+            self.runtime_protocol == crate::model::RUNTIME_PROTOCOL && self.platform == PLATFORM,
             "Bundle platform/protocol mismatch"
         );
         ensure!(hex(&self.source_commit, 40), "Invalid bundle source commit");
@@ -534,22 +534,8 @@ impl BundledRuntime {
         }))
     }
 
-    pub fn runner(&self) -> Vec<String> {
-        // -I ignores PYTHON* settings, so -B is necessary to keep the verified
-        // generation immutable even when the runtime is writable by its owner.
-        vec![
-            self.python().to_string_lossy().into_owned(),
-            "-I".into(),
-            "-B".into(),
-            "-m".into(),
-            "ngn_nagents".into(),
-        ]
-    }
     pub fn python(&self) -> PathBuf {
         self.root.join(&self.manifest.runner[0])
-    }
-    pub fn python_version(&self) -> &str {
-        &self.manifest.python.version
     }
     pub fn ca_file(&self) -> PathBuf {
         self.root.join(&self.manifest.ca_file)

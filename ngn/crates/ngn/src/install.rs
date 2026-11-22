@@ -14,15 +14,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::bundle::{
+    BundleManifest, MAX_COMPRESSED, MAX_EXPANDED, MAX_MANIFEST, MAX_MEMBERS, ReleaseManifest,
+    ReleaseVersion, file_hash, hex, relative_path, release_manifest_name, supported_platform,
+};
+use crate::paths::{trusted_system_alias, without_system_aliases};
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use flate2::read::MultiGzDecoder;
 use fs2::FileExt;
-use ngn_core::bundle::{
-    BundleManifest, MAX_COMPRESSED, MAX_EXPANDED, MAX_MANIFEST, MAX_MEMBERS, ReleaseManifest,
-    ReleaseVersion, file_hash, hex, relative_path, release_manifest_name, supported_platform,
-};
-use ngn_core::paths::{trusted_system_alias, without_system_aliases};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio::{io::AsyncReadExt, process::Command};

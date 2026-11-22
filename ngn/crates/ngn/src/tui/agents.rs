@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 mod activity;
 
+use crate::model::{ProviderAuth, RunStatus, TaskInfo};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ngn_protocol::{ProviderAuth, RunStatus, TaskInfo};
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -208,11 +208,6 @@ impl Context {
                 "No provider selected".into(),
                 "Model: unavailable".into(),
                 "Not configured",
-            ),
-            ProviderDisplay::Unavailable => (
-                "Provider unavailable".into(),
-                "Model: unavailable".into(),
-                "Mode unavailable",
             ),
         };
         let paragraph = Paragraph::new(vec![
@@ -729,12 +724,13 @@ impl App {
 mod tests {
     use std::time::Instant;
 
-    use ngn_core::{Config, Host};
-    use ngn_protocol::{Event, EventRecord, ToolCall, ToolResult, VERSION};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use super::*;
-    use crate::engine::{Approval, ChildToolDispatch, InProcess, Run, SessionSelection};
+    use crate::{
+        engine::{Approval, ChildToolDispatch, Run, SessionSelection, fake::FakeEngine},
+        model::{Event, EventRecord, ToolCall, ToolResult, VERSION},
+    };
 
     fn task(id: &str, parent: &str, status: RunStatus) -> TaskInfo {
         TaskInfo {
@@ -1164,27 +1160,16 @@ mod tests {
 
     #[test]
     fn context_has_bounded_metadata_and_reads_only_safe_display_fields() {
-        use ngn_protocol::ProviderConfig;
-
-        let mut config = Config {
+        let configured = |auth| ClientDisplay {
             workspace: "/workspace/very-long-directory-name/日本語\n\x1bproject".into(),
-            data_dir: "/private/data".into(),
-            source: Some("/private/config".into()),
-            provider: "active".into(),
             read_only: true,
-            providers: [(
-                "active".into(),
-                ProviderConfig {
-                    kind: "openai".into(),
-                    model: "configured-model".into(),
-                    api: "responses".into(),
-                    base_url: "https://user:secret@example.invalid".into(),
-                    api_key_env: "PRIVATE_KEY_VAR".into(),
-                    auth: ProviderAuth::ApiKey,
-                },
-            )]
-            .into(),
-            ..Config::default()
+            provider: ProviderDisplay::Configured {
+                id: "active".into(),
+                kind: "openai".into(),
+                model: Some("configured-model".into()),
+                auth: Some(auth),
+            },
+            ..ClientDisplay::default()
         };
         let mut app = App {
             session: "session-example".into(),
@@ -1194,7 +1179,7 @@ mod tests {
         app.agents.refresh(&app.tasks);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let focus = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
-        let display = ClientDisplay::from(&config);
+        let display = configured(ProviderAuth::ApiKey);
         assert!(app.agents_key(focus, 111));
         let buffer = paint_rail(&mut app, &display, 30);
         assert!(buffer[(3, 2)].modifier.contains(Modifier::REVERSED));
@@ -1255,8 +1240,7 @@ mod tests {
         }
         assert_eq!(buffer[(31, 29)].symbol(), "╯");
 
-        config.providers.get_mut("active").unwrap().auth = ProviderAuth::Chatgpt;
-        let display = ClientDisplay::from(&config);
+        let display = configured(ProviderAuth::Chatgpt);
         let buffer = paint_rail(&mut app, &display, 30);
         assert!(panel(&buffer).contains("ChatGPT login mode"));
         for height in [0, 1, 2, 3, 5, 8, 10, 16, 29, 40] {
@@ -1272,14 +1256,17 @@ mod tests {
             }
         }
 
-        // A missing/invalid provider must not expose config diagnostics.
-        config.providers.clear();
-        let display = ClientDisplay::from(&config);
+        // An unselected provider shows no stale model or credential mode.
+        let display = ClientDisplay {
+            provider: ProviderDisplay::Unselected,
+            ..configured(ProviderAuth::ApiKey)
+        };
         assert!(app.agents_key(key(KeyCode::Tab), 111));
         assert!(app.agents_key(key(KeyCode::End), 111));
         let last = panel(&paint_rail(&mut app, &display, 30));
-        assert!(last.contains("Provider unavailable"), "{last}");
-        assert!(last.contains("Mode unavailable") && !last.contains("/private"));
+        assert!(last.contains("No provider selected"), "{last}");
+        assert!(last.contains("Model: unavailable") && last.contains("Not configured"));
+        assert!(!last.contains("configured-model") && !last.contains("API key mode"));
     }
 
     #[test]
@@ -1397,7 +1384,7 @@ mod tests {
             root_session_id: app.session.clone(),
             agent_title: "root".into(),
             depth: 0,
-            call: ngn_protocol::ToolCall {
+            call: crate::model::ToolCall {
                 call_id: "call".into(),
                 name: "write".into(),
                 arguments: serde_json::Value::Null,
@@ -1443,18 +1430,7 @@ mod tests {
 
     #[tokio::test]
     async fn focus_and_exact_inspection_preserve_draft_scroll_and_queue() {
-        let dir = crate::test_support::private_tempdir().unwrap();
-        let host = Host::open(
-            Config {
-                workspace: dir.path().into(),
-                data_dir: dir.path().join("state"),
-                ..Config::default()
-            }
-            .resolve()
-            .unwrap(),
-        )
-        .unwrap();
-        let engine = InProcess::new(host);
+        let engine = FakeEngine::default();
         let mut app = App {
             session: engine.open_session(SessionSelection::New).await.unwrap(),
             input: "/se".into(),

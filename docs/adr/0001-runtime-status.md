@@ -1,7 +1,8 @@
 # ADR 0001: Python engine runtime support
 
-This describes the opt-in `/api/v1` runtime slice, not completion of the
-[ADR's migration plan](0001-python-core-rust-tui.md). It uses the existing
+This describes the `/api/v1` engine that every ngn client uses since 0.100.47,
+when the Rust host was removed (see the
+[ADR's migration plan](0001-python-core-rust-tui.md)). It uses the existing
 Python `WebState`, Harness, session database, and inbox dispatcher.
 
 ## Supported behavior
@@ -36,23 +37,24 @@ Python `WebState`, Harness, session database, and inbox dispatcher.
   child inspection loads durable evidence from that child's history endpoint.
   Child approvals and cancellation address the exact activation. If an owner
   exits before a child's completion arrives, its history is marked interrupted.
-- Optional ABI3 helpers share the legacy Git matcher and diff algorithm.
+- Optional ABI3 helpers keep the Git matcher and diff algorithm of the retired Rust host.
   With `NGN_NATIVE_DISCOVERY=1`, Rust scans and searches under a verified
   workspace directory. Python still supplies the path policy, loads workspace
   instructions, handles approvals, and owns all writes.
-- `nagents import-host` copies root display history from a standalone Rust
-  schema-5 SQLite backup. It writes archive rows and the one-time marker in
-  a single transaction. Imported identities can never start or resume work.
+- On first start in a workspace the engine copies root display history from
+  the retired Rust host's default schema-5 database, through a private backup;
+  `nagents import-host` does the same for a backup from elsewhere. Archive rows
+  and the one-time marker are written in a single transaction. Imported
+  identities can never start or resume work.
 
 ## Gaps
 
 - `/history` replays the v1 journal, including explicit archive imports.
   The offline import does not restore provider context, child conversations,
-  queued work or old approvals. It does not migrate the live Rust database.
+  queued work or old approvals, and never modifies the old Rust database.
 - The child stream projects text and structured tool status, not every
   existing Python web feature (such as attachments, remote task artifacts,
   child follow-up editing, or voice).
-- Legacy remains the default. Native discovery/search have a same-fixture
-  Linux benchmark, not broad workload and platform parity. Resumable legacy
-  context, released engine packaging, and retirement of the legacy host are
-  still cutover gates.
+- Native discovery/search are optional and not in the bundle; they have a
+  same-fixture Linux benchmark, not broad workload and platform parity.
+  Imported Rust host sessions cannot be continued.

@@ -574,12 +574,12 @@ pub(super) enum UserPaint {
 }
 
 impl UserPaint {
-    pub(super) fn new(surface: Option<Style>, background: Option<[u8; 3]>, no_color: bool) -> Self {
+    pub(super) fn new(background: Option<[u8; 3]>, no_color: bool) -> Self {
         if no_color {
             return Self::Monochrome;
         }
-        surface
-            .or_else(|| background.map(terminal_user_surface))
+        background
+            .map(terminal_user_surface)
             .map_or(Self::Plain, Self::Surface)
     }
 }
@@ -1010,13 +1010,13 @@ impl<'a> Layout<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ngn_protocol::{Event, EventRecord, RunStatus, ToolCall, ToolResult};
     use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
     use serde_json::json;
 
     use super::*;
-    use crate::engine::{Approval, ClientDisplay, PaintedComposerTheme};
+    use crate::engine::{Approval, ClientDisplay};
     use crate::tui::footer::Activity;
     use crate::tui::{App, main_transcript};
 
@@ -1149,12 +1149,8 @@ mod tests {
                 .unwrap();
             terminal.backend().buffer().clone()
         };
-        let theme = Some(PaintedComposerTheme::Ocean);
-        let shaded = paint(UserPaint::new(
-            super::super::composer::Palette::new(theme, false).user_surface(),
-            None,
-            false,
-        ));
+        // A black terminal background is tinted 10% toward white.
+        let shaded = paint(UserPaint::new(Some([0, 0, 0]), false));
         for (y, columns) in [
             (1, &[0, 1, 2, 4, 6, 7][..]),
             (2, &[0, 1, 2, 4, 5, 6, 7][..]),
@@ -1162,7 +1158,7 @@ mod tests {
             for &x in columns {
                 // Ratatui emits the leading cell of a wide glyph; the same
                 // background is applied by the terminal to its continuation.
-                assert_eq!(shaded[(x, y)].bg, Color::Rgb(29, 44, 54));
+                assert_eq!(shaded[(x, y)].bg, Color::Rgb(25, 25, 25));
             }
         }
         assert_eq!(shaded[(0, 1)].symbol(), "▎");
@@ -1173,11 +1169,7 @@ mod tests {
         assert_eq!(shaded[(0, 3)].symbol(), "a");
         assert_eq!(shaded[(0, 3)].bg, Color::Reset);
 
-        let unshaded = paint(UserPaint::new(
-            super::super::composer::Palette::new(theme, true).user_surface(),
-            Some([0, 0, 0]),
-            true,
-        ));
+        let unshaded = paint(UserPaint::new(Some([0, 0, 0]), true));
         assert_eq!(unshaded, paint(UserPaint::Monochrome));
         // NO_COLOR keeps the user bar and inset, just without colour.
         assert_eq!(unshaded[(0, 1)].symbol(), "▎");
@@ -1195,7 +1187,7 @@ mod tests {
             ([0; 3], Color::Rgb(25, 25, 25)),
             ([255; 3], Color::Rgb(229, 229, 229)),
         ] {
-            let native = paint(UserPaint::new(None, Some(base), false));
+            let native = paint(UserPaint::new(Some(base), false));
             assert!(
                 [0, 1, 2, 4, 6, 7]
                     .into_iter()
@@ -1237,11 +1229,7 @@ mod tests {
                     Some(&app.tools),
                     app.tools_available(),
                     active,
-                    UserPaint::new(
-                        app.composer_palette.user_surface(),
-                        app.terminal_background,
-                        app.no_color,
-                    ),
+                    UserPaint::new(app.terminal_background, app.no_color),
                 );
                 if app.shows_overlay() {
                     layout.hide_wipes();
@@ -1351,7 +1339,7 @@ mod tests {
                 event(
                     run,
                     Event::RunFinished {
-                        status: ngn_protocol::RunStatus::Completed,
+                        status: crate::model::RunStatus::Completed,
                         error: String::new(),
                     },
                 ),
@@ -2167,7 +2155,7 @@ mod tests {
 
     #[test]
     fn headers_align_outcome_elapsed_and_timeout_columns_like_the_python_tui() {
-        use ngn_protocol::ToolCall;
+        use crate::model::ToolCall;
         let shell = ToolCall {
             call_id: "a".into(),
             name: "shell".into(),

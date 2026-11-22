@@ -15,25 +15,19 @@ from typing import cast
 
 from release import digest
 
-SCRIPTS = Path(__file__).resolve().parent
 IMPORT_PROBE = """import importlib.metadata as m, json, pathlib, ssl, sys
 import certifi, nagents, ngn_nagents
+import nagents.engine.lifecycle as engine
 from ngn_nagents.auth import available
 print(json.dumps({
     'prefix': sys.prefix,
-    'paths': [nagents.__file__, ngn_nagents.__file__],
+    'paths': [nagents.__file__, ngn_nagents.__file__, engine.__file__],
     'core': m.version('nagents'), 'adapter': m.version('ngn-nagents'),
     'auth_available': available(), 'dont_write_bytecode': sys.dont_write_bytecode,
     'ca': certifi.where(), 'ca_count': ssl.create_default_context().cert_store_stats()['x509_ca'],
     'editable': [json.loads(d.read_text('direct_url.json') or '{}').get('dir_info', {}).get('editable', False)
                  for d in (m.distribution('nagents'), m.distribution('ngn-nagents'))]
 }))
-"""
-SMOKE = """import runpy, sys
-# Only checked-in fixture helpers, never a source core/adapter import override.
-sys.path.insert(0, sys.argv[1])
-sys.argv = [sys.argv[1] + '/smoke.py', '--binary', sys.argv[2], '--bundled-runtime']
-runpy.run_path(sys.argv[0], run_name='__main__')
 """
 
 
@@ -139,16 +133,16 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
     doctor = execute([str(command), "doctor"], environment=environment, directory=workspace)
     assert str(generation) in doctor.stdout and "runtime/bin/python3" in doctor.stdout
     (output / "doctor.log").write_text(doctor.stdout + doctor.stderr)
+    # The installed client starts its bundled Python engine; the demo makes no model request.
     checks = execute(
-        [str(python), "-I", "-B", "-c", SMOKE, str(SCRIPTS), str(command)],
+        [str(command), "--standalone", "--engine-demo", "run", "--json", "hello offline"],
         environment=environment,
         directory=workspace,
         timeout=180,
     )
-    (output / "smoke.log").write_text(checks.stdout + checks.stderr)
-    suites_passed = sum(line.startswith("PASS:") for line in checks.stdout.splitlines())
-    # Four CLI/HTTP/WS suites and three PTY suites; no separate demo suite.
-    assert suites_passed == 7, f"Expected seven bundled smoke suites, got {suites_passed}"
+    (output / "engine-run.log").write_text(checks.stdout + checks.stderr)
+    events = [json.loads(line) for line in checks.stdout.splitlines()]
+    assert events and events[-1]["event"] == {"type": "run.finished", "status": "completed", "error": ""}
     assert inventory(generation) == before, "Runtime execution changed the immutable release inventory"
     selected = (prefix / "current").readlink()
     for check_flag in (["--check"], []):
@@ -235,16 +229,14 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
         "command": str(command),
         "runtime_python": str(python),
         "runtime": runtime_info,
-        "suites_passed": suites_passed,
+        "engine_events": len(events),
         "path": "",
         "state_sentinels_unchanged": True,
         "release_inventory_unchanged": True,
         "cross_version_update": upgraded,
     }
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
-    print(
-        f"PASS: real bundled first install, isolated imports/CA, {suites_passed} CLI/HTTP/WS/PTY suites with empty PATH"
-    )
+    print("PASS: real bundled first install, isolated imports/CA, bundled Python engine run with empty PATH")
     print(
         "PASS: managed check/no-op, corrupt update, foreign binary and unsafe ancestry leave protected state unchanged"
     )

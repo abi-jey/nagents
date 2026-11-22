@@ -20,7 +20,7 @@ pub(crate) fn fixture(root: &Path) -> BundleManifest {
         ngn_version: env!("CARGO_PKG_VERSION").into(),
         nagents_version: "0.28.5".into(),
         adapter_version: env!("CARGO_PKG_VERSION").into(),
-        runtime_protocol: ngn_protocol::VERSION,
+        runtime_protocol: crate::model::RUNTIME_PROTOCOL,
         platform: PLATFORM.into(),
         source_commit: "a".repeat(40),
         official: false,

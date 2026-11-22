@@ -1,5 +1,10 @@
 # ChatGPT device authentication
 
+> **Since 0.100.47** `ngn auth login|status|logout` runs the Python engine's own
+> sign-in (`nagents.cli login`/`logout`) in the engine's Python; the Rust host
+> and adapter paths described below were removed. Saved logins are the same ones
+> the Python client uses.
+
 **Official subscription release requires the matching published Python core.**
 The adapter now requires `nagents>=0.100.2,<0.101`; that core must be published and
 pass the fresh installed release gate first. Published `nagents==0.28.5` does

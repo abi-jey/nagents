@@ -102,8 +102,7 @@ Ordered by user impact relative to effort.
 - Run a scripted OpenAI-compatible fixture server and drive the TUI in tmux
   at 80×24, 100×30 and 160×45, capturing panes before and after.
 - Check `NO_COLOR=1` and a narrow (≤ 42 column) terminal.
-- Run `scripts/smoke.py` (real PTY, mouse and OSC 52), then
-  `composer_smoke.py`, `steering_smoke.py` and `fifo_fault_smoke.py` with
-  `--binary`.
+- Run `scripts/python_engine_smoke.py --binary …` (real PTY and Chromium
+  against a live engine and a loopback fixture model).
 - Prefer assertions on painted cells in `TestBackend` tests over string
   snapshots of internal state.

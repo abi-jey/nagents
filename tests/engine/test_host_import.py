@@ -189,3 +189,44 @@ host_import.import_host(*map(Path, sys.argv[1:]))
     assert not report.already_imported and report.events == 6
     assert import_host(source, state, database).already_imported
     assert source.read_bytes() == original
+
+
+def test_engine_start_imports_the_default_legacy_database_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from nagents.engine.host_import import import_legacy_once
+    from nagents.engine.host_import import legacy_host_database
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state = tmp_path / "state"
+    database = session_database_path(workspace, state)
+    assert import_legacy_once(workspace, state, database) == ""
+
+    legacy = legacy_host_database(workspace)
+    legacy.parent.mkdir(parents=True)
+    _make_snapshot(legacy)
+    # The retired host left its lock and WAL files beside the database.
+    (legacy.parent / "host.lock").touch()
+    before = legacy.read_bytes()
+    assert import_legacy_once(workspace, state, database) == "Imported 1 earlier ngn sessions as read-only history."
+    assert import_legacy_once(workspace, state, database) == ""
+    assert legacy.read_bytes() == before
+    assert sorted(path.name for path in legacy.parents[2].iterdir()) == ["workspaces"]
+
+
+def test_failed_legacy_import_reports_a_retry_and_commits_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.engine.host_import import import_legacy_once
+    from nagents.engine.host_import import legacy_host_database
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    legacy = legacy_host_database(tmp_path)
+    legacy.parent.mkdir(parents=True)
+    _make_snapshot(legacy, corrupt=True)
+    state = tmp_path / "state"
+    database = session_database_path(tmp_path, state)
+    notice = import_legacy_once(tmp_path, state, database)
+    assert notice.startswith(f"Could not import earlier ngn history from {legacy}")
+    assert "nagents import-host" in notice
+    assert import_legacy_once(tmp_path, state, database) == notice

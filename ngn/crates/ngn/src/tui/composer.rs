@@ -11,7 +11,7 @@ use ratatui::{
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{engine::PaintedComposerTheme, view};
+use crate::view;
 
 use super::selection::Pane;
 
@@ -35,44 +35,6 @@ pub(super) fn border(width: u16, pending: usize, accent: Color, muted: Color) ->
         }
     }
     block
-}
-
-#[derive(Clone, Copy, Default)]
-pub(super) struct Palette(Option<(Color, Color, Color)>);
-
-impl Palette {
-    pub(super) fn new(theme: Option<PaintedComposerTheme>, no_color: bool) -> Self {
-        use Color::Rgb;
-        use PaintedComposerTheme::*;
-        if no_color {
-            return Self::default();
-        }
-        // Computed ngn-composer-background, -text and -accent from Python
-        // themes.py. Textual blends the app background 7% toward white for
-        // these dark presets, truncating each channel (not tinting the panel).
-        Self(theme.map(|theme| match theme {
-            Terminal => (Rgb(37, 40, 47), Rgb(230, 234, 242), Rgb(133, 186, 255)),
-            Graphite => (Rgb(37, 40, 47), Rgb(230, 234, 242), Rgb(182, 160, 255)),
-            Ocean => (Rgb(29, 44, 54), Rgb(224, 243, 245), Rgb(97, 216, 231)),
-            Ember => (Rgb(51, 41, 39), Rgb(245, 232, 220), Rgb(241, 173, 117)),
-        }))
-    }
-
-    fn surface(self) -> Style {
-        self.user_surface().unwrap_or_default()
-    }
-
-    pub(super) fn user_surface(self) -> Option<Style> {
-        self.0
-            .map(|(shade, text, _)| Style::new().bg(shade).fg(text))
-    }
-
-    fn cursor(self) -> Style {
-        self.0.map_or(
-            Style::new().add_modifier(Modifier::REVERSED),
-            |(shade, _, accent)| Style::new().bg(accent).fg(shade),
-        )
-    }
 }
 
 #[derive(Default)]
@@ -270,14 +232,12 @@ pub(super) fn draw(
     input: &str,
     cursor: usize,
     caret_visible: bool,
-    palette: Palette,
     mut pane: Option<&mut Pane>,
 ) -> Option<Position> {
     let area = area.intersection(buffer.area);
     if area.is_empty() {
         return None;
     }
-    buffer.set_style(area, palette.surface());
     let available = usize::from(area.width);
     let wrap_width = available.saturating_sub(1).max(1);
     let tab_stop = wrap_width.min(4);
@@ -384,7 +344,7 @@ pub(super) fn draw(
     }
     let position = Position::new(area.x + caret.1 as u16, area.y + (caret.0 - first) as u16);
     if caret_visible {
-        buffer[position].set_style(palette.cursor());
+        buffer[position].set_style(Style::new().add_modifier(Modifier::REVERSED));
     }
     Some(position)
 }
@@ -399,15 +359,7 @@ mod tests {
             let mut buffer = Buffer::empty(Rect::new(0, 0, width + 5, height + 4));
             let position = Position::new(area.x + cursor.0, area.y + cursor.1);
             assert_eq!(
-                draw(
-                    &mut buffer,
-                    area,
-                    input,
-                    usize::MAX,
-                    visible,
-                    Palette::default(),
-                    None
-                ),
+                draw(&mut buffer, area, input, usize::MAX, visible, None),
                 Some(position)
             );
             assert_eq!(buffer[position].symbol(), " ");
@@ -468,7 +420,6 @@ mod tests {
             "ab\t界e\u{301}\nend",
             usize::MAX,
             false,
-            Palette::default(),
             Some(&mut pane),
         );
         let mut selection = Selection::default();
@@ -497,7 +448,6 @@ mod tests {
         assert_draft("界", 2, 2, &["界", ""], (0, 1));
         assert_draft("界", 1, 2, &["�", ""], (0, 1));
         let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 2));
-        let palette = Palette::default();
         assert_eq!(
             draw(
                 &mut buffer,
@@ -505,7 +455,6 @@ mod tests {
                 "a",
                 usize::MAX,
                 true,
-                palette,
                 None
             ),
             None
@@ -517,7 +466,6 @@ mod tests {
                 "a",
                 usize::MAX,
                 true,
-                palette,
                 None
             ),
             Some(Position::new(1, 1))
@@ -525,85 +473,43 @@ mod tests {
     }
 
     #[test]
-    fn draft_surface_and_focused_caret_match_python_composer_roles() {
-        use Color::{Reset, Rgb};
-        use PaintedComposerTheme::*;
+    fn focused_caret_blinks_as_a_reversed_cell_without_painting_the_draft() {
+        use Color::Reset;
         let area = Rect::new(1, 1, 6, 3);
         let start = Instant::now();
         let draft = "ab\ncd";
-        for (theme, no_color, shade, text, accent) in [
-            (
-                Some(Terminal),
-                false,
-                Rgb(37, 40, 47),
-                Rgb(230, 234, 242),
-                Rgb(133, 186, 255),
-            ),
-            (
-                Some(Graphite),
-                false,
-                Rgb(37, 40, 47),
-                Rgb(230, 234, 242),
-                Rgb(182, 160, 255),
-            ),
-            (
-                Some(Ocean),
-                false,
-                Rgb(29, 44, 54),
-                Rgb(224, 243, 245),
-                Rgb(97, 216, 231),
-            ),
-            (
-                Some(Ember),
-                false,
-                Rgb(51, 41, 39),
-                Rgb(245, 232, 220),
-                Rgb(241, 173, 117),
-            ),
-            (Some(Ocean), true, Reset, Reset, Reset),
-            (None, false, Reset, Reset, Reset),
+        let mut caret = Caret::new(true);
+        for (focused, now, visible) in [
+            (true, start, true),
+            (true, start + BLINK_INTERVAL, false),
+            (false, start + BLINK_INTERVAL, false),
+            (true, start + BLINK_INTERVAL, true),
         ] {
-            let palette = Palette::new(theme, no_color);
-            let mut caret = Caret::new(true);
-            for (focused, now, visible) in [
-                (true, start, true),
-                (true, start + BLINK_INTERVAL, false),
-                (false, start + BLINK_INTERVAL, false),
-                (true, start + BLINK_INTERVAL, true),
-            ] {
-                let mut buffer = Buffer::empty(Rect::new(0, 0, 8, 5));
-                caret.focus(focused, now);
-                assert_eq!(caret.visible(now), visible);
-                assert_eq!(
-                    draw(
-                        &mut buffer,
-                        area,
-                        draft,
-                        usize::MAX,
-                        caret.visible(now),
-                        palette,
-                        None
-                    ),
-                    Some(Position::new(3, 2))
-                );
-                assert_eq!(buffer[(1, 1)].symbol(), "a");
-                assert_eq!(buffer[(2, 2)].symbol(), "d");
-                assert_eq!(buffer[(3, 2)].symbol(), " ");
-                for y in 0..5 {
-                    for x in 0..8 {
-                        let cell = &buffer[(x, y)];
-                        let cursor = visible && (x, y) == (3, 2);
-                        let expected = if !area.contains(Position::new(x, y)) {
-                            (Reset, Reset, Modifier::empty())
-                        } else if cursor && accent != Reset {
-                            (shade, accent, Modifier::empty())
-                        } else if cursor {
-                            (Reset, Reset, Modifier::REVERSED)
-                        } else {
-                            (text, shade, Modifier::empty())
-                        };
-                        assert_eq!((cell.fg, cell.bg, cell.modifier), expected);
-                    }
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 8, 5));
+            caret.focus(focused, now);
+            assert_eq!(caret.visible(now), visible);
+            assert_eq!(
+                draw(
+                    &mut buffer,
+                    area,
+                    draft,
+                    usize::MAX,
+                    caret.visible(now),
+                    None
+                ),
+                Some(Position::new(3, 2))
+            );
+            assert_eq!(buffer[(1, 1)].symbol(), "a");
+            assert_eq!(buffer[(2, 2)].symbol(), "d");
+            for y in 0..5 {
+                for x in 0..8 {
+                    let cell = &buffer[(x, y)];
+                    let modifier = if visible && (x, y) == (3, 2) {
+                        Modifier::REVERSED
+                    } else {
+                        Modifier::empty()
+                    };
+                    assert_eq!((cell.bg, cell.fg, cell.modifier), (Reset, Reset, modifier));
                 }
             }
         }
@@ -693,7 +599,7 @@ mod tests {
         let draft = "one\ntwo\nthree\nfour";
         // Caret on the 'w' of "two": rows scroll up to show it.
         let at = draft.find('w').unwrap();
-        let position = draw(&mut buffer, area, draft, at, true, Palette::default(), None).unwrap();
+        let position = draw(&mut buffer, area, draft, at, true, None).unwrap();
         assert_eq!(position, Position::new(1, 0));
         let row =
             |buffer: &Buffer, y| -> String { (0..6).map(|x| buffer[(x, y)].symbol()).collect() };
@@ -701,16 +607,7 @@ mod tests {
         assert!(buffer[(1, 0)].modifier.contains(Modifier::REVERSED));
         // At the end the tail is shown as before.
         let mut buffer = Buffer::empty(area);
-        let position = draw(
-            &mut buffer,
-            area,
-            draft,
-            usize::MAX,
-            true,
-            Palette::default(),
-            None,
-        )
-        .unwrap();
+        let position = draw(&mut buffer, area, draft, usize::MAX, true, None).unwrap();
         assert_eq!(position, Position::new(4, 1));
         assert_eq!(row(&buffer, 1).trim_end(), "four");
     }

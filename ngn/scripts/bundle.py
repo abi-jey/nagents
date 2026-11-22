@@ -6,7 +6,7 @@ own reviewed runtime lock and vendored upstream notices (see PLATFORMS).
 Only the builder needs Python. Dependencies are installed from reviewed binary
 wheels, never resolved or compiled during a build. The runtime's own pip performs
 the final dependency check; no host Python, pip, venv or generated script is used
-to launch the installed adapter. See runtime-lock.json for upstream provenance.
+to launch the bundled `nagents engine`. See runtime-lock.json for upstream provenance.
 """
 
 from __future__ import annotations
@@ -89,6 +89,7 @@ def host_platform() -> str:
 
 
 PLATFORM = host_platform() or "linux-x86_64"
+# Kept for ngn <= 0.100.46 updaters; ngn itself starts `-m nagents.engine.cli engine`.
 RUNNER = ["runtime/bin/python3", "-I", "-B", "-m", "ngn_nagents"]
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -859,8 +860,10 @@ def _load_lock() -> dict[str, object]:
         artifact = Artifact.parse(wheel["artifact"])
         if not artifact.filename.endswith(".whl") or urlsplit(artifact.url).hostname != "files.pythonhosted.org":
             raise ValueError("Dependencies must be pinned public binary wheels")
-    if not {"aiohttp", "aiosqlite", "pyyaml", "certifi"}.issubset(names):
-        raise ValueError("Runtime lock omits a required dependency or bundled CA")
+    if not {"aiohttp", "aiosqlite", "pyyaml", "certifi", "fastapi", "uvicorn", "pydantic", "websockets"}.issubset(
+        names
+    ):
+        raise ValueError("Runtime lock omits a required engine dependency or bundled CA")
     _notices(lock)
     return lock
 
@@ -998,7 +1001,8 @@ assert sys.prefix == sys.base_prefix, 'runtime must not be a venv'
 assert pathlib.Path(sys.prefix).resolve() == root / 'runtime'
 assert all(pathlib.Path(path).resolve().is_relative_to(root / 'runtime') for path in sys.path)
 modules = {}
-for name in ('nagents', 'ngn_nagents', 'certifi', 'aiohttp', 'aiosqlite', 'yaml'):
+for name in ('nagents', 'nagents.engine.lifecycle', 'ngn_nagents', 'certifi', 'aiohttp', 'aiosqlite', 'yaml',
+             'fastapi', 'uvicorn', 'pydantic', 'websockets'):
     module = importlib.import_module(name)
     path = pathlib.Path(module.__file__).resolve()
     assert path.is_relative_to(root / 'runtime'), 'outside-source import'
