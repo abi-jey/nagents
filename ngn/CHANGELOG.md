@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.48
+
+- Add opt-in, built-in OpenID Connect sign-in for private Python ngn web deployments.
+
 ## 0.100.47
 
 - One Python engine behind the Rust TUI and browser: the Rust host is removed, old history is imported once, Enter steers in the browser, and TUI tool headers show elapsed/timeout columns.

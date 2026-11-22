@@ -3148,7 +3148,7 @@ files = [
     {file = "pyjwt-2.15.0-py3-none-any.whl", hash = "sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8"},
     {file = "pyjwt-2.15.0.tar.gz", hash = "sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4"},
 ]
-markers = {main = "extra == \"dev\" or extra == \"a2a\""}
+markers = {main = "extra == \"dev\" or extra == \"web\" or extra == \"a2a\""}
 
 [package.dependencies]
 cryptography = {version = ">=3.4.0", optional = true, markers = "extra == \"crypto\""}
@@ -4157,9 +4157,9 @@ dev = ["PyJWT", "a2a-sdk", "fastapi", "httpx", "httpx2", "mypy", "numpy", "pre-c
 docs = ["mkdocs", "mkdocs-material", "mkdocstrings"]
 engine = ["aiortc", "fastapi", "pydantic", "uvicorn", "websockets"]
 voice = ["aiortc", "fastapi", "pydantic", "sounddevice"]
-web = ["aiortc", "fastapi", "pydantic", "uvicorn", "websockets"]
+web = ["PyJWT", "aiortc", "fastapi", "pydantic", "uvicorn", "websockets"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12, <4.0"
-content-hash = "5382990d90c83dc95851d2995925c047982894b6d08be68fa1448831950388b4"
+content-hash = "de34bcac97dc30e4815c061e5c76ccf86ad44302aa106383fb227cd2ace543c3"

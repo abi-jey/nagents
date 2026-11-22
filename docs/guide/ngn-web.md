@@ -751,6 +751,8 @@ ClusterIP is not public Internet exposure, but cluster clients can also reach it
 and forge headers. Same-origin fetch-metadata checks and the per-process CSRF
 token protect browser requests, not against malicious authorized network
 clients that can obtain the bootstrap token; there is no web login prompt.
+Private deployments can opt into [built-in OIDC login](ngn-web-deployment.md#optional-built-in-oidc)
+without changing the local defaults.
 
 Live approved shell/custom tools can access the host with your account's rights.
 Closing the web server does not remove saved conversations or undo approved edits.

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Annotated
 from typing import Literal
+from urllib.parse import urlsplit
 
 import anyio
 from fastapi import FastAPI
@@ -73,6 +74,8 @@ from ..settings.provider_login import ProviderLogin
 from ..settings.provider_setup import provider_setup
 from ..settings.tools import register as register_tool_settings
 from ..shells import register as register_shells
+from .oidc import OidcClient
+from .oidc import OidcLogin
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
 
@@ -80,6 +83,7 @@ if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
 
     from ..live.login import LoginVoiceConfig
+    from .oidc import OidcConfig
 
 APPROVAL_TIMEOUT = 300
 logger = logging.getLogger("uvicorn.error")
@@ -179,6 +183,7 @@ def create_app(
     continue_session: bool = False,
     harness_factory: Callable[["HarnessConfig"], Harness] = Harness,
     headless_routes: Callable[[FastAPI, Callable[[], WebState]], None] | None = None,
+    oidc: "OidcConfig | None" = None,
 ) -> FastAPI:
     """Build one WebState lifespan. A headless caller supplies its own routes and security boundary."""
     service = "ngn serve" if headless_routes is None else "nagents engine"
@@ -407,14 +412,26 @@ def create_app(
         lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=headless_routes is None
     )
     if headless_routes is not None:
+        if oidc is not None:
+            raise ValueError("OIDC is only available on the browser web server.")
         headless_routes(app, lambda: state)
         return app
 
     authority = local_authority(host, port)
-    enforce_authority = is_loopback_host(host)
+    origin = oidc.public_origin if oidc else ""
+    if origin:
+        authority = urlsplit(origin).netloc
     directory = built_assets() if assets is None else assets
     token = secrets.token_urlsafe(32)
-    app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
+    app.add_middleware(
+        LocalOnly,
+        authority=authority,
+        token=token,
+        enforce_authority=bool(origin) or is_loopback_host(host),
+        origin=origin,
+    )
+    if oidc is not None:
+        app.add_middleware(OidcLogin, client=OidcClient(oidc))
     register_tool_settings(app, lambda: state)
     register_shells(app, lambda: state)
     from ..tasks.routes import register as register_tasks
@@ -460,6 +477,7 @@ def create_app(
         return {
             "schema_version": 1,
             "capabilities": {"chat": True},
+            **({"oidc_login": True} if oidc is not None else {}),
             "token": token,
             "workspace": str(state.harness.workspace),
             "provider": state.harness.config.provider_profile().kind,

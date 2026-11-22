@@ -136,6 +136,7 @@ nav:
       - Architecture Decisions:
           - Overview: adr/README.md
           - "0001: Python core, Rust TUI client": adr/0001-python-core-rust-tui.md
+          - "0002: Built-in OIDC for the private web workspace": adr/0002-web-oidc.md
 
 extra:
   social:

@@ -14,10 +14,45 @@ The standalone client binds **127.0.0.1** by default. This example opts into a
 routable bind by passing an explicit `--host 0.0.0.0`, so the in-cluster Service
 and Ingress reach the process directly with no same-pod proxy. Only a literal IP
 is accepted for that opt-in; hostnames stay rejected.
-**Access is password-free.** Tailscale ACLs/grants and trusted cluster networking
+**By default there is no web login.** Tailscale ACLs/grants and trusted cluster networking
 are the access boundary. Everyone allowed to reach the Service shares the same
 trusted-user workspace, sessions, and per-call approvals. This is not multi-user
 isolation or a sandbox.
+
+## Optional built-in OIDC
+
+Keep the private HTTPS ingress and configure the Python `ngn serve` container
+with all four variables in your private deployment overlay:
+
+| Variable | Value |
+| --- | --- |
+| `NGN_WEB_OIDC_ISSUER` | The exact HTTPS issuer URL from OIDC discovery. |
+| `NGN_WEB_OIDC_PUBLIC_ORIGIN` | The browser-facing HTTPS origin, e.g. `https://workspace.example.test`, without a trailing slash. |
+| `NGN_WEB_OIDC_CLIENT_ID` | The confidential web application's client ID. |
+| `NGN_WEB_OIDC_CLIENT_SECRET` | The client secret from a Kubernetes Secret reference. |
+
+Register the exact public origin plus `/oauth2/callback` as the redirect URI.
+The client needs authorization code flow with S256 PKCE, the `openid` scope,
+RS256 ID tokens, and `client_secret_basic` or `client_secret_post`. Configure
+the issuer to deny token issuance to users who are not assigned to this client.
+Unset all four variables for the default local behavior; partial configuration
+is an error. OIDC is not supported with `ngn serve --dev`.
+
+Before enabling OIDC on the deployment:
+
+1. Preserve the public `Host` and `Origin` headers and WebSocket upgrades
+   through the existing HTTPS ingress. Do not expose the upstream HTTP port to
+   untrusted clients or log callback query strings, cookies, or tokens.
+2. Change unauthenticated readiness/liveness probes from `/api/bootstrap` to
+   `GET /healthz`. It checks the web process, not issuer connectivity.
+3. In a private test deployment, verify that an assigned account can sign in,
+   load the workspace, and stream events and audio; that an unassigned account
+   cannot sign in; and that direct requests to the Service cannot load
+   bootstrap or open a WebSocket without a session.
+
+All admitted users still share the single trusted workspace. Local sign-out
+ends the NGN session, not the identity provider's login. Sessions last at most
+one hour and are cleared on restart. See [ADR 0002](../adr/0002-web-oidc.md).
 
 The public template is [examples/k8s/ngn-web.yaml](https://github.com/abi-jey/nagents/blob/main/examples/k8s/ngn-web.yaml).
 The deployment administrator is responsible for secret handling, reviewing the

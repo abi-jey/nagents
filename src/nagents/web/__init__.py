@@ -2,6 +2,7 @@
 
 import hashlib
 import ipaddress
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -60,6 +61,7 @@ def serve(
         import uvicorn
 
         from .http.app import create_app
+        from .http.oidc import OidcConfig
         from .http.runtime import server_config
     except ModuleNotFoundError as error:
         if error.name not in {"fastapi", "starlette", "pydantic", "uvicorn", "anyio"}:
@@ -68,11 +70,17 @@ def serve(
             "The web server dependencies are not installed. From the repository root, in this source checkout's "
             "virtualenv, run `pip install -e '.[web]'` (or `poetry install -E web`)."
         ) from error
+    oidc = OidcConfig.from_env()
     if dev:
+        if oidc is not None:
+            raise ValueError("OIDC is not supported with ngn serve --dev.")
         from .http.dev import serve_dev
 
         serve_dev(config, host=host, port=port, resume_session=resume_session, continue_session=continue_session)
         return
+    if oidc is not None:
+        # Keep the secret in the auth component, not in the environment inherited by tools.
+        os.environ.pop("NGN_WEB_OIDC_CLIENT_SECRET", None)
     assets = built_assets()
     build_id = hashlib.sha256((assets / "build.json").read_bytes()).hexdigest()[:12]
     print(f"ngn: React UI build {build_id} from {assets}", file=sys.stderr, flush=True)
@@ -83,5 +91,6 @@ def serve(
         assets=assets,
         resume_session=resume_session,
         continue_session=continue_session,
+        oidc=oidc,
     )
     uvicorn.Server(server_config(app, host=host, port=port)).run()
