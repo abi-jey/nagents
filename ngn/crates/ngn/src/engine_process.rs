@@ -545,7 +545,9 @@ mod local {
         #[test]
         fn discovery_rejects_unprotected_and_linked_registrations() {
             let tmp = crate::test_support::private_tempdir().unwrap();
-            let root = tmp.path();
+            // The engine reports a resolved state directory; macOS temp paths
+            // go through the /var -> /private/var symlink, which discovery refuses.
+            let root = &tmp.path().canonicalize().unwrap();
             let record = root.join("engine.json");
             assert!(registration(root).unwrap().is_none());
             std::fs::write(&record, RECORD).unwrap();

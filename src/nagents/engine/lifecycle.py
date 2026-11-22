@@ -166,7 +166,9 @@ def private_stdio() -> Iterator[StdioLease]:
         raise ValueError("The Python engine currently requires a POSIX host.")
     for descriptor in (0, 1):
         info = os.fstat(descriptor)
-        if not stat.S_ISFIFO(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        # Anonymous pipes cannot be opened by path, and macOS reports them as
+        # 0660 where Linux says 0600, so refuse only a foreign or world-writable FIFO.
+        if not stat.S_ISFIFO(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o002:
             raise ValueError("--stdio requires private stdin and stdout pipes from the launcher.")
     sys.stdout.flush()
     readiness = os.dup(1)
