@@ -87,6 +87,9 @@ jobs:
           python ngn/scripts/browser_smoke.py --binary "$bundled_binary" \
             --runtime-python "$bundled_python" \
             --output "$RUNNER_TEMP/ngn-browser-evidence"
+          python ngn/scripts/steering_clients_smoke.py --binary "$bundled_binary" \
+            --runtime-python "$bundled_python" --installed-runtime \
+            --output "$RUNNER_TEMP/ngn-browser-evidence"
       - name: Save real-browser evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

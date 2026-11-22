@@ -22,12 +22,15 @@ import struct
 import subprocess
 import tempfile
 import termios
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
 from aiohttp import web
-from playwright.async_api import Browser, Page, async_playwright
+from browser_smoke import approval_dialog, connected, new_mobile_session, ready, root_conversation, stopped_message
+from playwright.async_api import Browser, Locator, Page, async_playwright, expect
 from pty_smoke import COMPOSER_TITLE, WorkspaceReady
 from steering_smoke import REPO, adapter_runner, require, server
 
@@ -38,6 +41,8 @@ class Fixture:
         self.checked: set[str] = set()
         self.browser_batch = asyncio.Event()
         self.release_browser = asyncio.Event()
+        self.pty_started = {prompt: threading.Event() for prompt in ("pty batch", "pty cancel")}
+        self.release_pty = {prompt: asyncio.Event() for prompt in self.pty_started}
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
         if request.method == "GET":
@@ -46,6 +51,11 @@ class Fixture:
         self.requests.append(messages)
         prompt = messages[-1].get("content", "")
         if prompt in {"browser batch", "browser cancel", "pty batch", "pty cancel"}:
+            if prompt in self.pty_started:
+                # Let the TUI steer while the composer owns input. The approval
+                # panel deliberately won't accept composer commands.
+                self.pty_started[prompt].set()
+                await self.release_pty[prompt].wait()
             prefix = prompt.replace(" ", "-")
             delta = {
                 "tool_calls": [
@@ -94,16 +104,47 @@ class Fixture:
         return response
 
 
-async def receipt_status(page: Page, status: str, count: int) -> None:
-    await page.wait_for_function(
-        "([status, count]) => [...document.querySelectorAll('#steering-receipts article strong')].filter(e => e.textContent.includes(' · ' + status + ' · ')).length === count",
-        arg=[status, count],
-    )
+async def receipt_status(page: Page, status: str, count: int) -> Locator:
+    panel = page.locator(".native-receipts")
+    summary = panel.locator("summary")
+    await expect(summary).to_be_visible()
+    if await panel.get_attribute("open") is None:
+        await summary.click()
+    await expect(
+        panel.locator(".native-receipt > strong").filter(has_text=re.compile(rf"^#\d+ · {re.escape(status)} · "))
+    ).to_have_count(count)
+    return panel
 
 
-async def finished(page: Page, status: str) -> None:
-    await page.locator("#transcript").get_by_text(status, exact=True).last.wait_for()
-    await page.locator("#status").filter(has_text="Ready").wait_for()
+async def defer_browser_approval(page: Page, *, touch: bool = False) -> None:
+    dialog = approval_dialog(page)
+    later = dialog.get_by_role("button", name="Review later", exact=True)
+    if touch:
+        await later.tap()
+    else:
+        await later.click()
+    await expect(dialog).to_be_hidden()
+    await expect(page.get_by_role("button", name="Review pending approval", exact=True)).to_be_visible()
+
+
+async def steer_browser(page: Page, text: str, *, touch: bool = False) -> None:
+    composer = page.locator("#composer")
+    await composer.fill(text)
+    steer = page.get_by_role("button", name="Steer active turn", exact=True)
+    if touch:
+        await steer.tap()
+    else:
+        await steer.click()
+    await expect(composer).to_have_value("")
+    if touch:
+        await expect(composer).to_be_focused()
+
+
+async def reopen_browser_approval(page: Page, path: str) -> Locator:
+    await page.get_by_role("button", name="Review pending approval", exact=True).click()
+    dialog = approval_dialog(page)
+    await expect(dialog.get_by_role("region", name="Proposed change", exact=True)).to_contain_text(f"+++ b/{path}")
+    return dialog
 
 
 async def browser_checks(browser: Browser, url: str, workspace: Path, fixture: Fixture, output: Path) -> None:
@@ -113,55 +154,55 @@ async def browser_checks(browser: Browser, url: str, workspace: Path, fixture: F
         page = await context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         await page.goto(url)
-        await page.locator("#connection").filter(has_text="Connected").wait_for()
-        require(await page.locator("#steer").is_disabled(), "Idle client enabled steering")
-        await page.locator("#prompt").fill("browser batch")
-        await page.locator("#prompt").press("Enter")
-        await page.locator("#approval").wait_for(state="visible")
-        await page.wait_for_function("() => !document.getElementById('steer').disabled")
-        await page.locator("#steering-panel summary").click()
+        await connected(page)
+        composer = page.locator("#composer")
+        steer = page.get_by_role("button", name="Steer active turn", exact=True)
+        await expect(steer).to_have_count(0)
+        await composer.fill("browser batch")
+        await expect(page.get_by_role("button", name="Send", exact=True)).to_be_enabled()
+        await composer.press("Enter")
+        await defer_browser_approval(page)
         for text in ["browser first steering", "browser second steering"]:
-            await page.locator("#prompt").fill(text)
-            await page.locator("#steer").click()
-            await page.wait_for_function("() => document.getElementById('prompt').value === ''")
-        await receipt_status(page, "pending", 2)
+            await steer_browser(page, text)
+        await receipt_status(page, "Pending", 2)
         require(len(fixture.requests) == 1, "Steering made a model request before either tool approval")
         require(not (workspace / "browser-batch-0.txt").exists(), "First native tool ran without approval")
         require(not (workspace / "browser-batch-1.txt").exists(), "Second native tool ran without approval")
+        dialog = await reopen_browser_approval(page, "browser-batch-0.txt")
         await page.screenshot(path=str(output / "browser-pending-first-approval.png"))
-        await page.locator("#allow").click()
-        await page.locator("#preview").filter(has_text="browser-batch-1.txt").wait_for()
-        await receipt_status(page, "pending", 2)
+        allow = dialog.get_by_role("button", name="Allow once", exact=True)
+        await allow.click()
+        await expect(dialog.get_by_role("region", name="Proposed change", exact=True)).to_contain_text(
+            "+++ b/browser-batch-1.txt"
+        )
+        await receipt_status(page, "Pending", 2)
         require((workspace / "browser-batch-0.txt").read_text() == "tool 0\n", "First native result missing")
         require(not (workspace / "browser-batch-1.txt").exists(), "Second tool skipped its approval")
         require(len(fixture.requests) == 1, "Steering was injected between native tools")
         await page.screenshot(path=str(output / "browser-pending-second-approval.png"))
-        await page.locator("#allow").click()
+        await allow.click()
         await asyncio.wait_for(fixture.browser_batch.wait(), 15)
-        await receipt_status(page, "applied", 2)
+        receipts = await receipt_status(page, "Applied", 2)
         require((workspace / "browser-batch-1.txt").read_text() == "tool 1\n", "Second persisted native result missing")
-        require(
-            "not proof of model consumption" in await page.locator("#steering-receipts").inner_text(),
-            "Receipt overclaimed delivery",
-        )
-        await page.locator("#prompt").fill("ordinary next-run FIFO")
-        await page.locator("#send").click()
-        await page.locator("#queue").filter(has_text="ordinary next-run FIFO").wait_for()
-        require(
-            "ordinary next-run FIFO" not in await page.locator("#steering-receipts").inner_text(),
-            "Busy Send became steering",
-        )
-        await page.locator("#pause-queue").click()
-        await page.locator("#queue-status").filter(has_text="Paused").wait_for()
+        await expect(receipts).to_contain_text("not proof of model consumption")
+        await composer.fill("ordinary next-run FIFO")
+        await page.get_by_role("button", name="Queue", exact=True).click()
+        queue = page.locator(".native-queue")
+        summary = queue.locator("summary")
+        await expect(summary).to_contain_text("1 pending")
+        await summary.click()
+        await expect(queue.get_by_text("ordinary next-run FIFO", exact=True)).to_be_visible()
+        await expect(receipts).not_to_contain_text("ordinary next-run FIFO")
+        await queue.get_by_role("button", name="Pause queue", exact=True).click()
+        await expect(summary).to_contain_text("Paused")
         await page.screenshot(path=str(output / "browser-applied-and-separate-fifo.png"))
         fixture.release_browser.set()
-        await finished(page, "completed")
+        await ready(page, "Both native results and both persisted steering messages were received.")
         await page.reload()
-        await page.locator("#connection").filter(has_text="Connected").wait_for()
-        await page.locator("#steering-panel summary").click()
-        await receipt_status(page, "applied", 2)
+        await connected(page)
+        await receipt_status(page, "Applied", 2)
         require(len(fixture.requests) == 2, "Browser reconnect replayed model/tool input")
-        require(await page.locator("#steer").is_disabled(), "Terminal root still accepts steering in UI")
+        await expect(steer).to_have_count(0)
         require(not errors, f"Browser errors: {errors}")
     finally:
         await context.close()
@@ -171,36 +212,30 @@ async def browser_checks(browser: Browser, url: str, workspace: Path, fixture: F
         page = await context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         await page.goto(url)
-        await page.locator("#connection").filter(has_text="Connected").wait_for()
-        previous = await page.locator("#mobile-sessions").input_value()
-        await page.locator("#mobile-new-session").tap()
-        await page.wait_for_function("id => document.getElementById('mobile-sessions').value !== id", arg=previous)
-        await page.locator("#prompt").fill("local Return")
-        await page.locator("#prompt").press("End")
-        await page.locator("#prompt").press("Enter")
-        require(await page.locator("#prompt").input_value() == "local Return\n", "Touch Return no longer edits locally")
-        await page.locator("#prompt").fill("browser cancel")
-        await page.locator("#send").tap()
-        await page.locator("#approval").wait_for(state="visible")
-        await page.wait_for_function("() => !document.getElementById('steer').disabled")
-        await page.locator("#prompt").fill("never offered on Stop")
-        await page.locator("#steer").tap()
-        await page.wait_for_function("() => document.getElementById('prompt').value === ''")
-        require(await page.locator("#prompt").evaluate("e => e === document.activeElement"), "Steer stole touch focus")
-        await page.locator("#steering-panel summary").tap()
-        await receipt_status(page, "pending", 1)
-        await page.locator("#prompt").fill("newer unsent draft")
-        await page.locator("#cancel").tap()
-        await finished(page, "cancelled")
-        await receipt_status(page, "undelivered", 1)
-        require(await page.locator("#prompt").input_value() == "newer unsent draft", "Stop cleared a newer touch draft")
-        require(await page.locator("#prompt").evaluate("e => e === document.activeElement"), "Stop stole touch focus")
+        await connected(page)
+        await new_mobile_session(page)
+        composer = page.locator("#composer")
+        await composer.fill("local Return")
+        await composer.press("End")
+        await composer.press("Enter")
+        await expect(composer).to_have_value("local Return\n")
+        await composer.fill("browser cancel")
+        await page.get_by_role("button", name="Send", exact=True).tap()
+        await defer_browser_approval(page, touch=True)
+        await steer_browser(page, "never offered on Stop", touch=True)
+        await receipt_status(page, "Pending", 1)
+        await composer.fill("newer unsent draft")
+        await page.locator(".chat-composer").get_by_role("button", name="Stop run", exact=True).tap()
+        await expect(stopped_message(root_conversation(page))).to_be_attached()
+        await ready(page)
+        await receipt_status(page, "Undelivered", 1)
+        await expect(composer).to_have_value("newer unsent draft")
+        await expect(composer).to_be_focused()
         require(not (workspace / "browser-cancel-0.txt").exists(), "Stop executed an unapproved tool")
         await page.screenshot(path=str(output / "touch-stop-undelivered.png"))
         await page.reload()
-        await page.locator("#connection").filter(has_text="Connected").wait_for()
-        await page.locator("#steering-panel summary").tap()
-        await receipt_status(page, "undelivered", 1)
+        await connected(page)
+        await receipt_status(page, "Undelivered", 1)
         require(not errors, f"Touch browser errors: {errors}")
     finally:
         await context.close()
@@ -211,34 +246,39 @@ async def browser_failure(browser: Browser, url: str, output: Path) -> None:
     try:
         page = await context.new_page()
         await page.goto(url)
-        await page.locator("#connection").filter(has_text="Connected").wait_for()
-        await page.locator("#prompt").fill("wrong-ack trusted runtime fixture")
-        await page.locator("#send").click()
-        await page.locator("#approval").wait_for(state="visible")
-        await page.wait_for_function("() => !document.getElementById('steer').disabled")
+        await connected(page)
+        await page.locator("#composer").fill("wrong-ack trusted runtime fixture")
+        await page.get_by_role("button", name="Send", exact=True).click()
+        await defer_browser_approval(page)
         for prompt in ["offered without confirmation", "pending at failure"]:
-            await page.locator("#prompt").fill(prompt)
-            await page.locator("#steer").click()
-            await page.wait_for_function("() => document.getElementById('prompt').value === ''")
-        await page.locator("#allow").click()
-        await page.locator("#transcript .notice.error").filter(has_text="failed").wait_for()
-        await page.locator("#steering-panel summary").click()
-        await receipt_status(page, "uncertain", 1)
-        await receipt_status(page, "undelivered", 1)
+            await steer_browser(page, prompt)
+        await receipt_status(page, "Pending", 2)
+        await page.get_by_role("button", name="Review pending approval", exact=True).click()
+        await approval_dialog(page).get_by_role("button", name="Allow once", exact=True).click()
+        await expect(root_conversation(page).locator(".entry.error")).to_contain_text("Run failed")
+        await receipt_status(page, "Uncertain", 1)
+        await receipt_status(page, "Undelivered", 1)
         await page.screenshot(path=str(output / "browser-failed-uncertain-undelivered.png"))
         posts: list[str] = []
         page.on("request", lambda request: posts.append(request.url) if request.method == "POST" else None)
         await page.reload()
-        await page.locator("#connection").filter(has_text="Connected").wait_for()
-        await page.locator("#steering-panel summary").click()
-        await receipt_status(page, "uncertain", 1)
-        await receipt_status(page, "undelivered", 1)
+        await connected(page)
+        await receipt_status(page, "Uncertain", 1)
+        await receipt_status(page, "Undelivered", 1)
         require(not posts, "Reconnect automatically retried an uncertain steering input")
     finally:
         await context.close()
 
 
-def pty_check(binary: Path, config: Path, workspace: Path, data: Path, output: Path) -> None:
+def pty_check(
+    binary: Path,
+    config: Path,
+    workspace: Path,
+    data: Path,
+    output: Path,
+    started: dict[str, threading.Event],
+    release: Callable[[str], None],
+) -> None:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 132, 0, 0))
     original = termios.tcgetattr(slave)
@@ -290,6 +330,13 @@ def pty_check(binary: Path, config: Path, workspace: Path, data: Path, output: P
                 return result
         raise AssertionError(f"PTY delivery/storage boundary not reached: {sql}")
 
+    def wait_for_model(prompt: str) -> None:
+        deadline = time.monotonic() + 20
+        while not started[prompt].is_set() and time.monotonic() < deadline:
+            read()
+            require(process.poll() is None, "TUI exited before the model fixture was called")
+        require(started[prompt].is_set(), f"TUI did not reach model for {prompt}")
+
     try:
         ready = WorkspaceReady(master)
         deadline = time.monotonic() + 20
@@ -301,7 +348,7 @@ def pty_check(binary: Path, config: Path, workspace: Path, data: Path, output: P
             "Steering TUI did not render and repaint at the resized PTY dimensions",
         )
         os.write(master, b"pty batch\r")
-        wait(b"y allow")
+        wait_for_model("pty batch")
         root = str(rows("SELECT id FROM runs WHERE status = 'running'", 1)[0][0])
         for prompt in ["pty first steering", "pty second steering"]:
             os.write(master, f"/steer {prompt}\r".encode())
@@ -310,6 +357,8 @@ def pty_check(binary: Path, config: Path, workspace: Path, data: Path, output: P
             pending == [(root, "pty first steering"), (root, "pty second steering")],
             "PTY steering target/order changed",
         )
+        release("pty batch")
+        wait(b"y allow")
         start = len(history)
         os.write(master, b"\x1b[18~")  # F7, through the terminal input driver.
         wait(b"Steering receipts", start)
@@ -334,9 +383,11 @@ def pty_check(binary: Path, config: Path, workspace: Path, data: Path, output: P
         wait(root.encode(), start)
         wait(b"not proof of model consumption", start)
         os.write(master, b"\x1b[18~pty cancel\r")
-        wait(b"pty-cancel-0.txt")
+        wait_for_model("pty cancel")
         os.write(master, b"/steer terminal receipt after Stop\r")
         rows("SELECT run_id FROM steering_inputs WHERE status = 'pending'", 1)
+        release("pty cancel")
+        wait(b"pty-cancel-0.txt")
         os.write(master, b"\x1b")  # Esc: stop the exact active root.
         rows("SELECT id FROM runs WHERE status = 'cancelled'", 1)
         rows("SELECT run_id FROM steering_inputs WHERE status = 'undelivered'", 1)
@@ -368,6 +419,7 @@ async def main(binary: Path, runtime_python: Path, executable: str, output: Path
     root = Path(tempfile.mkdtemp(prefix="ngn-steering-clients-"))
     print(f"Private fixture state: {root}", flush=True)
     os.environ["NGN_STEERING_CLIENT_FIXTURE_KEY"] = "loopback-only-not-a-provider-credential"
+    os.environ["NGN_WIRE_LOG"] = "false"
     adapter = adapter_runner(runtime_python, installed=installed)
     fixture = Fixture()
     application = web.Application()
@@ -421,7 +473,12 @@ async def main(binary: Path, runtime_python: Path, executable: str, output: Path
             finally:
                 await browser.close()
         workspace, data, config = settings("pty")
-        await asyncio.to_thread(pty_check, binary, config, workspace, data, output)
+        loop = asyncio.get_running_loop()
+
+        def release_pty(prompt: str) -> None:
+            loop.call_soon_threadsafe(fixture.release_pty[prompt].set)
+
+        await asyncio.to_thread(pty_check, binary, config, workspace, data, output, fixture.pty_started, release_pty)
         require(fixture.checked == {"browser", "pty"}, "Actual clients did not reach the Python model boundary")
         evidence = {
             "checks": sorted(fixture.checked),
@@ -436,6 +493,8 @@ async def main(binary: Path, runtime_python: Path, executable: str, output: Path
         )
     finally:
         fixture.release_browser.set()
+        for release in fixture.release_pty.values():
+            release.set()
         await runner.cleanup()
 
 
