@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Annotated
 from typing import Literal
-from urllib.parse import urlsplit
 
 import anyio
 from fastapi import FastAPI
@@ -74,8 +73,7 @@ from ..settings.provider_login import ProviderLogin
 from ..settings.provider_setup import provider_setup
 from ..settings.tools import register as register_tool_settings
 from ..shells import register as register_shells
-from .oidc import OidcClient
-from .oidc import OidcLogin
+from .oidc import OidcOrigins
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
 
@@ -418,20 +416,12 @@ def create_app(
         return app
 
     authority = local_authority(host, port)
-    origin = oidc.public_origin if oidc else ""
-    if origin:
-        authority = urlsplit(origin).netloc
     directory = built_assets() if assets is None else assets
     token = secrets.token_urlsafe(32)
-    app.add_middleware(
-        LocalOnly,
-        authority=authority,
-        token=token,
-        enforce_authority=bool(origin) or is_loopback_host(host),
-        origin=origin,
-    )
     if oidc is not None:
-        app.add_middleware(OidcLogin, client=OidcClient(oidc))
+        app.add_middleware(OidcOrigins, config=oidc, token=token)
+    else:
+        app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=is_loopback_host(host))
     register_tool_settings(app, lambda: state)
     register_shells(app, lambda: state)
     from ..tasks.routes import register as register_tasks
