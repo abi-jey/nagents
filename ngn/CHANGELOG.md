@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.51
+
+- Support separate OIDC sign-ins on explicitly configured web hostnames and attribute authenticated web audit events to the verified user.
+
 ## 0.100.50
 
 - Keep Python engine logs off the TUI and add verbose download diagnostics to the official installer.
