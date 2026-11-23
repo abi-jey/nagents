@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import secrets
 import time
@@ -285,9 +286,25 @@ def test_workspace_serve_opts_into_oidc(tmp_path: Path, identity: Identity, capl
         assert "Test workspace" in client.get("/").text
         bootstrap = client.get("/api/bootstrap")
         assert bootstrap.json()["oidc_login"] is True and "strict-transport-security" in bootstrap.headers
+        response = client.post(
+            "/api/messages",
+            headers={**ORIGIN, "X-Ngn-Token": bootstrap.json()["token"], "X-Forwarded-User": "forged-user"},
+            json={"unexpected": "private-marker"},
+        )
+        assert response.status_code == 422
         assert client.post(oidc.LOGOUT, headers=ORIGIN).status_code == 204
         events = [record.getMessage() for record in caplog.records if record.getMessage().startswith("web_auth ")]
-        assert events == [
-            f"web_auth event={event} suppressed=0"
-            for event in ("http_unauthenticated", "login_denied", "login_succeeded", "logout")
+        assert events[:2] == [
+            "web_auth event=http_unauthenticated suppressed=0",
+            "web_auth event=login_denied suppressed=0",
         ]
+        actor = {"iss": CONFIG.issuer, "sub": "assigned-subject"}
+        for line, event, fields in zip(
+            events[2:],
+            ("login_succeeded", "write_request", "logout"),
+            ({}, {"method": "POST", "route": "/api/messages", "status": 422}, {}),
+            strict=True,
+        ):
+            prefix, detail = line.split(" actor=")
+            assert prefix == f"web_auth event={event} suppressed=0"
+            assert json.loads(detail) == {**actor, **fields}
