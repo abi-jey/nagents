@@ -48,6 +48,9 @@ pub(crate) struct Source {
 
 #[derive(Debug, Args)]
 pub(crate) struct Install {
+    /// Show official download paths and HTTP status codes on stderr.
+    #[arg(short, long)]
+    verbose: bool,
     #[command(flatten)]
     source: Source,
     /// Defaults to $XDG_DATA_HOME/ngn-harness or $HOME/.local/share/ngn-harness.
@@ -60,6 +63,9 @@ pub(crate) struct Install {
 
 #[derive(Debug, Args)]
 pub(crate) struct Update {
+    /// Show official download paths and HTTP status codes on stderr.
+    #[arg(short, long)]
+    verbose: bool,
     #[command(flatten)]
     source: Source,
     /// Check availability without downloading or executing a network payload.
@@ -77,7 +83,11 @@ trait Transport {
     }
 }
 
-struct Https(reqwest::Client, AtomicU64);
+struct Https {
+    client: reqwest::Client,
+    length: AtomicU64,
+    verbose: bool,
+}
 
 fn allowed_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https"
@@ -96,7 +106,7 @@ fn allowed_url(url: &reqwest::Url) -> bool {
 }
 
 impl Https {
-    fn new() -> Result<Self> {
+    fn new(verbose: bool) -> Result<Self> {
         let redirects = reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 8 || !allowed_url(attempt.url()) {
                 attempt.error("Untrusted release redirect")
@@ -104,8 +114,8 @@ impl Https {
                 attempt.follow()
             }
         });
-        Ok(Self(
-            reqwest::Client::builder()
+        Ok(Self {
+            client: reqwest::Client::builder()
                 .https_only(true)
                 .redirect(redirects)
                 .connect_timeout(Duration::from_secs(15))
@@ -113,36 +123,47 @@ impl Https {
                 .user_agent(concat!("ngn-installer/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .context("Cannot initialize the Rustls HTTPS installer")?,
-            AtomicU64::new(0),
-        ))
+            length: AtomicU64::new(0),
+            verbose,
+        })
     }
 }
 
 impl Transport for Https {
     async fn fetch(&self, url: &str, output: &mut File, limit: u64) -> Result<()> {
-        ensure!(
-            allowed_url(&reqwest::Url::parse(url)?),
-            "Untrusted release URL"
+        let original = reqwest::Url::parse(url)?;
+        ensure!(allowed_url(&original), "Untrusted release URL");
+        // Report only the original official resource, never signed redirect URLs.
+        let resource = format!(
+            "{}{}",
+            original.host_str().unwrap_or_default(),
+            original.path()
         );
+        if self.verbose {
+            eprintln!("ngn installer: GET {resource}");
+        }
         let mut response = self
-            .0
+            .client
             .get(url)
             .send()
             .await
             .map_err(|error| error.without_url())
-            .context("Official HTTPS release request failed")?
-            .error_for_status()
-            .map_err(|error| error.without_url())
-            .context(
-                "Official release asset is unavailable; select a released schema-2 Rust bundle",
-            )?;
+            .with_context(|| format!("Official HTTPS release request failed: {resource}"))?;
+        let status = response.status();
+        if self.verbose {
+            eprintln!("ngn installer: HTTP {status} for {resource}");
+        }
+        ensure!(
+            status.is_success(),
+            "Official release request for {resource} returned HTTP {status}"
+        );
         ensure!(
             response
                 .content_length()
                 .is_none_or(|length| length <= limit),
             "Release response exceeds its byte limit"
         );
-        self.1
+        self.length
             .store(response.content_length().unwrap_or(0), Ordering::Relaxed);
         let mut total = 0;
         while let Some(chunk) = response
@@ -159,7 +180,7 @@ impl Transport for Https {
     }
 
     fn expected_length(&self) -> Option<u64> {
-        Some(self.1.load(Ordering::Relaxed)).filter(|length| *length > 0)
+        Some(self.length.load(Ordering::Relaxed)).filter(|length| *length > 0)
     }
 }
 
@@ -1536,7 +1557,7 @@ pub(crate) async fn install(arguments: &Install, cancel: &CancellationToken) -> 
         &installation,
         &arguments.source,
         false,
-        &Https::new()?,
+        &Https::new(arguments.verbose)?,
         &RuntimeProbe,
         cancel,
         Progress::default(),
@@ -1561,7 +1582,7 @@ pub(crate) async fn update(
         &installation,
         &arguments.source,
         arguments.check,
-        &Https::new()?,
+        &Https::new(arguments.verbose)?,
         &RuntimeProbe,
         cancel,
         progress,

@@ -112,6 +112,15 @@ cp "$DOWNLOADS/${url##*/}" "$output"
         self.assertFalse(self.invocation.exists())
         self.assertFalse(list(self.scratch.iterdir()))
 
+    def test_verbose_reports_public_assets_and_reaches_native_installer(self) -> None:
+        result = self.invoke("--verbose")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"release v{self.version}, platform linux-x86_64", result.stderr)
+        for asset in ("SHA256SUMS", "ngn-installer-linux-x86_64"):
+            self.assertIn(f"/download/v{self.version}/{asset}", result.stderr)
+        self.assertEqual(self.invocation.read_text().splitlines()[-1], "--verbose")
+        self.assertNotIn(str(self.scratch), result.stderr)
+
     def test_duplicate_or_malformed_installer_hash_is_rejected_before_payload_download(self) -> None:
         for checksum, duplicate in (("g" * 64, False), ("a" * 63, False), ("a" * 64, True)):
             with self.subTest(checksum=checksum, duplicate=duplicate):

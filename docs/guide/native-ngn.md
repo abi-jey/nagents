@@ -16,6 +16,12 @@ Supported:
 curl -fsSL https://github.com/abi-jey/nagents/releases/latest/download/install.sh | sh
 ```
 
+For download diagnostics, replace `| sh` with `| sh -s -- --verbose`.
+The bootstrap and native installer report the selected release resources and
+HTTP statuses on stderr, without printing headers or signed redirect URLs.
+This flag also works with `ngn install` and `ngn update`. If downloading
+`install.sh` itself fails, the script never starts; check the outer curl error.
+
 This installs the latest release to `~/.local/share/ngn-harness` and links
 `~/.local/bin/ngn`. The bootstrap verifies the native installer's SHA-256 against the
 release's `SHA256SUMS` before running it. To pin a version, replace `latest/download`
