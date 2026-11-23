@@ -230,8 +230,10 @@ backup taken from a non-default location.
 
 ## Local diagnostics
 
-An engine started by ngn writes its diagnostics to the starting terminal's
-stderr. Logs stay local; nothing is uploaded.
+An engine started by ngn writes its own log to `logs/engine.log` in its state
+directory (beside any wire logs), never to the terminal the TUI draws on. If the
+engine exits before reporting readiness, ngn points to that log. Logs stay local;
+nothing is uploaded.
 
 Provider HTTP payload capture is **off by default**. Enable it for one invocation
 with `--wire-log` or use `NGN_WIRE_LOG=true|false|1|0` as a default. Use

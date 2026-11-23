@@ -147,6 +147,9 @@ def accept(installer: Path, bundle: Path, output: Path, *, upgrade_bundle: str =
         timeout=180,
     )
     (output / "engine-run.log").write_text(checks.stdout + checks.stderr)
+    # The engine ngn started logs to its own file; nothing may reach the terminal.
+    assert " INFO: " not in checks.stderr, f"Engine logs reached the terminal:\n{checks.stderr}"
+    assert list(engine_data.glob("ngn/engine/workspaces/*/logs/engine.log")), "Engine log file missing"
     events = [json.loads(line) for line in checks.stdout.splitlines()]
     assert events and events[-1]["event"] == {"type": "run.finished", "status": "completed", "error": ""}
     assert inventory(generation) == before, "Runtime execution changed the immutable release inventory"

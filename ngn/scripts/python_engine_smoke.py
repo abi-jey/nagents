@@ -10,6 +10,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -426,6 +427,8 @@ def pty_phase(
         )
         until(lambda: b"both persisted steering" in clean(at), "rendered completion")
         assert "pty" in fixture.checked
+        # Engine server logs go to its log file; none may be painted over the TUI.
+        assert b" INFO: " not in clean(), "Engine logs reached the terminal"
         session = active["session_id"]
 
         def outcome(run_id: str) -> str | None:
@@ -479,6 +482,43 @@ def pty_phase(
             child.kill()
             child.wait()
         os.close(master)
+
+
+def owned_terminal(binary: Path, env: dict[str, str], workspace: Path) -> None:
+    """Exercise a TUI that starts its own noisy engine, rather than attaching."""
+    wrapper = workspace / "noisy-python"
+    marker = b"NGN_FIXTURE_ENGINE_STDERR"
+    wrapper.write_text(f'#!/bin/sh\necho {marker.decode()} >&2\nexec {shlex.quote(env["NGN_ENGINE_PYTHON"])} "$@"\n')
+    wrapper.chmod(0o700)
+    master, slave = pty.openpty()
+    termios.tcsetwinsize(slave, (42, 132))
+    try:
+        with subprocess.Popen(
+            [str(binary), "--engine-demo", "-C", str(workspace), "--no-animations"],
+            env={**env, "NGN_ENGINE_PYTHON": str(wrapper)},
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            start_new_session=True,
+        ) as child:
+            output = bytearray()
+            deadline = time.monotonic() + TIMEOUT
+            try:
+                while COMPOSER_TITLE not in output and time.monotonic() < deadline and child.poll() is None:
+                    if select.select([master], [], [], 0.1)[0]:
+                        output.extend(os.read(master, 65536))
+                assert COMPOSER_TITLE in output, "Owned TUI failed to render its composer"
+                assert marker not in output, "Owned engine wrote over the terminal"
+                log = state_path(env, workspace) / "logs/engine.log"
+                assert marker in log.read_bytes() and log.stat().st_mode & 0o777 == 0o600
+                os.write(master, b"\x11")
+                assert child.wait(timeout=TIMEOUT) == 0
+            finally:
+                if child.poll() is None:
+                    child.kill()
+    finally:
+        os.close(master)
+        os.close(slave)
 
 
 async def private_run(binary: Path, env: dict[str, str], workspace: Path, output: Path) -> None:
@@ -600,6 +640,9 @@ async def main(binary: Path, output: Path, chromium: str, checks: set[str]) -> N
                     finally:
                         await browser.close()
             if "pty" in checks:
+                owned_workspace = root / "owned-pty"
+                owned_workspace.mkdir()
+                await asyncio.to_thread(owned_terminal, binary, env, owned_workspace)
                 async with engine(env, pty_workspace, output / "engine-pty.log") as (owner, registered):
                     loop = asyncio.get_running_loop()
 

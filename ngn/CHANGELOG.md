@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.50
+
+- Keep Python engine logs off the TUI and add verbose download diagnostics to the official installer.
+
 ## 0.100.49
 
 - Suppress the HTTP server banner, send HSTS on the OIDC web origin, and audit sign-in and logout without logging credentials.
