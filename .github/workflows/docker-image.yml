@@ -1,0 +1,135 @@
+name: Docker image audit and publish
+
+on:
+  workflow_call:
+    inputs:
+      candidate_sha:
+        required: true
+        type: string
+      publish:
+        type: boolean
+        default: false
+      publish_alpha:
+        type: boolean
+        default: false
+
+jobs:
+  image:
+    name: Build and scan runtime image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}/agent-server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify Docker candidate
+        env:
+          RELEASE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          echo "IMAGE_LAYOUT=$RUNNER_TEMP/runtime-image" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: inputs.publish_alpha
+        with:
+          python-version: '3.12'
+
+      - name: Stamp the same feature alpha as the tested distribution
+        if: inputs.publish_alpha
+        run: python .github/scripts/alpha_version.py
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=sha-${{ inputs.candidate_sha }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=alpha-${{ github.run_number }}-${{ github.run_attempt }},enable=${{ inputs.publish_alpha }}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build immutable OCI candidate without pushing
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: dockerfiles/Runtime.Dockerfile
+          platforms: linux/amd64
+          outputs: type=oci,tar=false,dest=${{ env.IMAGE_LAYOUT }}
+          provenance: mode=min
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: ${{ inputs.publish && 'type=gha,mode=max' || '' }}
+
+      - name: Download and verify Trivy v0.76.2
+        run: |
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz \
+            --output "$archive"
+          printf '%s  %s\n' bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf "$archive" | sha256sum --check
+          tar -xOzf "$archive" trivy > "$RUNNER_TEMP/trivy"
+          chmod +x "$RUNNER_TEMP/trivy"
+
+      - name: Compare Trivy findings with the published image
+        id: scan
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          bash .github/scripts/scan-container-image.sh "$RUNNER_TEMP/trivy" "$IMAGE_LAYOUT" \
+            "$IMAGE" "$IMAGE_DIGEST" "$RUNNER_TEMP/container-audit"
+
+      - name: Upload Trivy inventory and findings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-audit-reports-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/container-audit/reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Download and verify regctl v0.11.7
+        if: inputs.publish
+        run: |
+          binary="$RUNNER_TEMP/regctl"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/regclient/regclient/releases/download/v0.11.7/regctl-linux-amd64 \
+            --output "$binary"
+          printf '%s  %s\n' 3737fbbdd791e04e7a831640b681f3397a376498e80e2ad9b1b2d27296f239bc "$binary" | sha256sum --check
+          chmod +x "$binary"
+
+      - name: Log in to GHCR after the audit passes
+        if: inputs.publish
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the scanned OCI digest and tags
+        if: inputs.publish
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          BASELINE_DIGEST: ${{ steps.scan.outputs.baseline_digest }}
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          regctl="$RUNNER_TEMP/regctl"
+          if [[ "$("$regctl" image digest "$IMAGE:latest")" != "$BASELINE_DIGEST" ]]; then
+            echo "The published baseline changed after the scan. Rerun the build against the new baseline." >&2
+            exit 1
+          fi
+          ref="$IMAGE@$IMAGE_DIGEST"
+          "$regctl" image copy "ocidir://$IMAGE_LAYOUT@$IMAGE_DIGEST" "$ref"
+          while IFS= read -r tag; do
+            [[ "$tag" == "$IMAGE":* ]]
+            "$regctl" image copy "$ref" "$tag"
+            test "$("$regctl" image digest "$tag")" = "$IMAGE_DIGEST"
+          done <<< "$IMAGE_TAGS"

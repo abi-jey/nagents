@@ -72,8 +72,9 @@ def test_publications_verify_artifacts_before_upload_and_pin_sha() -> None:
         assert any(step.get("with", {}).get("name") == "release-manifest" for step in steps)
         for step in steps:
             assert "git pull" not in step.get("run", "")
-    for name in ("build", "docker-build"):
-        runs = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+    image = yaml.safe_load((ROOT / ".github/workflows/docker-image.yml").read_text())["jobs"]["image"]
+    for steps in (jobs["build"]["steps"], image["steps"]):
+        runs = "\n".join(step.get("run", "") for step in steps)
         assert "git pull" not in runs
         assert "FETCH_HEAD" not in runs
 
@@ -90,6 +91,31 @@ def test_build_runs_alongside_checks_but_publication_waits_for_them() -> None:
     for name in ("docker-build", "publish-stable", "publish-alpha", "publish-dev"):
         assert set(jobs[name]["needs"]) == {"lint", "test", "build", "dependency-audit"}, name
         assert "always()" not in jobs[name]["if"] and "cancelled()" not in jobs[name]["if"], name
+
+
+def test_docker_uses_the_same_scan_before_publication_and_on_read_only_prs() -> None:
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    check = jobs["docker-check"]
+    publish = jobs["docker-build"]
+    assert check["if"] == "github.event_name == 'pull_request'"
+    assert check["permissions"] == {"contents": "read"}
+    assert publish["with"]["publish"] is True and not check["with"].get("publish")
+    assert check["uses"] == publish["uses"] == "./.github/workflows/docker-image.yml"
+    assert check["with"]["candidate_sha"] == publish["with"]["candidate_sha"] == "${{ needs.build.outputs.sha }}"
+    workflow = yaml.load((ROOT / ".github/workflows/docker-image.yml").read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow["on"]) == {"workflow_call"}
+    steps = workflow["jobs"]["image"]["steps"]
+    build = next(step for step in steps if step.get("uses", "").startswith("docker/build-push-action@"))
+    scan = next(step for step in steps if "scan-container-image.sh" in step.get("run", ""))
+    upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
+    login = next(step for step in steps if step.get("uses", "").startswith("docker/login-action@"))
+    push = next(step for step in steps if step.get("name") == "Publish the scanned OCI digest and tags")
+    assert build["with"].get("push") != "true" and "type=oci,tar=false" in build["with"]["outputs"]
+    assert steps.index(build) < steps.index(scan) < steps.index(upload) < steps.index(login) < steps.index(push)
+    assert "if" not in scan and "continue-on-error" not in scan
+    assert upload["if"] == "${{ !cancelled() }}"
+    assert login["if"] == push["if"] == "inputs.publish"
+    assert 'image copy "ocidir://$IMAGE_LAYOUT@$IMAGE_DIGEST" "$ref"' in push["run"]
 
 
 def test_stable_tag_must_equal_distribution_version() -> None:

@@ -433,70 +433,32 @@ jobs:
           if-no-files-found: error
 
   # =============================================================================
-  # DOCKER BUILD & PUSH
+  # DOCKER IMAGE AUDIT & PUBLISH
   # =============================================================================
+  docker-check:
+    name: Audit Docker Image
+    needs: [build, dependency-audit]
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      candidate_sha: ${{ needs.build.outputs.sha }}
+
   docker-build:
-    name: Build & Push Docker Image
-    runs-on: ubuntu-latest
+    name: Audit & Publish Docker Image
     needs: [lint, test, build, dependency-audit]
     if: |
       github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) ||
       github.event_name == 'workflow_dispatch' && inputs.publish_alpha
     permissions:
+      contents: read
       packages: write
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}/agent-server
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
-        with:
-          python-version: '3.12'
-
-      - name: Stamp the same feature alpha as the tested distribution
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
-        run: python .github/scripts/alpha_version.py
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=sha-${{ needs.build.outputs.sha }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=alpha-${{ github.run_number }}-${{ github.run_attempt }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish_alpha }}
-            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-
-      - name: Verify Docker candidate
-        env:
-          RELEASE_SHA: ${{ needs.build.outputs.sha }}
-        run: test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-
-      - name: Build and push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: dockerfiles/Runtime.Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      candidate_sha: ${{ needs.build.outputs.sha }}
+      publish: true
+      publish_alpha: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_alpha }}
 
   # =============================================================================
   # PUBLISH CORE TO PYPI (the shared tag calls the sole GitHub publisher below)
