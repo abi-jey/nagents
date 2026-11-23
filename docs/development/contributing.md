@@ -296,8 +296,28 @@ The job log and summary show each scanner's version and advisory source,
 scanned package counts, exit codes, and findings. Download
 `dependency-audit-reports-*` from the workflow run for the original scanner
 JSON and logs, even when the audit fails. Use the IDs, affected versions, and
-available fixes to update the flagged dependency. These checks do not scan
-container base images, system packages, or the bundled Python interpreter.
+available fixes to update the flagged dependency.
+
+### Built container image audit
+
+On pull requests and before publishing an `agent-server` image, CI builds the
+Linux/amd64 runtime image without pushing it. Trivy inventories OS packages and
+installed Python and npm packages. CI scans both the candidate and the current
+published `:latest` image, resolved to an immutable digest, with the same
+database. It blocks new package–advisory matches (including additional affected
+copies) at **every severity**, as well as scan errors or missing inventories.
+An advisory reported on both images is existing debt, including if it was
+disclosed after the baseline image was published; it remains in the reports.
+
+The job summary shows both digests, database details, package counts, severity
+counts, and new findings. The `container-audit-reports-*` artifact retains both
+raw inventories and findings, scan logs, and the summary on pass or failure.
+Publishing copies the scanned OCI digest and its provenance without rebuilding.
+The PR job has no package write permission.
+
+Trivy does not inventory everything copied into an image, notably the separately
+downloaded Chrome binary and the source-built primary CPython interpreter.
+This check also does not scan the standalone native release bundles.
 
 ## Documentation
 
