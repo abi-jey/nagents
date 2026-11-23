@@ -13,7 +13,7 @@ fail() {
 if [ "${1:-}" = --help ] || [ "${1:-}" = -h ]; then
     printf '%s\n' \
         'Install the self-contained ngn harness (Linux x86_64, macOS arm64/x86_64).' \
-        'Usage: sh install.sh [--prefix DIRECTORY] [--bin-dir DIRECTORY]' \
+        'Usage: sh install.sh [--verbose|-v] [--prefix DIRECTORY] [--bin-dir DIRECTORY]' \
         'No Python, pip, Rust or Node installation is required.' \
         'Existing unrelated ngn executables and application state are not replaced.'
     exit 0
@@ -44,6 +44,13 @@ case "$(uname -s)" in
     *) fail "$unsupported" ;;
 esac
 asset=ngn-installer-$platform
+verbose=false
+for arg in "$@"; do
+    case "$arg" in --verbose|-v) verbose=true ;; esac
+done
+if "$verbose"; then
+    printf 'ngn bootstrap: release v%s, platform %s\n' "$NGN_BOOTSTRAP_VERSION" "$platform" >&2
+fi
 
 command -v curl >/dev/null 2>&1 || fail "curl is needed for this shell bootstrap; alternatively download and run the native $asset release asset directly."
 
@@ -67,10 +74,14 @@ trap 'exit 143' TERM HUP
 
 base="https://github.com/abi-jey/nagents/releases/download/v$NGN_BOOTSTRAP_VERSION"
 download() {
+    if "$verbose"; then
+        printf 'ngn bootstrap: GET %s\n' "$1" >&2
+        set -- "$1" "$2" "$3" --write-out 'ngn bootstrap: HTTP %{http_code}\n'
+    fi
     curl --fail --silent --show-error --location --max-redirs 5 \
         --proto '=https' --proto-redir '=https' --tlsv1.2 \
         --connect-timeout 30 --max-time 300 --max-filesize "$3" \
-        --output "$2" "$1"
+        ${4:+"$4"} ${5:+"$5"} --output "$2" "$1" >&2
 }
 
 download "$base/SHA256SUMS" "$temporary/SHA256SUMS" 1048576
