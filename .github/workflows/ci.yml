@@ -31,6 +31,33 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  dependency-audit:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Download and verify OSV-Scanner v2.7.1
+        run: |
+          scanner="$RUNNER_TEMP/osv-scanner"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64 \
+            --output "$scanner"
+          printf '%s  %s\n' fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8 "$scanner" | sha256sum --check
+          chmod +x "$scanner"
+
+      - name: Audit locked and resolved dependencies
+        run: bash .github/scripts/audit-dependencies.sh "$RUNNER_TEMP/osv-scanner" "$RUNNER_TEMP/dependency-audit"
+
   # =============================================================================
   # LINT
   # =============================================================================
@@ -375,7 +402,7 @@ jobs:
   docker-build:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: [lint, test, build]
+    needs: [lint, test, build, dependency-audit]
     if: |
       github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) ||
       github.event_name == 'workflow_dispatch' && inputs.publish_alpha
@@ -441,7 +468,7 @@ jobs:
   publish-stable:
     name: Publish Core to PyPI (Stable)
     runs-on: ubuntu-latest
-    needs: [lint, test, build]
+    needs: [lint, test, build, dependency-audit]
     if: startsWith(github.ref, 'refs/tags/v') && !inputs.publish_alpha
     environment:
       name: pypi-stable
@@ -524,7 +551,7 @@ jobs:
   publish-alpha:
     name: Publish Feature Alpha
     runs-on: ubuntu-latest
-    needs: [lint, test, build]
+    needs: [lint, test, build, dependency-audit]
     if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
     environment:
       name: pypi-alpha
@@ -566,7 +593,7 @@ jobs:
   publish-dev:
     name: Publish Core to PyPI (Dev)
     runs-on: ubuntu-latest
-    needs: [lint, test, build]
+    needs: [lint, test, build, dependency-audit]
     if: github.event_name == 'workflow_dispatch' && inputs.publish_dev
     environment:
       name: pypi-dev

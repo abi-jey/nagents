@@ -78,11 +78,14 @@ def test_publications_verify_artifacts_before_upload_and_pin_sha() -> None:
         assert "FETCH_HEAD" not in runs
 
 
-def test_build_runs_alongside_tests_but_every_publication_waits_for_them() -> None:
+def test_build_runs_alongside_checks_but_publication_waits_for_them() -> None:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     assert "needs" not in jobs["build"]
+    audit = jobs["dependency-audit"]
+    assert not audit.get("if") and not audit.get("continue-on-error")
+    assert not any(step.get("continue-on-error") for step in audit["steps"])
     for name in ("docker-build", "publish-stable", "publish-alpha", "publish-dev"):
-        assert set(jobs[name]["needs"]) == {"lint", "test", "build"}, name
+        assert set(jobs[name]["needs"]) == {"lint", "test", "build", "dependency-audit"}, name
         assert "always()" not in jobs[name]["if"] and "cancelled()" not in jobs[name]["if"], name
 
 
