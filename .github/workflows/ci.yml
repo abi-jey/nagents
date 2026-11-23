@@ -34,7 +34,7 @@ jobs:
   dependency-audit:
     name: Dependency Vulnerability Scan
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -46,7 +46,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.20.0'
+
       - name: Download and verify OSV-Scanner v2.7.1
+        if: ${{ !cancelled() }}
         run: |
           scanner="$RUNNER_TEMP/osv-scanner"
           curl --fail --silent --show-error --location --retry 3 \
@@ -55,8 +60,39 @@ jobs:
           printf '%s  %s\n' fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8 "$scanner" | sha256sum --check
           chmod +x "$scanner"
 
-      - name: Audit locked and resolved dependencies
-        run: bash .github/scripts/audit-dependencies.sh "$RUNNER_TEMP/osv-scanner" "$RUNNER_TEMP/dependency-audit"
+      - name: Download and verify cargo-audit v0.23.0
+        if: ${{ !cancelled() }}
+        run: |
+          asset=cargo-audit-x86_64-unknown-linux-gnu-v0.23.0
+          archive="$RUNNER_TEMP/$asset.tgz"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.23.0/$asset.tgz" \
+            --output "$archive"
+          printf '%s  %s\n' b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59 "$archive" | sha256sum --check
+          tar -xOzf "$archive" "$asset/cargo-audit" > "$RUNNER_TEMP/cargo-audit"
+          chmod +x "$RUNNER_TEMP/cargo-audit"
+
+      - name: Install pip-audit v2.10.1 in an isolated environment
+        if: ${{ !cancelled() }}
+        run: |
+          python -m venv "$RUNNER_TEMP/pip-audit-venv"
+          "$RUNNER_TEMP/pip-audit-venv/bin/python" -m pip install --disable-pip-version-check 'pip-audit==2.10.1'
+
+      - name: Cross-check locked and resolved dependencies
+        if: ${{ !cancelled() }}
+        timeout-minutes: 8
+        run: |
+          bash .github/scripts/audit-dependencies.sh "$RUNNER_TEMP/osv-scanner" \
+            "$RUNNER_TEMP/pip-audit-venv/bin/pip-audit" "$RUNNER_TEMP/cargo-audit" "$RUNNER_TEMP/dependency-audit"
+
+      - name: Upload dependency audit reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-audit-reports-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dependency-audit/reports/
+          if-no-files-found: error
+          retention-days: 14
 
   # =============================================================================
   # LINT
