@@ -277,6 +277,21 @@ poetry run pre-commit run --all-files
 poetry run pre-commit run ruff-check --all-files
 ```
 
+## Dependency Vulnerability Scan
+
+The CI workflow runs OSV-Scanner on pull requests to `main`, pushes to `main`,
+release tags, and manual runs. It checks direct and transitive packages pinned
+by Poetry, npm, Cargo, and the Linux and macOS installer wheel locks, plus the
+pinned benchmark and contract tools. It also resolves the Python dependencies
+used by CI and the Docker build on Python 3.12, without installing them.
+
+Any known advisory or scan error fails the check. PyPI and container image
+publishing wait for it, and the coordinated GitHub release waits for the PyPI
+job. If a scan fails, use the advisory IDs and affected versions in the log to
+update the relevant dependency or lockfile. This is a package dependency check,
+not a scan of container base images, system packages, or the bundled Python
+interpreter.
+
 ## Documentation
 
 ### Building Docs

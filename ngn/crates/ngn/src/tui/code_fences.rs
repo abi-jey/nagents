@@ -7,6 +7,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::Span,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::view::FenceKey;
 
@@ -159,10 +160,11 @@ impl Pan {
     }
 }
 
-fn glyphs<'a>(line: &'a Span<'a>) -> impl Iterator<Item = (usize, usize, &'a str)> {
-    line.styled_graphemes(Style::default())
-        .scan(0, |column, grapheme| {
-            let symbol = grapheme.symbol;
+fn glyphs(line: &str) -> impl Iterator<Item = (usize, usize, &str)> {
+    // Ratatui's styled graphemes drop tabs; keep them for the code fence tab stops.
+    line.graphemes(true)
+        .filter(|symbol| *symbol == "\t" || !symbol.contains(char::is_control))
+        .scan(0, |column, symbol| {
             let width = if symbol == "\t" {
                 4 - *column % 4
             } else {
@@ -178,7 +180,7 @@ pub(super) fn width(text: &str) -> usize {
     if text.is_ascii() && !text.contains('\t') {
         return text.len();
     }
-    glyphs(&Span::raw(text))
+    glyphs(text)
         .last()
         .map_or(0, |(start, width, _)| start + width)
 }
@@ -214,7 +216,7 @@ pub(super) fn draw(
         }
         return;
     }
-    for (column, width, symbol) in glyphs(&Span::raw(text)) {
+    for (column, width, symbol) in glyphs(text) {
         if column + width > right {
             break;
         }
