@@ -84,6 +84,9 @@ def test_build_runs_alongside_checks_but_publication_waits_for_them() -> None:
     audit = jobs["dependency-audit"]
     assert not audit.get("if") and not audit.get("continue-on-error")
     assert not any(step.get("continue-on-error") for step in audit["steps"])
+    upload = next(step for step in audit["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
+    assert upload["if"] == "${{ !cancelled() }}"
+    assert upload["with"]["path"].endswith("/dependency-audit/reports/")
     for name in ("docker-build", "publish-stable", "publish-alpha", "publish-dev"):
         assert set(jobs[name]["needs"]) == {"lint", "test", "build", "dependency-audit"}, name
         assert "always()" not in jobs[name]["if"] and "cancelled()" not in jobs[name]["if"], name

@@ -279,18 +279,25 @@ poetry run pre-commit run ruff-check --all-files
 
 ## Dependency Vulnerability Scan
 
-The CI workflow runs OSV-Scanner on pull requests to `main`, pushes to `main`,
-release tags, and manual runs. It checks direct and transitive packages pinned
-by Poetry, npm, Cargo, and the Linux and macOS installer wheel locks, plus the
-pinned benchmark and contract tools. It also resolves the Python dependencies
-used by CI and the Docker build on Python 3.12, without installing them.
+The CI workflow audits dependencies on pull requests to `main`, pushes to
+`main`, release tags, and manual runs. OSV-Scanner checks Poetry, npm, Cargo,
+Linux and macOS installer wheel locks, and the pinned benchmark and contract
+tools. It also checks the Python dependencies resolved for CI and the Docker
+build on Python 3.12, without installing them. `pip-audit` (PyPI advisory
+service), `npm audit` (npm registry), and `cargo-audit` (RustSec) independently
+check those same inputs for their respective ecosystems.
 
-Any known advisory or scan error fails the check. PyPI and container image
-publishing wait for it, and the coordinated GitHub release waits for the PyPI
-job. If a scan fails, use the advisory IDs and affected versions in the log to
-update the relevant dependency or lockfile. This is a package dependency check,
-not a scan of container base images, system packages, or the bundled Python
-interpreter.
+Vulnerability findings and scan errors, including empty reports and skipped
+PyPI packages, fail the check. RustSec unsoundness warnings also fail it; its
+other informational warnings are printed. PyPI and container publishing wait
+for the audit, and the coordinated GitHub release waits for PyPI.
+
+The job log and summary show each scanner's version and advisory source,
+scanned package counts, exit codes, and findings. Download
+`dependency-audit-reports-*` from the workflow run for the original scanner
+JSON and logs, even when the audit fails. Use the IDs, affected versions, and
+available fixes to update the flagged dependency. These checks do not scan
+container base images, system packages, or the bundled Python interpreter.
 
 ## Documentation
 
