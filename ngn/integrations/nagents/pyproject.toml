@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ngn-nagents"
-version = "0.100.50"
+version = "0.100.51"
 description = "Compatibility marker that lets older ngn releases update to engine-based bundles"
 requires-python = ">=3.12, <4.0"
 license = "MIT"
-dependencies = ["nagents>=0.100.50,<0.101"]
+dependencies = ["nagents>=0.100.51,<0.101"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ngn_nagents"]
