@@ -8,6 +8,7 @@ import logging
 import secrets
 import time
 from base64 import urlsafe_b64encode
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
@@ -23,7 +24,6 @@ from starlette.websockets import WebSocketDisconnect
 from nagents.harness.config import HarnessConfig
 from nagents.web.http import oidc
 from nagents.web.http.app import create_app
-from nagents.web.http.security import LocalOnly
 from tests.support.web import ControlledHarness
 
 if TYPE_CHECKING:
@@ -40,12 +40,9 @@ AUDIO_URL = CONFIG.public_origin.replace("https:", "wss:") + "/api/live/sessions
 AUDIO_PROTOCOLS = ["ngn.live.v2", "ngn.token.process-token"]
 
 
-def app() -> FastAPI:
+def app(config: oidc.OidcConfig = CONFIG) -> FastAPI:
     server = FastAPI()
-    server.add_middleware(
-        LocalOnly, authority=urlsplit(CONFIG.public_origin).netloc, token="process-token", origin=CONFIG.public_origin
-    )
-    server.add_middleware(oidc.OidcLogin, client=oidc.OidcClient(CONFIG))
+    server.add_middleware(oidc.OidcOrigins, config=config, token="process-token")
 
     @server.get("/")
     @server.get("/dashboard")
@@ -99,7 +96,7 @@ class Identity:
         self.token_requests += 1
         data = kwargs["data"]
         assert isinstance(data, dict)
-        assert data["redirect_uri"] == CONFIG.public_origin + oidc.CALLBACK
+        assert [data["redirect_uri"]] == self.query["redirect_uri"]
         challenge = urlsafe_b64encode(hashlib.sha256(data["code_verifier"].encode()).digest()).decode().rstrip("=")
         assert self.query["code_challenge"] == [challenge]
         assert "client_secret" not in data
@@ -147,7 +144,7 @@ def browser() -> Iterator[TestClient]:
 
 
 def test_oidc_configuration_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("ISSUER", "PUBLIC_ORIGIN", "CLIENT_ID", "CLIENT_SECRET"):
+    for name in ("ISSUER", "PUBLIC_ORIGIN", "CLIENT_ID", "CLIENT_SECRET", "ADDITIONAL_ORIGINS"):
         monkeypatch.delenv(f"NGN_WEB_OIDC_{name}", raising=False)
     assert oidc.OidcConfig.from_env() is None
     monkeypatch.setenv("NGN_WEB_OIDC_ISSUER", CONFIG.issuer)
@@ -157,6 +154,49 @@ def test_oidc_configuration_fails_closed(monkeypatch: pytest.MonkeyPatch) -> Non
         oidc.OidcConfig(CONFIG.issuer, CONFIG.public_origin + "/", "client", "secret")
     with pytest.raises(ValueError, match="HTTPS"):
         oidc.OidcConfig("http://identity.example.test", CONFIG.public_origin, "client", "secret")
+
+
+def test_independent_origin_logins(identity: Identity) -> None:
+    private = "https://private.example.test"
+    with TestClient(
+        app(replace(CONFIG, additional_origins=(private,))), base_url=CONFIG.public_origin, follow_redirects=False
+    ) as browser:
+        for origin, other in ((CONFIG.public_origin, private), (private, CONFIG.public_origin)):
+            state = identity.start(browser, origin + "/")
+            assert identity.query["redirect_uri"] == [origin + oidc.CALLBACK]
+            cookie = browser.cookies.get(oidc.FLOW_COOKIE, domain=urlsplit(origin).hostname)
+            params = {"state": state, "code": "assigned-user"}
+            assert (
+                browser.get(
+                    other + oidc.CALLBACK, params=params, headers={"Cookie": f"{oidc.FLOW_COOKIE}={cookie}"}
+                ).status_code
+                == 403
+            )
+            assert browser.get(origin + oidc.CALLBACK, params=params).status_code == 303
+            assert browser.get(origin + "/api/bootstrap").status_code == 200
+            session = browser.cookies.get(oidc.SESSION_COOKIE, domain=urlsplit(origin).hostname)
+            assert (
+                browser.get(
+                    other + "/api/bootstrap", headers={"Cookie": f"{oidc.SESSION_COOKIE}={session}"}
+                ).status_code
+                == 401
+            )
+            assert browser.post(origin + oidc.LOGOUT, headers={"Origin": other}).status_code == 403
+            with browser.websocket_connect(
+                origin.replace("https:", "wss:") + "/api/events", headers={"Origin": origin}, subprotocols=PROTOCOLS
+            ) as socket:
+                assert socket.receive_text() == "connected"
+                socket.send_text("done")
+            with (
+                pytest.raises(WebSocketDisconnect),
+                browser.websocket_connect(
+                    origin.replace("https:", "wss:") + "/api/events", headers={"Origin": other}, subprotocols=PROTOCOLS
+                ),
+            ):
+                pytest.fail("Accepted the sibling origin on a WebSocket")
+        assert browser.post(private + oidc.LOGOUT, headers={"Origin": private}).status_code == 204
+        assert browser.get(private + "/api/bootstrap").status_code == 401
+        assert browser.get("/api/bootstrap").status_code == 200
 
 
 def test_oidc_boundaries_and_single_use_callback(browser: TestClient, identity: Identity) -> None:

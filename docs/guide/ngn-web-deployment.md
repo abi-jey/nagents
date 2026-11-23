@@ -32,6 +32,13 @@ with all four variables in your private deployment overlay:
 | `NGN_WEB_OIDC_CLIENT_SECRET` | The client secret from a Kubernetes Secret reference. |
 
 Register the exact public origin plus `/oauth2/callback` as the redirect URI.
+For separate public and private hostnames, keep the primary origin and set
+`NGN_WEB_OIDC_ADDITIONAL_ORIGINS` to a comma-separated list of exact HTTPS
+origins on distinct hostnames. Register **each** origin plus `/oauth2/callback`
+on the same confidential client. Sign in separately on each hostname: callbacks,
+sessions, WebSockets and logout are scoped to the hostname used. An edge policy
+on the public hostname does not protect the private ingress; keep its network
+access controls in place.
 The client needs authorization code flow with S256 PKCE, the `openid` scope,
 RS256 ID tokens, and `client_secret_basic` or `client_secret_post`. Configure
 the issuer to deny token issuance to users who are not assigned to this client.

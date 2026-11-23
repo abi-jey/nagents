@@ -10,6 +10,7 @@ import secrets
 from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from time import monotonic
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl
@@ -27,6 +28,7 @@ from starlette.responses import RedirectResponse
 from starlette.responses import Response
 
 from .security import SECURITY_HEADERS
+from .security import LocalOnly
 
 if TYPE_CHECKING:
     from starlette.types import ASGIApp
@@ -68,10 +70,18 @@ class OidcConfig:
     public_origin: str
     client_id: str
     client_secret: str = field(repr=False)
+    additional_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _https_url(self.issuer)
-        _https_url(self.public_origin, origin_only=True)
+        hosts = set()
+        for origin in (self.public_origin, *self.additional_origins):
+            _https_url(origin, origin_only=True)
+            hostname = urlsplit(origin).hostname
+            # Browser cookies are isolated by hostname, not port.
+            if not hostname or hostname in hosts or "*" in hostname or hostname.endswith("."):
+                raise ValueError("OIDC origins must have distinct exact hostnames.")
+            hosts.add(hostname)
         if not self.client_id.strip() or not self.client_secret.strip():
             raise ValueError("OIDC requires a client ID and client secret.")
 
@@ -79,15 +89,41 @@ class OidcConfig:
     def from_env(cls) -> "OidcConfig | None":
         names = ("ISSUER", "PUBLIC_ORIGIN", "CLIENT_ID", "CLIENT_SECRET")
         values = [os.environ.get(f"NGN_WEB_OIDC_{name}") for name in names]
-        if all(value is None for value in values):
+        additional = os.environ.get("NGN_WEB_OIDC_ADDITIONAL_ORIGINS")
+        if all(value is None for value in values) and additional is None:
             return None
         if not all(values):
             raise ValueError("Set all four NGN_WEB_OIDC_{ISSUER,PUBLIC_ORIGIN,CLIENT_ID,CLIENT_SECRET} variables.")
-        return cls(*[value for value in values if value is not None])
+        origins = tuple(item.strip() for item in additional.split(",")) if additional is not None else ()
+        issuer, public_origin, client_id, client_secret = (value for value in values if value is not None)
+        return cls(issuer, public_origin, client_id, client_secret, origins)
 
 
 class LoginError(Exception):
     """The provider response could not authenticate this login."""
+
+
+class OidcOrigins:
+    """Each configured origin owns its login flows, sessions and same-origin boundary."""
+
+    def __init__(self, app: "ASGIApp", *, config: OidcConfig, token: str) -> None:
+        self.app = app
+        self.handlers = {}
+        for origin in (config.public_origin, *config.additional_origins):
+            authority = urlsplit(origin).netloc
+            inner = LocalOnly(app, authority=authority, origin=origin, token=token)
+            client = OidcClient(replace(config, public_origin=origin, additional_origins=()))
+            self.handlers[authority] = OidcLogin(inner, client=client)
+        self.primary = self.handlers[urlsplit(config.public_origin).netloc]
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        hosts = Headers(scope=scope).getlist("host")
+        # The primary gate rejects unknown/duplicate hosts, except its public health probe.
+        handler = self.handlers.get(hosts[0], self.primary) if len(hosts) == 1 else self.primary
+        await handler(scope, receive, send)
 
 
 @dataclass(frozen=True)
