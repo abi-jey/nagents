@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -18,6 +19,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 from starlette.datastructures import Headers
+from starlette.datastructures import MutableHeaders
 from starlette.requests import HTTPConnection
 from starlette.responses import HTMLResponse
 from starlette.responses import JSONResponse
@@ -28,6 +30,7 @@ from .security import SECURITY_HEADERS
 
 if TYPE_CHECKING:
     from starlette.types import ASGIApp
+    from starlette.types import Message
     from starlette.types import Receive
     from starlette.types import Scope
     from starlette.types import Send
@@ -259,6 +262,20 @@ class OidcLogin:
         self.discovery: tuple[Provider | None, float] | None = None
         self.discovery_lock = asyncio.Lock()
         self.exchanges = asyncio.Semaphore(16)
+        self.audit_windows: dict[str, tuple[float, int]] = {}
+
+    def _audit(self, event: str, *, sampled: bool = False) -> None:
+        # Only internal outcome names reach logs. A flood of unauthenticated
+        # requests must not produce a log entry for every packet.
+        suppressed = 0
+        if sampled:
+            now = monotonic()
+            until, suppressed = self.audit_windows.get(event, (0.0, 0))
+            if now < until:
+                self.audit_windows[event] = (until, suppressed + 1)
+                return
+            self.audit_windows[event] = (now + 30, 0)
+        logging.getLogger("uvicorn.error").info("web_auth event=%s suppressed=%d", event, suppressed)
 
     async def _provider(self) -> Provider:
         async with self.discovery_lock:
@@ -279,6 +296,7 @@ class OidcLogin:
         for handle, session in list(self.sessions.items()):
             if session.expires <= now:
                 self.sessions.pop(handle).ended.set()
+                self._audit("session_expired")
 
     async def _start(self, destination: str) -> Response:
         try:
@@ -398,6 +416,7 @@ class OidcLogin:
         session = self.sessions.get(identifier) if HANDLE.fullmatch(identifier) else None
         if kind == "websocket":
             if not host_ok or session is None:
+                self._audit("websocket_denied", sampled=True)
                 await send({"type": "websocket.close", "code": 1008})
             else:
                 await self._socket(session, scope, receive, send)
@@ -410,6 +429,10 @@ class OidcLogin:
             response = JSONResponse({"detail": "Untrusted Host."}, status_code=403)
         elif path == CALLBACK and method == "GET":
             response = await self._callback(scope, cookies.get(FLOW_COOKIE, ""))
+            if response.status_code == 303:
+                self._audit("login_succeeded")
+            else:
+                self._audit("login_denied", sampled=True)
         elif path == SIGNED_OUT and method == "GET" and not scope["query_string"]:
             response = HTMLResponse(
                 '<!doctype html><title>Signed out</title><p>Signed out of NGN.</p><a href="/">Sign in</a>'
@@ -422,18 +445,30 @@ class OidcLogin:
                 and headers.get("sec-fetch-dest") in {None, "document"}
             ):
                 response = await self._start(path)
+                if response.status_code == 503:
+                    self._audit("issuer_unavailable", sampled=True)
             else:
+                self._audit("http_unauthenticated", sampled=True)
                 response = JSONResponse({"detail": "Sign in to NGN."}, status_code=401)
         elif path == LOGOUT and method == "POST" and not scope["query_string"]:
             if headers.getlist("origin") != [self.origin]:
                 response = JSONResponse({"detail": "An exact same-origin Origin header is required."}, status_code=403)
             else:
                 self.sessions.pop(identifier).ended.set()
+                self._audit("logout")
                 response = Response(status_code=204)
                 response.delete_cookie(SESSION_COOKIE, secure=True, httponly=True, samesite="lax")
                 response.delete_cookie(FLOW_COOKIE, secure=True, httponly=True, samesite="lax")
         else:
-            await self.app(scope, receive, send)
+
+            async def secure_send(message: "Message") -> None:
+                if message["type"] == "http.response.start":
+                    MutableHeaders(scope=message)["Strict-Transport-Security"] = "max-age=31536000"
+                await send(message)
+
+            await self.app(scope, receive, secure_send)
             return
         response.headers.update(SECURITY_HEADERS)
+        if host_ok:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         await response(scope, receive, send)
