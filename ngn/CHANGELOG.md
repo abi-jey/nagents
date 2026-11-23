@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.49
+
+- Suppress the HTTP server banner, send HSTS on the OIDC web origin, and audit sign-in and logout without logging credentials.
+
 ## 0.100.48
 
 - Add opt-in, built-in OpenID Connect sign-in for private Python ngn web deployments.

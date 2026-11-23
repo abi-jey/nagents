@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "nagents-native"
-version = "0.100.48"
+version = "0.100.49"
 dependencies = [
  "anyhow",
  "cap-std",
@@ -1178,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "ngn"
-version = "0.100.48"
+version = "0.100.49"
 dependencies = [
  "anyhow",
  "axum",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "ngn-api"
-version = "0.100.48"
+version = "0.100.49"
 dependencies = [
  "axum",
  "futures-util",

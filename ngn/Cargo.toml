@@ -3,7 +3,7 @@ members = ["crates/nagents-native", "crates/ngn-api", "crates/ngn"]
 resolver = "2"
 
 [workspace.package]
-version = "0.100.48"
+version = "0.100.49"
 edition = "2024"
 rust-version = "1.93"
 license = "MIT"

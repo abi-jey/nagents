@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import time
 from base64 import urlsafe_b64encode
@@ -267,15 +268,26 @@ def test_session_expires_without_socket_traffic(
     assert browser.get("/api/bootstrap", headers={"Cookie": f"{oidc.SESSION_COOKIE}={cookie}"}).status_code == 401
 
 
-def test_workspace_serve_opts_into_oidc(tmp_path: Path, identity: Identity) -> None:
+def test_workspace_serve_opts_into_oidc(tmp_path: Path, identity: Identity, caplog: pytest.LogCaptureFixture) -> None:
     assets = tmp_path / "static"
     (assets / "assets").mkdir(parents=True)
     (assets / "index.html").write_text("<html>Test workspace</html>")
     config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", demo=True)
     server = create_app(config, host="0.0.0.0", assets=assets, harness_factory=ControlledHarness, oidc=CONFIG)
     with TestClient(server, base_url=CONFIG.public_origin, follow_redirects=False) as client:
+        caplog.set_level(logging.INFO, logger="uvicorn.error")
+        rejected = client.get("/api/bootstrap")
+        assert rejected.status_code == 401 and "strict-transport-security" in rejected.headers
         assert client.get("/api/bootstrap").status_code == 401
+        assert client.get(oidc.CALLBACK, params={"code": "private-marker"}).status_code == 403
         state = identity.start(client)
         assert client.get(oidc.CALLBACK, params={"state": state, "code": "assigned-user"}).status_code == 303
         assert "Test workspace" in client.get("/").text
-        assert client.get("/api/bootstrap").json()["oidc_login"] is True
+        bootstrap = client.get("/api/bootstrap")
+        assert bootstrap.json()["oidc_login"] is True and "strict-transport-security" in bootstrap.headers
+        assert client.post(oidc.LOGOUT, headers=ORIGIN).status_code == 204
+        events = [record.getMessage() for record in caplog.records if record.getMessage().startswith("web_auth ")]
+        assert events == [
+            f"web_auth event={event} suppressed=0"
+            for event in ("http_unauthenticated", "login_denied", "login_succeeded", "logout")
+        ]
