@@ -119,6 +119,51 @@ mod local {
 
     const MAX_REGISTRATION: usize = 4096;
     const STARTUP: Duration = Duration::from_secs(25);
+    const LOG_ROTATE_BYTES: u64 = 8 * 1024 * 1024;
+
+    /// The engine's own log. Its stderr must never reach the terminal: the TUI
+    /// draws there, and every request would paint server logs over the screen.
+    /// A file (not a pipe) lets a shared engine outlive the client that started it.
+    struct EngineLog {
+        path: PathBuf,
+    }
+
+    impl EngineLog {
+        fn open(state: &Path) -> Result<(Self, File)> {
+            let directory = state.join("logs");
+            let dir =
+                checked_directory(&directory, true)?.context("Missing engine log directory")?;
+            let path = directory.join("engine.log");
+            let open_file = || -> Result<File> {
+                let file = File::from(openat(
+                    &dir,
+                    "engine.log",
+                    OFlags::CREATE
+                        | OFlags::APPEND
+                        | OFlags::WRONLY
+                        | OFlags::NOFOLLOW
+                        | OFlags::NONBLOCK
+                        | OFlags::CLOEXEC,
+                    Mode::from_bits_truncate(0o600),
+                )?);
+                let meta = file.metadata()?;
+                ensure!(
+                    meta.is_file()
+                        && meta.uid() == rustix::process::getuid().as_raw()
+                        && meta.mode() & 0o7777 == 0o600
+                        && meta.nlink() == 1,
+                    "Expected a private engine log file"
+                );
+                Ok(file)
+            };
+            let mut file = open_file()?;
+            if file.metadata()?.len() > LOG_ROTATE_BYTES {
+                rustix::fs::renameat(&dir, "engine.log", &dir, "engine.log.1")?;
+                file = open_file()?;
+            }
+            Ok((Self { path }, file))
+        }
+    }
 
     #[derive(Deserialize, PartialEq, Eq)]
     struct Registration {
@@ -174,6 +219,10 @@ mod local {
     }
 
     fn private_directory(directory: &Path) -> Result<Option<File>> {
+        checked_directory(directory, false)
+    }
+
+    fn checked_directory(directory: &Path, create: bool) -> Result<Option<File>> {
         ensure!(
             directory.is_absolute(),
             "Engine state directory must be absolute"
@@ -189,6 +238,13 @@ mod local {
             };
             dir = match openat(&dir, name, flags, Mode::empty()) {
                 Ok(fd) => File::from(fd),
+                Err(rustix::io::Errno::NOENT) if create => {
+                    match rustix::fs::mkdirat(&dir, name, Mode::from_bits_truncate(0o700)) {
+                        Ok(()) | Err(rustix::io::Errno::EXIST) => (),
+                        Err(err) => return Err(err.into()),
+                    }
+                    File::from(openat(&dir, name, flags, Mode::empty())?)
+                }
                 Err(rustix::io::Errno::NOENT) => return Ok(None),
                 Err(error) => {
                     return Err(error)
@@ -323,7 +379,7 @@ mod local {
             ])
             .arg(workspace)
             .stdin(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null())
             .env_remove("NGN_ENGINE_TOKEN")
             .kill_on_drop(true);
         if let Some(config) = options.config {
@@ -379,7 +435,7 @@ mod local {
             child.stdout.take().context("Missing engine state discovery pipe")?
                 .take(MAX_REGISTRATION as u64 + 1).read_to_end(&mut output).await?;
             ensure!(output.len() <= MAX_REGISTRATION, "Engine state directory response is too large");
-            ensure!(child.wait().await?.success(), "Could not resolve the Python engine state directory. Check the launch diagnostic above.");
+            ensure!(child.wait().await?.success(), "Could not resolve the Python engine state directory. Check workspace, config and NGN_ENGINE_PYTHON.");
             Ok::<_, anyhow::Error>(())
         }).await.context("Python engine state discovery timed out")??;
         let value = output
@@ -397,7 +453,11 @@ mod local {
         Ok(path)
     }
 
-    async fn standalone(mut command: Command, workspace: &Path) -> Result<EngineProcess> {
+    async fn standalone(
+        mut command: Command,
+        workspace: &Path,
+        log: EngineLog,
+    ) -> Result<EngineProcess> {
         let mut child = command
             .arg("--stdio")
             .stdin(Stdio::piped())
@@ -414,7 +474,8 @@ mod local {
             .context("Private engine startup timed out")??;
         ensure!(
             bytes.last() == Some(&b'\n'),
-            "Private engine did not report readiness. Check the launch diagnostic above."
+            "Private engine did not report readiness. See {}",
+            log.path.display()
         );
         let record = Registration::decode(&bytes)?;
         ensure!(
@@ -455,7 +516,9 @@ mod local {
         let mut command = command(&options, &workspace)?;
         command.arg("--state-dir").arg(&directory);
         if options.standalone {
-            return standalone(command, &workspace).await;
+            let (log, file) = EngineLog::open(&directory)?;
+            command.stderr(Stdio::from(file));
+            return standalone(command, &workspace, log).await;
         }
 
         let stale = registration(&directory)?;
@@ -483,7 +546,9 @@ mod local {
             }
         }
 
+        let (log, file) = EngineLog::open(&directory)?;
         let mut child = command
+            .stderr(Stdio::from(file))
             .stdout(Stdio::null())
             .spawn()
             .context("Could not start the Python engine")?;
@@ -496,12 +561,19 @@ mod local {
                 {
                     return Ok::<_, anyhow::Error>(record);
                 }
-                if child.try_wait()?.is_some() && exited.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(3) {
-                    bail!("Python engine exited before publishing readiness. Check the launch diagnostic above.");
+                if child.try_wait()?.is_some()
+                    && exited.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(3)
+                {
+                    bail!(
+                        "Python engine exited before publishing readiness. See {}",
+                        log.path.display()
+                    );
                 }
                 sleep(Duration::from_millis(80)).await;
             }
-        }).await.context("Registered engine startup timed out")??;
+        })
+        .await
+        .context("Registered engine startup timed out")??;
         let client = candidate.connect(&workspace).await?;
         let owner = if start_pid == Some(candidate.pid) {
             Some(Owner {
