@@ -1,4 +1,5 @@
 import { apiPath } from "./origin.js";
+import { sessionFetch } from "./sessionFetch.js";
 
 export class RequestError extends Error {
   constructor(
@@ -17,7 +18,7 @@ export async function request(
   signal?: AbortSignal,
   method = body ? "POST" : "GET",
 ): Promise<Response> {
-  const response = await fetch(apiPath(path), {
+  const response = await sessionFetch(apiPath(path), {
     method,
     headers: {
       ...(token ? { "X-Ngn-Token": token } : {}),
@@ -40,7 +41,7 @@ export async function requestBinary(
   headers: Record<string, string>,
   signal: AbortSignal,
 ): Promise<Response> {
-  return checked(await fetch(apiPath(path), {
+  return checked(await sessionFetch(apiPath(path), {
     method: "POST",
     headers: { ...headers, "X-Ngn-Token": token, "Content-Type": body.type },
     body,
