@@ -169,7 +169,7 @@ class OidcClient:
             raise LoginError
         return Provider(endpoints[0], endpoints[1], endpoints[2], auth_method)
 
-    async def redeem(self, provider: Provider, code: str, verifier: str, nonce: str) -> None:
+    async def redeem(self, provider: Provider, code: str, verifier: str, nonce: str) -> str:
         import jwt
 
         data = {
@@ -223,12 +223,14 @@ class OidcClient:
                 issuer=self.config.issuer,
                 options={"require": ["iss", "aud", "exp", "iat", "sub", "nonce"]},
             )
-            if not isinstance(claims["sub"], str) or not claims["sub"] or claims["nonce"] != nonce:
+            subject = claims["sub"]
+            if not isinstance(subject, str) or not 1 <= len(subject) <= 255 or claims["nonce"] != nonce:
                 raise LoginError
             audience = claims["aud"]
             azp = claims.get("azp")
             if (azp is not None or (isinstance(audience, list) and len(audience) > 1)) and azp != self.config.client_id:
                 raise LoginError
+            return subject
         except (jwt.PyJWTError, ValueError, TypeError, OverflowError):
             raise LoginError from None
 
@@ -246,6 +248,7 @@ class Login:
 @dataclass
 class Session:
     expires: float
+    subject: str
     ended: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -264,7 +267,7 @@ class OidcLogin:
         self.exchanges = asyncio.Semaphore(16)
         self.audit_windows: dict[str, tuple[float, int]] = {}
 
-    def _audit(self, event: str, *, sampled: bool = False) -> None:
+    def _audit(self, event: str, *, sampled: bool = False, subject: str | None = None, **fields: str | int) -> None:
         # Only internal outcome names reach logs. A flood of unauthenticated
         # requests must not produce a log entry for every packet.
         suppressed = 0
@@ -275,7 +278,12 @@ class OidcLogin:
                 self.audit_windows[event] = (until, suppressed + 1)
                 return
             self.audit_windows[event] = (now + 30, 0)
-        logging.getLogger("uvicorn.error").info("web_auth event=%s suppressed=%d", event, suppressed)
+        details = ""
+        if subject is not None:
+            details = " actor=" + json.dumps(
+                {"iss": self.client.config.issuer, "sub": subject, **fields}, separators=(",", ":"), ensure_ascii=True
+            )
+        logging.getLogger("uvicorn.error").info("web_auth event=%s suppressed=%d%s", event, suppressed, details)
 
     async def _provider(self) -> Provider:
         async with self.discovery_lock:
@@ -296,7 +304,7 @@ class OidcLogin:
         for handle, session in list(self.sessions.items()):
             if session.expires <= now:
                 self.sessions.pop(handle).ended.set()
-                self._audit("session_expired")
+                self._audit("session_expired", subject=session.subject)
 
     async def _start(self, destination: str) -> Response:
         try:
@@ -365,13 +373,16 @@ class OidcLogin:
             return rejected
         try:
             async with self.exchanges:
-                await self.client.redeem(flow.provider, code, flow.verifier, flow.nonce)
+                subject = await self.client.redeem(flow.provider, code, flow.verifier, flow.nonce)
         except LoginError:
             return rejected
         if len(self.sessions) >= 128:
-            self.sessions.pop(next(iter(self.sessions))).ended.set()
+            evicted = self.sessions.pop(next(iter(self.sessions)))
+            evicted.ended.set()
+            self._audit("session_evicted", subject=evicted.subject)
         identifier = secrets.token_urlsafe(32)
-        self.sessions[identifier] = Session(monotonic() + SESSION_SECONDS)
+        self.sessions[identifier] = Session(monotonic() + SESSION_SECONDS, subject)
+        self._audit("login_succeeded", subject=subject)
         response = RedirectResponse(flow.destination, status_code=303)
         response.delete_cookie(FLOW_COOKIE, secure=True, httponly=True, samesite="lax")
         response.set_cookie(
@@ -429,9 +440,7 @@ class OidcLogin:
             response = JSONResponse({"detail": "Untrusted Host."}, status_code=403)
         elif path == CALLBACK and method == "GET":
             response = await self._callback(scope, cookies.get(FLOW_COOKIE, ""))
-            if response.status_code == 303:
-                self._audit("login_succeeded")
-            else:
+            if response.status_code != 303:
                 self._audit("login_denied", sampled=True)
         elif path == SIGNED_OUT and method == "GET" and not scope["query_string"]:
             response = HTMLResponse(
@@ -455,7 +464,7 @@ class OidcLogin:
                 response = JSONResponse({"detail": "An exact same-origin Origin header is required."}, status_code=403)
             else:
                 self.sessions.pop(identifier).ended.set()
-                self._audit("logout")
+                self._audit("logout", subject=session.subject)
                 response = Response(status_code=204)
                 response.delete_cookie(SESSION_COOKIE, secure=True, httponly=True, samesite="lax")
                 response.delete_cookie(FLOW_COOKIE, secure=True, httponly=True, samesite="lax")
@@ -464,6 +473,14 @@ class OidcLogin:
             async def secure_send(message: "Message") -> None:
                 if message["type"] == "http.response.start":
                     MutableHeaders(scope=message)["Strict-Transport-Security"] = "max-age=31536000"
+                    if method in {"POST", "PUT", "PATCH", "DELETE"}:
+                        self._audit(
+                            "write_request",
+                            subject=session.subject,
+                            method=method,
+                            route=getattr(scope.get("route"), "path", "unmatched"),
+                            status=message["status"],
+                        )
                 await send(message)
 
             await self.app(scope, receive, secure_send)

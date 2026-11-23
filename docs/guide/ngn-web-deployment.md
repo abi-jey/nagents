@@ -51,6 +51,12 @@ Before enabling OIDC on the deployment:
    bootstrap or open a WebSocket without a session.
 
 All admitted users still share the single trusted workspace. Local sign-out
+and login events identify the account by its verified OIDC issuer and subject.
+Authenticated HTTP writes log that same identity, method, route template and
+response status; they do not log prompts, request bodies, tokens or raw URLs.
+An accepted request is not proof that background agent work completed.
+Restrict access to these logs and set a retention period for account identifiers.
+Local sign-out
 ends the NGN session, not the identity provider's login. Sessions last at most
 one hour and are cleared on restart. See [ADR 0002](../adr/0002-web-oidc.md).
 
