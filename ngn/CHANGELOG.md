@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.100.52
+
+- Ship patched native Rust dependencies, return expired web sessions to sign-in, and scan built Docker images with Trivy before publishing.
+
 ## 0.100.51
 
 - Support separate OIDC sign-ins on explicitly configured web hostnames and attribute authenticated web audit events to the verified user.
